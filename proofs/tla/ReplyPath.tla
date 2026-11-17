@@ -44,7 +44,21 @@
 (*              path the connection holds is validated, in every state;    *)
 (*  Unique      no path is held twice, also when a 1-RTT packet follows    *)
 (*              the reply that learnt the path in the same datagram;       *)
-(*              ActiveHeld, ActiveValid, KeyWaits.                         *)
+(*              ActiveHeld, ActiveValid, KeyWaits;                         *)
+(*  RankRule    the choice of the active path moves the session onto a     *)
+(*              relay path with no round trip only from an active path     *)
+(*              that is not usable or has failed PTO_FALLBACK probe        *)
+(*              timeouts, and only when no usable path has a round trip    *)
+(*              or is a direct path (the choice is made from the table as  *)
+(*              it is, and after the endpoint named a path's kind);        *)
+(*  EscapeRule  an active relay path with no round trip that failed        *)
+(*              PTO_FALLBACK probe timeouts gives way to a usable path     *)
+(*              that is not such a relay path, when there is one;          *)
+(*  FallRule    the fall-back of a failed direct path takes a relay path:  *)
+(*              the usable one of least rank, so one with a round trip     *)
+(*              when there is one, else the last relay path; the failed    *)
+(*              path is no longer validated.                               *)
+(*                                                                         *)
 (* The bound itself is the table's shape: NP slots, and every path the     *)
 (* connection holds takes one (TypeOK).                                    *)
 (*                                                                         *)
@@ -65,6 +79,16 @@
 (*              which still has the slot handle_inner found at the start   *)
 (*              of the datagram (none), adds it a second time; Unique      *)
 (*              fails. The model found it; the code now looks the id up.  *)
+(*  _rank       the rule before the second round of #598, Rank = "none":  *)
+(*              the cost and the slot alone, so a relay path with no       *)
+(*              round trip ties with, and by its slot beats, the relay     *)
+(*              path the session is on; RankRule fails.                    *)
+(*  _escape     Rank = "seen": no escape, so an active relay path that     *)
+(*              failed, with no round trip, never gives way to a relay     *)
+(*              path with one; EscapeRule fails.                           *)
+(*  _fall       Rank = "none": the fall-back of a failed direct path takes *)
+(*              a relay path with no round trip before one with a round    *)
+(*              trip; FallRule fails.                                      *)
 (***************************************************************************)
 EXTENDS PathOps, TLC
 
@@ -73,6 +97,8 @@ CONSTANTS Ids,    \* the path ids a datagram may arrive on; 1 is the dialed path
           Old,    \* TRUE: the rule before #399
           \* RelayKeep (PathOps): FALSE is the rule before the correction that keeps a relay path valid
           Lookup, \* FALSE: the rule before the correction (learning does not look the id up)
+          \* RT, Rank (PathOps): RT = 0 has no round trips (the rule of the first round); Rank "none" and "seen" are the
+          \* rules before the second round
           HDMAX   \* the dropped-packet counts explored
 
 VARIABLES role, c
@@ -81,13 +107,14 @@ vars == <<role, c>>
 \* a datagram carries a 1-RTT packet behind its handshake packet, or not
 Coals == BOOLEAN
 \* a path of a table: a relay path is validated
-SlotOf(S) == [id : S, v : BOOLEAN, k : {"direct"}] \cup [id : S, v : {TRUE}, k : {"relay"}]
+SlotOf(S) == [id : S, v : BOOLEAN, k : {"direct"}, r : 0..RT] \cup [id : S, v : {TRUE}, k : {"relay"}, r : 0..RT]
 SlotVals == {Empty} \cup SlotOf(Ids \ {1})
 UniqueT(t) == \A i, j \in 1..NP : (t[i].id # 0 /\ t[i].id = t[j].id) => i = j
 DialTables ==
-    {t \in {[i \in 1..NP |-> IF i = 1 THEN [id |-> 1, v |-> TRUE, k |-> d] ELSE f[i]] : f \in [1..NP -> SlotVals], d \in PKinds} :
+    {t \in {[i \in 1..NP |-> IF i = 1 THEN [id |-> 1, v |-> TRUE, k |-> d, r |-> 0] ELSE f[i]] :
+                f \in [1..NP -> SlotVals], d \in PKinds} :
         UniqueT(t)}
-C0(t) == [t |-> t, act |-> 1, hs |-> "wait", rf |-> 0, pend |-> 0, smp |-> FALSE, hd |-> 0]
+C0(t) == [t |-> t, act |-> 1, hs |-> "wait", rf |-> 0, pend |-> 0, smp |-> FALSE, f |-> FALSE, hd |-> 0]
 
 Init ==
     /\ role \in Roles
@@ -104,8 +131,15 @@ AppA == \E id \in Ids : c' = App(c, id)
 \* the host adds or removes a path
 AddA == \E id \in Ids : c' = [c EXCEPT !.t = AddPath(c.t, c.act, id).t]
 RmA == \E id \in Ids : c' = [c EXCEPT !.t = RemovePath(c.t, c.act, id).t]
+\* a timer pass; the endpoint names a path's kind; an acknowledged packet gives the active path a round trip; the third
+\* probe timeout in a row; the fall-back of a failed direct path alone. They need round trips to rank by.
+TimerA == RT > 0 /\ c' = Timer(c)
+InfoA == RT > 0 /\ \E id \in Ids, kd \in PKinds : c' = SetInfo(c, id, kd)
+MeasureA == RT > 0 /\ \E r \in 1..RT : c' = Measure(c, r)
+FailA == RT > 0 /\ c' = Fail(c)
+FallA == RT > 0 /\ c' = Fallback(c)
 
-Next == (DRx \/ DKey \/ RRxA \/ AppA \/ AddA \/ RmA) /\ UNCHANGED role
+Next == (DRx \/ DKey \/ RRxA \/ AppA \/ AddA \/ RmA \/ TimerA \/ InfoA \/ MeasureA \/ FailA \/ FallA) /\ UNCHANGED role
 Spec == Init /\ [][Next]_vars
 Bound == c.hd <= HDMAX
 
@@ -113,11 +147,12 @@ TypeOK ==
     /\ role \in {"dial", "resp"}
     /\ c.t \in [1..NP -> {Empty} \cup SlotOf(Ids)]
     /\ c.act \in 1..NP /\ c.hs \in {"wait", "key", "done"}
-    /\ c.rf \in Ids \cup {0} /\ c.pend \in Ids \cup {0} /\ c.smp \in BOOLEAN /\ c.hd \in Nat
+    /\ c.rf \in Ids \cup {0} /\ c.pend \in Ids \cup {0} /\ c.smp \in BOOLEAN /\ c.f \in BOOLEAN /\ c.hd \in Nat
 
 Unique == UniqueT(c.t)
-\* a relay path the connection holds is validated: nothing but a challenge validates a path, and a relay path is never
-\* challenged
+\* a relay path the connection holds is validated: nothing but a challenge validates a direct path, and a relay path
+\* is never challenged but valid from the moment the connection tracks it (the endpoint's naming of a path a relay's
+\* validates it, SetInfo)
 RelayValid == \A i \in 1..NP : (c.t[i].id # 0 /\ c.t[i].k = "relay") => c.t[i].v
 ActiveHeld == (\E i \in 1..NP : c.t[i].id # 0) => c.t[c.act].id # 0
 \* a dialing side's active path is validated: the dialed one, then the reply's
@@ -171,4 +206,38 @@ GiveUpRule ==
     /\ role = "dial" => \A r \in {"ok", "more", "bad"}, s \in BOOLEAN : Kept(c, Key(c, r, s))
     /\ role = "resp" => \A id \in Ids, est \in BOOLEAN : Kept(c, RRx(c, id, est))
     /\ \A id \in Ids : Kept(c, App(c, id)) /\ Kept(c, [c EXCEPT !.t = AddPath(c.t, c.act, id).t])
+
+\* the tables the choice of the active path may be made from: c as it is, or after the endpoint named one path's kind
+Pre(c0) == {c0} \cup {SetKind(c0, id, kd) : id \in Ids, kd \in PKinds}
+
+\* a usable path that is not a relay path with no round trip
+Seen(c0, j) == Usable(c0, j) /\ ~(c0.t[j].k = "relay" /\ c0.t[j].r = 0)
+
+RankStep(c0) ==
+    LET c1 == Choose(c0)
+    IN (c1.act # c0.act /\ c1.t[c1.act].k = "relay" /\ c1.t[c1.act].r = 0) =>
+           /\ (~Usable(c0, c0.act) \/ c0.f)
+           /\ \A j \in 1..NP : ~Seen(c0, j)
+RankRule == \A c0 \in Pre(c) : RankStep(c0)
+
+EscapeStep(c0) ==
+    LET c1 == Choose(c0)
+        a == c0.t[c0.act]
+    IN (a.id # 0 /\ a.k = "relay" /\ a.r = 0 /\ c0.f /\ \E j \in 1..NP : Seen(c0, j)) =>
+           /\ c1.act # c0.act
+           /\ Seen(c0, c1.act)
+EscapeRule == \A c0 \in Pre(c) : EscapeStep(c0)
+
+FallStep(c0) ==
+    LET c1 == Fallback(c0)
+        a == c0.t[c0.act]
+        rel == {i \in 1..NP : c0.t[i].id # 0 /\ c0.t[i].k = "relay"}
+        vrel == {i \in rel : c0.t[i].v}
+    IN (c0.f /\ a.id # 0 /\ a.k = "direct" /\ a.v /\ rel # {}) =>
+           /\ c1.act \in rel
+           /\ ~c1.t[c0.act].v
+           /\ (vrel # {} => c1.act \in vrel)
+           /\ ((\E j \in vrel : c0.t[j].r > 0) => c0.t[c1.act].r > 0)
+           /\ (vrel = {} => c1.act = Last(rel))
+FallRule == FallStep(c)
 =============================================================================

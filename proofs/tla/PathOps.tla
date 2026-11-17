@@ -1,54 +1,80 @@
 ------------------------------- MODULE PathOps -------------------------------
 (***************************************************************************)
-(* The path table of vinc-transport conn/path.rs and what a connection's  *)
+(* The path table of vinc-transport conn/path.rs and what a connection's   *)
 (* datagram input does to it (conn/recv.rs handle_inner, on_handshake,     *)
-(* process_payload; conn/drive.rs follow_reply), call for call.            *)
+(* process_payload; conn/drive.rs follow_reply), call for call, and the    *)
+(* choice of the active path (conn/path.rs rank, best_path, choose_path,   *)
+(* set_path_info; conn/timer.rs; the fall-back of conn/path_fall.rs).      *)
 (* ReplyPath.tla checks the operators over every interleaving and every    *)
 (* input; TraceReplyPath.tla replays the recorded runs of the real code.   *)
 (*                                                                         *)
 (* A table t is NP slots: Empty, or the path's id (from 1), whether it is  *)
-(* validated (v) and its kind (k: "direct", or "relay", a path through a   *)
-(* relay). A relay path is valid from the moment the connection tracks it  *)
-(* and is never challenged, so a relay path is always validated; a path a  *)
-(* connection learns by receiving on it is direct (the endpoint names a    *)
-(* relay path afterwards, which the model leaves out). act is the slot of  *)
-(* the active path. Learn is                                               *)
-(* new_path_slot as learn_path calls it, the one rule of both roles for a  *)
-(* path the connection learns by receiving on it: the slot of the path if *)
-(* it is held already, else the first empty slot, else the first          *)
-(* unvalidated path that is not the active one is given up, else no path  *)
-(* is added. Place is that rule without the look-up, the rule before the   *)
-(* correction that followed #399: it adds a path it already holds again.  *)
+(* validated (v), its kind (k: "direct", or "relay", a path through a      *)
+(* relay) and its round trip (r: 0 for none, else 1..RT). A relay path is  *)
+(* valid from the moment the connection tracks it and is never challenged, *)
+(* so a relay path is always validated; a path a connection learns by      *)
+(* receiving on it is direct until the endpoint names it a relay path      *)
+(* (SetInfo, which validates it). act is the slot of the active path.      *)
+(* Learn is new_path_slot as learn_path calls it, the one rule of both     *)
+(* roles for a path the connection learns by receiving on it: the slot of  *)
+(* the path if it is held already, else the first empty slot, else the     *)
+(* first unvalidated path that is not the active one is given up, else no  *)
+(* path is added. Place is that rule without the look-up, the rule before  *)
+(* the correction that followed #399: it adds a path it already holds      *)
+(* again.                                                                  *)
+(*                                                                         *)
+(* The active path is chosen by rank. The usable paths (held and           *)
+(* validated) are ranked by <<Unseen, Cost, slot>>, least first (Best). A  *)
+(* path is Unseen when it is a relay path with no round trip (r = 0) and   *)
+(* is either not the active path, or is the active path after PTO_FALLBACK *)
+(* probe timeouts in a row (f). Cost is the round trip, and RT + 1 more    *)
+(* for a relay path. Rank says how much of that rule the model applies:    *)
+(* "full" is the rule of the code, "seen" has no escape (the active path   *)
+(* is never unseen), "none" is the rule before: the cost and the slot      *)
+(* alone. Choose is choose_path: it moves to the best path at once from a  *)
+(* relay path (or from none), and the path it leaves keeps the round trip  *)
+(* sample, if there is one, as its own (Switch). Timer is a timer pass:    *)
+(* the fall-back of a failed direct path (Fallback), then Choose. SetInfo  *)
+(* is set_path_info, Measure an acknowledged packet (the active path gets  *)
+(* a round trip, the sample is there, f is cleared), Fail the third probe  *)
+(* timeout in a row. With RT = 0 no path has a round trip and nothing of   *)
+(* it changes a table.                                                     *)
 (*                                                                         *)
 (* A connection c: t and act; hs, the handshake ("wait": the first flight  *)
-(* is out, "key": a Reply waits for the key host, "done": established);   *)
+(* is out, "key": a Reply waits for the key host, "done": established);    *)
 (* rf, reply_from (the path of the last message the handshake took, 0 for  *)
 (* none); pend, the path of the Reply that waits for the key host (0 for   *)
 (* none), a ghost the properties read, not a field of the code; smp, the   *)
-(* round trip estimate has a sample; hd, the handshake_dropped count.      *)
+(* round trip estimate has a sample; f, the active path failed             *)
+(* PTO_FALLBACK probe timeouts in a row; hd, the handshake_dropped count.  *)
 (*                                                                         *)
 (* What a dialing side's handshake packet completes (Kinds), as its        *)
 (* machine answers it: "none" no message (a fragment of one, or no         *)
 (* handshake packet), "bad" a message that fails authentication (counted), *)
-(* "other" one refused for another reason, "rej" a reject with the right  *)
+(* "other" one refused for another reason, "rej" a reject with the right   *)
 (* echo (taken; nothing authenticated), "pend" a Reply that passed its     *)
-(* first checks (the key host decides), "auth" a resume Reply, or a late  *)
-(* one, that authenticated (the session is established at once). A Reply  *)
+(* first checks (the key host decides), "auth" a resume Reply, or a late   *)
+(* one, that authenticated (the session is established at once). A Reply   *)
 (* or a reject that arrives while a Reply waits for the key host is        *)
 (* refused (UnexpectedMessage).                                            *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
 
 CONSTANTS NP,
-          RelayKeep \* TRUE: the rule of the code, the path a session leaves keeps its validity if it is a relay path;
-                    \* FALSE: the rule before the correction, whatever the kind the path it leaves is unvalidated
+          RelayKeep, \* TRUE: the rule of the code, the path a session leaves keeps its validity if it is a relay path;
+                     \* FALSE: the rule before the correction, whatever the kind the path it leaves is unvalidated
+          RT,        \* the largest round trip a path holds; 0: the model has no round trips and nothing to choose by
+          Rank       \* "full": the rule of the code; "seen": no escape for the active path; "none": no unseen key
 
 PKinds == {"direct", "relay"}
-Empty == [id |-> 0, v |-> FALSE, k |-> "direct"]
+Empty == [id |-> 0, v |-> FALSE, k |-> "direct", r |-> 0]
 Kinds == {"none", "bad", "other", "rej", "pend", "auth"}
 
 \* the least element of a set of slots, 0 for none
 First(S) == IF S = {} THEN 0 ELSE CHOOSE i \in S : \A j \in S : i <= j
+
+\* the greatest element of a set of slots, 0 for none
+Last(S) == IF S = {} THEN 0 ELSE CHOOSE i \in S : \A j \in S : j <= i
 
 \* Paths::find: the first slot that holds the path id, 0 for none
 Find(t, id) == First({i \in 1..NP : t[i].id = id})
@@ -62,7 +88,8 @@ Slot(t, act) ==
 \* the table has no room
 Place(t, act, id) ==
     LET i == Slot(t, act)
-    IN IF i = 0 THEN [t |-> t, i |-> 0] ELSE [t |-> [t EXCEPT ![i] = [id |-> id, v |-> FALSE, k |-> "direct"]], i |-> i]
+    IN IF i = 0 THEN [t |-> t, i |-> 0]
+       ELSE [t |-> [t EXCEPT ![i] = [id |-> id, v |-> FALSE, k |-> "direct", r |-> 0]], i |-> i]
 
 \* learn_path (new_path_slot): the slot of a path already held, its state untouched, else Place
 Learn(t, act, id) == IF Find(t, id) # 0 THEN [t |-> t, i |-> Find(t, id)] ELSE Place(t, act, id)
@@ -81,18 +108,27 @@ RemovePath(t, act, id) ==
 \* as the connection tracks it
 Left(s) == [s EXCEPT !.v = IF RelayKeep /\ s.k = "relay" THEN @ ELSE FALSE]
 
+\* the round trip a path the session leaves is stamped with when a sample is held: any positive one (two measured
+\* relay paths are not compared by the model), none when the model has no round trips
+Sample == IF RT > 0 THEN 1 ELSE 0
+
+\* the path a session leaves by its own choice (switch_active) takes the connection's sample as its own round trip
+Stamp(s, smp) == IF smp /\ s.id # 0 THEN [s EXCEPT !.r = Sample] ELSE s
+
 \* follow_reply: the reply's path is learnt (found when it is held); the session moves to it, which is validated, and
-\* the path it leaves is left (Left). With no room for it the session stays on its path.
+\* the path it leaves is left (Left) and stamped. With no room for it the session stays on its path.
 FollowReply(c) ==
     LET id == c.rf
         l == Learn(c.t, c.act, id)
         c0 == [c EXCEPT !.rf = 0]
     IN IF id = 0 \/ l.i = 0 THEN c0
        ELSE IF l.i = c.act THEN [c0 EXCEPT !.t = l.t]
-       ELSE [c0 EXCEPT !.t = [l.t EXCEPT ![c.act] = Left(l.t[c.act]), ![l.i].v = TRUE], !.act = l.i]
+       ELSE [c0 EXCEPT !.t = [l.t EXCEPT ![c.act] = Stamp(Left(l.t[c.act]), c.smp), ![l.i].v = TRUE], !.act = l.i]
 
-\* pump at the establishment: follow_reply, and the round trip sample feed took if the first flight went unrepeated (s)
-Establish(c, s) == FollowReply([c EXCEPT !.hs = "done", !.pend = 0, !.smp = @ \/ s])
+\* pump at the establishment: follow_reply, then the round trip sample feed took if the first flight went unrepeated (s)
+Establish(c, s) ==
+    LET d == FollowReply([c EXCEPT !.hs = "done", !.pend = 0])
+    IN [d EXCEPT !.smp = c.smp \/ s]
 
 \* on_handshake of a dialing side: what the machine's answer to a completed message does (Drop::Empty once established)
 HsMsg(c, id, k, s) ==
@@ -135,4 +171,75 @@ RRx(c, id, est) ==
         c1 == IF Find(c.t, id) = 0 /\ (empty \/ c.hs # "done") THEN [c EXCEPT !.t = Learn(c.t, c.act, id).t] ELSE c
     IN IF est /\ c1.hs # "done" /\ Find(c1.t, id) # 0 /\ c1.t[c1.act].id # 0
        THEN [c1 EXCEPT !.hs = "done", !.t[c1.act].v = TRUE] ELSE c1
+
+\* ---- the choice of the active path ----
+
+\* a path is usable: held and validated
+Usable(c, i) == c.t[i].id # 0 /\ c.t[i].v
+
+\* The relay path of slot i is unseen under rank rk: it has no round trip, and it is not the active path, or (the
+\* escape, "full" alone) it is the active path after PTO_FALLBACK probe timeouts in a row. "none" has no unseen key.
+UnseenBy(rk, c, i) ==
+    /\ c.t[i].id # 0 /\ c.t[i].k = "relay" /\ c.t[i].r = 0
+    /\ IF rk = "none" THEN FALSE ELSE IF rk = "seen" THEN i # c.act ELSE i # c.act \/ c.f
+Unseen(c, i) == UnseenBy(Rank, c, i)
+
+\* the cost of a path: its round trip, and one more than any round trip for a relay path
+Cost(s) == s.r + IF s.k = "relay" THEN RT + 1 ELSE 0
+
+\* the rank of slot i, and the order of ranks (the least wins; the slot makes every rank distinct)
+RankKey(c, i) == <<IF Unseen(c, i) THEN 1 ELSE 0, Cost(c.t[i]), i>>
+Before(a, b) == a[1] < b[1] \/ (a[1] = b[1] /\ (a[2] < b[2] \/ (a[2] = b[2] /\ a[3] < b[3])))
+
+\* the slot of S of least rank, 0 for none
+Ranked(c, S) == IF S = {} THEN 0 ELSE CHOOSE i \in S : \A j \in S : ~Before(RankKey(c, j), RankKey(c, i))
+
+\* best_path: the usable path of least rank
+Best(c) == Ranked(c, {i \in 1..NP : Usable(c, i)})
+
+\* switch_active: the session moves to slot i by its own choice; the path it leaves is stamped with the sample
+Switch(c, i) ==
+    IF i = c.act \/ c.t[i].id = 0 THEN c
+    ELSE [c EXCEPT !.t = [c.t EXCEPT ![c.act] = Stamp(c.t[c.act], c.smp)], !.act = i]
+
+\* choose_path: to the best path at once from a relay path (or from none); from a direct path only for a gain, which the
+\* model leaves out
+Choose(c) ==
+    LET b == Best(c)
+    IN IF b = 0 \/ ~(c.t[c.act].id = 0 \/ c.t[c.act].k = "relay") THEN c ELSE Switch(c, b)
+
+\* fail_over and relay_fallback: the active direct path failed PTO_FALLBACK probe timeouts in a row; it is no longer
+\* validated, and the session moves to the validated relay path of least rank, else to the last relay path. Without a
+\* relay path nothing moves: the code challenges the failed path (the model leaves challenges out).
+Fallback(c) ==
+    LET a == c.t[c.act]
+        rel == {i \in 1..NP : c.t[i].id # 0 /\ c.t[i].k = "relay"}
+        vrel == {i \in rel : c.t[i].v}
+        tgt == IF vrel # {} THEN Ranked(c, vrel) ELSE Last(rel)
+    IN IF ~c.f \/ a.id = 0 \/ a.k # "direct" \/ ~a.v \/ tgt = 0 THEN c
+       ELSE Switch([c EXCEPT !.t[c.act].v = FALSE], tgt)
+
+\* a timer pass: the fall-back of a failed direct path, then the choice (on_path_timers)
+Timer(c) == Choose(Fallback(c))
+
+\* the endpoint names the kind of the path id (set_path_info) when the connection holds it and it differs
+SetKind(c, id, kd) ==
+    LET i == Find(c.t, id)
+    IN IF i = 0 THEN c ELSE [c EXCEPT !.t[i].k = kd]
+
+\* set_path_info: the new kind first, then the choice (Choose moves only from a relay path or from none), then a path
+\* named a relay's is validated, as every relay path is
+SetInfo(c, id, kd) ==
+    LET i == Find(c.t, id)
+        c1 == Choose(SetKind(c, id, kd))
+    IN IF i = 0 \/ c.t[i].k = kd THEN c
+       ELSE IF kd = "relay" THEN [c1 EXCEPT !.t[i].v = TRUE] ELSE c1
+
+\* an acknowledged packet of an established connection: the active path has a round trip r, the sample is there and the
+\* probe timeouts in a row are over
+Measure(c, r) ==
+    IF c.hs # "done" \/ c.t[c.act].id = 0 THEN c ELSE [c EXCEPT !.t[c.act].r = r, !.smp = TRUE, !.f = FALSE]
+
+\* the third probe timeout in a row on the active path of an established connection
+Fail(c) == IF c.hs # "done" \/ c.t[c.act].id = 0 THEN c ELSE [c EXCEPT !.f = TRUE]
 =============================================================================
