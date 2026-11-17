@@ -299,7 +299,7 @@ impl Run<'_> {
     }
 
     fn burst(&mut self) {
-        // Many one-byte frames at even offsets of one stream fragment its stored ranges past the 96 it can track.
+        // Many one-byte frames at even offsets of one stream spill its stored ranges past the 96 it keeps inline.
         let id = REMOTE[self.below(4) as usize];
         let limit = self.slot(id).map_or(WINDOW, |s| s.limit);
         for k in 0..110u64 {
@@ -899,6 +899,24 @@ fn stream_table_runs_match_the_models() {
         if let Ok(dir) = std::env::var("PINC_TRACE_DIR") {
             std::fs::create_dir_all(&dir).unwrap();
             std::fs::write(std::path::Path::new(&dir).join("streams.ndjson"), &out).unwrap();
+        }
+    });
+}
+
+/// A stream whose ranges filled the pool chunk they spilled into refuses the next hole with `Fragmented`: 1,024 ranges
+/// of one byte, then one more. The runs above never get that far, so the refusal has a run of its own.
+#[test]
+fn a_stream_that_fills_its_spill_chunk_is_refused_fragmented_in_the_trace() {
+    big_stack(|| {
+        let mut out = String::new();
+        let mut r = new_run(0x5354_5245_414d_f000, &mut out, 99);
+        r.log(r#""op":"init""#);
+        for k in 0..1030u64 {
+            r.frame(0, 2 * k + 8, 1, false, false);
+        }
+        drop(r);
+        for needle in [r#""sp":true"#, r#""err":"Fragmented""#] {
+            assert!(out.contains(needle), "the run never reaches {needle}");
         }
     });
 }
