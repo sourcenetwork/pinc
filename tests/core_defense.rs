@@ -1,5 +1,5 @@
 //! The defences of an endpoint that answers strangers: the amplification ledger, the half-open cap with its Initial
-//! size floors and its expiry (30 s, 60 s on a thin node).
+//! size floors and its expiry (30 s, 60 s on a thin node, 60 s once a session answered).
 #![allow(
     clippy::many_single_char_names,
     clippy::unwrap_used,

@@ -65,7 +65,7 @@ pub enum TraceEvent {
         /// Server sessions owed to the host.
         owed: u64,
     },
-    /// An unauthenticated session lived its life (30 s, 60 s on a thin node) and was dropped.
+    /// An unauthenticated session lived its life (30 s, 60 s on a thin node, 60 s once it answered) and was dropped.
     HalfOpenExpired {
         /// The session slot.
         slot: u64,

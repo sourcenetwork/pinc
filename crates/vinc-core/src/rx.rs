@@ -483,7 +483,8 @@ ep_impl! {
     /// every [`Event::Incoming`](crate::Event::Incoming) it reads, so every session that finishes its handshake has a
     /// place to wait. Sessions whose peer is not authenticated yet hold at most half of the room (rounded up, and
     /// never more than [`MAX_HALF_OPEN`]): a flood of first flights that never finish, each of which keeps its place
-    /// for [`HALF_OPEN_LIFE`], leaves the rest to peers that resume with a ticket. Unlimited until set.
+    /// for [`HALF_OPEN_LIFE`] (for [`HALF_OPEN_HOLD`] once it answered), leaves the rest to peers that resume with a
+    /// ticket. Unlimited until set.
     pub const fn set_backlog_room(&mut self, room: usize) {
         self.backlog_room = room;
     }

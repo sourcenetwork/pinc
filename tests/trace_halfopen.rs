@@ -28,8 +28,8 @@
 //! bytes for a full Initial, 464 for a short one, 93 for a Hello), the owed sessions leave room, and it resumes or the
 //! count is under the cap, which is 256 or half the room the host left, rounded up, when that is less. A short Initial
 //! or a Hello that the responder would only reject, or not answer, is decided without a session (admitted 2, answered
-//! with a reject, or 3, dropped) and takes no slot, and a packet of a genuine dialer that finds no session under its
-//! ids is never decided so. A refused or dropped first flight changes no slot and counts one dropped, refused or
+//! with a reject, or 3, dropped) and takes no slot. The genuine dialer in these runs holds a live prekey and ticket,
+//! so a packet of its that finds no session under its ids is never decided so. A refused or dropped first flight changes no slot and counts one dropped, refused or
 //! stalled datagram; a reject counts none in its call unless the ledger or a full queue refuses it, and is counted as
 //! sent when it is written.
 #![allow(

@@ -370,8 +370,8 @@ impl<const K: usize, const D: usize> Rec<K, D> {
         let open = owed < room;
         if admitted >= 2 {
             // answered with a reject or dropped, without a session: a short Initial or a Hello at its floor or more, no
-            // resumption, and never a first packet a genuine dialer sent (this branch runs only while no session holds
-            // the ids)
+            // resumption, and in these runs never a first packet the genuine dialer sent (it holds a live prekey and
+            // ticket; this branch runs only while no session holds the ids)
             assert!(
                 matches!(kind, 2 | 6) && resume == 0 && len >= f && open,
                 "a first packet was answered without a session that the responder would not only reject"
