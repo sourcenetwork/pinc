@@ -117,6 +117,37 @@ RemoveSeq(c, mb, node, seq) ==
                  IN [held |-> IF h2.count = 0 THEN Del(mb.held, node) ELSE Put(mb.held, node, h2),
                      seq |-> mb.seq, st |-> Bump(mb.st, "delivered", 1)]
 
+(* QBytes: the bytes a queue of messages takes, headers included *)
+QBytes(c, q) == LET F[i \in 0..Len(q)] == IF i = 0 THEN 0 ELSE F[i - 1] + Size(c, q[i]) IN F[Len(q)]
+
+(* Fits: the messages of q whose body is at most max, in their order *)
+Fits(q, max) == SelectSeq(q, LAMBDA m : m.len <= max)
+
+(* DrainFit: the release pass of a member as ONE ordered pass over its queue, oldest first. The expired messages are
+   dropped; each message that fits (body at most max) is offered to the taker; a message taken leaves and is counted
+   delivered; the taker accepts the first k offers and refuses the next one, which stays held and after which nothing
+   more is offered (k at or above the number that fit: every fitting message is taken). Whatever stays keeps its order
+   and the count and the byte total follow what leaves. The pass is read in steps by LookFit and RemoveSeq.
+   Returns live (the unexpired queue), offered, taken, kept, the member's new state h and the new statistics st. *)
+DrainFit(c, mb, now, node, max, k) ==
+    IF node \notin DOMAIN mb.held
+    THEN [live |-> <<>>, offered |-> <<>>, taken |-> <<>>, kept |-> <<>>, h |-> NewHeld, st |-> mb.st]
+    ELSE LET e == ExpireH(c, now, mb.held[node])
+             live == e.h.q
+             fit == Fits(live, max)
+             n == IF k < Len(fit) THEN k ELSE Len(fit)
+             taken == SubSeq(fit, 1, n)
+             gone == {taken[i].seq : i \in 1..n}
+             kept == SelectSeq(live, LAMBDA m : m.seq \notin gone)
+         IN [live |-> live, offered |-> SubSeq(fit, 1, IF n < Len(fit) THEN n + 1 ELSE n), taken |-> taken, kept |-> kept,
+             h |-> [q |-> kept, head |-> e.h.head, used |-> Sub(e.h.used, QBytes(c, taken)), count |-> Sub(e.h.count, n)],
+             st |-> Bump(Bump(mb.st, "expired", e.n), "delivered", n)]
+
+(* DrainMb: the mailbox after a DrainFit d on the member *)
+DrainMb(mb, node, d) ==
+    IF node \notin DOMAIN mb.held THEN mb
+    ELSE [held |-> IF d.h.count = 0 THEN Del(mb.held, node) ELSE Put(mb.held, node, d.h), seq |-> mb.seq, st |-> d.st]
+
 (* Mailbox::pop_fitting: the look followed by the removal of what it returned; max is the longest body the caller can
    deliver *)
 Pop(c, mb, now, node, max) ==

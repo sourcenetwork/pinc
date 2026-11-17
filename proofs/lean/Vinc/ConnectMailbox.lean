@@ -25,6 +25,11 @@ Theorems, for every configuration with `0 < B` and every sequence of steps from 
   is younger than the maximum age.
 * `drop_oldest`: the quota loop removes a prefix of the queue.
 * `wake_first` and `wake_spaced`: the wake rule.
+* The release pass that steps over a message too long for the route, as one ordered walk (`drainWalk`, `drainHeld`):
+  `drainWalk_kept` and `drain_kept` (what stays is a sublist of the input, in order), `drainWalk_offered` and
+  `drain_offered` (what is offered is a sublist, in arrival order), `drainWalk_fits`, `drainWalk_stopped` (after a
+  stop nothing is offered), `drainWalk_perm` and `drain_partition` (what is taken and what stays are together the
+  unexpired messages), `drain_books` (the byte total and the count are those of what stays).
 -/
 
 namespace Vinc.ConnectMailbox
@@ -799,5 +804,167 @@ theorem wake_quiet (rearm now woke : Nat) (h : now - woke < rearm) :
   unfold holdWoke shouldWake
   have : ¬ rearm ≤ now - woke := by omega
   simp [this]
+
+/-! ### The release pass: one ordered walk that steps over a message too long for the route -/
+
+/-- The pass over a list of messages, oldest first. `mx` is the longest body the route takes, `k` the number of offers
+the taker still accepts, `stopped` whether it has said stop. A message that does not fit is stepped over and stays; a
+message that fits is offered, and is taken while the taker accepts; the first offer it refuses stays, and after it
+nothing more is offered. Returns the messages offered, the messages taken and the messages that stay
+(`ConnectMailboxOps.tla` `DrainFit`). -/
+def drainWalk (mx : Nat) : Nat → Bool → List Msg → List Msg × List Msg × List Msg
+  | _, _, [] => ([], [], [])
+  | k, s, m :: r =>
+    if s = true ∨ ¬ m.len ≤ mx then
+      let x := drainWalk mx k s r
+      (x.1, x.2.1, m :: x.2.2)
+    else if k = 0 then
+      let x := drainWalk mx 0 true r
+      (m :: x.1, x.2.1, m :: x.2.2)
+    else
+      let x := drainWalk mx (k - 1) false r
+      (m :: x.1, m :: x.2.1, x.2.2)
+
+/-- The pass on a member: the old messages expire, the walk runs over what is left, and the count and the byte total
+follow what was taken. Returns the member, the messages offered and the messages taken. -/
+def drainHeld (c : Cfg) (now : Nat) (h : Held) (k mx : Nat) : Held × List Msg × List Msg :=
+  let e := expire c now h
+  let w := drainWalk mx k false e.1.q
+  (⟨w.2.2, e.1.head, e.1.used - sizes c w.2.1, e.1.count - w.2.1.length⟩, w.1, w.2.1)
+
+theorem sizes_cons (c : Cfg) (m : Msg) (l : List Msg) : sizes c (m :: l) = (c.H + m.len) + sizes c l := by
+  simp [sizes]
+
+/-- What is taken and what stays are the messages given, none lost and none twice. -/
+theorem drainWalk_perm (mx : Nat) : ∀ (q : List Msg) (k : Nat) (s : Bool),
+    List.Perm ((drainWalk mx k s q).2.1 ++ (drainWalk mx k s q).2.2) q := by
+  intro q; induction q with
+  | nil => intro k s; simp [drainWalk]
+  | cons m r ih =>
+    intro k s
+    simp only [drainWalk]
+    split
+    · exact List.perm_middle.trans ((ih k s).cons m)
+    · split
+      · exact List.perm_middle.trans ((ih 0 true).cons m)
+      · exact (ih (k - 1) false).cons m
+
+/-- What stays is a sublist of the input: the messages that stay keep their order. -/
+theorem drainWalk_kept (mx : Nat) : ∀ (q : List Msg) (k : Nat) (s : Bool),
+    List.Sublist (drainWalk mx k s q).2.2 q := by
+  intro q; induction q with
+  | nil => intro k s; simp [drainWalk]
+  | cons m r ih =>
+    intro k s
+    simp only [drainWalk]
+    split
+    · exact (ih k s).cons₂ m
+    · split
+      · exact (ih 0 true).cons₂ m
+      · exact (ih (k - 1) false).cons m
+
+/-- What is offered is a sublist of the input: the messages are offered in arrival order. -/
+theorem drainWalk_offered (mx : Nat) : ∀ (q : List Msg) (k : Nat) (s : Bool),
+    List.Sublist (drainWalk mx k s q).1 q := by
+  intro q; induction q with
+  | nil => intro k s; simp [drainWalk]
+  | cons m r ih =>
+    intro k s
+    simp only [drainWalk]
+    split
+    · exact (ih k s).cons m
+    · split
+      · exact (ih 0 true).cons₂ m
+      · exact (ih (k - 1) false).cons₂ m
+
+/-- Every message offered fits the route. -/
+theorem drainWalk_fits (mx : Nat) : ∀ (q : List Msg) (k : Nat) (s : Bool),
+    ∀ x ∈ (drainWalk mx k s q).1, x.len ≤ mx := by
+  intro q; induction q with
+  | nil => intro k s x hx; simp [drainWalk] at hx
+  | cons m r ih =>
+    intro k s x hx
+    simp only [drainWalk] at hx
+    split at hx
+    · exact ih k s x hx
+    · rename_i h1
+      have hfit : m.len ≤ mx := by
+        by_cases hc : m.len ≤ mx
+        · exact hc
+        · exact absurd (Or.inr hc) h1
+      by_cases hk : k = 0
+      · rw [if_pos hk] at hx
+        have hx' : x ∈ m :: (drainWalk mx 0 true r).1 := hx
+        rcases List.mem_cons.mp hx' with hx'' | hx''
+        · rw [hx'']; exact hfit
+        · exact ih 0 true x hx''
+      · rw [if_neg hk] at hx
+        have hx' : x ∈ m :: (drainWalk mx (k - 1) false r).1 := hx
+        rcases List.mem_cons.mp hx' with hx'' | hx''
+        · rw [hx'']; exact hfit
+        · exact ih (k - 1) false x hx''
+
+/-- After the taker says stop nothing is offered and nothing is taken. -/
+theorem drainWalk_stopped (mx k : Nat) : ∀ q : List Msg,
+    (drainWalk mx k true q).1 = [] ∧ (drainWalk mx k true q).2.1 = [] := by
+  intro q; induction q with
+  | nil => simp [drainWalk]
+  | cons m r ih => simp [drainWalk, ih]
+
+/-- The bytes of what is taken and of what stays are those of the input. -/
+theorem drainWalk_sizes (c : Cfg) (mx : Nat) : ∀ (q : List Msg) (k : Nat) (s : Bool),
+    sizes c (drainWalk mx k s q).2.1 + sizes c (drainWalk mx k s q).2.2 = sizes c q := by
+  intro q; induction q with
+  | nil => intro k s; simp [drainWalk, sizes]
+  | cons m r ih =>
+    intro k s
+    simp only [drainWalk]
+    split
+    · simp only [sizes_cons]; have := ih k s; omega
+    · split
+      · simp only [sizes_cons]; have := ih 0 true; omega
+      · simp only [sizes_cons]; have := ih (k - 1) false; omega
+
+/-- The messages that stay are a sublist of the messages the member held: they keep their order. -/
+theorem drain_kept (c : Cfg) (now : Nat) (h : Held) (k mx : Nat) :
+    List.Sublist (drainHeld c now h k mx).1.q h.q := by
+  obtain ⟨j, hj⟩ := expireN_prefix c now h.q.length h
+  have hw := drainWalk_kept mx (expire c now h).1.q k false
+  have hd : (expire c now h).1.q = h.q.drop j := hj
+  show List.Sublist (drainWalk mx k false (expire c now h).1.q).2.2 h.q
+  refine hw.trans ?_
+  rw [hd]
+  exact List.drop_sublist _ _
+
+/-- The messages offered are a sublist of the messages the member held: they are offered in arrival order. -/
+theorem drain_offered (c : Cfg) (now : Nat) (h : Held) (k mx : Nat) :
+    List.Sublist (drainHeld c now h k mx).2.1 h.q := by
+  obtain ⟨j, hj⟩ := expireN_prefix c now h.q.length h
+  have hw := drainWalk_offered mx (expire c now h).1.q k false
+  have hd : (expire c now h).1.q = h.q.drop j := hj
+  show List.Sublist (drainWalk mx k false (expire c now h).1.q).1 h.q
+  refine hw.trans ?_
+  rw [hd]
+  exact List.drop_sublist _ _
+
+/-- The messages taken and the messages that stay are together exactly the member's messages that did not expire. -/
+theorem drain_partition (c : Cfg) (now : Nat) (h : Held) (k mx : Nat) :
+    List.Perm ((drainHeld c now h k mx).2.2 ++ (drainHeld c now h k mx).1.q) (expire c now h).1.q :=
+  drainWalk_perm mx (expire c now h).1.q k false
+
+/-- The byte total and the count of the member are the sum of the sizes and the length of what stays. -/
+theorem drain_books {c : Cfg} (hB : 0 < c.B) {s : Nat} (now : Nat) (h : Held) (k mx : Nat) (hi : HI c s h) :
+    (drainHeld c now h k mx).1.used = sizes c (drainHeld c now h k mx).1.q ∧
+    (drainHeld c now h k mx).1.count = (drainHeld c now h k mx).1.q.length := by
+  have he : HI c s (expire c now h).1 := HI_expireN (s := s) now hB h.q.length h hi
+  obtain ⟨hu, _, hc, _⟩ := he
+  have hs := drainWalk_sizes c mx (expire c now h).1.q k false
+  have hp := (drainWalk_perm mx (expire c now h).1.q k false).length_eq
+  simp only [List.length_append] at hp
+  show (expire c now h).1.used - sizes c (drainWalk mx k false (expire c now h).1.q).2.1
+        = sizes c (drainWalk mx k false (expire c now h).1.q).2.2 ∧
+      (expire c now h).1.count - (drainWalk mx k false (expire c now h).1.q).2.1.length
+        = (drainWalk mx k false (expire c now h).1.q).2.2.length
+  exact ⟨by omega, by omega⟩
 
 end Vinc.ConnectMailbox
