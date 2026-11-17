@@ -3,7 +3,8 @@
 //! relay's path as a validated standby (pinged, and taken again through `path_lost`, the host's `set_active` or the
 //! peer's data on it, not by the transport's own timers), while a direct path it leaves is validated again only by a
 //! challenge. A relay path is seen only once a packet sent on it was acknowledged; a path nothing was seen on never
-//! takes the session from the one it runs on, and a path that takes a slot inherits nothing from the one before it.
+//! takes the session from the one it runs on, and a path that takes a slot inherits neither the round trip nor the seen
+//! fact of the one before it (the slot's reorder state carries over).
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
 
 use std::cell::{Cell, RefCell};
@@ -331,6 +332,12 @@ fn a_session_moved_onto_a_relay_path_nothing_was_measured_on_returns_to_the_seen
             Some(OTHER),
             "the session was not on the seen path at the third timeout"
         );
+        timer_step(net);
+        assert_eq!(
+            net.a.conn.active_path(),
+            Some(OTHER),
+            "a timer pass took the session back to the path nothing was seen on"
+        );
         assert_eq!(m.changes, 1, "the active path changed more than once after the move");
         assert_eq!(net.a.conn.active_path(), Some(OTHER));
         assert!(net.a.conn.is_connected(), "the session closed: {:?}", net.a.closed());
@@ -344,12 +351,28 @@ fn two_relay_paths_nothing_was_measured_on_do_not_trade_the_session_back_and_for
         // again (the Reply's capture dropped what the responder sent on it).
         net.link.route(PathId(1)).ba.p.loss_ppm = 0;
         assert!(net.a.conn.path_rtt(PathId(1)).is_none());
-        let m = run_past_third_pto(net, &pattern(5_000, 7));
+        let mut m = run_watching(net, &pattern(5_000, 7), |_, _, since| since.is_some());
         assert_eq!(
             m.at_third_pto,
             Some(PathId(1)),
             "the session did not move to the working path at the third timeout"
         );
+        timer_step(net);
+        assert_eq!(
+            net.a.conn.active_path(),
+            Some(PathId(1)),
+            "a timer pass at the third timeout took the session back to the path nothing was seen on"
+        );
+        let mut last = net.a.conn.active_path();
+        let until = net.now + 20 * SEC;
+        net.run(until, |n| {
+            let path = n.a.conn.active_path();
+            if path != last {
+                m.changes += 1;
+                last = path;
+            }
+            false
+        });
         assert_eq!(m.changes, 1, "the active path changed more than once");
         assert_eq!(net.a.conn.active_path(), Some(PathId(1)));
         assert!(net.a.conn.is_connected(), "the session closed: {:?}", net.a.closed());
@@ -375,7 +398,7 @@ fn a_session_that_left_a_failing_relay_path_does_not_go_back_to_it_before_anythi
 }
 
 #[test]
-fn a_path_that_takes_a_slot_inherits_nothing_from_the_path_that_left_it() {
+fn a_path_that_takes_a_slot_inherits_neither_the_round_trip_nor_the_seen_fact_of_the_path_that_left_it() {
     answered_elsewhere(relay(), Some(relay()), |net| {
         see_other(net, 10 * MS);
         with_direct_path(net);
