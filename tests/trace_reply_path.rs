@@ -3,9 +3,9 @@
 //! back on the dialed path, on another path the dial holds, on a path it does not hold, on one its table gave up, at a
 //! full table, cut over two paths, after forged Replies and after a prekey reject, a resume Reply, and a resume Reply
 //! with a 1-RTT packet behind it in the same datagram. After every call the dialing side's path table (`path_list`, in
-//! slot order, and `active_path`), whether it is established, whether its round trip has a sample and its dropped
-//! handshake count are recorded as ndjson (`reply_path.ndjson`) for the TLA+ trace check (`TraceReplyPath.tla`) and
-//! the Lean replay (`Vinc/TraceReplyPath.lean`).
+//! slot order with the kind of each path, direct or relay, and `active_path`), whether it is established, whether its
+//! round trip has a sample and its dropped handshake count are recorded as ndjson (`reply_path.ndjson`) for the TLA+
+//! trace check (`TraceReplyPath.tla`) and the Lean replay (`Vinc/TraceReplyPath.lean`). Four runs dial on a relay path.
 //!
 //! A datagram is recorded with the path it arrived on, with what its handshake packet completed as the connection
 //! answered it (`bad` the dropped count rose, `auth` the session was established by it, `pend` it raised a key request:
@@ -36,6 +36,7 @@ use vinc_crypto::IdentityAlg;
 use vinc_tests::*;
 use vinc_transport::conn::{PathError, PathId, PathInfo};
 use vinc_transport::packet::{Header, packets};
+use vinc_transport::recovery::PathKind;
 
 /// The length of the connection ids in a 1-RTT header: the transport's default.
 const CID_LEN: usize = 4;
@@ -50,10 +51,14 @@ struct Log {
     coal: bool,
 }
 
+fn kind(k: PathKind) -> &'static str {
+    if k == PathKind::Relay { "relay" } else { "direct" }
+}
+
 fn view(c: &Conn<'_>) -> String {
     let paths: Vec<String> = c
         .path_list()
-        .map(|(id, _, v)| format!(r#"{{"id":{},"v":{v}}}"#, id.0))
+        .map(|(id, info, v)| format!(r#"{{"id":{},"v":{v},"kind":"{}"}}"#, id.0, kind(info.kind)))
         .collect();
     format!(
         r#"{{"paths":[{}],"act":{},"est":{},"smp":{},"hd":{}}}"#,
@@ -74,11 +79,12 @@ fn log(l: &mut Log, net: &Net<'_, '_>, body: &str) {
     );
 }
 
-/// A new run: the dialing side holds its dialed path 1. Its key requests wait for the test.
-fn start(l: &mut Log, net: &mut Net<'_, '_>) {
+/// A new run: the dialing side holds its dialed path 1, a relay path when `relay`. Its key requests wait for the test.
+fn start(l: &mut Log, net: &mut Net<'_, '_>, relay: bool) {
     l.run += 1;
     net.a.auto_keys = false;
-    log(l, net, r#""op":"init","np":4,"id":1"#);
+    let k = if relay { "relay" } else { "direct" };
+    log(l, net, &format!(r#""op":"init","np":4,"id":1,"kind":"{k}""#));
 }
 
 fn add(l: &mut Log, net: &mut Net<'_, '_>, p: u64) {
@@ -210,10 +216,21 @@ fn bounded(net: &Net<'_, '_>) {
 
 /// A full handshake whose Reply comes back on `p` after the host added `added` (and removed `removed`).
 fn full(l: &mut Log, alg: IdentityAlg, seed: u64, added: &[u64], removed: &[u64], p: u64) {
+    full_on(l, alg, seed, added, removed, p, false);
+}
+
+/// `full` with the dial sent on a relay path when `relay`: the path the session leaves then stays validated.
+fn full_on(l: &mut Log, alg: IdentityAlg, seed: u64, added: &[u64], removed: &[u64], p: u64, relay: bool) {
     let mut w = World::new(alg);
+    if relay {
+        w.dial_info = PathInfo {
+            kind: PathKind::Relay,
+            ..PathInfo::default()
+        };
+    }
     let (mut sa, mut sb) = (Store::new(true), Store::new(false));
     let mut net = setup(&mut w, &mut sa, &mut sb, Link::new(seed, Params::new(10 * MS)));
-    start(l, &mut net);
+    start(l, &mut net, relay);
     for &q in added {
         add(l, &mut net, q);
     }
@@ -227,6 +244,12 @@ fn full(l: &mut Log, alg: IdentityAlg, seed: u64, added: &[u64], removed: &[u64]
     keys(l, &mut net);
     assert!(net.a.conn.is_connected(), "the Reply on path {p} was not taken");
     assert!(held(&net, p) && active(&net) == p && net.a.conn.path_validated(PathId(p)));
+    if relay && p != 1 {
+        assert!(
+            held(&net, 1) && net.a.conn.path_validated(PathId(1)),
+            "the relay path the session left is no longer validated"
+        );
+    }
     // Once established, a dialing side takes no handshake packet: the Reply again, on a path it does not hold.
     rx(l, &mut net, 7, &reply[0]);
     assert!(!held(&net, 7) && active(&net) == p);
@@ -239,7 +262,7 @@ fn split(l: &mut Log, seed: u64, p: u64, q: u64) {
     let mut w = World::new(IdentityAlg::Hybrid);
     let (mut sa, mut sb) = (Store::new(true), Store::new(false));
     let mut net = setup(&mut w, &mut sa, &mut sb, Link::new(seed, Params::new(10 * MS)));
-    start(l, &mut net);
+    start(l, &mut net, false);
     let reply = answer(&mut net);
     let n = message_len(&reply);
     assert!(n > 1, "the Reply fits one datagram");
@@ -258,7 +281,7 @@ fn forged(l: &mut Log, seed: u64) {
     let id = w.rp.id;
     let (mut sa, mut sb) = (Store::new(true), Store::new(false));
     let mut net = setup(&mut w, &mut sa, &mut sb, Link::new(seed, Params::new(10 * MS)));
-    start(l, &mut net);
+    start(l, &mut net, false);
     net.link.route(PathId(1)).ba.p.loss_ppm = 1_000_000;
     let initial = sent_initial(&mut net);
     let dcid = net.a.conn.local_cids().next().unwrap();
@@ -303,7 +326,7 @@ fn reject(l: &mut Log, seed: u64) {
     w.short = true;
     let (mut sa, mut sb) = (Store::new(true), Store::new(false));
     let mut net = setup(&mut w, &mut sa, &mut sb, Link::new(seed, Params::new(10 * MS)));
-    start(l, &mut net);
+    start(l, &mut net, false);
     let rejects = answer(&mut net);
     let first = rejects.first().unwrap().clone();
     rx(l, &mut net, 9, &first);
@@ -327,7 +350,7 @@ fn resume(l: &mut Log, seed: u64, added: &[u64], p: u64, coalesce: bool) {
     let a = w.client(&mut sa, Some(ticket), vinc_security::ClientTickets::new());
     let b = w.server(&mut sb);
     let mut net = Net::new(a, b, Link::new(seed, Params::new(10 * MS)), &mut w.stores);
-    start(l, &mut net);
+    start(l, &mut net, false);
     for &q in added {
         add(l, &mut net, q);
     }
@@ -369,6 +392,12 @@ fn reply_path_traces() {
         full(&mut l, IdentityAlg::Ed25519, 84, &[9], &[9], 9);
         full(&mut l, IdentityAlg::Ed25519, 85, &[3, 4, 5, 6], &[], 9);
         full(&mut l, IdentityAlg::Hybrid, 86, &[3], &[], 9);
+        // The dial sent on a relay path: the relay path the session leaves stays validated, and a full table gives up
+        // one of the paths that did not validate, not the relay path.
+        full_on(&mut l, IdentityAlg::Ed25519, 95, &[], &[], 9, true);
+        full_on(&mut l, IdentityAlg::Ed25519, 96, &[2], &[], 2, true);
+        full_on(&mut l, IdentityAlg::Ed25519, 97, &[3, 4, 5], &[], 9, true);
+        full_on(&mut l, IdentityAlg::Ed25519, 98, &[], &[], 1, true);
         split(&mut l, 87, 9, 1);
         split(&mut l, 88, 1, 9);
         forged(&mut l, 89);

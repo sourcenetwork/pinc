@@ -424,6 +424,8 @@ pub struct World {
     pub client_cfg: Option<Config>,
     /// Mixed into both sides' random generators, so two worlds with different seeds run different sessions.
     pub seed: u8,
+    /// The kind of the path the client dials on.
+    pub dial_info: PathInfo,
 }
 
 impl World {
@@ -442,6 +444,7 @@ impl World {
             short: false,
             client_cfg: None,
             seed: 0,
+            dial_info: PathInfo::default(),
         }
     }
 
@@ -471,7 +474,7 @@ impl World {
                 peer_has_prekey: self.short,
                 ticket,
                 path: PathId(1),
-                path_info: PathInfo::default(),
+                path_info: self.dial_info,
             },
             store.resources(),
             &mut env,

@@ -244,6 +244,10 @@ name = "transport_reply_path"
 path = "transport_reply_path.rs"
 
 [[test]]
+name = "transport_relay_valid"
+path = "transport_relay_valid.rs"
+
+[[test]]
 name = "membership_codec"
 path = "membership_codec.rs"
 
