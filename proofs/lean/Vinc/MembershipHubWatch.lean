@@ -60,18 +60,17 @@ def ExcusedB (l : Lease) (since : Nat) (sleep : Option Nat) (ev : Option Evid) :
   decide (since ≤ l.renewed) || (match ev with | some x => decide (since ≤ x.rx) | none => false) ||
     (match sleep with | some s => decide (since ≤ satAdd s SLEEP_WIN) | none => false)
 
-/-- Every suspicion whose second probe is recorded sent it on a path other than the session (1 direct, 2 relay). -/
+/-- Every suspicion whose second probe is recorded sent it on a path other than the session (the code takes only
+the relay, 2; the wire still carries 1, the direct path, from a hub of the rule before). -/
 def N.SuspOk (n : N) : Prop :=
   ∀ k sp tb path, n.susp.get? k = some sp → sp.probeB = some (tb, path) → path = 1 ∨ path = 2
 
-theorem independentRoute_path (n : N) (now m : Nat) (ev : Option Evid) (r : Route) (path : Nat)
-    (h : n.independentRoute now m ev = some (r, path)) : path = 1 ∨ path = 2 := by
+theorem independentRoute_path (e : Env) (n : N) (now m : Nat) (ev : Option Evid) (r : Route) (path : Nat)
+    (h : n.independentRoute e now m ev = some (r, path)) : path = 1 ∨ path = 2 := by
   unfold N.independentRoute at h
-  split at h
-  · simp at h; left; exact h.2.symm
-  · simp only [Option.map_eq_some_iff] at h
-    obtain ⟨x, _, hx⟩ := h
-    right; simp at hx; exact hx.2.symm
+  simp only [Option.map_eq_some_iff] at h
+  obtain ⟨x, _, hx⟩ := h
+  right; simp at hx; exact hx.2.symm
 
 theorem scheduleConfirm_roster (n : N) (now at_ : Nat) : (n.scheduleConfirm now at_).roster = n.roster := by
   unfold N.scheduleConfirm; rfl
@@ -81,7 +80,7 @@ def N.nsFirst (e : Env) (n : N) (m : Nat) : N :=
   (N.tx e n m .session .probe).1.trace (.probeSent m 0)
 
 def N.nsSecond (e : Env) (n : N) (now m : Nat) (ev : Option Evid) : N × Option (Nat × Nat) :=
-  match n.independentRoute now m ev with
+  match n.independentRoute e now m ev with
   | some (route, path) =>
     let n := (N.tx e n m route .probe).1
     (n.trace (.probeSent m path), some (now, path))
@@ -92,8 +91,8 @@ theorem rewatch_roster (n : N) (now : Nat) (sp : Susp) : (N.rewatch n now sp).ro
   repeat' split
   all_goals rfl
 
-theorem rewatch_indep (n : N) (now x m : Nat) (sp : Susp) (ev : Option Evid) :
-    (N.rewatch n now sp).independentRoute x m ev = n.independentRoute x m ev := by
+theorem rewatch_indep (e : Env) (n : N) (now x m : Nat) (sp : Susp) (ev : Option Evid) :
+    (N.rewatch n now sp).independentRoute e x m ev = n.independentRoute e x m ev := by
   unfold N.rewatch N.scheduleConfirm N.independentRoute N.hubUp
   repeat' split
   all_goals rfl
@@ -142,7 +141,7 @@ nothing. (Before the wait is over the check is scheduled for its end: `cw_lone_w
 theorem cw_lone_old (e : Env) (n : N) (now m since : Nat) (sleep : Option Nat) (l : Lease) (sp : Susp)
     (hl : n.roster.get? m = some l) (hc : e.carrier m = .gone since sleep)
     (hx : ¬ Excused l since sleep (e.evidence m)) (hs : n.susp.get? m = some sp) (hsince : sp.since = since)
-    (hb : sp.probeB = none) (hr : n.independentRoute now m (e.evidence m) = none) (hw : sp.probeA + sp.wait ≤ now) :
+    (hb : sp.probeB = none) (hr : n.independentRoute e now m (e.evidence m) = none) (hw : sp.probeA + sp.wait ≤ now) :
     N.carrierWatch e n now m = n := by
   unfold Excused at hx
   have hrw : N.rewatch n now sp = n := by unfold N.rewatch; rw [if_neg (by omega)]
@@ -166,7 +165,7 @@ theorem cw_lone_new (e : Env) (n : N) (now m since : Nat) (sleep : Option Nat) (
 def ConfirmCond (e : Env) (n : N) (now m : Nat) (l : Lease) : Prop :=
   ∃ since sleep sp tb path, e.carrier m = .gone since sleep ∧ ¬ Excused l since sleep (e.evidence m) ∧
     n.susp.get? m = some sp ∧ sp.since = since ∧ (path = 1 ∨ path = 2) ∧
-    (sp.probeB = some (tb, path) ∨ (sp.probeB = none ∧ tb = now ∧ ∃ r, n.independentRoute now m (e.evidence m) = some (r, path))) ∧
+    (sp.probeB = some (tb, path) ∨ (sp.probeB = none ∧ tb = now ∧ ∃ r, n.independentRoute e now m (e.evidence m) = some (r, path))) ∧
     max (max (since + CONFIRM) (sp.probeA + sp.wait)) (tb + sp.wait) ≤ now
 
 /-- The `else` of the excuse test in `carrier_watch`: the suspicion of this drop. -/
@@ -177,7 +176,7 @@ def N.cwMain (e : Env) (n : N) (now m since : Nat) (l : Lease) (ev : Option Evid
       let n := N.rewatch n now sp0
       let (n, sp) : N × Susp :=
         if sp0.probeB.isNone then
-          match n.independentRoute now m ev with
+          match n.independentRoute e now m ev with
           | some (route, path) =>
             let n := (N.tx e n m route .probe).1
             let n := n.trace (.probeSent m path)
@@ -207,7 +206,7 @@ roster. -/
 theorem cw_lone_waiting (e : Env) (n : N) (now m since : Nat) (sleep : Option Nat) (l : Lease) (sp : Susp)
     (hl : n.roster.get? m = some l) (hc : e.carrier m = .gone since sleep)
     (hx : ¬ Excused l since sleep (e.evidence m)) (hs : n.susp.get? m = some sp) (hsince : sp.since = since)
-    (hb : sp.probeB = none) (hr : n.independentRoute now m (e.evidence m) = none) :
+    (hb : sp.probeB = none) (hr : n.independentRoute e now m (e.evidence m) = none) :
     (N.carrierWatch e n now m).roster = n.roster := by
   rw [cw_eq_main e n now m since sleep l hl hc hx]
   unfold N.cwMain
@@ -230,14 +229,14 @@ theorem cwMain_keeps_unless (e : Env) (n : N) (now m since : Nat) (sleep : Optio
       cases hb : sp0.probeB with
       | none =>
         simp only [hb, Option.isNone_none, if_true, rewatch_indep]
-        cases hr : n.independentRoute now m (e.evidence m) with
+        cases hr : n.independentRoute e now m (e.evidence m) with
         | none => left; simp only [hr, hb, rewatch_indep]; exact keep _ (rewatch_roster ..)
         | some rp =>
           obtain ⟨route, path⟩ := rp
           simp only [hr, rewatch_indep]
           by_cases hdl : max (max (since + CONFIRM) (sp0.probeA + sp0.wait)) (now + sp0.wait) ≤ now
           · right
-            exact ⟨since, sleep, sp0, now, path, hc, hx, hs, hsi, independentRoute_path n now m _ route path hr,
+            exact ⟨since, sleep, sp0, now, path, hc, hx, hs, hsi, independentRoute_path e n now m _ route path hr,
               Or.inr ⟨hb, rfl, route, hr⟩, hdl⟩
           · left
             simp only [hdl, if_false]

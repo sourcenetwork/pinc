@@ -55,6 +55,11 @@ theorem inv_onTimeout {e : Env} {n : N} (hx : Inv B n) (now : Nat) : Inv B (N.on
   inv_go
 macro_rules | `(tactic| inv_apply) => `(tactic| apply inv_onTimeout)
 
+theorem inv_ofDelta {e : Env} {n : N} (hx : Inv B n) (now peer m : Nat) (rc : Rec) (a : Alive) : Inv B (N.ofDelta e n now peer m rc a) := by
+  unfold N.ofDelta
+  inv_go
+macro_rules | `(tactic| inv_apply) => `(tactic| apply inv_ofDelta)
+
 theorem inv_onFrame {e : Env} {n : N} (hx : Inv B n) (now peer : Nat) (f : NFrame) : Inv B (N.onFrame e n now peer f) := by
   unfold N.onFrame
   inv_go

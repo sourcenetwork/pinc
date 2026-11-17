@@ -122,8 +122,10 @@ def envOf (j : J) : Except String Env := do
     | k => throw s!"unknown carrier {k}"
   let gu ← (← pairs (← field j "gu")).mapM fun (p, x) => do pure (p, ← limbsOf x)
   let acc ← natList (← field j "acc")
+  let rv ← natList (← field j "rv")
   check ((← natF j "floor") == 9) "the floor body is 9 bytes in the harness"
   pure { ev := sortedByKey ev, car := sortedByKey car, acc := sortedByKey (acc.map fun p => (p, ())),
+         rv := sortedByKey (rv.map fun p => (p, ())),
          ver := ← natF j "ver", tk := ← natF j "tk", refl := ← boolF j "refl",
          loc := ⟨← boolF j "pers", ← optF j "sealed", ← boolF j "failunseal", ← boolF j "failseal"⟩,
          floorBody := fun p => [0xF1, p, 0, 0, 0, 0, 0, 0, 1], gu := sortedByKey gu }
@@ -131,7 +133,6 @@ def envOf (j : J) : Except String Env := do
 def routeOf (j : J) : Except String Route := do
   match ← strF j "r" with
   | "s" => pure .session
-  | "d" => pure .direct
   | "v" => pure (.via (← natF j "via"))
   | r => throw s!"unknown route {r}"
 

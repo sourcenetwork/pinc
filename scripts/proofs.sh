@@ -407,6 +407,9 @@ par run_tlc sys_jump MembershipSys MembershipSys_jump
 par run_tlc sys_move MembershipSys MembershipSys_move
 par run_tlc sys_primary MembershipSys MembershipSys_primary
 par run_tlc sys_pulse MembershipSys MembershipSys_pulse
+par run_tlc sys_direct MembershipSys MembershipSys_direct
+par run_tlc sys_refused MembershipSys MembershipSys_refused
+par run_tlc sys_leavelost MembershipSys MembershipSys_leavelost
 par witness_tlc sys_w_clockback MembershipSys MembershipSys_w_clockback IncOK
 par witness_tlc sys_w_confirm MembershipSys MembershipSys_w_confirm NeverConfirmed
 par witness_tlc sys_w_down MembershipSys MembershipSys_w_down NeverDown
@@ -419,6 +422,9 @@ par witness_tlc sys_w_revoked MembershipSys MembershipSys_w_revoked NeverRevoked
 par witness_tlc sys_w_restart MembershipSys MembershipSys_w_restart NeverRestarted
 par witness_tlc sys_w_suppressed MembershipSys MembershipSys_w_suppressed NeverSuppressed
 par witness_tlc sys_w_switch MembershipSys MembershipSys_w_switch NeverSwitched
+par witness_tlc sys_w_direct MembershipSys MembershipSys_w_direct NoConf14
+par witness_tlc sys_w_refused MembershipSys MembershipSys_w_refused NoConf14
+par witness_tlc sys_w_leavelost MembershipSys MembershipSys_w_leavelost LeftGone
 par run_tlc sys_live_complete MembershipSys MembershipSys_live_complete
 par run_tlc sys_live_lease MembershipSys MembershipSys_live_lease
 par run_tlc sys_live_return MembershipSys MembershipSys_live_return

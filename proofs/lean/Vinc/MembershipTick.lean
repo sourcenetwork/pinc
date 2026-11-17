@@ -123,7 +123,7 @@ theorem cwMain_rm (e : Env) (n : N) (now m since : Nat) (l : Lease) (ev : Option
       cases hb : sp0.probeB with
       | none =>
         simp only [hb, Option.isNone_none, if_true, rewatch_indep]
-        cases hr : n.independentRoute now m ev with
+        cases hr : n.independentRoute e now m ev with
         | none => simp only [hr, hb, rewatch_indep]; exact key _ (rewatch_roster ..)
         | some rp =>
           obtain ⟨route, path⟩ := rp

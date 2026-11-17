@@ -279,6 +279,11 @@ theorem onHello_eq3 (e : Env) (n : N) (now peer : Nat) (rc : Rec) (snap homed : 
   unfold N.hubDown; tm_tac
 @[simp] theorem onDown_tm (e : Env) (n : N) (now m inc : Nat) (pf : Proof) : TM[n, N.onDown e n now m inc pf] := by
   unfold N.onDown; tm_tac
+@[simp] theorem onLeft_tm (e : Env) (n : N) (now m : Nat) (rc : Rec) : TM[n, N.onLeft e n now m rc] := by
+  unfold N.onLeft; tm_tac
+@[simp] theorem ofDelta_tm (e : Env) (n : N) (now peer m : Nat) (rc : Rec) (a : Alive) :
+    TM[n, N.ofDelta e n now peer m rc a] := by
+  unfold N.ofDelta; dsimp only; simp
 @[simp] theorem carrierReturn_tm (e : Env) (n : N) (now member : Nat) : TM[n, N.carrierReturn e n now member] := by
   unfold N.carrierReturn; tm_tac
 @[simp] theorem scheduleConfirm_tm (n : N) (now at_ : Nat) : TM[n, n.scheduleConfirm now at_] := by

@@ -60,7 +60,7 @@ theorem nsSecond_spec (e : Env) (n : N) (now m : Nat) (ev : Option Evid) :
     (N.nsSecond e n now m ev).1.susp = n.susp ∧ (N.nsSecond e n now m ev).1.outBc = n.outBc ∧
     ∀ tb path, (N.nsSecond e n now m ev).2 = some (tb, path) → path = 1 ∨ path = 2 := by
   unfold N.nsSecond
-  cases hr : n.independentRoute now m ev with
+  cases hr : n.independentRoute e now m ev with
   | none => simp
   | some rp =>
     obtain ⟨route, path⟩ := rp
@@ -69,7 +69,7 @@ theorem nsSecond_spec (e : Env) (n : N) (now m : Nat) (ev : Option Evid) :
     intro tb p h
     simp at h
     obtain ⟨-, rfl⟩ := h
-    exact independentRoute_path n now m ev route path hr
+    exact independentRoute_path e n now m ev route path hr
 
 theorem newSusp_cw2 (e : Env) (n : N) (now m since : Nat) (ev : Option Evid) : CW2 n (N.newSusp e n now m since ev) := by
   have h : N.newSusp e n now m since ev =
@@ -186,11 +186,11 @@ theorem cwMain_cw2 (e : Env) (n : N) (now m since : Nat) (l : Lease) (ev : Optio
       refine CW2.trans (rewatch_cw2 n now sp0) ?_
       have hsA : (N.rewatch n now sp0).susp.get? m = some sp0 := by rw [rewatch_susp]; exact hs
       generalize hN : N.rewatch n now sp0 = n1 at hsA ⊢
-      have hind : n1.independentRoute now m ev = n.independentRoute now m ev := by rw [← hN]; exact rewatch_indep ..
+      have hind : n1.independentRoute e now m ev = n.independentRoute e now m ev := by rw [← hN]; exact rewatch_indep ..
       cases hb : sp0.probeB with
       | none =>
         simp only [hb, Option.isNone_none, if_true]
-        cases hr : n.independentRoute now m ev with
+        cases hr : n.independentRoute e now m ev with
         | none => simp only [hind, hr, hb]; exact CW2.refl _
         | some rp =>
           obtain ⟨route, path⟩ := rp
@@ -199,7 +199,7 @@ theorem cwMain_cw2 (e : Env) (n : N) (now m since : Nat) (l : Lease) (ev : Optio
               x.outBc = n1.outBc → CW2 n1 x := by
             intro x hx hb'
             refine ⟨fun hok => SuspOk.insert m _ hx ?_ hok, ⟨[], by rw [hb']; simp⟩⟩
-            intro tb p h; simp at h; obtain ⟨-, rfl⟩ := h; exact independentRoute_path n now m ev route path hr
+            intro tb p h; simp at h; obtain ⟨-, rfl⟩ := h; exact independentRoute_path e n now m ev route path hr
           by_cases hdl : max (max (sp0.since + CONFIRM) (sp0.probeA + sp0.wait)) (now + sp0.wait) ≤ now
           · simp only [hind, hr, hdl, ite_true, hb]
             refine CW2.trans ?_ (confirm_cw2 ..)

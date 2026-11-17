@@ -207,6 +207,8 @@ structure Env where
   ev : AMap Evid
   car : AMap Car
   acc : ASet
+  /-- The hubs whose relay the host refuses a probe through (its probe queue is full). -/
+  rv : ASet
   ver : Nat
   tk : Nat
   refl : Bool
@@ -224,7 +226,7 @@ def Env.carrier (e : Env) (m : Nat) : Car := (e.car.get? m).getD .unknown
 def Env.hash (e : Env) (m : Nat) : List Nat := [e.tk, m, 0, 0, 0, 0, 0, 7]
 
 inductive Route where
-  | session | direct | via (x : Nat)
+  | session | via (x : Nat)
   deriving DecidableEq, Repr
 
 inductive Bc where

@@ -322,6 +322,27 @@ theorem onDown_held (t0 m : Nat) (e : Env) (n : N) (now m' inc : Nat) (pf : Proo
     · subst hk; left; rw [h]; exact AMap.get?_erase_self _ _
     · unfold Held; rw [h, AMap.get?_erase_ne _ _ _ hk, AMap.get?_modify_ne _ _ _ _ hk]; exact hh
 
+theorem onLeft_held (t0 m : Nat) (e : Env) (n : N) (now m' : Nat) (rc : Rec) (hh : Held t0 m n) :
+    Held t0 m (N.onLeft e n now m' rc) := by
+  unfold N.onLeft
+  split
+  · exact hh
+  · rw [Held, hubDown_roster_cp]
+    by_cases hk : m = m'
+    · subst hk; left; exact AMap.get?_erase_self _ _
+    · rw [AMap.get?_erase_ne _ _ _ hk]; simp only [trace_rs]; exact hh
+
+theorem ofDelta_held (t0 m : Nat) (e : Env) (n : N) (now peer m' : Nat) (rc : Rec) (a : Alive) (hh : Held t0 m n) :
+    Held t0 m (N.ofDelta e n now peer m' rc a) := by
+  unfold N.ofDelta
+  dsimp only
+  have h : Held t0 m (if n.isHub && a == .left then N.onLeft e n now m' rc else n) := by
+    split
+    · exact onLeft_held t0 m e n now m' rc hh
+    · exact hh
+  generalize (if n.isHub && a == .left then N.onLeft e n now m' rc else n) = x at h ⊢
+  exact Held.of_eq (by simp) h
+
 theorem ofDisp_held (t0 m : Nat) (e : Env) (n : N) (now peer : Nat) (f : NFrame) (fromHub : Bool)
     (hs : Silent t0 e m) (hp : peer ≠ m) (hh : Held t0 m n) : Held t0 m (N.ofDisp e n now peer f fromHub) := by
   unfold N.ofDisp
@@ -336,6 +357,10 @@ theorem ofDisp_held (t0 m : Nat) (e : Env) (n : N) (now peer : Nat) (f : NFrame)
     · split
       · exact Held.of_eq (by simp) hh
       · exact hh
+  | delta m' rc a =>
+    dsimp only; split
+    · exact ofDelta_held t0 m e n now peer m' rc a hh
+    · exact hh
   | _ => dsimp only; (repeat' split) <;> exact Held.of_eq (by simp) hh
 
 theorem onFrame_held (t0 m : Nat) (e : Env) (n : N) (now peer : Nat) (f : NFrame) (hs : Silent t0 e m) (hp : peer ≠ m)

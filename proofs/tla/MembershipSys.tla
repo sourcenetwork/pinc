@@ -29,8 +29,12 @@
 (*                                                                         *)
 (* The script is a sequence of entries <<kind, seconds after the start,     *)
 (* args...>>: crash n | restart n wall | cut a b | heal a b | gone hub m |  *)
-(* back hub m | leave n | revoke node m | jump seconds | move n | lose k    *)
-(* (the next k PROBE frames sent are lost).                                  *)
+(* back hub m | leave n | leavelost n hub | revoke node m | jump seconds |   *)
+(* move n | lose k (the next k PROBE frames sent are lost) | direct a b (a   *)
+(* validated direct path between a and b: the session of the pair runs on   *)
+(* it) | refuse hub (the host refuses a relayed probe through hub's relay,  *)
+(* as a full probe queue does). leavelost n hub: n leaves and is gone, and  *)
+(* its close to hub never arrives.                                          *)
 (*                                                                         *)
 (* History variables record what the nodes reported, for the properties:  *)
 (* down/left (observer, member) events, susp (hub, member) suspicion        *)
@@ -70,6 +74,7 @@ EnvFor(x, n) ==
                  [rx |-> x.rx[<<n, p>>], srtt |-> x.srtt[<<n, p>>], pto |-> 0, inf |-> 0, direct |-> Pr(n, p) \in x.direct]],
      car |-> [m \in {m \in Members : n \in Hubs /\ x.car[<<n, m>>].k # "unknown"} |-> x.car[<<n, m>>]],
      acc |-> {p \in Nodes : Pr(n, p) \in x.sess},
+     rv |-> x.refuse,
      ver |-> 1, tk |-> n, refl |-> TRUE, pers |-> Pers, sealed |-> x.store[n], failseal |-> FALSE, failunseal |-> FALSE,
      floor |-> [p \in 0..255 |-> <<241, p, 0, 0, 0, 0, 0, 0, 1>>], gu |-> EmptyFn]
 
@@ -225,8 +230,10 @@ AdvanceStep(x) ==
 
 (* ---- the script ---- *)
 \* ends every session of n at the live peers (code `code` as seen by the peer) and at n
-CloseSessions(x, n, code) ==
-    LET peers == Ordered({p \in Nodes : Pr(n, p) \in x.sess}, NONE)
+CloseSessions(x, n, code) == CloseSessionsBut(x, n, code, 0)
+\* the same, except that the close to `skip` is lost: that peer keeps its session
+CloseSessionsBut(x, n, code, skip) ==
+    LET peers == Ordered({p \in Nodes : Pr(n, p) \in x.sess /\ p # skip}, NONE)
         RECURSIVE Go(_, _)
         Go(y, i) == IF i > Len(peers) THEN y
                     ELSE LET p == peers[i]
@@ -269,6 +276,12 @@ ScriptStep(x) ==
          [] k = "leave" -> LET n == en[3]
                                y == CallAt(x0, n, LAMBDA S, e : CallLeave(S, e))
                            IN CloseSessions(y, n, LEAVE_CODE)
+         [] k = "leavelost" -> LET n == en[3]
+                                   y == CallAt(x0, n, LAMBDA S, e : CallLeave(S, e))
+                                   z == CloseSessionsBut(y, n, LEAVE_CODE, en[4])
+                               IN [z EXCEPT !.alive = @ \ {n}, !.hist.crashAt[n] = <<x.now>>]
+         [] k = "direct" -> [x0 EXCEPT !.direct = @ \cup {Pr(en[3], en[4])}]
+         [] k = "refuse" -> [x0 EXCEPT !.refuse = @ \cup {en[3]}]
          [] k = "revoke" -> LET n == en[3] m == en[4]
                                 r == CallRevoke(x0.nodes[n], EnvFor(x0, n), x0.now, m)
                             IN Done(x0, n, r.S, x0.now)
@@ -291,7 +304,7 @@ StartAll ==
                          IN St([x EXCEPT !.nodes[n] = r.S, !.store[n] = r.S.loc.sealed, !.hist.lastInc[n] = INC!Word(r.S.inc)], i + 1)
         x0 == [now |-> SecW(START), nodes |-> [n \in Nodes |-> <<>>], alive |-> Nodes,
                net |-> [p \in Nodes \X Nodes |-> <<>>], inbox |-> [n \in Nodes |-> <<>>],
-               rx |-> [p \in Nodes \X Nodes |-> SecW(START)], srtt |-> [p \in Nodes \X Nodes |-> SRTT], sess |-> {}, cut |-> {}, dead |-> {}, direct |-> {},
+               rx |-> [p \in Nodes \X Nodes |-> SecW(START)], srtt |-> [p \in Nodes \X Nodes |-> SRTT], sess |-> {}, cut |-> {}, dead |-> {}, direct |-> {}, refuse |-> {},
                car |-> [p \in Hubs \X Members |-> [k |-> "unknown"]], store |-> [n \in Nodes |-> <<>>],
                hist |-> HistInit, steps |-> 0, pc |-> 1, lose |-> 0, nextKA |-> SecW(START + 30), dial |-> TRUE]
     IN St(x0, 1)
@@ -381,6 +394,9 @@ NoConf14 == NoConf(1, 4) /\ NoConf(2, 4)
 NoDownAny == w.hist.down = {} /\ w.hist.conf = {}
 Restored14 == RestoredBack(1, 4)
 Revoke14 == RevokeEffect(1, 4)
+\* a member that left, with the close lost at one hub, is out of every live node's list soon after the leave: the hub that
+\* saw it tells the other, which drops it as left (and so never reports it down after the lease)
+LeftGone == SecsSince(w, 45) => \A o \in w.alive : 4 \notin DOMAIN w.nodes[o].members
 LeaveNotDown4 == LeaveReported(4) /\ <<1, 4>> \notin w.hist.hold /\ <<2, 4>> \notin w.hist.hold
 \* property 10: the primary of a member does not flap inside the hysteresis (at most the first choice and one switch)
 PrimaryStable == \A n \in Members : w.hist.primN[n] <= 2
@@ -430,6 +446,13 @@ ScrPartition == <<<<"cut", 40, 1, 3>>, <<"cut", 40, 2, 3>>, <<"cut", 40, 1, 4>>,
 ScrReturn == <<<<"cut", 40, 2, 4>>, <<"gone", 40, 1, 4>>, <<"heal", 45, 2, 4>>, <<"back", 50, 1, 4>>>>
 \* a graceful leave
 ScrLeave == <<<<"leave", 40, 4>>>>
+\* a graceful leave whose close to hub 2 is lost, the member gone: only hub 1 sees it, and tells hub 2
+ScrLeaveLost == <<<<"leavelost", 40, 4, 2>>>>
+\* member 4's session to hub 1 runs on a validated direct path; the pair is cut and its carrier drops; hub 2's relay
+\* still reaches the member, which is alive
+ScrDirectCut == <<<<"direct", 20, 1, 4>>, <<"cut", 40, 1, 4>>, <<"gone", 40, 1, 4>>>>
+\* hub 1's host refuses a relayed probe through hub 2, the first probe is lost, the member is alive
+ScrRefused == <<<<"refuse", 1, 2>>, <<"lose", 39, 1>>, <<"notice", 40, 1, 4>>, <<"back", 50, 1, 4>>>>
 \* a revocation
 ScrRevoke == <<<<"revoke", 40, 1, 4>>>>
 \* crash and restart on the same host store, a wall clock that went back

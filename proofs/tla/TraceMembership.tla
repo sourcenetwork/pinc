@@ -69,6 +69,7 @@ EnvOf(e) ==
      car |-> [x \in {e.car[a][1] : a \in 1..Len(e.car)} |->
                   CarOf(e.car[CHOOSE a \in 1..Len(e.car) : e.car[a][1] = x][2])],
      acc |-> {e.acc[a] : a \in 1..Len(e.acc)},
+     rv |-> {e.rv[a] : a \in 1..Len(e.rv)},
      ver |-> e.ver, tk |-> e.tk, refl |-> e.refl, pers |-> e.pers, sealed |-> OptL(e.sealed),
      failseal |-> e.failseal, failunseal |-> e.failunseal,
      floor |-> [p \in 0..255 |-> <<241, p, 0, 0, 0, 0, 0, 0, 1>>],

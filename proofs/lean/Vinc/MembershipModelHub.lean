@@ -128,10 +128,22 @@ def N.carrierReturn (e : Env) (n : N) (now member : Nat) : N :=
       let n := N.deltaTo e n member member l.rc .alive
       n.trace (.carrierReturned member true)
 
-/-- `independent_route`: the direct path if validated, otherwise another hub's relay: `(route, path)`. -/
-def N.independentRoute (n : N) (now m : Nat) (ev : Option Evid) : Option (Route × Nat) :=
-  if (ev.map (·.direct)).getD false then some (.direct, 1)
-  else (n.boot.find? (fun x => x != n.me && x != m && n.hubUp now x)).map (fun x => (.via x, 2))
+/-- `probe_second`: the second probe never takes the path of the first, the session: it goes through the relay of the
+first live hub (not this node, not the member) whose relay the host takes it for: `(route, path)`. A probe the host
+refuses is not a sent probe, so the member needs a session (`acc`) and a hub whose relay the host refuses
+(`rv`) is passed over. (The code tries each hub in turn and a refused try leaves its frame-out trace and a not-taken
+entry in the sent list; this model selects the hub that takes it and leaves the refused tries out, as the
+refused tries change no table. `Membership.tla` models them.) -/
+def N.independentRoute (e : Env) (n : N) (now m : Nat) (_ev : Option Evid) : Option (Route × Nat) :=
+  (n.boot.find? (fun x => x != n.me && x != m && n.hubUp now x && !e.rv.has x &&
+    !(n.revoked.has m || m == n.me) && e.acc.has m)).map (fun x => (.via x, 2))
+
+/-- `on_left`: another hub's delta says `m` left. A member this hub holds for the same life, with no carrier to this
+hub, is dropped as left at once. -/
+def N.onLeft (e : Env) (n : N) (now m : Nat) (rc : Rec) : N :=
+  if n.isBoot m || e.carrier m == .open_ ||
+      (match n.roster.get? m with | none => true | some l => l.rc.inc / 65536 != rc.inc / 65536) then n
+  else N.hubDown e (n.trace (.leaveSeen m)) now m .left
 
 def N.scheduleConfirm (n : N) (now at_ : Nat) : N :=
   let at_ := max at_ (now + 1)
@@ -161,7 +173,7 @@ def N.newSusp (e : Env) (n : N) (now m since : Nat) (ev : Option Evid) : N :=
     let n := (N.tx e n m .session .probe).1
     let n := n.trace (.probeSent m 0)
     let (n, probeB) : N × Option (Nat × Nat) :=
-      match n.independentRoute now m ev with
+      match n.independentRoute e now m ev with
       | some (route, path) =>
         let n := (N.tx e n m route .probe).1
         (n.trace (.probeSent m path), some (now, path))
@@ -197,7 +209,7 @@ def N.carrierWatch (e : Env) (n : N) (now m : Nat) : N :=
             let n := N.rewatch n now sp0
             let (n, sp) : N × Susp :=
               if sp0.probeB.isNone then
-                match n.independentRoute now m ev with
+                match n.independentRoute e now m ev with
                 | some (route, path) =>
                   let n := (N.tx e n m route .probe).1
                   let n := n.trace (.probeSent m path)

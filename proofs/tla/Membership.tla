@@ -26,7 +26,6 @@ INC == INSTANCE Incarnation WITH PersModes <- {TRUE}, TrackFloor <- FALSE, Fault
                                  loc <- 0, inc <- 0, ann <- 0, mono <- 0, floorOK <- 0, obsOK <- 0, heard <- 0, steps <- 0
 
 RSession == [r |-> "s", via |-> 0]
-RDirect == [r |-> "d", via |-> 0]
 RVia(x) == [r |-> "v", via |-> x]
 
 SatMul3(a) == LET p == N!MulAt(a, 3, 1, 0) IN IF U!Fits(p) THEN p ELSE U!Max64
@@ -39,7 +38,8 @@ NewCopy == [entries |-> EmptyFn, round |-> Z, open |-> FALSE]
 Tx(S, env, peer, route, f) ==
     IF peer \in S.revoked \/ peer = S.me THEN [S |-> S, ok |-> FALSE]
     ELSE LET s1 == Trace(S, [k |-> "frame_out", peer |-> peer, ty |-> TyOf(f)])
-             ok == peer \in env.acc
+             \* a relayed probe the host refuses (its probe queue is full, the member has no session) is not taken
+             ok == peer \in env.acc /\ ~(route.r = "v" /\ route.via \in env.rv)
          IN [S |-> [s1 EXCEPT !.sent = Append(@, [to |-> peer, r |-> route.r, via |-> route.via, f |-> f, ok |-> ok])],
              ok |-> ok]
 SendS(S, env, peer, route, f) == Tx(S, env, peer, route, f).S
@@ -368,11 +368,27 @@ OnDown(S, env, now, d) ==
             IN IF Le(SatSub(now, renewed), window) THEN Trace(s1, [k |-> "down_refused", member |-> m, why |-> 2])
                ELSE HubDown(Trace(s1, [k |-> "down_accepted", member |-> m]), env, now, m, [c |-> "remote"])
 
+\* hub.rs on_left: another hub's delta says d.m left. Dropped as left at once when this hub holds it for the same life and
+\* it holds no carrier here. The leave is a close code of the member's own session, which no other hub can verify: the
+\* notice is as trusted as the hub that sends it.
+OnLeft(S, env, now, d) ==
+    LET m == d.m
+        l == Lookup(S.roster, m)
+    IN IF IsBoot(S, m) \/ CarrierOf(env, m).k = "open" \/ l = <<>> \/ Epoch(l[1].rec.inc) # Epoch(d.rec.inc) THEN S
+       ELSE HubDown(Trace(S, [k |-> "leave_seen", member |-> m]), env, now, m, [c |-> "left"])
+
 (* ---- hub.rs: carrier events ---- *)
-IndependentRoute(S, now, m, ev) ==
-    IF ev # <<>> /\ ev[1].direct THEN <<[route |-> RDirect, path |-> 1]>>
-    ELSE LET F == SelectSeq(S.boot, LAMBDA x : x # S.me /\ x # m /\ HubUp(S, now, x))
-         IN IF F = <<>> THEN <<>> ELSE <<[route |-> RVia(F[1]), path |-> 2]>>
+\* The second probe of a suspicion never takes the path of the first, the session: it goes through the relay of the
+\* first live hub, not this node and not the member, whose relay the host took it for. A probe the host refused is not
+\* a sent probe: the next hub is tried, and with none left no second probe is recorded.
+SecondProbe(S, env, now, m) ==
+    LET F == SelectSeq(S.boot, LAMBDA x : x # S.me /\ x # m /\ HubUp(S, now, x))
+        RECURSIVE Try(_, _)
+        Try(s, i) == IF i > Len(F) THEN [S |-> s, p |-> <<>>]
+                     ELSE LET t == Tx(s, env, m, RVia(F[i]), [k |-> "probe"])
+                          IN IF t.ok THEN [S |-> Trace(t.S, [k |-> "probe_sent", member |-> m, path |-> 2]), p |-> <<[t |-> now, path |-> 2]>>]
+                             ELSE Try(t.S, i + 1)
+    IN Try(S, 1)
 
 ScheduleConfirm(S, now, at) ==
     LET at1 == Max2(at, U!Add64(now, One))
@@ -383,6 +399,22 @@ Confirm(S, env, now, m, sp, l) ==
         pr == IF sp.probeB = <<>> THEN <<p0>>
               ELSE <<p0, [age |-> N!Ms(SatSub(now, sp.probeB[1].t)), path |-> sp.probeB[1].path]>>
     IN HubDown(S, env, now, m, [c |-> "conf", proof |-> [sil |-> N!Ms(SatSub(now, l.renewed)), pr |-> pr]])
+
+\* The rule before: the second probe took the member's validated direct path when the session ran on it, so both probes
+\* travelled the same path, and whether the host took the probe was never asked. Witness configs override SecondProbe
+\* with it.
+OldSecondProbe(S, env, now, m) ==
+    LET ev == Evidence(env, m)
+        F == SelectSeq(S.boot, LAMBDA x : x # S.me /\ x # m /\ HubUp(S, now, x))
+        rt == IF ev # <<>> /\ ev[1].direct THEN <<[route |-> [r |-> "d", via |-> 0], path |-> 1]>>
+              ELSE IF F = <<>> THEN <<>> ELSE <<[route |-> RVia(F[1]), path |-> 2]>>
+    IN IF rt = <<>> THEN [S |-> S, p |-> <<>>]
+       ELSE [S |-> Trace(SendS(S, env, m, rt[1].route, [k |-> "probe"]), [k |-> "probe_sent", member |-> m, path |-> rt[1].path]),
+             p |-> <<[t |-> now, path |-> rt[1].path]>>]
+
+\* The rule before the leave notice: a hub told by another hub that a member left does nothing. Witness configs override
+\* OnLeft with it.
+NoOnLeft(S, env, now, d) == S
 
 CarrierWatch(S, env, now, m) ==
     LET l == Lookup(S.roster, m)
@@ -402,14 +434,10 @@ CarrierWatch(S, env, now, m) ==
                                 sp == spo
                                 at == U!Add64(spo.probeA, spo.wait)
                                 sA == IF Lt(now, at) THEN ScheduleConfirm(S, now, at) ELSE S
-                                rt == IndependentRoute(S, now, m, ev)
-                                needB == sp.probeB = <<>> /\ rt # <<>>
-                                s1 == IF needB
-                                      THEN LET t1 == SendS(sA, env, m, rt[1].route, [k |-> "probe"])
-                                               t2 == Trace(t1, [k |-> "probe_sent", member |-> m, path |-> rt[1].path])
-                                           IN [t2 EXCEPT !.susp = Put(@, m, [sp EXCEPT !.probeB = <<[t |-> now, path |-> rt[1].path]>>])]
-                                      ELSE sA
-                                spB == IF needB THEN [sp EXCEPT !.probeB = <<[t |-> now, path |-> rt[1].path]>>] ELSE sp
+                                sb == IF sp.probeB = <<>> THEN SecondProbe(sA, env, now, m) ELSE [S |-> sA, p |-> sp.probeB]
+                                needB == sp.probeB = <<>> /\ sb.p # <<>>
+                                spB == [sp EXCEPT !.probeB = sb.p]
+                                s1 == IF needB THEN [sb.S EXCEPT !.susp = Put(@, m, spB)] ELSE sb.S
                             IN IF spB.probeB = <<>> THEN s1
                                ELSE LET tb == spB.probeB[1].t
                                         dl == Max2(Max2(U!Add64(spB.since, CONFIRM), U!Add64(spB.probeA, spB.wait)), U!Add64(tb, spB.wait))
@@ -418,10 +446,9 @@ CarrierWatch(S, env, now, m) ==
                        ELSE LET wait == Max2(PROBE_WAIT_MIN, IF ev = <<>> THEN Z ELSE SatMul3(ev[1].srtt))
                                 t1 == SendS(S, env, m, RSession, [k |-> "probe"])
                                 t2 == Trace(t1, [k |-> "probe_sent", member |-> m, path |-> 0])
-                                rt == IndependentRoute(S, now, m, ev)
-                                t4 == IF rt = <<>> THEN t2
-                                      ELSE Trace(SendS(t2, env, m, rt[1].route, [k |-> "probe"]), [k |-> "probe_sent", member |-> m, path |-> rt[1].path])
-                                pB == IF rt = <<>> THEN <<>> ELSE <<[t |-> now, path |-> rt[1].path]>>
+                                sb == SecondProbe(t2, env, now, m)
+                                t4 == sb.S
+                                pB == sb.p
                                 sp == [since |-> since, probeA |-> now, probeB |-> pB, wait |-> wait]
                                 t5 == [t4 EXCEPT !.susp = Put(@, m, sp)]
                                 t6 == ScheduleConfirm(t5, now, U!Add64(now, wait))

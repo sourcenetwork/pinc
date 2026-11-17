@@ -151,7 +151,7 @@ OnFrame(S, env, now, peer, f) ==
               [] f.k = "probe" -> IF fromHub /\ ~sG.isHub THEN HelloTo(sG, env, peer, FALSE) ELSE sG
               [] f.k = "down" -> IF sG.isHub /\ fromHub THEN OnDown(sG, env, now, f)
                                  ELSE IF fromHub THEN ApplyDown(sG, env, now, peer, f.m, f.inc) ELSE sG
-              [] f.k = "delta" -> IF fromHub THEN ApplyDelta(sG, env, now, peer, f) ELSE sG
+              [] f.k = "delta" -> IF fromHub THEN ApplyDelta(IF sG.isHub /\ f.a = 2 THEN OnLeft(sG, env, now, f) ELSE sG, env, now, peer, f) ELSE sG
               [] f.k = "snap" -> IF fromHub THEN ApplySnap(sG, env, now, peer, f) ELSE sG
               [] f.k = "ack" -> sG
               [] f.k = "other" -> Bc(sG, [k |-> "frame", from |-> peer, ty |-> f.ty, topic |-> f.topic, rest |-> f.rest])

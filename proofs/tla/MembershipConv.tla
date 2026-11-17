@@ -19,7 +19,7 @@ Mem == <<3, 4>>
 E(k) == U!W(65536 * k)
 Rec(k) == [inc |-> E(k), ver |-> 1, th |-> <<0, 0, 0, 0, 0, 0, 0, 0>>]
 Env0 == [ev |-> EmptyFn, car |-> EmptyFn, acc |-> {}, ver |-> 1, tk |-> 0, refl |-> TRUE, pers |-> FALSE,
-         sealed |-> <<>>, failseal |-> FALSE, failunseal |-> FALSE, floor |-> [p \in 0..255 |-> <<>>], gu |-> EmptyFn]
+         sealed |-> <<>>, failseal |-> FALSE, failunseal |-> FALSE, floor |-> [p \in 0..255 |-> <<>>], gu |-> EmptyFn, rv |-> {}]
 Now == N!Sec(500)
 Base == StartOp([me |-> 9, isHub |-> TRUE, hubs |-> <<1, 2>>], Env0, Now, U!W(1000000), Z).S
 

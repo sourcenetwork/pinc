@@ -131,6 +131,12 @@ def N.onTimeout (e : Env) (n : N) (now : Nat) : N :=
       N.tick e n now
     else n
 
+/-- A DELTA from a hub: a hub that is told a member left drops it (`on_left`), then the copy of the sender takes the
+entry. -/
+def N.ofDelta (e : Env) (n : N) (now peer m : Nat) (rc : Rec) (a : Alive) : N :=
+  let n := if n.isHub && a == .left then N.onLeft e n now m rc else n
+  N.applyDelta e n now peer m rc a
+
 /-- `on_frame`: handle one frame from `peer`. -/
 def N.onFrame (e : Env) (n : N) (now peer : Nat) (f : NFrame) : N :=
   if n.revoked.has peer || n.leaving then n
@@ -173,7 +179,7 @@ def N.onFrame (e : Env) (n : N) (now peer : Nat) (f : NFrame) : N :=
       if n.isHub && fromHub then N.onDown e n now m inc pf
       else if fromHub then N.applyDown e n now peer m inc
       else n
-    | .delta m rc a => if fromHub then N.applyDelta e n now peer m rc a else n
+    | .delta m rc a => if fromHub then N.ofDelta e n now peer m rc a else n
     | .snap part more es => if fromHub then N.applySnap e n now peer part more es else n
     | .ack => n
     | .other ty topic rest => n.bc (.frame peer ty topic rest)

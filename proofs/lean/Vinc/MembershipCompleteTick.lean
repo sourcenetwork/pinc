@@ -73,7 +73,7 @@ theorem cwMain_roster (e : Env) (n : N) (now m since : Nat) (l : Lease) (ev : Op
       cases hb : sp0.probeB with
       | none =>
         simp only [hb, Option.isNone_none, if_true, rewatch_indep]
-        cases hr : n.independentRoute now m ev with
+        cases hr : n.independentRoute e now m ev with
         | none => left; simp only [hr, hb, rewatch_indep]; exact rewatch_roster ..
         | some rp =>
           obtain ⟨route, path⟩ := rp

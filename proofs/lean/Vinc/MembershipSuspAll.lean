@@ -499,7 +499,7 @@ def N.ofDisp (e : Env) (n : N) (now peer : Nat) (f : NFrame) (fromHub : Bool) : 
     if n.isHub && fromHub then N.onDown e n now m inc pf
     else if fromHub then N.applyDown e n now peer m inc
     else n
-  | .delta m rc a => if fromHub then N.applyDelta e n now peer m rc a else n
+  | .delta m rc a => if fromHub then N.ofDelta e n now peer m rc a else n
   | .snap part more es => if fromHub then N.applySnap e n now peer part more es else n
   | .ack => n
   | .other ty topic rest => n.bc (.frame peer ty topic rest)
@@ -542,6 +542,23 @@ theorem ofMid_susp (e : Env) (n : N) (now peer : Nat) (f : NFrame) (fromHub : Bo
   repeat' split
   all_goals simp [ofHub_susp]
 
+theorem onLeft_so (e : Env) (n : N) (now m : Nat) (rc : Rec) (hs : n.SuspOk) : (N.onLeft e n now m rc).SuspOk := by
+  unfold N.onLeft
+  split
+  · exact hs
+  · exact (hubDown_susp _ _ _ _ _).1 (SuspOk.of_eq (by simp) hs)
+
+theorem ofDelta_so (e : Env) (n : N) (now peer m : Nat) (rc : Rec) (a : Alive) (hs : n.SuspOk) :
+    (N.ofDelta e n now peer m rc a).SuspOk := by
+  unfold N.ofDelta
+  dsimp only
+  have h : (if n.isHub && a == .left then N.onLeft e n now m rc else n).SuspOk := by
+    split
+    · exact onLeft_so e n now m rc hs
+    · exact hs
+  generalize (if n.isHub && a == .left then N.onLeft e n now m rc else n) = x at h ⊢
+  exact SuspOk.of_eq (by simp) h
+
 theorem ofDisp_so (e : Env) (n : N) (now peer : Nat) (f : NFrame) (fromHub : Bool) (hs : n.SuspOk) :
     (N.ofDisp e n now peer f fromHub).SuspOk := by
   unfold N.ofDisp
@@ -549,6 +566,7 @@ theorem ofDisp_so (e : Env) (n : N) (now peer : Nat) (f : NFrame) (fromHub : Boo
   all_goals first
     | exact onDown_so _ _ _ _ _ _ hs
     | exact SuspOk.of_eq (by simp) hs
+    | exact ofDelta_so _ _ _ _ _ _ _ hs
     | exact hs
 
 theorem onFrame_so (e : Env) (n : N) (now peer : Nat) (f : NFrame) (hs : n.SuspOk) : (N.onFrame e n now peer f).SuspOk := by

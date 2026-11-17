@@ -43,6 +43,11 @@ theorem inv_onDown {e : Env} {n : N} (hx : Inv B n) (now m inc : Nat) (pf : Proo
   inv_go
 macro_rules | `(tactic| inv_apply) => `(tactic| apply inv_onDown)
 
+theorem inv_onLeft {e : Env} {n : N} (hx : Inv B n) (now m : Nat) (rc : Rec) : Inv B (N.onLeft e n now m rc) := by
+  unfold N.onLeft
+  inv_go
+macro_rules | `(tactic| inv_apply) => `(tactic| apply inv_onLeft)
+
 theorem inv_carrierReturn {e : Env} {n : N} (hx : Inv B n) (now member : Nat) : Inv B (N.carrierReturn e n now member) := by
   unfold N.carrierReturn
   inv_go

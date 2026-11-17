@@ -123,7 +123,7 @@ theorem cwMain_ps (e : Env) (n : N) (now m since : Nat) (l : Lease) (ev : Option
       cases hb : sp0.probeB with
       | none =>
         simp only [Option.isNone_none, if_true]
-        cases hr : n.independentRoute now m ev with
+        cases hr : n.independentRoute e now m ev with
         | none => simp only [hb]; exact PS_refl _
         | some rp =>
           obtain ⟨route, path⟩ := rp
@@ -291,7 +291,7 @@ theorem cwMain_ak (e : Env) (n : N) (now m since : Nat) (l : Lease) (ev : Option
       cases hpb : sp0.probeB with
       | none =>
         simp only [Option.isNone_none, if_true]
-        cases hr : n.independentRoute now m ev with
+        cases hr : n.independentRoute e now m ev with
         | none => simp only [hpb]; exact AK.refl _
         | some rp =>
           obtain ⟨route, path⟩ := rp
