@@ -15,7 +15,7 @@ use alloc::vec::Vec;
 use vinc_membership::{Nanos, NodeId};
 
 use crate::consts::{LOG_CAP, LOG_WINDOW};
-use crate::table::MidMap;
+use crate::table::{IdKey, MidMap, ProbeLimit};
 
 #[derive(Debug, Clone, Copy)]
 struct Entry {
@@ -45,10 +45,10 @@ pub(crate) struct HubLog {
 }
 
 impl HubLog {
-    pub(crate) fn new(bytes: usize) -> Self {
+    pub(crate) fn new(bytes: usize, key: IdKey) -> Self {
         Self {
             entries: VecDeque::with_capacity(LOG_CAP),
-            index: MidMap::with_capacity(LOG_CAP),
+            index: MidMap::with_capacity(LOG_CAP, key),
             base: 0,
             ring: vec![0; bytes],
             wpos: 0,
@@ -75,6 +75,16 @@ impl HubLog {
 
     pub(crate) fn contains(&self, mid: u64) -> bool {
         self.index.get(mid).is_some()
+    }
+
+    /// Whether `mid` is logged, or [`ProbeLimit`] when the lookup passed the table's probe bound.
+    pub(crate) fn lookup(&self, mid: u64) -> Result<bool, ProbeLimit> {
+        Ok(self.index.lookup(mid)?.is_some())
+    }
+
+    /// Whether the index can take `mid` within its probe bound; a message whose id it cannot take is not logged.
+    pub(crate) fn admits(&self, mid: u64) -> bool {
+        self.index.fits_probe(mid)
     }
 
     /// When the oldest message leaves the window (strictly after this instant), if any.
@@ -186,7 +196,7 @@ impl HubLog {
         mut evicted: impl FnMut(u64),
     ) -> bool {
         let n = head.len() + body.len();
-        if n > self.ring.len() || self.contains(mid) {
+        if n > self.ring.len() || self.contains(mid) || !self.admits(mid) {
             return false;
         }
         loop {
@@ -204,6 +214,11 @@ impl HubLog {
                     d.copy_from_slice(body);
                 }
                 let seq = self.base + u64::try_from(self.entries.len()).unwrap_or(0);
+                // The evictions above made room, and `admits` held, so this cannot be refused; if it ever were, the
+                // message is not logged rather than logged without its id.
+                if self.index.insert(mid, seq).is_err() {
+                    return false;
+                }
                 self.entries.push_back(Entry {
                     mid,
                     origin: *origin,
@@ -213,7 +228,6 @@ impl HubLog {
                     len: n,
                     cost: pad + n,
                 });
-                self.index.insert(mid, seq);
                 *self.origins.entry(*origin).or_insert(0) += 1;
                 self.used += pad + n;
                 self.wpos = (off + n) % self.ring.len();
@@ -263,7 +277,7 @@ mod tests {
     /// `evicts` names exactly the messages `push` then evicts, across wraps, padding and the entry cap.
     #[test]
     fn evicts_predicts_push() {
-        let mut log = HubLog::new(10_000);
+        let mut log = HubLog::new(10_000, IdKey::from_seed(7));
         let mut x = 7u64;
         for mid in 0..20_000u64 {
             x = x.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
@@ -288,6 +302,25 @@ mod tests {
         }
         log.expire(LOG_WINDOW + 1, |_| {});
         assert!((0..3u8).all(|o| !log.holds(&[o; 32])), "an empty log holds no origin");
+    }
+
+    /// An id whose probe would pass the index's bound is not logged, and nothing else changes.
+    #[test]
+    #[allow(clippy::indexing_slicing, reason = "tests assert")]
+    fn an_id_the_index_cannot_take_is_not_logged() {
+        use crate::table::PROBE_MAX;
+        let key = IdKey::from_seed(7);
+        let probe = crate::table::MidMap::with_capacity(LOG_CAP, key);
+        let ids: Vec<u64> = (0u64..).filter(|id| probe.home(*id) == 3).take(PROBE_MAX + 1).collect();
+        let mut log = HubLog::new(1 << 20, key);
+        for id in &ids[..PROBE_MAX] {
+            assert!(log.push(*id, &[1; 32], 0, 0, &[], b"x", |_| {}));
+        }
+        let over = ids[PROBE_MAX];
+        assert!(!log.admits(over));
+        assert!(!log.push(over, &[1; 32], 0, 0, &[], b"x", |_| {}));
+        assert_eq!((log.len(), log.contains(over)), (PROBE_MAX, false));
+        assert_eq!(log.lookup(over), Err(ProbeLimit));
     }
 
     fn seq_mid(log: &HubLog, seq: u64) -> u64 {

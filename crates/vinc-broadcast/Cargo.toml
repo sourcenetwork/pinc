@@ -20,6 +20,7 @@ vinc-wire = { workspace = true }
 vinc-crypto = { workspace = true }
 vinc-membership = { workspace = true }
 blake3 = { workspace = true }
+rapidhash = { workspace = true }
 
 [dev-dependencies]
 vinc-dag = { workspace = true }

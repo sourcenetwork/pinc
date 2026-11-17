@@ -267,6 +267,7 @@ where
             incarnation: mem.incarnation(),
             trace: cfg.trace,
             limits: cfg.limits,
+            map_seed: seed,
         };
         let topics = Topics::start(&bc_cfg, key, now, cfg.wall_ms).map_err(StartError::Broadcast)?;
         io.trace(NodeTrace::Started {

@@ -8,9 +8,11 @@
 //!
 //! Invariants: nothing here depends on how often the host calls, only on the time it passes.
 
+use alloc::vec::Vec;
 use vinc_membership::Nanos;
 
 use crate::consts::FLOOR_WAIT;
+use crate::event::Reject;
 use crate::host::Host;
 use crate::node::Topics;
 
@@ -65,16 +67,21 @@ impl Topics {
     /// Expire the dedupe sets and the logs; a message leaving a log stays in the dedupe set, so a late copy is not
     /// delivered again.
     fn sweep(&mut self, now: Nanos) {
+        // Ids the set could not take back (the probe bound), counted below; unallocated in the usual case.
+        let mut lost: Vec<u64> = Vec::new();
         for st in self.topics.values_mut() {
             st.seen.expire(now);
             let seen = &mut st.seen;
             if let Some(log) = st.log.as_mut() {
                 log.expire(now, |old| {
-                    if !seen.contains(old, now) {
-                        seen.insert(old, now, true);
+                    if !seen.contains(old, now) && seen.insert(old, now, true).is_err() {
+                        lost.push(old);
                     }
                 });
             }
+        }
+        for old in lost {
+            self.note_reject(old.to_le_bytes(), Reject::ProbeLimit);
         }
     }
 }

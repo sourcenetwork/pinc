@@ -290,6 +290,7 @@ impl Net {
                 incarnation: (WALL0 + 1) << 16,
                 trace: true,
                 limits,
+                map_seed: 0x5eed + i as u64,
             };
             let t = Topics::start(&cfg, Box::new(k), start, WALL0 + start / 1_000_000).unwrap();
             let h = NodeHost {
@@ -337,6 +338,7 @@ impl Net {
             incarnation: ((WALL0 + at / 1_000_000 + 1) << 16) | 1,
             trace: true,
             limits: self.limits,
+            map_seed: 0x5eed + i as u64,
         };
         let skew = self.nodes[i].h.skew_ms;
         let wall = WALL0.saturating_add_signed(skew + i64::try_from(at / 1_000_000).unwrap());

@@ -23,7 +23,7 @@ use crate::consts::{
 use crate::event::Trace;
 use crate::floors::{Gather, SentFloors};
 use crate::log::HubLog;
-use crate::table::Seen;
+use crate::table::{IdKey, Seen};
 
 /// The size limits of a node. The defaults suit small messages; raise `max_body` (and `log_bytes` with it) for a
 /// stack that broadcasts larger payloads. Data larger than any sensible limit belongs behind a reference: broadcast a
@@ -94,6 +94,10 @@ pub struct Config<'a> {
     pub trace: bool,
     /// The size limits.
     pub limits: Limits,
+    /// A seed the node's key store drew, unknown to every peer: it places message ids in the dedupe sets and the
+    /// hub logs, so that no sender can choose where its ids land. The seed that keys the facade's tables is the
+    /// model; two nodes need not share it.
+    pub map_seed: u64,
 }
 
 /// Why a node could not start.
@@ -211,7 +215,7 @@ pub(crate) struct Topic {
 }
 
 impl Topic {
-    fn new() -> Self {
+    fn new(id_key: IdKey) -> Self {
         Self {
             sub: false,
             confirmed: false,
@@ -229,7 +233,7 @@ impl Topic {
             log: None,
             behind: BTreeMap::new(),
             forgot: None,
-            seen: Seen::with_capacity(SEEN_CAP),
+            seen: Seen::with_capacity(SEEN_CAP, id_key),
             requested: BTreeSet::new(),
             refused: false,
         }
@@ -301,6 +305,8 @@ pub struct Topics {
     pub(crate) is_hub: bool,
     pub(crate) hubs: Vec<NodeId>,
     pub(crate) limits: Limits,
+    /// Places message ids in the dedupe sets and the hub logs (see [`Config::map_seed`]).
+    pub(crate) id_key: IdKey,
     pub(crate) key: alloc::boxed::Box<Keypair>,
     pub(crate) alg: IdentityAlg,
     pub(crate) pk: Vec<u8>,
@@ -404,6 +410,7 @@ impl Topics {
             is_hub: cfg.is_hub,
             hubs,
             limits: cfg.limits,
+            id_key: IdKey::from_seed(cfg.map_seed),
             key,
             alg,
             pk,
@@ -564,7 +571,7 @@ impl Topics {
             if self.topics.len() >= self.limits.max_topics {
                 return None;
             }
-            self.topics.insert(topic.to_vec(), Topic::new());
+            self.topics.insert(topic.to_vec(), Topic::new(self.id_key));
         }
         self.topics.get_mut(topic)
     }
