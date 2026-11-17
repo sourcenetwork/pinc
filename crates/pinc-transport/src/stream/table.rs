@@ -633,9 +633,8 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         }
         let Some(i) = self.locate(pool, id)? else { return Ok(()) };
         let slot = self.slots.get_mut(i).ok_or(StreamError::UnknownStream)?;
-        let spilled = slot.recv.spilled();
         let result = slot.recv.on_data(pool, offset, data, fin);
-        self.stats.range_spills += u64::from(!spilled && slot.recv.spilled());
+        self.stats.range_spills += slot.recv.take_spills();
         self.stats.held_back += u64::from(result == Err(StreamError::Exhausted));
         self.stats.range_overflows += u64::from(result == Err(StreamError::Fragmented));
         self.settle(pool, i);
@@ -980,3 +979,7 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
 #[cfg(all(test, feature = "alloc"))]
 #[allow(clippy::unwrap_used, reason = "tests assert")]
 mod tests;
+
+#[cfg(all(test, feature = "alloc"))]
+#[allow(clippy::unwrap_used, reason = "tests assert")]
+mod spill_tests;

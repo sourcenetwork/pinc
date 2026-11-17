@@ -147,9 +147,9 @@ impl<const C: usize> Recv<C> {
         self.ranges.clear(pool);
     }
 
-    /// Whether the received ranges hold a pool chunk.
-    pub(super) const fn spilled(&self) -> bool {
-        self.ranges.is_spilled()
+    /// The times the received ranges spilled into a pool chunk since the last call.
+    pub(super) fn take_spills(&mut self) -> u64 {
+        self.ranges.take_spills()
     }
 
     /// The pool bytes the credit up to the granted limit may still claim, as the ledger counts them
