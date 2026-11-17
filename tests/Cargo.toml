@@ -799,6 +799,10 @@ path = "trace_broadcast.rs"
 name = "broadcast_fixes"
 path = "broadcast_fixes.rs"
 
+[[test]]
+name = "broadcast_idtaken"
+path = "broadcast_idtaken.rs"
+
 [lints]
 workspace = true
 
