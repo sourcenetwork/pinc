@@ -42,9 +42,9 @@ if grep -rnE '\b(sorry|admit|axiom|native_decide|unsafe|implemented_by)\b' proof
 fi
 (cd proofs/lean && lake build)
 
-run_tlc() { # run_tlc <name> <spec> <cfg> : model check one config, show the summary lines
+run_tlc() { # run_tlc <name> <spec> <cfg> [tlc options] : model check one config, show the summary lines
     local out
-    out=$(JAVA_TOOL_OPTIONS="$(jopts)" tlc -workers auto -metadir "proofs/tla/states/$1" -config "proofs/tla/$3.cfg" "proofs/tla/$2.tla" 2>&1) \
+    out=$(JAVA_TOOL_OPTIONS="$(jopts)" tlc -workers auto ${4:-} -metadir "proofs/tla/states/$1" -config "proofs/tla/$3.cfg" "proofs/tla/$2.tla" 2>&1) \
         || { echo "$out" >&2; echo "proofs: TLC failed on $3" >&2; exit 1; }
     echo "tlc $3: $(echo "$out" | grep -E 'states generated, ' | tail -1)"
 }
@@ -676,7 +676,9 @@ par witness_tlc broadcast_auth_noisb BroadcastAuth BroadcastAuth_noisb DeliverEx
 par witness_tlc broadcast_auth_nomid BroadcastAuth BroadcastAuth_nomid DeliverExact
 par witness_tlc broadcast_auth_notopic BroadcastAuth BroadcastAuth_notopic DeliverExact
 par witness_tlc broadcast_auth_nots BroadcastAuth BroadcastAuth_nots DeliverExact
-par run_tlc broadcast_wire BroadcastWire BroadcastWire
+# 13 symbols make 2,391,484 strings, over the 1,000,000 elements TLC builds a set of by default.
+par run_tlc broadcast_wire BroadcastWire BroadcastWire "-maxSetSize 3000000"
+# The witness is sized to the shortest envelope with one byte after it: 12 symbols over two, enough to show the violation.
 par witness_tlc broadcast_wire_notrail BroadcastWire BroadcastWire_notrail EnvCanonical
 par run_tlc broadcast_midmap BroadcastMidMap BroadcastMidMap
 par run_tlc broadcast_log BroadcastLog BroadcastLog

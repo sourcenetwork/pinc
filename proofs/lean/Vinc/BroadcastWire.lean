@@ -515,7 +515,7 @@ theorem env_topic_bound (tl : Nat) (rest : List Nat) (h1 : 255 < tl) (h2 : tl < 
     decEnv ([1, 1] ++ beBytes 2 tl ++ rest) = none := by
   have e2 : beVal (beBytes 2 tl) = tl := beVal_of_lt (n := 2) (x := tl) (by show tl < 65536; exact h2)
   unfold decEnv
-  simp only [List.append_assoc, List.cons_append, List.nil_append, rd1, ne_eq, not_true_eq_false, if_false]
+  simp only [List.cons_append, List.nil_append, rd1, ne_eq, not_true_eq_false, ite_false]
   rw [rd_append _ (length_beBytes 2 tl)]
   simp [e2, h1]
 
