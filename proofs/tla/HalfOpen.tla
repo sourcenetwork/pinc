@@ -88,7 +88,7 @@
 (* Lean counterpart: proofs/lean/Vinc/CoreHalfOpen*.lean, and              *)
 (* proofs/lean/Vinc/CoreBacklog*.lean for the room.                        *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, FiniteSets
+EXTENDS Integers, Sequences, FiniteSets, TLC
 CONSTANTS K, MAX, LIFE, HOLD, FULL, SHORT, TMAX, LENS, IDS, MAXH, BUG_LE, STRICT, SUPERSEDE,
           QCAP, BUG_ROOM, BUG_EST, BUG_GONE, BUG_SUB, BUG_HALF, BUG_HOLD
 VARIABLES e, ids, stalled, refused, left, timed, resumed, atcap, kept, ow, pend, q, gone, busy, heldok, roomref,
@@ -100,6 +100,11 @@ vars == <<e, ids, stalled, refused, left, timed, resumed, atcap, kept, ow, pend,
           halfok, resok>>
 
 INSTANCE HalfOpenOps
+
+\* The ids up to a swap, for the invariants only (never a liveness property or a printed trace). Every slot starts with
+\* id 0, outside IDS, so a swap fixes it; ids are read only by membership, equality and ranging over IDS (no
+\* arithmetic, order or CHOOSE touches them) and no invariant names one, so a swap of the ids maps steps to steps.
+IdPerms == Permutations(IDS)
 
 Slots == 0..(K - 1)
 \* the host set a room: the accept queue is modelled
