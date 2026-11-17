@@ -8,6 +8,12 @@
 (* the answer ("ok" or the reason of the refusal) and the effects in the   *)
 (* order the code emits them (frames, closes, wake-ups and every Trace).   *)
 (*                                                                         *)
+(* A message held for a member is released when a packet from the member   *)
+(* is heard (UdpHeard, and the SPU datagram through it) and its route is   *)
+(* ready, and a packet for a member that holds messages is held behind     *)
+(* them (Route): nothing overtakes a held message. cf.old restores the     *)
+(* rule before (no release, packets overtake), for the witnesses.          *)
+(*                                                                         *)
 (* Time is in whole seconds, the unit of the trace; every rule constant is *)
 (* a whole number of seconds in the code. Node ids are small naturals,     *)
 (* 0 meaning none. Tables:                                                 *)
@@ -76,10 +82,12 @@ Fail(R, why, node) == [R |-> R, res |-> why, ef |-> <<RejE(why, node)>>]
    call *)
 SetReady(R, node, ok) == [R EXCEPT !.nr = IF ok = 1 THEN R.nr \ {node} ELSE R.nr \cup {node}]
 
+(* route.rs fresh: the UDP session of the node was heard less than 20 s ago *)
+Fresh(R, now, node) == node \in DOMAIN R.udp /\ Sat(now - R.udp[node]) < FRESH
+
 (* route.rs tunnel_down *)
 TunnelDown(R, now, dst, src, flag, len) ==
-    LET fresh == dst \in DOMAIN R.udp /\ Sat(now - R.udp[dst]) < FRESH IN
-    IF ~fresh \/ dst \in R.nr \/ len = 0 \/ 35 + len > MAXTUN THEN [ok |-> FALSE, ef |-> <<>>]
+    IF ~Fresh(R, now, dst) \/ dst \in R.nr \/ len = 0 \/ 35 + len > MAXTUN THEN [ok |-> FALSE, ef |-> <<>>]
     ELSE [ok |-> TRUE, ef |-> <<<<"udp", dst, "spl", src, flag, len>>, RoutedE(src, dst, "tunnel", len)>>]
 
 (* route.rs deliver_client *)
@@ -93,13 +101,13 @@ DeliverClient(cf, R, now, src, dst, flag, len, stalecopy) ==
              t == IF stalecopy /\ stale THEN TunnelDown(R1, now, dst, src, flag, len) ELSE [ok |-> FALSE, ef |-> <<>>]
          IN [R |-> R1, ok |-> TRUE, ef |-> <<fe, RoutedE(src, dst, "carrier", len)>> \o t.ef]
 
-(* route.rs hold: the packet goes into the mailbox, and a wake-up is requested on the first one or 30 s after the last *)
+(* route.rs hold: the packet goes into the mailbox, and a wake-up is requested on the first one or 30 s after the last,
+   only while the member is still marked asleep *)
 Hold(cf, R, now, dst, src, flag, len) ==
     LET p == Push(MC(cf), R.mb, now, dst, src, flag, len) IN
     IF p.res = "stored"
-    THEN LET s == R.sl[dst]
-             rearm == ShouldWake(MC(cf), now, s, p.first)
-             R1 == [R EXCEPT !.mb = p.mb, !.sl[dst] = IF rearm THEN [s EXCEPT !.woke = now] ELSE s]
+    THEN LET rearm == dst \in DOMAIN R.sl /\ ShouldWake(MC(cf), now, R.sl[dst], p.first)
+             R1 == [R EXCEPT !.mb = p.mb, !.sl = IF rearm THEN [R.sl EXCEPT ![dst] = [R.sl[dst] EXCEPT !.woke = now]] ELSE R.sl]
              e == <<RoutedE(src, dst, "mailbox", len), <<"t", "mstored", dst, p.seq, p.dropped>>>>
                   \o (IF rearm THEN <<<<"t", "wakereq", dst>>, <<"wake", dst>>>> ELSE <<>>)
          IN [R |-> R1, res |-> "ok", ef |-> e]
@@ -113,17 +121,6 @@ Forward(cf, R, now, src, dst, flag, len) ==
     IN IF home = 0 \/ home = cf.me THEN Fail(R, "noroute", src)
        ELSE IF ~IsPeer(R, home) THEN Fail(R, "nopeer", src)
        ELSE [R |-> R, res |-> "ok", ef |-> <<<<"peer", home, "fwd", src, dst, flag, len>>, RoutedE(src, dst, "peer", len)>>]
-
-(* route.rs route; origin is "client", "peer" or "tunnel" *)
-Route(cf, R, now, src, dst, flag, len, origin) ==
-    IF dst = cf.me THEN [R |-> R, res |-> "ok", ef |-> LocalEf(src, cf.me, len)]
-    ELSE LET dc == DeliverClient(cf, R, now, src, dst, flag, len, TRUE) IN
-    IF dc.ok THEN [R |-> dc.R, res |-> "ok", ef |-> dc.ef]
-    ELSE LET td == TunnelDown(R, now, dst, src, flag, len) IN
-    IF td.ok THEN [R |-> R, res |-> "ok", ef |-> td.ef]
-    ELSE IF dst \in DOMAIN R.sl THEN Hold(cf, R, now, dst, src, flag, len)
-    ELSE IF origin = "peer" THEN Fail(R, "noroute", src)
-    ELSE Forward(cf, R, now, src, dst, flag, len)
 
 (* route.rs deliver_held: look, hand over, then remove; the pass stops at the first message that cannot be handed over,
    which stays held, and is counted once *)
@@ -144,9 +141,34 @@ DHLoop(cf, R, now, node, open, fit, acc) ==
 DeliverHeld(cf, R, now, node) ==
     IF Pending(R.mb, node)[1] = 0 THEN [R |-> R, ef |-> <<>>]
     ELSE LET open == HasC(cf, R, node)
-             fresh == node \in DOMAIN R.udp /\ Sat(now - R.udp[node]) < FRESH
-         IN IF ~open /\ ~fresh THEN [R |-> R, ef |-> <<>>]
+         IN IF ~open /\ ~Fresh(R, now, node) THEN [R |-> R, ef |-> <<>>]
             ELSE DHLoop(cf, R, now, node, open, IF open THEN MAXPKT ELSE MAXTUN - 35, <<>>)
+
+(* route.rs release_held: nothing held returns at once; a member whose session is not fresh or whose route the host
+   reports not ready keeps its messages and nothing is emitted; otherwise the pass of deliver_held runs. more says
+   messages remain held (counted as pending, as the code does). cf.old is the rule before: nothing is released *)
+ReleaseHeld(cf, R, now, node) ==
+    IF cf.old \/ Pending(R.mb, node)[1] = 0 THEN [R |-> R, ef |-> <<>>, more |-> FALSE]
+    ELSE IF ~Fresh(R, now, node) \/ node \in R.nr THEN [R |-> R, ef |-> <<>>, more |-> TRUE]
+    ELSE LET dh == DeliverHeld(cf, R, now, node) IN [R |-> dh.R, ef |-> dh.ef, more |-> Pending(dh.R.mb, node)[1] > 0]
+
+(* the answer o behind the effects of an earlier step of the same call *)
+After(ef, o) == [o EXCEPT !.ef = ef \o o.ef]
+
+(* route.rs route; origin is "client", "peer" or "tunnel". After the carrier, a destination that holds messages is
+   released first and the packet is held behind what remains, so nothing overtakes a held message *)
+Route(cf, R, now, src, dst, flag, len, origin) ==
+    IF dst = cf.me THEN [R |-> R, res |-> "ok", ef |-> LocalEf(src, cf.me, len)]
+    ELSE LET dc == DeliverClient(cf, R, now, src, dst, flag, len, TRUE) IN
+    IF dc.ok THEN [R |-> dc.R, res |-> "ok", ef |-> dc.ef]
+    ELSE LET rh == ReleaseHeld(cf, R, now, dst)
+             R2 == rh.R
+             td == TunnelDown(R2, now, dst, src, flag, len)
+         IN IF rh.more THEN After(rh.ef, Hold(cf, R2, now, dst, src, flag, len))
+    ELSE IF td.ok THEN [R |-> R2, res |-> "ok", ef |-> rh.ef \o td.ef]
+    ELSE IF dst \in DOMAIN R2.sl THEN After(rh.ef, Hold(cf, R2, now, dst, src, flag, len))
+    ELSE IF origin = "peer" THEN After(rh.ef, Fail(R2, "noroute", src))
+    ELSE After(rh.ef, Forward(cf, R2, now, src, dst, flag, len))
 
 (* clients.rs carrier_opened *)
 CarrierOpened(cf, R, now, node) ==
@@ -264,9 +286,14 @@ AddPeer(R, p) ==
          IF free = {} THEN [R |-> R, ok |-> FALSE] ELSE [R |-> [R EXCEPT !.peers[MinOf(free)] = p], ok |-> TRUE]
 RemovePeer(R, p) == [R EXCEPT !.peers = [i \in 1..MAXPEERS |-> IF R.peers[i] = p THEN 0 ELSE R.peers[i]]]
 
-UdpHeard(cf, R, node, at) ==
-    IF CanPut(R.udp, node, cf.C) THEN [R |-> [R EXCEPT !.udp = Put(R.udp, node, at)], res |-> "ok", ef |-> <<>>]
-    ELSE [R |-> R, res |-> "full", ef |-> <<>>]
+(* route.rs udp_heard: the host heard the member on its validated route at now; the time is stamped, then the member's
+   held messages are released. A full table is reported (cf.old: silently, with no release) *)
+UdpHeard(cf, R, now, node) ==
+    IF CanPut(R.udp, node, cf.C)
+    THEN LET R1 == [R EXCEPT !.udp = Put(R.udp, node, now)]
+             rh == ReleaseHeld(cf, R1, now, node)
+         IN [R |-> rh.R, res |-> "ok", ef |-> rh.ef]
+    ELSE IF cf.old THEN [R |-> R, res |-> "full", ef |-> <<>>] ELSE Fail(R, "full", node)
 UdpGone(R, node) == [R EXCEPT !.udp = Del(R.udp, node)]
 
 MemberReturned(cf, R, now, node) ==
@@ -274,13 +301,14 @@ MemberReturned(cf, R, now, node) ==
         dh == DeliverHeld(cf, R1, now, node)
     IN [R |-> dh.R, res |-> "ok", ef |-> dh.ef]
 
-(* discovery.rs datagram, the SPU case; m is the validated member or 0 *)
+(* discovery.rs datagram, the SPU case; m is the validated member or 0. The member is heard first (its effects come
+   first, a full table is traced and the datagram goes on) *)
 Spu(cf, R, now, m, dst, flag, len) ==
     IF len = 0 \/ 35 + len > MAXTUN THEN Fail(R, "baddg", m)
-    ELSE LET R1 == IF m # 0 /\ CanPut(R.udp, m, cf.C) THEN [R EXCEPT !.udp = Put(R.udp, m, now)] ELSE R IN
-         IF m = 0 THEN Fail(R1, "unauth", 0)
-         ELSE IF dst = cf.me THEN Fail(R1, "noroute", m)
-         ELSE Route(cf, R1, now, m, dst, flag, len, "tunnel")
+    ELSE IF m = 0 THEN Fail(R, "unauth", 0)
+    ELSE LET uh == UdpHeard(cf, R, now, m) IN
+         IF dst = cf.me THEN After(uh.ef, Fail(uh.R, "noroute", m))
+         ELSE After(uh.ef, Route(cf, uh.R, now, m, dst, flag, len, "tunnel"))
 
 (* clients.rs handle_timeout: the session sweep walks the real slots; an expired session is removed and the slot looked at again *)
 RECURSIVE SweepC(_, _, _, _, _, _)
