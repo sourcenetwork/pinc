@@ -59,7 +59,7 @@ Learn(a, al, node) == IF al < AM THEN [a EXCEPT !.sl[al] = node] ELSE a
 Resolve(a, al) == IF al < AM THEN a.sl[al] ELSE 0
 
 NewRelay(cf) == [bk |-> [x \in {} |-> 0], tb |-> NewTable(cf.C), cd |-> [x \in {} |-> 0], gone |-> [x \in {} |-> 0],
-                 sl |-> [x \in {} |-> 0], udp |-> [x \in {} |-> 0],
+                 sl |-> [x \in {} |-> 0], udp |-> [x \in {} |-> 0], nr |-> {},
                  fb |-> [i \in 0..(cf.C - 1) |-> [n |-> 0, rel |-> 0, at |-> 0]],
                  peers |-> [i \in 1..MAXPEERS |-> 0], rec |-> [x \in {} |-> 0], mb |-> Empty, ns |-> 0, ls |-> 0, np |-> 0]
 
@@ -72,10 +72,13 @@ RejE(why, node) == <<"t", "rej", why, node>>
 LocalEf(from, me, len) == <<RoutedE(from, me, "local", len), <<"local", from, len>>>>
 Fail(R, why, node) == [R |-> R, res |-> why, ef |-> <<RejE(why, node)>>]
 
+(* The host answers Sink::tunnel_ready from nr, the members with no validated direct route; it is an input of the call *)
+SetReady(R, node, ok) == [R EXCEPT !.nr = IF ok = 1 THEN R.nr \ {node} ELSE R.nr \cup {node}]
+
 (* route.rs tunnel_down *)
 TunnelDown(R, now, dst, src, flag, len) ==
     LET fresh == dst \in DOMAIN R.udp /\ Sat(now - R.udp[dst]) < FRESH IN
-    IF ~fresh \/ len = 0 \/ 35 + len > MAXTUN THEN [ok |-> FALSE, ef |-> <<>>]
+    IF ~fresh \/ dst \in R.nr \/ len = 0 \/ 35 + len > MAXTUN THEN [ok |-> FALSE, ef |-> <<>>]
     ELSE [ok |-> TRUE, ef |-> <<<<"udp", dst, "spl", src, flag, len>>, RoutedE(src, dst, "tunnel", len)>>]
 
 (* route.rs deliver_client *)
@@ -121,18 +124,21 @@ Route(cf, R, now, src, dst, flag, len, origin) ==
     ELSE IF origin = "peer" THEN Fail(R, "noroute", src)
     ELSE Forward(cf, R, now, src, dst, flag, len)
 
-(* route.rs deliver_held *)
+(* route.rs deliver_held: look, hand over, then remove; the pass stops at the first message that cannot be handed over,
+   which stays held, and is counted once *)
 RECURSIVE DHLoop(_, _, _, _, _, _, _)
 DHLoop(cf, R, now, node, open, fit, acc) ==
-    LET p == Pop(MC(cf), R.mb, now, node, fit)
+    LET p == Look(MC(cf), R.mb, now, node, fit)
         R1 == [R EXCEPT !.mb = p.mb]
     IN IF ~p.got THEN [R |-> R1, ef |-> acc]
        ELSE LET m == p.m
                 sent == IF open THEN DeliverClient(cf, R1, now, m.src, node, m.flag, m.len, FALSE)
                         ELSE TunnelDown(R1, now, node, m.src, m.flag, m.len)
                 R2 == IF open THEN sent.R ELSE R1
-                e == sent.ef \o (IF sent.ok THEN <<<<"t", "mdeliv", node, m.seq>>>> ELSE <<RejE("notunnel", node)>>)
-            IN DHLoop(cf, R2, now, node, open, fit, acc \o e)
+            IN IF sent.ok
+               THEN DHLoop(cf, [R2 EXCEPT !.mb = MbRemove(MC(cf), R2.mb, node, m.seq)], now, node, open, fit,
+                           acc \o sent.ef \o <<<<"t", "mdeliv", node, m.seq>>>>)
+               ELSE [R |-> R2, ef |-> acc \o sent.ef \o <<RejE("notunnel", node)>>]
 
 DeliverHeld(cf, R, now, node) ==
     IF Pending(R.mb, node)[1] = 0 THEN [R |-> R, ef |-> <<>>]

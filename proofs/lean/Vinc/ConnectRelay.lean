@@ -117,6 +117,8 @@ structure RS where
   gone : List (Nat × Nat) := []
   sl : List (Nat × Sl) := []
   udp : List (Nat × Nat) := []
+  /-- Members the host reports with no validated direct route (`Sink::tunnel_ready` is false). -/
+  nr : List Nat := []
   fb : List FB := []
   peers : List Nat := List.replicate maxPeers 0
   recs : List (Nat × Rc) := []
@@ -149,8 +151,14 @@ def okOut (r : RS) (ef : Ef) : Out := ⟨r, "ok", ef⟩
 def tunnelFresh (r : RS) (now dst : Nat) : Bool :=
   match aget r.udp dst with | some h => decide (now - h < fresh) | none => false
 
+/-- The host's answer to `Sink::tunnel_ready`, an input of every call. -/
+def tunnelReady (r : RS) (dst : Nat) : Bool := !r.nr.contains dst
+
+def setReady (r : RS) (node : Nat) (ok : Bool) : RS :=
+  { r with nr := if ok then r.nr.filter (· != node) else if r.nr.contains node then r.nr else node :: r.nr }
+
 def tunnelDown (r : RS) (now dst src flag len : Nat) : Bool × Ef :=
-  if !tunnelFresh r now dst || len == 0 || 35 + len > maxTun then (false, [])
+  if !tunnelFresh r now dst || !tunnelReady r dst || len == 0 || 35 + len > maxTun then (false, [])
   else (true, [[.s "udp", .n dst, .s "spl", .n src, .n flag, .n len], routedE src dst "tunnel" len])
 
 def deliverClient (cf : CF) (r : RS) (now src dst flag len : Nat) (staleCopy : Bool) : RS × Bool × Ef :=
@@ -204,18 +212,22 @@ def route (cf : CF) (r : RS) (now src dst flag len : Nat) (origin : Origin) : Ou
   else if origin == .peer then fail r "noroute" src
   else forward cf r now src dst flag len
 
+/-- `deliver_held`: look at the oldest message, hand it over, remove it only if it was handed over; the pass stops at
+the first message that cannot be handed over, which stays held and is counted once. -/
 def dhLoop (cf : CF) (now node : Nat) (op : Bool) (fit : Nat) : Nat → RS → Ef → RS × Ef
   | 0, r, acc => (r, acc)
   | fuel + 1, r, acc =>
-    let (mb, got) := ConnectMailbox.pop (mc cf) now r.mb node fit
+    let (mb, got) := ConnectMailbox.look (mc cf) now r.mb node fit
     let r1 := { r with mb := mb }
     match got with
     | none => (r1, acc)
     | some m =>
       let sent := if op then deliverClient cf r1 now m.src node m.flag m.len false
         else (r1, (tunnelDown r1 now node m.src m.flag m.len).1, (tunnelDown r1 now node m.src m.flag m.len).2)
-      let e := sent.2.2 ++ (if sent.2.1 then [[.s "t", .s "mdeliv", .n node, .n m.seq]] else [rejE "notunnel" node])
-      dhLoop cf now node op fit fuel sent.1 (acc ++ e)
+      if sent.2.1 then
+        dhLoop cf now node op fit fuel { sent.1 with mb := ConnectMailbox.remove (mc cf) sent.1.mb node m.seq }
+          (acc ++ sent.2.2 ++ [[.s "t", .s "mdeliv", .n node, .n m.seq]])
+      else (sent.1, acc ++ sent.2.2 ++ [rejE "notunnel" node])
 
 def pendingCount (mb : ConnectMailbox.MB) (k : Nat) : Nat :=
   match ConnectMailbox.lookup k mb.held with | some h => h.count | none => 0

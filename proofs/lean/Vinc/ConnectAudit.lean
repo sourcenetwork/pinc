@@ -25,6 +25,10 @@ import Vinc.ConnectOwnThm
 #audit_axioms Vinc.ConnectMailbox.fifo_once
 #audit_axioms Vinc.ConnectMailbox.push_fresh
 #audit_axioms Vinc.ConnectMailbox.pop_spec
+#audit_axioms Vinc.ConnectMailbox.pop_look_out
+#audit_axioms Vinc.ConnectMailbox.look_keeps
+#audit_axioms Vinc.ConnectMailbox.remove_front
+#audit_axioms Vinc.ConnectMailbox.remove_other
 #audit_axioms Vinc.ConnectMailbox.drop_oldest
 #audit_axioms Vinc.ConnectMailbox.push_first
 #audit_axioms Vinc.ConnectMailbox.wake_first
@@ -50,6 +54,7 @@ import Vinc.ConnectOwnThm
 #audit_axioms Vinc.ConnectRelay.charge_drop
 #audit_axioms Vinc.ConnectRelay.charge_inv
 #audit_axioms Vinc.ConnectRelay.tunnel_spec
+#audit_axioms Vinc.ConnectRelay.tunnel_ready_spec
 #audit_axioms Vinc.ConnectRelay.spu_member
 #audit_axioms Vinc.ConnectRelay.sleep_spec
 #audit_axioms Vinc.ConnectRelay.close_asleep

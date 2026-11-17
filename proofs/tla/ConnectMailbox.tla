@@ -5,7 +5,8 @@
 (* operators of ConnectMailboxOps.tla. The steps are Push (a packet for a  *)
 (* member, through hold when the member sleeps), Pop (deliver_held), Sweep,*)
 (* Clear, and the sleep mark of a member (SleepNotice, Return). Time is    *)
-(* monotone and takes values of the finite set Times.                      *)
+(* monotone and takes values of the finite set Times. A delivery pass is   *)
+(* Look, the hand-over (which the caller may refuse), then Remove.         *)
 (*                                                                         *)
 (* Properties (Lean: Vinc/ConnectMailbox.lean):                            *)
 (*  Bounds       used = sum of sizes <= B, count = length, members <= N,   *)
@@ -15,6 +16,8 @@
 (*  OrderOnce    messages leave in arrival order and each at most once    *)
 (*               (order_once)                                              *)
 (*  Age          a delivered message is younger than Age (age_bound)       *)
+(*  RefusedKept  a message whose hand-over was refused is still held, in   *)
+(*               front: it leaves only on delivery or expiry              *)
 (*  DropOldest   the dropped messages are the oldest (drop_oldest)         *)
 (*  WakeFirst    the first held message of a sleeping member requests a    *)
 (*               wake; WakeSpaced: otherwise only Rearm after the last one *)
@@ -22,14 +25,14 @@
 (***************************************************************************)
 EXTENDS ConnectMailboxOps
 
-CONSTANTS H, B, N, MaxPkt, Age, Rearm, Nodes, Srcs, Times, MaxSeq, Max
+CONSTANTS H, B, N, MaxPkt, Age, Rearm, Nodes, Srcs, Times, MaxSeq, Max, OldRule
 c == [H |-> H, B |-> B, N |-> N, MaxPkt |-> MaxPkt, Age |-> Age, Rearm |-> Rearm]
 
 VARIABLES mb, sl, clock, lastOut, lastPush, lastWake, popped
 vars == <<mb, sl, clock, lastOut, lastPush, lastWake, popped>>
 
 Init == /\ mb = Empty /\ sl = [x \in {} |-> 0] /\ clock = 0
-        /\ lastOut = [node |-> 0, got |-> FALSE, m |-> NoMsg, now |-> 0, prev |-> -1]
+        /\ lastOut = [node |-> 0, got |-> FALSE, m |-> NoMsg, now |-> 0, prev |-> -1, kept |-> TRUE]
         /\ lastPush = [res |-> "none", first |-> FALSE, sleeping |-> FALSE, fired |-> FALSE, droppedOldest |-> TRUE]
         /\ lastWake = [first |-> TRUE, gap |-> 0]
         /\ popped = {}
@@ -50,13 +53,19 @@ DoPush(node, src, flag, len) ==
           /\ lastWake' = IF fire THEN [first |-> r.first, gap |-> Sat(clock' - s.woke)] ELSE lastWake
     /\ UNCHANGED <<lastOut, popped>>
 
-DoPop(node, max) ==
+\* deliver_held: the oldest message is looked at, handed over (ok) or refused (~ok), and removed only when handed over.
+\* OldRule is the code that removed it first: a refused message is then gone, which RefusedKept catches.
+DoPass(node, max, ok) ==
     /\ Tick
-    /\ LET r == Pop(c, mb, clock', node, max) IN
-       /\ mb' = r.mb
-       /\ lastOut' = [node |-> node, got |-> r.got, m |-> r.m, now |-> clock',
-                      prev |-> IF node \in DOMAIN mb.held /\ mb.held[node].q # <<>> THEN Head(mb.held[node].q).seq ELSE -1]
-       /\ popped' = IF ~r.got THEN popped ELSE popped \cup {r.m.seq}
+    /\ LET l == Look(c, mb, clock', node, max)
+           gone == l.got /\ (ok \/ OldRule)
+           nm == IF gone THEN Pop(c, mb, clock', node, max).mb ELSE l.mb
+       IN /\ mb' = nm
+          /\ lastOut' = [node |-> node, got |-> gone, m |-> l.m, now |-> clock',
+                         prev |-> IF node \in DOMAIN mb.held /\ mb.held[node].q # <<>> THEN Head(mb.held[node].q).seq ELSE -1,
+                         kept |-> (l.got /\ ~ok) => (node \in DOMAIN nm.held /\ nm.held[node].q # <<>>
+                                                    /\ Head(nm.held[node].q).seq = l.m.seq)]
+          /\ popped' = IF ~gone THEN popped ELSE popped \cup {l.m.seq}
     /\ UNCHANGED <<sl, lastPush, lastWake>>
 
 DoSweep == /\ Tick /\ mb' = Sweep(c, mb, clock') /\ UNCHANGED <<sl, lastOut, lastPush, lastWake, popped>>
@@ -67,7 +76,7 @@ DoSleep(node) == /\ sl' = Put(sl, node, IF node \in DOMAIN sl THEN sl[node] ELSE
 DoReturn(node) == /\ node \in DOMAIN sl /\ sl' = Del(sl, node) /\ UNCHANGED <<mb, clock, lastOut, lastPush, lastWake, popped>>
 
 Next == \/ \E n \in Nodes, s \in Srcs, l \in 0..MaxPkt : DoPush(n, s, 0, l)
-        \/ \E n \in Nodes, m \in {MaxPkt, 0} : DoPop(n, m)
+        \/ \E n \in Nodes, m \in {MaxPkt, 0}, ok \in BOOLEAN : DoPass(n, m, ok)
         \/ DoSweep \/ \E n \in Nodes : DoClear(n) \/ DoSleep(n) \/ DoReturn(n)
 
 Spec == Init /\ [][Next]_vars
@@ -93,6 +102,7 @@ AgeBound == lastOut.got => Sat(lastOut.now - lastOut.m.t) < Age
 WakeFirst == (lastPush.res = "stored" /\ lastPush.sleeping /\ lastPush.first) => lastPush.fired
 WakeSpaced == lastWake.first \/ lastWake.gap >= Rearm
 DropOldest == lastPush.droppedOldest
+RefusedKept == lastOut.kept
 \* bounds the refusal counters, which no step of the model otherwise limits
 Bound == mb.st.oversize <= 1 /\ mb.st.members <= 1
 =============================================================================

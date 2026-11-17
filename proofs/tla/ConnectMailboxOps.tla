@@ -75,16 +75,28 @@ Push(c, mb, now, node, src, flag, len) ==
          IN [mb |-> [held |-> Put(mb.held, node, h3), seq |-> mb.seq + 1, st |-> Bump(d.st, "stored", 1)],
              res |-> "stored", seq |-> mb.seq, dropped |-> d.d, first |-> first]
 
-(* Mailbox::pop_fitting; got says a message came out, m is it; max is the longest body the caller can deliver *)
-Pop(c, mb, now, node, max) ==
+(* Mailbox::look; got says a live message with a body of at most max is at the front, m is it. Nothing leaves but the
+   expired messages: the message stays held, in front *)
+Look(c, mb, now, node, max) ==
     IF node \notin DOMAIN mb.held THEN [mb |-> mb, got |-> FALSE, m |-> NoMsg]
     ELSE LET e == ExpireH(c, now, mb.held[node])
              ok == e.h.q # <<>> /\ Head(e.h.q).len <= max
-             h2 == IF ok THEN SkipFront(c, e.h).h ELSE e.h
-             st == Bump(Bump(mb.st, "expired", e.n), "delivered", IF ok THEN 1 ELSE 0)
-         IN [mb |-> [held |-> IF h2.count = 0 THEN Del(mb.held, node) ELSE Put(mb.held, node, h2),
-                     seq |-> mb.seq, st |-> st],
+         IN [mb |-> [held |-> IF e.h.count = 0 THEN Del(mb.held, node) ELSE Put(mb.held, node, e.h),
+                     seq |-> mb.seq, st |-> Bump(mb.st, "expired", e.n)],
              got |-> ok, m |-> IF ok THEN Head(e.h.q) ELSE NoMsg]
+
+(* Mailbox::remove (MbRemove, as Remove is the session table's): the front message leaves when it is the one numbered seq, and is counted delivered *)
+MbRemove(c, mb, node, seq) ==
+    IF node \notin DOMAIN mb.held \/ mb.held[node].q = <<>> \/ Head(mb.held[node].q).seq # seq THEN mb
+    ELSE LET h2 == SkipFront(c, mb.held[node]).h IN
+         [held |-> IF h2.count = 0 THEN Del(mb.held, node) ELSE Put(mb.held, node, h2),
+          seq |-> mb.seq, st |-> Bump(mb.st, "delivered", 1)]
+
+(* Mailbox::pop_fitting: the look followed by the removal of what it returned; max is the longest body the caller can
+   deliver *)
+Pop(c, mb, now, node, max) ==
+    LET l == Look(c, mb, now, node, max) IN
+    IF l.got THEN [mb |-> MbRemove(c, l.mb, node, l.m.seq), got |-> TRUE, m |-> l.m] ELSE l
 
 (* Mailbox::sweep: expire every member, free the empty ones *)
 Sweep(c, mb, now) ==

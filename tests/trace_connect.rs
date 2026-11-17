@@ -7,7 +7,8 @@
 //! SELF, PING, PONG, an unexpected RECV, PUB of an own and of a foreign record, SLEEP of an own, a foreign and a
 //! mis-signed notice), frames from peer relays and from a node that is no peer (FWD, SYNC, PING, PONG, an unexpected
 //! frame), `add_peer` and `remove_peer`, `udp_heard` and `udp_gone`, SPU datagrams with and without a validated
-//! member, `member_returned`, sleep notices over UDP, and `handle_timeout`. Times step by amounts around every rule
+//! member, `member_returned`, sleep notices over UDP, the host's `tunnel_ready` answer for a member (changed by a call of
+//! its own, so a held message is refused and kept), and `handle_timeout`. Times step by amounts around every rule
 //! constant (10, 15, 20, 30 s, the sweep, the quota window, the session limit, the mailbox age); every time is a whole
 //! number of seconds, written in seconds (the Lean replay multiplies by 10^9 and TLC keeps 32-bit integers).
 //!
@@ -96,9 +97,16 @@ fn reject_name(r: Reject) -> String {
 struct Rec<'a> {
     names: &'a Names,
     out: Vec<String>,
+    /// Bit `n` is set when node `n` (as `Names::n` numbers it) has no validated direct route.
+    off: u16,
 }
 
 impl Sink for Rec<'_> {
+    fn tunnel_ready(&self, node: &NodeId) -> bool {
+        let n = self.names.n(node);
+        n >= 16 || self.off & (1 << n) == 0
+    }
+
     fn emit(&mut self, e: Effect<'_>) {
         let n = |x: &NodeId| self.names.n(x);
         let s = match e {
@@ -205,6 +213,7 @@ struct Cov {
     wake: u32,
     held_out: u32,
     tunnel_held: u32,
+    refused_held: u32,
 }
 
 type Cache = std::collections::HashMap<(u8, u64, u64, u8), Vec<u8>>;
@@ -238,6 +247,7 @@ fn run(seed: u64, out: &mut Vec<String>, cov: &mut Cov, cache: &mut Cache) {
     let mut sess: [Option<SessionId>; 6] = [None; 6];
     let mut secs = 1000u64;
     let mut seqs = [0u64; 4];
+    let mut off = 0u16;
     // (op, node, kind, dst, seconds to advance or MAX for random, packet length or 0 for random)
     let mut script: std::collections::VecDeque<(u64, usize, u64, usize, u64, usize)> =
         std::collections::VecDeque::new();
@@ -250,7 +260,7 @@ fn run(seed: u64, out: &mut Vec<String>, cov: &mut Cov, cache: &mut Cache) {
             let k = (rng.next_u64() % 4) as usize;
             let o = 4 + (rng.next_u64() % 2) as usize;
             let d = |rng: &mut SplitMix64, v: [u64; 3]| v[(rng.next_u64() % 3) as usize];
-            match rng.next_u64() % 10 {
+            match rng.next_u64() % 11 {
                 // sleep notice, close, packets for the sleeper, return
                 0 => script.extend([
                     (0, k, 0, 0, R, 0),
@@ -324,6 +334,22 @@ fn run(seed: u64, out: &mut Vec<String>, cov: &mut Cov, cache: &mut Cache) {
                     (11, k, 0, 0, 1, 0),
                     (13, k, 0, 0, 1, 0),
                 ]),
+                // the sleeper's UDP session wakes with no validated direct route: the mailbox stays held and the pass
+                // is refused once; when the route is validated the held packets go down in order
+                10 => script.extend([
+                    (0, k, 0, 0, 1, 0),
+                    (3, k, 11, 0, 1, 0),
+                    (2, k, 0, 0, 1, 0),
+                    (0, o, 0, 0, 1, 0),
+                    (3, o, 0, k, 1, 0),
+                    (3, o, 0, k, 1, 0),
+                    (17, k, 0, 0, 0, 0),
+                    (11, k, 0, 0, 1, 0),
+                    (13, k, 0, 0, 1, 0),
+                    (13, k, 0, 0, 1, 0),
+                    (17, k, 1, 0, 0, 0),
+                    (13, k, 0, 0, 1, 0),
+                ]),
                 // a record is dropped after three republish periods, not before
                 _ => script.extend([
                     (0, k, 0, 0, 1, 0),
@@ -348,6 +374,7 @@ fn run(seed: u64, out: &mut Vec<String>, cov: &mut Cov, cache: &mut Cache) {
         let mut sink = Rec {
             names: &names,
             out: Vec::new(),
+            off,
         };
         let head;
         let res: String;
@@ -613,6 +640,13 @@ fn run(seed: u64, out: &mut Vec<String>, cov: &mut Cov, cache: &mut Cache) {
                 res = "ok".into();
                 head = format!(r#"{{"t":"rtime","now":{secs}"#);
             }
+            17 => {
+                let ready = forced.map_or_else(|| rng.next_u64() % 2 == 0, |f| f.2 == 1);
+                let bit = 1u16 << (node + 1);
+                off = if ready { off & !bit } else { off | bit };
+                res = "ok".into();
+                head = format!(r#"{{"t":"rready","n":{},"ok":{}"#, node + 1, u8::from(ready));
+            }
             _ => {
                 let p = forced.map_or_else(|| ids[6 + (rng.next_u64() % 4) as usize], |f| ids[f.1]);
                 if forced.is_none() && rng.next_u64() % 3 == 0 {
@@ -634,7 +668,9 @@ fn run(seed: u64, out: &mut Vec<String>, cov: &mut Cov, cache: &mut Cache) {
             cov.fwdback += u32::from(e.contains("fwdback"));
             cov.wake += u32::from(e.starts_with(r#"["wake"#));
             cov.held_out += u32::from(e.contains("mdeliv"));
+            cov.refused_held += u32::from(e.contains(r#""notunnel""#));
         }
+
         cov.tunnel_held += u32::from(
             sink.out.iter().any(|e| e.starts_with(r#"["udp"#)) && sink.out.iter().any(|e| e.contains("mdeliv")),
         );
@@ -657,6 +693,7 @@ fn the_relay_records_its_trace() {
         wake: 0,
         held_out: 0,
         tunnel_held: 0,
+        refused_held: 0,
     };
     let mut cache = Cache::new();
     for seed in 0..24u64 {
@@ -673,6 +710,10 @@ fn the_relay_records_its_trace() {
     assert!(
         vinc_tests::soaking() || cov.tunnel_held > 0,
         "no held packet delivered down the tunnel"
+    );
+    assert!(
+        vinc_tests::soaking() || cov.refused_held > 0,
+        "no held packet kept for a tunnel that was not ready"
     );
     let Some(dir) = std::env::var_os("VINC_TRACE_DIR") else {
         return;

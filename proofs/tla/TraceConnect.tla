@@ -43,6 +43,7 @@ CloseE == /\ Ev.t = "rclose" /\ Step(CarrierClosed(cf, R, Ev.now, Ev.n, Ev.sid))
 FrameE == /\ Ev.t = "rframe" /\ Step(CarrierFrame(cf, R, Ev.now, Ev.n, Ev.sid, Ev.f))
 PeerE == /\ Ev.t = "rpeer" /\ Step(PeerFrame(cf, R, Ev.now, Ev.from, Ev.f))
 UdpHE == /\ Ev.t = "rudph" /\ Step(UdpHeard(cf, R, Ev.n, Ev.at))
+RdyE == /\ Ev.t = "rready" /\ Ev.out = <<>> /\ R' = SetReady(R, Ev.n, Ev.ok) /\ cf' = cf /\ i' = i + 1
 UdpGE == /\ Ev.t = "rudpg" /\ Ev.out = <<>> /\ R' = UdpGone(R, Ev.n) /\ cf' = cf /\ i' = i + 1
 SpuE == /\ Ev.t = "rspu" /\ Step(Spu(cf, R, Ev.now, Ev.m, Ev.dst, Ev.flag, Ev.len))
 RetE == /\ Ev.t = "rret" /\ Step(MemberReturned(cf, R, Ev.now, Ev.n))
@@ -50,7 +51,7 @@ TimeE == /\ Ev.t = "rtime" /\ Step(Timeout(cf, R, Ev.now))
 
 Done == i > Len(Trace) /\ UNCHANGED vars
 
-TNext == (i <= Len(Trace) /\ (NewE \/ BkE \/ AddE \/ RemE \/ OpenE \/ CloseE \/ FrameE \/ PeerE \/ UdpHE \/ UdpGE \/ SpuE \/ RetE \/ TimeE))
+TNext == (i <= Len(Trace) /\ (NewE \/ BkE \/ AddE \/ RemE \/ OpenE \/ CloseE \/ FrameE \/ PeerE \/ UdpHE \/ RdyE \/ UdpGE \/ SpuE \/ RetE \/ TimeE))
          \/ Done
 
 TraceSpec == Init /\ [][TNext]_vars /\ WF_vars(TNext)

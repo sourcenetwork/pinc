@@ -14,7 +14,8 @@ for every state and every call.
 * The byte quota: `charge_ok` (an accepted frame leaves the window total at most the quota), `charge_reset` (the window
   restarts only after the configured length), `charge_drop` (a frame over the quota is not counted).
 * The hub tunnel: `tunnel_spec` (a datagram goes down a UDP session only if it was heard less than 20 s ago and
-  `35 + len <= 1452 - 28`), `spu_member` (an uploaded packet is accepted only from a validated member),
+  `35 + len <= 1452 - 28`), `tunnel_ready_spec` (and only if the host reports a validated direct route for the member),
+  `spu_member` (an uploaded packet is accepted only from a validated member),
   `stale_copy` (the second copy goes out only if the carrier is silent for more than 15 s).
 * The sleep notice: `sleep_spec` (accepted only within 10 s of the relay's clock, for a node it knows, from its own
   carrier), `close_asleep` (a close within 10 s after an accepted notice is a suspension).
@@ -49,7 +50,7 @@ private theorem noPeer_local (a b c : Nat) : ∀ e ∈ localEf a b c, e.head? �
 
 private theorem noPeer_tunnel (r : RS) (a b c d f : Nat) : ∀ e ∈ (tunnelDown r a b c d f).2, e.head? ≠ some (V.s "peer") := by
   intro e he; unfold tunnelDown at he
-  by_cases hc : (!tunnelFresh r a b || f == 0 || decide (35 + f > maxTun)) = true
+  by_cases hc : (!tunnelFresh r a b || !tunnelReady r b || f == 0 || decide (35 + f > maxTun)) = true
   · simp [hc] at he
   · simp [hc, routedE] at he; rcases he with rfl | rfl <;> simp
 
@@ -183,15 +184,25 @@ theorem charge_inv (cf : CF) (r : RS) (now node bytes : Nat) (h : (cget r node).
 theorem tunnel_spec (r : RS) (now dst src flag len : Nat) (h : (tunnelDown r now dst src flag len).1 = true) :
     (∃ heard, aget r.udp dst = some heard ∧ now - heard < fresh) ∧ 0 < len ∧ 35 + len ≤ 1452 - 28 := by
   unfold tunnelDown at h
-  by_cases hc : (!tunnelFresh r now dst || len == 0 || decide (35 + len > maxTun)) = true
+  by_cases hc : (!tunnelFresh r now dst || !tunnelReady r dst || len == 0 || decide (35 + len > maxTun)) = true
   · simp [hc] at h
   · simp [Bool.or_eq_true] at hc
-    obtain ⟨⟨hf, hl⟩, hm⟩ := hc
+    obtain ⟨⟨⟨hf, _⟩, hl⟩, hm⟩ := hc
     refine ⟨?_, by omega, by simp [maxTun] at hm; omega⟩
     unfold tunnelFresh at hf
     cases hg : aget r.udp dst with
     | none => simp [hg] at hf
     | some t => simp [hg] at hf; exact ⟨t, rfl, hf⟩
+
+/-- A datagram goes down a member's UDP session only if the host reports a validated direct route for it. -/
+theorem tunnel_ready_spec (r : RS) (now dst src flag len : Nat) (h : (tunnelDown r now dst src flag len).1 = true) :
+    tunnelReady r dst = true := by
+  unfold tunnelDown at h
+  by_cases hc : (!tunnelFresh r now dst || !tunnelReady r dst || len == 0 || decide (35 + len > maxTun)) = true
+  · simp [hc] at h
+  · simp [Bool.or_eq_true] at hc
+    obtain ⟨⟨⟨_, hr⟩, _⟩, _⟩ := hc
+    exact hr
 
 /-- An uploaded packet (SPU) is accepted only from a validated member, and never for this relay. -/
 theorem spu_member (cf : CF) (r : RS) (now m dst flag len : Nat) (h : (spu cf r now m dst flag len).res = "ok") :

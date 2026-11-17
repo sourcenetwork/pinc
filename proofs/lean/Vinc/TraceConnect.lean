@@ -74,6 +74,7 @@ def replayEvent (j : J) (w : W) : Except String W := do
   | "rframe" => step j w (carrierFrame w.cf w.r now (← natF j "n") (← natF j "sid") (← toList (← field j "f")))
   | "rpeer" => step j w (peerFrame w.cf w.r now (← natF j "from") (← toList (← field j "f")))
   | "rudph" => step j w (udpHeard w.cf w.r (← natF j "n") ((← natF j "at") * sec))
+  | "rready" => pure { w with r := setReady w.r (← natF j "n") ((← natF j "ok") == 1) }
   | "rudpg" => pure { w with r := udpGone w.r (← natF j "n") }
   | "rspu" => step j w (spu w.cf w.r now (← natF j "m") (← natF j "dst") (← natF j "flag") (← natF j "len"))
   | "rret" => step j w (memberReturned w.cf w.r now (← natF j "n"))
@@ -82,6 +83,6 @@ def replayEvent (j : J) (w : W) : Except String W := do
 
 /-- The tags this module replays. -/
 def isTag (t : String) : Bool :=
-  ["rnew", "rbk", "radd", "rrem", "ropen", "rclose", "rframe", "rpeer", "rudph", "rudpg", "rspu", "rret", "rtime"].contains t
+  ["rnew", "rbk", "radd", "rrem", "ropen", "rclose", "rframe", "rpeer", "rudph", "rready", "rudpg", "rspu", "rret", "rtime"].contains t
 
 end Vinc.TraceConnect

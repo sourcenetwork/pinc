@@ -17,6 +17,9 @@ Theorems, for every configuration with `0 < B` and every sequence of steps from 
   message count is its length, the head is inside the ring, and at most `N` members exist.
 * `conservation`: stored = delivered + dropped oldest + expired + held, so every loss is counted.
 * `fifo_once`: the messages of a member are in increasing sequence number, and no message that was delivered is held.
+* `pop_look_out`, `look_keeps`, `remove_front`, `remove_other`: `pop` is `look` then `remove`; a look removes nothing
+  (the message stays held, in front) and only a removal counts a delivery, so a message leaves the mailbox only when
+  it is delivered or expires.
 * `age_bound` and `pop_front`: `pop` returns the first message of the member after the old ones are expired, and it
   is younger than the maximum age.
 * `drop_oldest`: the quota loop removes a prefix of the queue.
@@ -229,6 +232,33 @@ def pop (c : Cfg) (now : Nat) (mb : MB) (k mx : Nat) : MB × Option Msg :=
     ({ held := if h2.count = 0 then del k mb.held else put k h2 mb.held, seq := mb.seq,
        st := { mb.st with expired := mb.st.expired + e.2, delivered := mb.st.delivered + (if out.isSome then 1 else 0) } },
       out)
+
+/-- `Mailbox::look`: the oldest message left after the old ones expire, if its body is at most `mx` long. It stays
+held, in front: nothing leaves but what expired. -/
+def look (c : Cfg) (now : Nat) (mb : MB) (k mx : Nat) : MB × Option Msg :=
+  match lookup k mb.held with
+  | none => (mb, none)
+  | some h =>
+    let e := expire c now h
+    let out : Option Msg := match e.1.q with
+      | m :: _ => if m.len ≤ mx then some m else none
+      | [] => none
+    ({ held := if e.1.count = 0 then del k mb.held else put k e.1 mb.held, seq := mb.seq,
+       st := { mb.st with expired := mb.st.expired + e.2 } }, out)
+
+/-- `Mailbox::remove`: the front message leaves, counted delivered, when it is the one numbered `seq`. -/
+def remove (c : Cfg) (mb : MB) (k seq : Nat) : MB :=
+  match lookup k mb.held with
+  | none => mb
+  | some h =>
+    match h.q with
+    | m :: _ =>
+      if m.seq = seq then
+        let h2 := (skipFront c h).1
+        { held := if h2.count = 0 then del k mb.held else put k h2 mb.held, seq := mb.seq,
+          st := { mb.st with delivered := mb.st.delivered + 1 } }
+      else mb
+    | [] => mb
 
 def sweepL (c : Cfg) (now : Nat) : List (Nat × Held) → List (Nat × Held) × Nat
   | [] => ([], 0)
@@ -664,6 +694,40 @@ theorem pop_spec (c : Cfg) (now : Nat) (mb : MB) (k mx : Nat) (m : Msg)
         subst h
         exact ⟨h0, r, rfl, hq, hm, expireN_front c now h0.q.length h0 (Nat.le_refl _) m0 r hq⟩
       · simp [hq, hm] at h
+
+/-- `pop` returns what `look` returns: the selection rule is one. -/
+theorem pop_look_out (c : Cfg) (now : Nat) (mb : MB) (k mx : Nat) :
+    (pop c now mb k mx).2 = (look c now mb k mx).2 := by
+  unfold pop look
+  cases hl : lookup k mb.held with
+  | none => simp
+  | some h =>
+    simp only []
+
+/-- `look` returns the first message left after the old ones are expired, and removes none: the delivered counter is
+unchanged and the message is still the front of the member's queue. -/
+theorem look_keeps (c : Cfg) (now : Nat) (mb : MB) (k mx : Nat) (m : Msg)
+    (h : (look c now mb k mx).2 = some m) :
+    (look c now mb k mx).1.st.delivered = mb.st.delivered ∧
+    ∃ h0 r, lookup k mb.held = some h0 ∧ (expire c now h0).1.q = m :: r ∧ m.len ≤ mx ∧ now - m.t < c.maxAge := by
+  have hs : (pop c now mb k mx).2 = some m := by rw [pop_look_out]; exact h
+  obtain ⟨h0, r, h1, h2, h3, h4⟩ := pop_spec c now mb k mx m hs
+  refine ⟨?_, h0, r, h1, h2, h3, h4⟩
+  unfold look
+  simp [h1]
+
+/-- `remove` of the front message counts it delivered and takes it from the queue. -/
+theorem remove_front (c : Cfg) (mb : MB) (k : Nat) (h0 : Held) (m : Msg) (r : List Msg)
+    (hl : lookup k mb.held = some h0) (hq : h0.q = m :: r) :
+    (remove c mb k m.seq).st.delivered = mb.st.delivered + 1 := by
+  unfold remove
+  simp [hl, hq]
+
+/-- `remove` of a number that is not the front's changes nothing. -/
+theorem remove_other (c : Cfg) (mb : MB) (k seq : Nat) (h0 : Held) (m : Msg) (r : List Msg)
+    (hl : lookup k mb.held = some h0) (hq : h0.q = m :: r) (hne : m.seq ≠ seq) : remove c mb k seq = mb := by
+  unfold remove
+  simp [hl, hq, hne]
 
 /-- The quota loop removes the oldest messages: what is left is a suffix of the queue (a prefix is dropped), and it
 leaves room for the new message. -/

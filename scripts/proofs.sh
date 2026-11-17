@@ -250,6 +250,7 @@ par run_tlc_deep valuesverify_rx ValuesVerifyRx ValuesVerifyRx
 par witness_tlc valuesverify_rx_nowhole ValuesVerifyRx ValuesVerifyRx_nowhole WholeGroup
 par run_tlc_deep valueswire ValuesWire ValuesWire
 par run_tlc connect_mailbox ConnectMailbox ConnectMailbox
+par witness_tlc connect_mailbox_wold ConnectMailbox ConnectMailbox_wold RefusedKept
 par run_tlc connect_pack ConnectPack ConnectPack
 par run_tlc connect_pack_tight ConnectPack ConnectPack_tight
 par run_tlc connect_pack_noroom ConnectPack ConnectPack_noroom
@@ -317,6 +318,8 @@ par run_tlc connect_table_n4 ConnectTable ConnectTable_n4
 par run_tlc connect_cache ConnectTable ConnectTable_cache
 par run_tlc connect_relay ConnectRelay ConnectRelay
 par run_tlc connect_relay_sleep ConnectRelay ConnectRelay_sleep
+par run_tlc connect_relay_ready ConnectRelay ConnectRelay_ready
+par witness_tlc connect_relay_refused ConnectRelay ConnectRelay_refused NoRefusal
 par run_tlc connect_records ConnectRecords ConnectRecords
 par run_tlc connect_records_own ConnectRecords ConnectRecords_own
 par witness_tlc connect_records_nocheck ConnectRecords ConnectRecords_nocheck OnlyGood
