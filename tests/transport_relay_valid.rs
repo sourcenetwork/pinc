@@ -434,6 +434,28 @@ fn a_path_that_takes_a_slot_inherits_neither_the_round_trip_nor_the_seen_fact_of
     });
 }
 
+#[test]
+fn a_standby_relay_ping_carries_only_its_ping_while_data_waits() {
+    answered_elsewhere(relay(), Some(relay()), |net| {
+        let t = net.now + 200 * MS;
+        net.run(t, |_| false);
+        let id = net.a.conn.open_bi().unwrap();
+        net.a.conn.write(id, &pattern(20_000, 11)).unwrap();
+        net.a.conn.ping_path(PathId(1)).unwrap();
+        let from = net.a.tx_log.len();
+        net.flush();
+        let sizes: Vec<usize> = net.a.tx_log[from..]
+            .iter()
+            .filter(|t| t.2 == PathId(1))
+            .map(|t| t.1)
+            .collect();
+        assert!(
+            !sizes.is_empty() && sizes.iter().all(|n| *n < 100),
+            "a datagram to the standby relay path carried more than its ping: {sizes:?}"
+        );
+    });
+}
+
 /// Write `data` on a new unidirectional stream of `s` at node 0 and finish it.
 fn send(net: &mut CoreNet, s: vinc_core::SessionId, data: &[u8]) {
     let t = net.now;

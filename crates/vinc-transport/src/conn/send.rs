@@ -393,6 +393,7 @@ conn_impl! {
         let probes = self.life.probes > 0;
         let keepalive_due = self.life.keepalive.is_some_and(|k| now.saturating_sub(self.life.last_sent) >= k)
             && self.phase == Phase::Connected;
+        let standby = self.standby_relay(ti);
         let force = probes || self.life.ping_owed || keepalive_due || self.life.ack_now;
         let on_active = ti == self.paths.active;
         let mut fill = Fill {
@@ -400,7 +401,7 @@ conn_impl! {
             ti,
             allow_cc: cc_ok && !suspended_data,
             force,
-            ping_only: probes,
+            ping_only: probes || standby,
             probe: probe.filter(|_| !probes),
             repair: None,
             min_total: 0,
@@ -415,6 +416,14 @@ conn_impl! {
             self.life.probes -= 1;
         }
         r
+    }
+
+    /// Whether `ti` is a validated relay path the session stands by on: a datagram to it carries its PING and PATH
+    /// frames only, so a dead relay costs no stream data, window or loss.
+    fn standby_relay(&self, ti: usize) -> bool {
+        ti != self.paths.active
+            && self.phase == Phase::Connected
+            && self.paths.get(ti).is_some_and(|p| p.validated && p.info.kind == PathKind::Relay)
     }
 
     /// Build one packet of `kind` into `window` and send it through recovery. Returns its length.
@@ -557,7 +566,7 @@ conn_impl! {
             self.rx.on_ack_sent(pn, now);
         }
         self.life.ack_now = false;
-        if fill.ping_only && self.paths.get(ti).is_some_and(|p| p.mtu.current > MIN_MTU) {
+        if fill.ping_only && !self.standby_relay(ti) && self.paths.get(ti).is_some_and(|p| p.mtu.current > MIN_MTU) {
             self.life.small_ping = Some(pn);
             if let Some(p) = self.paths.get_mut(ti) {
                 p.mtu.ping_big = p.mtu.last_big;
@@ -678,7 +687,11 @@ conn_impl! {
             if now < self.life.wake_until && put(payload, &mut pos, &Frame::Wake) {
                 out.weak();
             }
-            if put(payload, &mut pos, &Frame::Ping) {
+            let standby = self.standby_relay(ti);
+            if standby {
+                self.fill_path(payload, &mut pos, &mut out, ti);
+            }
+            if (!standby || !out.eliciting) && put(payload, &mut pos, &Frame::Ping) {
                 out.weak();
             }
             out.len = pos;
