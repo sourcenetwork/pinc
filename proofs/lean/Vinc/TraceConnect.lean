@@ -61,7 +61,7 @@ def replayEvent (j : J) (w : W) : Except String W := do
     let window ← natF j "window"
     let sess ← natF j "sess"
     let age ← natF j "age"
-    let cf : CF := ⟨me, c, r, mn, mbb, bytes, window * sec, sess * sec, age * sec⟩
+    let cf : CF := ⟨me, c, r, mn, mbb, bytes, window * sec, sess * sec, age * sec, false⟩
     pure { cf := cf, r := RS.new cf }
   | "rbk" => pure { w with r := { w.r with bk := aput w.r.bk (← natF j "n") (← natF j "b") } }
   | "radd" =>
@@ -73,7 +73,7 @@ def replayEvent (j : J) (w : W) : Except String W := do
   | "rclose" => step j w (carrierClosed w.cf w.r now (← natF j "n") (← natF j "sid"))
   | "rframe" => step j w (carrierFrame w.cf w.r now (← natF j "n") (← natF j "sid") (← toList (← field j "f")))
   | "rpeer" => step j w (peerFrame w.cf w.r now (← natF j "from") (← toList (← field j "f")))
-  | "rudph" => step j w (udpHeard w.cf w.r (← natF j "n") ((← natF j "at") * sec))
+  | "rudph" => step j w (udpHeard w.cf w.r now (← natF j "n"))
   | "rready" => pure { w with r := setReady w.r (← natF j "n") ((← natF j "ok") == 1) }
   | "rudpg" => pure { w with r := udpGone w.r (← natF j "n") }
   | "rspu" => step j w (spu w.cf w.r now (← natF j "m") (← natF j "dst") (← natF j "flag") (← natF j "len"))

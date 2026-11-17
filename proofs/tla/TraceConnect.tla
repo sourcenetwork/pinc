@@ -24,14 +24,16 @@ vars == <<i, cf, R>>
 Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/connect.ndjson")
 Ev == Trace[i]
 
-Init == i = 1 /\ cf = [me |-> 0, C |-> 1, R |-> 1, MN |-> 1, MB |-> 1, Bytes |-> 0, Window |-> 1, SessT |-> 1, Age |-> 1]
+Init == i = 1 /\ cf = [me |-> 0, C |-> 1, R |-> 1, MN |-> 1, MB |-> 1, Bytes |-> 0, Window |-> 1, SessT |-> 1, Age |-> 1,
+                old |-> FALSE]
         /\ R = NewRelay(cf)
 
 Step(o) == /\ o.res = Ev.res /\ o.ef = Ev.out /\ R' = o.R /\ cf' = cf /\ i' = i + 1
 
 NewE == /\ Ev.t = "rnew"
         /\ cf' = [me |-> Ev.me, C |-> Ev.c, R |-> Ev.r, MN |-> Ev.mn, MB |-> Ev.mb, Bytes |-> Ev.bytes,
-                  Window |-> Ev.window, SessT |-> Ev.sess, Age |-> Ev.age]
+                  Window |-> Ev.window, SessT |-> Ev.sess, Age |-> Ev.age,
+                  old |-> FALSE]
         /\ R' = NewRelay(cf') /\ i' = i + 1
 BkE == /\ Ev.t = "rbk" /\ R' = [R EXCEPT !.bk = Put(R.bk, Ev.n, Ev.b)] /\ cf' = cf /\ i' = i + 1
 AddE == /\ Ev.t = "radd"
@@ -42,7 +44,7 @@ OpenE == /\ Ev.t = "ropen" /\ Step(CarrierOpened(cf, R, Ev.now, Ev.n))
 CloseE == /\ Ev.t = "rclose" /\ Step(CarrierClosed(cf, R, Ev.now, Ev.n, Ev.sid))
 FrameE == /\ Ev.t = "rframe" /\ Step(CarrierFrame(cf, R, Ev.now, Ev.n, Ev.sid, Ev.f))
 PeerE == /\ Ev.t = "rpeer" /\ Step(PeerFrame(cf, R, Ev.now, Ev.from, Ev.f))
-UdpHE == /\ Ev.t = "rudph" /\ Step(UdpHeard(cf, R, Ev.n, Ev.at))
+UdpHE == /\ Ev.t = "rudph" /\ Step(UdpHeard(cf, R, Ev.now, Ev.n))
 RdyE == /\ Ev.t = "rready" /\ Ev.out = <<>> /\ R' = SetReady(R, Ev.n, Ev.ok) /\ cf' = cf /\ i' = i + 1
 UdpGE == /\ Ev.t = "rudpg" /\ Ev.out = <<>> /\ R' = UdpGone(R, Ev.n) /\ cf' = cf /\ i' = i + 1
 SpuE == /\ Ev.t = "rspu" /\ Step(Spu(cf, R, Ev.now, Ev.m, Ev.dst, Ev.flag, Ev.len))
