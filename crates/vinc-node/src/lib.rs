@@ -58,6 +58,9 @@
 
 extern crate alloc;
 
+#[cfg(test)]
+extern crate std;
+
 mod apps;
 pub mod bound;
 mod config;
@@ -83,6 +86,7 @@ mod timers;
 pub mod trace;
 mod values;
 mod values_frames;
+mod values_net;
 mod values_provide;
 mod values_types;
 
@@ -108,6 +112,6 @@ pub use trace::{Body, NodeTrace, TRACE_VERSION, TraceItem};
 #[cfg(feature = "trace")]
 pub use values_frames::probe as values_frames_probe;
 pub use values_provide::PROVIDED_MAX;
-pub use values_types::{FETCHES, ValuesError, ValuesRequest};
+pub use values_types::{FETCHES, ValuesError, ValuesRequest, ValuesStats};
 /// The two types [`ServeSource`] is written in, for a host that names its own stream source.
 pub use vinc_values::{source::ValueSource, store::ValueRead};

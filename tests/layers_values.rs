@@ -143,6 +143,37 @@ fn a_second_fetch_from_a_provider_uses_the_session_the_first_one_dialed() {
 }
 
 #[test]
+fn a_finished_fetch_gives_its_providers_back() {
+    big(|| {
+        let seed = 271u64;
+        let mut w = LWorld::build_with(seed, 2, 5, 8_000_000, false, values_on);
+        let m = w.members.clone();
+        for (k, at) in [(1usize, 30u64), (2, 60), (3, 90)] {
+            let value = data(seed + k as u64, 256 << 10);
+            let root = w.provide(m[k], value.clone());
+            w.sim.command(
+                secs(at),
+                m[0],
+                NCmd::ValuesFetch {
+                    root,
+                    length: value.len() as u64,
+                    ranges: vec![],
+                    providers: ids(&w, &m[k..=k]),
+                },
+            );
+        }
+        w.run(secs(120));
+        assert_eq!(completes(&w, m[0]), 3, "all three fetches complete");
+        let stats = w.sim.node(m[0]).node.values_stats();
+        assert_eq!(
+            stats.providers_in_use, 0,
+            "nothing uses a provider once its fetch finished"
+        );
+        assert_eq!(stats.providers_refused, 0);
+    });
+}
+
+#[test]
 fn a_striped_fetch_asks_again_as_each_request_stream_ends() {
     // A stream whose end arrived with its last bytes must still free its place among the fetch's request streams, or
     // the fetch waits for the stall timer once the table is full.

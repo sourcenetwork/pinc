@@ -18,11 +18,10 @@
 //! behind a lost packet verify without waiting for it. The stream id in a proof frame is the endpoint's stream id,
 //! which both ends share; the layer's own handle for a stream is local to the node.
 //!
-//! Invariants: every table is bounded; only bytes the fetcher verified reach the store; a fetch that finished leaves
+//! Invariants: every table is bounded, the provider table by the providers in use; only bytes the fetcher verified reach the store; a fetch that finished leaves
 //! no stream behind; a served response slot is freed when the response is acknowledged.
 
 use alloc::boxed::Box;
-use alloc::collections::{BTreeMap, VecDeque};
 use alloc::vec::Vec;
 
 use vinc_core::{Command, SessionId};
@@ -37,7 +36,7 @@ use vinc_values::store::ValueRead;
 use vinc_values::trace::{Event as VEvent, Out, Trace};
 
 use crate::apps::{Apps, ServeSource};
-use crate::config::{Nanos, Store, TABLE_MAX};
+use crate::config::{Nanos, Store};
 use crate::ep::Ep;
 use crate::event::NodeEvent;
 use crate::io::Io;
@@ -45,111 +44,11 @@ use crate::layer::Layer;
 use crate::node::Node;
 use crate::trace::{Body, NodeTrace, tag};
 use crate::values_frames::{AHEAD_RUNS, EXT_MAX, head_sid, new_parts, stored_runs, with_sid};
-use crate::values_provide::Provided;
-use crate::values_types::{FETCHES, ValuesError, ValuesRequest};
+use crate::values_net::{Net, Owner, Pace};
+use crate::values_types::{FETCHES, ValuesError, ValuesRequest, ValuesStats};
 
 /// The most requests the server holds at once.
 const SERVERS: usize = 32;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Owner {
-    Fetch(u32),
-    Serve,
-}
-
-/// A stream of the values protocol and the bytes the value layer has not released.
-#[derive(Debug)]
-struct VStream {
-    session: SessionId,
-    stream: StreamId,
-    owner: Owner,
-    /// The absolute stream offset up to which the layer released the bytes.
-    base: u64,
-    /// The end of the contiguous bytes last reported to the fetch.
-    seen: u64,
-    /// The runs of bytes beyond a hole last reported to the fetch.
-    ahead: [(u64, u64); AHEAD_RUNS],
-    /// A consume found the end arrived and every byte consumed (the endpoint may forget the stream at that moment).
-    ended: bool,
-    announced: bool,
-    /// For a served response: what the server was last told about its sending.
-    pace: Pace,
-}
-
-/// What the server was last told of a response it serves.
-#[derive(Debug, Clone, Copy, Default)]
-struct Pace {
-    sent: u64,
-    lost: Option<u64>,
-}
-
-/// The streams of the layer, found by a node-wide number (the value layer's stream handle) or by session and stream.
-#[derive(Debug, Default)]
-pub(crate) struct Net {
-    streams: BTreeMap<u64, VStream>,
-    by_real: BTreeMap<(SessionId, StreamId), u64>,
-    next: u64,
-    provs: Vec<NodeId>,
-    served: VecDeque<u64>,
-    pub(crate) provided: Provided,
-}
-
-impl Net {
-    fn provider(&mut self, peer: &NodeId) -> Option<Provider> {
-        let i = match self.provs.iter().position(|p| p == peer) {
-            Some(i) => i,
-            None if self.provs.len() < TABLE_MAX => {
-                self.provs.push(*peer);
-                self.provs.len() - 1
-            }
-            None => return None,
-        };
-        u32::try_from(i).ok().map(Provider)
-    }
-
-    fn peer_of(&self, p: Provider) -> Option<NodeId> {
-        self.provs.get(p.0 as usize).copied()
-    }
-
-    fn add(&mut self, session: SessionId, stream: StreamId, owner: Owner) -> Option<u64> {
-        if self.streams.len() >= TABLE_MAX {
-            return None;
-        }
-        self.next += 1;
-        let lid = self.next;
-        self.streams.insert(
-            lid,
-            VStream {
-                session,
-                stream,
-                owner,
-                base: 0,
-                seen: 0,
-                ahead: [(0, 0); AHEAD_RUNS],
-                ended: false,
-                announced: false,
-                pace: Pace::default(),
-            },
-        );
-        self.by_real.insert((session, stream), lid);
-        Some(lid)
-    }
-
-    fn drop_stream(&mut self, lid: u64) -> Option<VStream> {
-        let s = self.streams.remove(&lid)?;
-        self.by_real.remove(&(s.session, s.stream));
-        self.served.retain(|x| *x != lid);
-        Some(s)
-    }
-
-    fn of_session(&self, session: SessionId) -> Vec<u64> {
-        self.streams
-            .iter()
-            .filter(|(_, s)| s.session == session)
-            .map(|(lid, _)| *lid)
-            .collect()
-    }
-}
 
 /// The events and traces a fetcher or the server reported during one call, taken out after it.
 #[derive(Debug, Default)]
@@ -352,7 +251,7 @@ impl<E: Ep, St: Store> Outbound for VSess<'_, E, St> {
             .get(&(Layer::Values, peer))
             .ok_or(OpenError::NotConnected)?;
         let real = self.io.open_stream_at(session, urgency).ok_or(OpenError::Busy)?;
-        if let Some(lid) = self.net.add(session, real, self.owner) {
+        if let Some(lid) = self.net.add_for(session, real, self.owner, provider) {
             Ok(lid)
         } else {
             self.io.drop_strm(session, real);
@@ -433,10 +332,9 @@ where
         if v.fetches.len() >= FETCHES {
             return Err(ValuesError::Busy);
         }
-        let mut provs: Vec<Provider> = Vec::with_capacity(MAX_PROVIDERS);
-        for peer in req.providers.iter().take(MAX_PROVIDERS) {
-            provs.push(v.net.provider(peer).ok_or(ValuesError::Providers)?);
-        }
+        let provs = v
+            .net
+            .acquire_all(req.providers.get(..MAX_PROVIDERS).unwrap_or(req.providers))?;
         v.next_fetch = v.next_fetch.wrapping_add(1);
         let fid = v.next_fetch;
         let mut fetch = Box::new(Fetch::new());
@@ -458,18 +356,23 @@ where
             store: self.apps.values(),
             out: &mut v.sink,
         };
-        match fetch.start(&mut env, now, &spec) {
-            Ok(()) => {}
-            Err(StartError::Busy) => return Err(ValuesError::Busy),
-            Err(StartError::TooManyRanges) => return Err(ValuesError::TooManyRanges),
-            Err(StartError::OutOfBounds) => return Err(ValuesError::OutOfBounds),
+        if let Err(e) = fetch.start(&mut env, now, &spec) {
+            v.net.release_all(&provs);
+            return Err(match e {
+                StartError::Busy => ValuesError::Busy,
+                StartError::TooManyRanges => ValuesError::TooManyRanges,
+                StartError::OutOfBounds => ValuesError::OutOfBounds,
+            });
         }
         self.io.trace(NodeTrace::ValuesFetch {
             fetch: u64::from(fid),
             providers: provs.len() as u64,
         });
-        if !fetch.is_done() {
+        if fetch.is_done() {
+            v.net.release_all(&provs);
+        } else {
             v.fetches.push((fid, fetch));
+            v.net.begin_fetch(fid, provs);
         }
         self.values_drain();
         Ok(fid)
@@ -506,6 +409,7 @@ where
         for lid in owned {
             se.abandon(lid, 0);
         }
+        v.net.end_fetch(fetch);
         self.io.trace(NodeTrace::ValuesCancel {
             fetch: u64::from(fetch),
         });
@@ -517,23 +421,28 @@ where
         self.vals.as_deref().map_or(0, |v| v.fetches.len())
     }
 
+    /// The providers in use and the fetches refused at the provider limit; zero while the layer is off.
+    pub fn values_stats(&self) -> ValuesStats {
+        self.vals.as_deref().map_or_else(ValuesStats::default, |v| ValuesStats {
+            providers_in_use: v.net.in_use(),
+            providers_refused: v.net.refused(),
+        })
+    }
+
     // ---------------------------------------------------------------- the node's events
 
     /// A session of the values protocol came up.
     pub(crate) fn values_up(&mut self, now: Nanos, session: SessionId, peer: &NodeId, incoming: bool) {
-        let Some(prov) = self.vals.as_deref_mut().and_then(|v| v.net.provider(peer)) else {
-            return;
-        };
         if incoming {
-            self.supersede(now, session, peer, prov);
-        } else {
+            self.supersede(now, session, peer);
+        } else if let Some(prov) = self.vals.as_deref().and_then(|v| v.net.lookup(peer)) {
             self.fetches_in(now, &In::Connected(prov));
         }
     }
 
     /// SUPERSEDE: a peer that dials again supersedes its older incoming values session, which would keep resending
     /// bytes the peer already holds. The sessions this node dialed are not touched.
-    fn supersede(&mut self, now: Nanos, session: SessionId, peer: &NodeId, _prov: Provider) {
+    fn supersede(&mut self, now: Nanos, session: SessionId, peer: &NodeId) {
         let old: Vec<SessionId> = self
             .io
             .lsess
@@ -556,7 +465,8 @@ where
 
     /// A dial for the values protocol failed.
     pub(crate) fn values_failed(&mut self, now: Nanos, peer: &NodeId) {
-        let Some(prov) = self.vals.as_deref_mut().and_then(|v| v.net.provider(peer)) else {
+        // Only a running fetch refers to a provider whose dial failed, and it holds the provider.
+        let Some(prov) = self.vals.as_deref().and_then(|v| v.net.lookup(peer)) else {
             return;
         };
         self.fetches_in(now, &In::ConnectFailed(prov));
@@ -568,7 +478,6 @@ where
             return;
         };
         let lids = v.net.of_session(session);
-        let prov = v.net.provider(peer);
         let more = self
             .io
             .lsess
@@ -587,7 +496,10 @@ where
                 v.net.drop_stream(lid);
             }
         }
-        let Some(prov) = prov else { return };
+        // A provider nothing uses any more has no fetch and no served request to tell.
+        let Some(prov) = self.vals.as_deref().and_then(|v| v.net.lookup(peer)) else {
+            return;
+        };
         if !more {
             self.server_in(now, &ServerIn::Closed(prov));
         }
@@ -607,13 +519,10 @@ where
         if v.net.by_real.contains_key(&(session, stream)) {
             return;
         }
-        let Some(prov) = v.net.provider(&peer) else {
+        let Some(prov) = v.net.acquire(&peer) else {
             return;
         };
-        let Some(v) = self.vals.as_deref_mut() else {
-            return;
-        };
-        let Some(lid) = v.net.add(session, stream, Owner::Serve) else {
+        let Some(lid) = v.net.add(session, stream, Owner::Serve, prov) else {
             let _ = self.io.cmd(Command::Reset {
                 session,
                 stream,
@@ -940,6 +849,13 @@ where
                 VEvent::Failed(reason) => NodeEvent::ValueFailed { fetch, reason },
             });
         }
-        v.fetches.retain(|(_, f)| !f.is_done());
+        let Values { fetches, net, .. } = v;
+        fetches.retain(|(fid, f)| {
+            let done = f.is_done();
+            if done {
+                net.end_fetch(*fid);
+            }
+            !done
+        });
     }
 }

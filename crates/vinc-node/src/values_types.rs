@@ -38,7 +38,8 @@ pub enum ValuesError {
     TooManyRanges,
     /// A range runs past the end of the value.
     OutOfBounds,
-    /// The provider table is full.
+    /// The provider table is full: as many providers are in use at once as the node can number, and the fetch names one
+    /// that is not among them. Fetches and streams that finish give their providers back.
     Providers,
 }
 
@@ -49,9 +50,18 @@ impl fmt::Display for ValuesError {
             Self::Busy => "too many fetches are running",
             Self::TooManyRanges => "a fetch takes at most 255 ranges",
             Self::OutOfBounds => "a range runs past the end of the value",
-            Self::Providers => "too many providers are known to this node",
+            Self::Providers => "this node is at its provider limit",
         })
     }
 }
 
 impl core::error::Error for ValuesError {}
+
+/// What the values layer counts, since the node started; all zero while the layer is off.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ValuesStats {
+    /// The providers in use now: peers a running fetch or a stream of the layer refers to.
+    pub providers_in_use: usize,
+    /// Fetches refused because the node was at its provider limit ([`ValuesError::Providers`]).
+    pub providers_refused: u64,
+}
