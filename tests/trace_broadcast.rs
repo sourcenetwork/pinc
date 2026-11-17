@@ -40,7 +40,7 @@ use std::collections::HashMap;
 use common::{Ev, Net, SEC, WALL0, keypair, ty};
 use vinc_broadcast::consts::HELD_MAX;
 use vinc_broadcast::wire::{Head, MAX_HEAD};
-use vinc_broadcast::{Limits, Trace, auth, topic_tag};
+use vinc_broadcast::{Limits, Reject, Trace, auth, topic_tag};
 use vinc_crypto::IdentityAlg;
 use vinc_crypto::identity::MAX_SIGNATURE_LEN;
 use vinc_wire::hlc::Hlc;
@@ -628,6 +628,7 @@ fn broadcast_trace() {
         "a rival under a taken id is not acknowledged"
     );
     let stored = w.net.nodes[0].t.log_len(t);
+    let full = w.net.nodes[0].t.reject_stats().count(Reject::LogFull);
     for k in 0..60u32 {
         w.publish(1, t, format!("filler {k}").as_bytes());
     }
@@ -637,6 +638,12 @@ fn broadcast_trace() {
     assert!(
         held < stored + 60,
         "the log held {stored} before the fillers and holds {held} after: nothing was let go"
+    );
+    // Every filler was stored: a log that refused the newcomer instead of letting the oldest go would count them.
+    assert_eq!(
+        w.net.nodes[0].t.reject_stats().count(Reject::LogFull),
+        full,
+        "no filler was refused for want of room"
     );
     w.frame(0, 1, ty::PUB, &tp, &fresh);
     assert!(

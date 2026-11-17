@@ -166,6 +166,7 @@ fn log_let_go() -> (Net, [u8; 8]) {
     }));
     let mid = net.publish(1, T, b"first");
     assert!(!net.events(1).contains(&Ev::Acked(mid)), "its acknowledgement was lost");
+    let full = net.nodes[0].t.reject_stats().count(Reject::LogFull);
     for _ in 0..10 {
         net.publish(2, T, &[7u8; 1024]);
     }
@@ -173,6 +174,12 @@ fn log_let_go() -> (Net, [u8; 8]) {
     // The ring lets the oldest go first, so a log that holds fewer than the eleven messages published has let `mid` go.
     let held = net.nodes[0].t.log_len(T);
     assert!(held < 11, "the log let the first message go, yet it holds {held} of 11");
+    // Every filler was stored: a log that refused the newcomer instead of letting the oldest go would count them.
+    assert_eq!(
+        net.nodes[0].t.reject_stats().count(Reject::LogFull),
+        full,
+        "no message was refused for want of room"
+    );
     (net, mid)
 }
 
