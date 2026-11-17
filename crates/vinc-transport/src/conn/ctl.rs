@@ -49,8 +49,11 @@ pub(crate) struct ExtSlot {
 /// What a batch of recovery events turned up for the connection.
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct Outcome {
-    pub(crate) probe_acked: Option<u32>,
-    pub(crate) probe_lost: Option<u32>,
+    /// Per path slot, the size and packet number of a size probe acknowledged on it. vertexia: one per slot and batch,
+    /// the newest probe; an older one of a refilled slot in the same batch is passed over without being counted.
+    pub(crate) probe_acked: [Option<(u32, u64)>; crate::recovery::MAX_PATHS],
+    /// Per path slot, the size and packet number of a size probe lost on it.
+    pub(crate) probe_lost: [Option<(u32, u64)>; crate::recovery::MAX_PATHS],
     /// The newest acknowledged packet larger than the minimum datagram size.
     pub(crate) big_acked: Option<u64>,
     /// A REKEY answer was lost.
@@ -190,8 +193,11 @@ pub(crate) fn apply<S: StreamSource, const N: usize, const C: usize>(
                 out.big_acked = out.big_acked.max(Some(pn));
             }
             out.loss_acked += u32::from(!repair);
-            if mtu_probe {
-                out.probe_acked = Some(size);
+            if mtu_probe
+                && let Some(s) = out.probe_acked.get_mut(usize::from(path))
+                && s.is_none_or(|(_, q)| q < pn)
+            {
+                *s = Some((size, pn));
             }
             for f in frames {
                 match *f {
@@ -213,16 +219,20 @@ pub(crate) fn apply<S: StreamSource, const N: usize, const C: usize>(
             }
         }
         Event::Lost {
+            pn,
             size,
+            path,
             frames,
             requeue,
             mtu_probe,
-            ..
         } => {
             out.lost_packets += 1;
             out.loss_lost += u32::from(requeue);
-            if mtu_probe {
-                out.probe_lost = Some(size);
+            if mtu_probe
+                && let Some(s) = out.probe_lost.get_mut(usize::from(path))
+                && s.is_none_or(|(_, q)| q < pn)
+            {
+                *s = Some((size, pn));
             }
             if !requeue {
                 return;

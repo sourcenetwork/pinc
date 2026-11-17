@@ -120,7 +120,7 @@ conn_impl! {
         let mut out = Outcome::default();
         let (streams, pool, ctl) = (&mut *self.streams, &mut self.pool, &mut self.ctl);
         let to = self.rec.on_timeout(now, |ev| apply(&ev, streams, pool, ctl, &mut out));
-        self.after_feedback(out, now);
+        self.after_feedback(&out, now);
         if to.ping {
             self.life.probes = 1;
             self.stats.ptos += 1;

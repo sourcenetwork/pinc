@@ -172,6 +172,7 @@ impl<const N: usize> Recovery<N> {
         on_event(Event::Lost {
             pn: sent.pn,
             size: sent.size,
+            path: sent.path,
             frames: &sent.frames,
             requeue: counts,
             mtu_probe: sent.is_mtu_probe,

@@ -97,7 +97,8 @@ pub(crate) const CTRL_SMALL: usize = 72;
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Mtu {
     pub(crate) current: u16,
-    pub(crate) inflight: Option<u16>,
+    /// The probe in flight: its size and the packet number it left in.
+    pub(crate) inflight: Option<(u16, u64)>,
     /// The main probe was sent since the last path event.
     pub(crate) probed: bool,
     pub(crate) jumbo: Jumbo,
@@ -723,7 +724,7 @@ conn_impl! {
             .resend_off_path(now, slot, REJOIN_RESEND, |ev| super::ctl::apply(&ev, streams, pool, ctl, &mut out));
         self.life.probes = 0;
         self.degraded_told = false;
-        self.after_feedback(out, now);
+        self.after_feedback(&out, now);
     }
 
     /// The path a session of this peer's abandoned address validated again, with its round trip, once; the endpoint

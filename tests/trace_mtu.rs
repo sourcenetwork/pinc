@@ -36,9 +36,10 @@ fn opt(x: Option<u64>) -> i128 {
 fn view_json(v: &MtuView, wide: bool) -> String {
     let c = |t: u64| if wide { t } else { t.min(TOP) };
     format!(
-        r#"{{"cur":{},"infl":{},"probed":{},"jdone":{},"retry":{},"started":{},"lbig":{},"backed":{},"pbig":{},"susp":[{},{}]}}"#,
+        r#"{{"cur":{},"infl":{},"ptok":{},"probed":{},"jdone":{},"retry":{},"started":{},"lbig":{},"backed":{},"pbig":{},"susp":[{},{}]}}"#,
         v.current,
         v.inflight.map_or(-1, i64::from),
+        opt(v.probe_pn),
         v.probed,
         v.jumbo_done,
         c(v.retry_at),
@@ -49,6 +50,14 @@ fn view_json(v: &MtuView, wide: bool) -> String {
         v.suspect.map_or(-1, |(b, _)| i128::from(b)),
         v.suspect.map_or(0, |(_, a)| c(a))
     )
+}
+
+/// The size and packet number of a probe outcome: those of the probe in flight three times in four, else any.
+fn outcome_of(rng: &mut SplitMix64, before: &MtuView, sizes: &[u16; 5], next_probe: u64) -> (u16, u64) {
+    match (before.inflight, before.probe_pn) {
+        (Some(s), Some(pn)) if !rng.next_u64().is_multiple_of(4) => (s, pn),
+        _ => (sizes[(rng.next_u64() % 5) as usize], rng.next_u64() % (next_probe + 2)),
+    }
 }
 
 fn run(rng: &mut SplitMix64, out: &mut String, id: u32, steps: u32, wide: bool) {
@@ -68,6 +77,8 @@ fn run(rng: &mut SplitMix64, out: &mut String, id: u32, steps: u32, wide: bool) 
     );
     let sizes = [1200u16, PROBE_MTU, 3000, 8952, 9000];
     let mut pn = 0u64;
+    // the packet number the next probe leaves in
+    let mut next_probe = 1u64;
     for _ in 0..steps {
         let before = p.view();
         match rng.next_u64() % 100 {
@@ -103,26 +114,55 @@ fn run(rng: &mut SplitMix64, out: &mut String, id: u32, steps: u32, wide: bool) 
                 let ll = rng.next_u64().is_multiple_of(2);
                 let im = sizes[(rng.next_u64() % 5) as usize];
                 if let Some(s) = p.target(true, im + HEADERS_V4, false, ll, now) {
-                    p.probe_sent(s);
-                    log(&p, out, &format!(r#""op":"sent","size":{s}"#));
+                    next_probe += 1 + rng.next_u64() % 3;
+                    p.probe_sent(s, next_probe);
+                    log(&p, out, &format!(r#""op":"sent","size":{s},"pn":{next_probe}"#));
                 }
             }
-            35..=49 => {
-                let s = sizes[(rng.next_u64() % 5) as usize];
-                let r = p.raise(s);
+            35..=44 => {
+                // the size and packet number of the probe in flight three times in four, else any
+                let (s, ppn) = outcome_of(rng, &before, &sizes, next_probe);
+                let r = p.raise(s, ppn);
                 let after = p.view();
-                assert_eq!(r.is_some(), s > before.current);
+                assert_eq!(
+                    r.is_some(),
+                    before.inflight == Some(s) && before.probe_pn == Some(ppn) && s > before.current
+                );
                 assert!(after.current >= MIN_MTU);
+                if before.inflight == Some(s) && before.probe_pn == Some(ppn) {
+                    assert!(after.inflight.is_none(), "an acknowledged probe stays in flight");
+                } else {
+                    assert_eq!(after, before, "a probe that is not in flight changed the state");
+                }
                 log(
                     &p,
                     out,
-                    &format!(r#""op":"raise","size":{s},"r":{}"#, r.map_or(-1, i64::from)),
+                    &format!(r#""op":"raise","size":{s},"pn":{ppn},"r":{}"#, r.map_or(-1, i64::from)),
+                );
+            }
+            45..=49 => {
+                let (s, _) = outcome_of(rng, &before, &sizes, next_probe);
+                let im = sizes[(rng.next_u64() % 5) as usize];
+                let r = p.echo(s, im + HEADERS_V4, false);
+                assert_eq!(
+                    r.is_some(),
+                    before.inflight == Some(s) && s <= im.min(8952) && s > before.current,
+                    "an echo of {s} against an interface payload of {im}"
+                );
+                log(
+                    &p,
+                    out,
+                    &format!(r#""op":"echo","size":{s},"im":{im},"r":{}"#, r.map_or(-1, i64::from)),
                 );
             }
             50..=59 => {
-                let s = sizes[(rng.next_u64() % 5) as usize];
-                p.probe_lost(s, now);
-                log(&p, out, &format!(r#""op":"lost","size":{s},"now":{now}"#));
+                let (s, ppn) = outcome_of(rng, &before, &sizes, next_probe);
+                p.probe_lost(s, ppn, now);
+                let after = p.view();
+                if before.inflight != Some(s) || before.probe_pn != Some(ppn) {
+                    assert_eq!(after, before, "a probe that is not in flight changed the state");
+                }
+                log(&p, out, &format!(r#""op":"lost","size":{s},"pn":{ppn},"now":{now}"#));
             }
             60..=66 => {
                 p.event();
@@ -192,6 +232,7 @@ fn path_mtu_runs_match_the_models() {
         r#""op":"target""#,
         r#""op":"sent""#,
         r#""op":"raise""#,
+        r#""op":"echo""#,
         r#""op":"lost""#,
         r#""op":"bh""#,
         r#""op":"bhc""#,

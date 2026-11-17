@@ -87,6 +87,8 @@ pub enum Event<'a> {
         pn: u64,
         /// The datagram size.
         size: u32,
+        /// The path the packet left on.
+        path: u8,
         /// What the packet carried.
         frames: &'a FrameRefs,
         /// Whether the frames are to be requeued; false for a repair packet or a path MTU probe.
@@ -662,6 +664,7 @@ impl<const N: usize> Recovery<N> {
             on_event(Event::Lost {
                 pn: sent.pn,
                 size: sent.size,
+                path: sent.path,
                 frames: &sent.frames,
                 requeue: !sent.is_repair && !sent.is_mtu_probe,
                 mtu_probe: sent.is_mtu_probe,

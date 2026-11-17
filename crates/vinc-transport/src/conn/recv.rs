@@ -598,7 +598,7 @@ conn_impl! {
                 self.dgrams.on_datagram_frame(&mut self.pool, data);
                 self.push(Ev::Datagram);
             }
-            Frame::MtuProbeEcho { mtu } => self.mtu_raise(pi, mtu),
+            Frame::MtuProbeEcho { mtu } => self.mtu_echo(pi, mtu),
             Frame::Sleep => {
                 if self.life.peer_asleep.is_none() {
                     self.life.peer_asleep = Some(now);
@@ -663,7 +663,7 @@ conn_impl! {
                     self.mtu_black_hole(now);
                 }
                 self.mtu_black_hole_check(now);
-                self.after_feedback(out, now);
+                self.after_feedback(&out, now);
                 self.after_ack(now);
                 Ok(())
             }
@@ -672,15 +672,18 @@ conn_impl! {
     }
 
     /// Fold recovery feedback into the loss average, the path MTU state and the counters.
-    pub(super) fn after_feedback(&mut self, out: Outcome, now: u64) {
+    pub(super) fn after_feedback(&mut self, out: &Outcome, now: u64) {
         self.stats.packets_lost += u64::from(out.lost_packets);
         self.loss.record(out.loss_lost, out.loss_acked);
-        let active = self.paths.active;
-        if let Some(size) = out.probe_acked.and_then(|s| u16::try_from(s).ok()) {
-            self.mtu_raise(active, size);
+        for (slot, probe) in out.probe_acked.iter().enumerate() {
+            if let Some((size, pn)) = *probe {
+                self.mtu_raise(slot, u16::try_from(size).unwrap_or(u16::MAX), pn);
+            }
         }
-        if let Some(size) = out.probe_lost.and_then(|s| u16::try_from(s).ok()) {
-            self.mtu_probe_lost(active, size, now);
+        for (slot, probe) in out.probe_lost.iter().enumerate() {
+            if let Some((size, pn)) = *probe {
+                self.mtu_probe_lost(slot, u16::try_from(size).unwrap_or(u16::MAX), pn, now);
+            }
         }
         for (slot, pn) in out.acked_pn.iter().enumerate() {
             if let Some(pn) = *pn {

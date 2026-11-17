@@ -569,7 +569,7 @@ conn_impl! {
             p.mtu.last_big = Some(pn);
         }
         if let Some(size) = fill.probe {
-            self.mtu_probe_sent(ti, u16::try_from(size).unwrap_or(u16::MAX));
+            self.mtu_probe_sent(ti, u16::try_from(size).unwrap_or(u16::MAX), pn);
         }
         if filled.eliciting {
             self.life.ping_owed = false;

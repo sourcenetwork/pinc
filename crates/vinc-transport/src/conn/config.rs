@@ -228,6 +228,8 @@ pub struct Stats {
     /// Events the application cannot recover that were dropped because the event queue held nothing else to give up;
     /// 0 while the queue is sized for the stream slots and paths.
     pub events_lost: u64,
+    /// Outcomes of datagram size probes that arrived for a path that no longer has that probe in flight.
+    pub probe_outcomes_dropped: u64,
     /// The current congestion window in bytes.
     pub cwnd: u64,
     /// The smoothed round trip of the active path in nanoseconds, 0 before the first sample.

@@ -12,9 +12,13 @@
 //! acknowledged while a full-size packet sent before it still is not one round trip later, the path drops to 1200,
 //! because the signature is a path that carries small packets only.
 //!
-//! Invariants: at most one probe is in flight per path; a lost probe is not a congestion signal (recovery is told the
-//! packet is a probe); the datagram size only rises to a size the peer confirmed (an acknowledgement or an echo) and
-//! falls back to 1200 on the black-hole signature.
+//! Invariants: at most one probe is in flight per path, and the path remembers its size and the packet number it left
+//! in; the outcome of a probe (its acknowledgement or its loss) is applied to the path it left on, and only while that
+//! path's probe in flight is that packet, so a freed path slot taken by a new path is never touched by the old path's
+//! probe (an outcome that matches nothing changes nothing and is counted); a lost probe is not a congestion signal
+//! (recovery is told the packet is a probe); the datagram size only rises to a size the peer confirmed (an
+//! acknowledgement, or an echo of the probe in flight within what the interface carries and the jumbo size) and falls
+//! back to 1200 on the black-hole signature.
 
 use vinc_crypto::Provider;
 
@@ -34,6 +38,11 @@ pub(crate) enum Jumbo {
     Untried,
     /// Tried, or not worth trying (the interface does not go above 2904).
     Done,
+}
+
+/// The largest size a probe or an echo may name on a path: the smaller of the jumbo size and what the interface carries.
+pub(crate) fn probe_ceiling(interface_mtu: u16, v6: bool) -> u16 {
+    interface_payload(interface_mtu, v6).min(JUMBO_MTU)
 }
 
 /// What the probe decision needs to know about the path and the connection.
@@ -71,18 +80,18 @@ impl Mtu {
         if !ctx.allowed || !self.started || self.inflight.is_some() || self.retry_at > now {
             return None;
         }
-        let room = interface_payload(ctx.interface_mtu, ctx.v6);
         if !self.probed {
+            let room = interface_payload(ctx.interface_mtu, ctx.v6);
             return (room >= PROBE_MTU && self.current < PROBE_MTU).then_some(PROBE_MTU);
         }
-        let jumbo = room.min(JUMBO_MTU);
+        let jumbo = probe_ceiling(ctx.interface_mtu, ctx.v6);
         (self.jumbo == Jumbo::Untried && self.current == PROBE_MTU && ctx.low_latency && jumbo > JUMBO_FLOOR)
             .then_some(jumbo)
     }
 
-    /// A probe of `size` left.
-    pub(crate) fn probe_sent(&mut self, size: u16) {
-        self.inflight = Some(size);
+    /// A probe of `size` left in packet `pn`.
+    pub(crate) fn probe_sent(&mut self, size: u16, pn: u64) {
+        self.inflight = Some((size, pn));
         if size == PROBE_MTU && !self.probed {
             self.probed = true;
         } else {
@@ -90,22 +99,41 @@ impl Mtu {
         }
     }
 
-    /// A probe of `size` was acknowledged or echoed; the new datagram size if it rose.
-    pub(crate) fn raise(&mut self, size: u16) -> Option<u16> {
-        if self.inflight == Some(size) {
-            self.inflight = None;
+    /// Whether the probe in flight is the one of `size` that left in packet `pn`.
+    pub(crate) fn holds(&self, size: u16, pn: u64) -> bool {
+        self.inflight == Some((size, pn))
+    }
+
+    /// The probe of `size` in packet `pn` was acknowledged; the new datagram size if it rose. Any other probe changes
+    /// nothing.
+    pub(crate) fn raise(&mut self, size: u16, pn: u64) -> Option<u16> {
+        if !self.holds(size, pn) {
+            return None;
         }
+        self.inflight = None;
         (size > self.current).then(|| {
             self.current = size;
             size
         })
     }
 
-    /// A probe of `size` was lost: it waits for the next path event or [`REPROBE_AFTER`].
-    pub(crate) fn probe_lost(&mut self, size: u16, now: u64) {
-        if self.inflight == Some(size) {
-            self.inflight = None;
+    /// A peer echoed `size` on the path: taken only if it is the size of the probe in flight and no more than
+    /// `ceiling` (see [`probe_ceiling`]); the new datagram size if it rose.
+    pub(crate) fn echo(&mut self, size: u16, ceiling: u16) -> Option<u16> {
+        let (s, pn) = self.inflight?;
+        if size != s || size > ceiling {
+            return None;
         }
+        self.raise(size, pn)
+    }
+
+    /// The probe of `size` in packet `pn` was lost: it waits for the next path event or [`REPROBE_AFTER`]. Any other
+    /// probe changes nothing.
+    pub(crate) fn probe_lost(&mut self, size: u16, pn: u64, now: u64) {
+        if !self.holds(size, pn) {
+            return;
+        }
+        self.inflight = None;
         self.retry_at = now.saturating_add(REPROBE_AFTER);
         if size > PROBE_MTU {
             self.jumbo = Jumbo::Done;
@@ -163,10 +191,10 @@ conn_impl! {
         p.mtu.target(ctx, now)
     }
 
-    /// Note that a probe of `size` left on path `i`.
-    pub(super) fn mtu_probe_sent(&mut self, i: usize, size: u16) {
+    /// Note that a probe of `size` left on path `i` in packet `pn`.
+    pub(super) fn mtu_probe_sent(&mut self, i: usize, size: u16, pn: u64) {
         let Some(p) = self.paths.get_mut(i) else { return };
-        p.mtu.probe_sent(size);
+        p.mtu.probe_sent(size, pn);
     }
 
     /// The earliest time a path whose probe was lost is probed again.
@@ -178,21 +206,42 @@ conn_impl! {
             .min()
     }
 
-    /// A probe of `size` was acknowledged or echoed: the path carries it.
-    pub(super) fn mtu_raise(&mut self, i: usize, size: u16) {
+    /// The probe of `size` in packet `pn` that left on path slot `i` was acknowledged: the path carries it. If the slot
+    /// holds no path, or a path whose probe in flight is another, nothing changes and the outcome is counted.
+    pub(super) fn mtu_raise(&mut self, i: usize, size: u16, pn: u64) {
         let active = i == self.paths.active;
-        let Some(p) = self.paths.get_mut(i) else { return };
-        if let Some(new) = p.mtu.raise(size)
+        let Some(p) = self.paths.get_mut(i).filter(|p| p.mtu.holds(size, pn)) else {
+            self.stats.probe_outcomes_dropped += 1;
+            return;
+        };
+        if let Some(new) = p.mtu.raise(size, pn)
             && active
         {
             self.rec.set_max_datagram_size(u64::from(new));
         }
     }
 
-    /// A probe of `size` was lost: it waits for the next path event or [`REPROBE_AFTER`].
-    pub(super) fn mtu_probe_lost(&mut self, i: usize, size: u16, now: u64) {
+    /// A peer echoed `size` on path `i`: the path carries it if it is the probe in flight and within what the
+    /// interface carries.
+    pub(super) fn mtu_echo(&mut self, i: usize, size: u16) {
+        let active = i == self.paths.active;
         let Some(p) = self.paths.get_mut(i) else { return };
-        p.mtu.probe_lost(size, now);
+        let ceiling = probe_ceiling(p.info.interface_mtu, p.info.v6);
+        if let Some(new) = p.mtu.echo(size, ceiling)
+            && active
+        {
+            self.rec.set_max_datagram_size(u64::from(new));
+        }
+    }
+
+    /// The probe of `size` in packet `pn` that left on path slot `i` was lost: the path waits for the next path event
+    /// or [`REPROBE_AFTER`]. An outcome that matches no probe in flight changes nothing and is counted.
+    pub(super) fn mtu_probe_lost(&mut self, i: usize, size: u16, pn: u64, now: u64) {
+        let Some(p) = self.paths.get_mut(i).filter(|p| p.mtu.holds(size, pn)) else {
+            self.stats.probe_outcomes_dropped += 1;
+            return;
+        };
+        p.mtu.probe_lost(size, pn, now);
     }
 
     /// A path event happened on path `i`: probe it again.
@@ -255,6 +304,8 @@ pub(super) mod trace {
         pub current: u16,
         /// The probe in flight.
         pub inflight: Option<u16>,
+        /// The packet number the probe in flight left in.
+        pub probe_pn: Option<u64>,
         /// The main probe was sent since the last path event.
         pub probed: bool,
         /// The jumbo probe is done.
@@ -314,19 +365,24 @@ pub(super) mod trace {
             )
         }
 
-        /// A probe of `size` left.
-        pub fn probe_sent(&mut self, size: u16) {
-            self.0.probe_sent(size);
+        /// A probe of `size` left in packet `pn`.
+        pub fn probe_sent(&mut self, size: u16, pn: u64) {
+            self.0.probe_sent(size, pn);
         }
 
-        /// A probe of `size` was acknowledged or echoed; the new size if it rose.
-        pub fn raise(&mut self, size: u16) -> Option<u16> {
-            self.0.raise(size)
+        /// The probe of `size` in packet `pn` was acknowledged; the new size if it rose.
+        pub fn raise(&mut self, size: u16, pn: u64) -> Option<u16> {
+            self.0.raise(size, pn)
         }
 
-        /// A probe of `size` was lost.
-        pub fn probe_lost(&mut self, size: u16, now: u64) {
-            self.0.probe_lost(size, now);
+        /// A peer echoed `size` on a path whose interface is `interface_mtu` bytes; the new size if it rose.
+        pub fn echo(&mut self, size: u16, interface_mtu: u16, v6: bool) -> Option<u16> {
+            self.0.echo(size, super::probe_ceiling(interface_mtu, v6))
+        }
+
+        /// The probe of `size` in packet `pn` was lost.
+        pub fn probe_lost(&mut self, size: u16, pn: u64, now: u64) {
+            self.0.probe_lost(size, pn, now);
         }
 
         /// A path event.
@@ -349,7 +405,8 @@ pub(super) mod trace {
             let m = &self.0;
             MtuView {
                 current: m.current,
-                inflight: m.inflight,
+                inflight: m.inflight.map(|(s, _)| s),
+                probe_pn: m.inflight.map(|(_, pn)| pn),
                 probed: m.probed,
                 jumbo_done: m.jumbo == Jumbo::Done,
                 retry_at: m.retry_at,
