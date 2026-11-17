@@ -283,10 +283,11 @@ impl<S, D, A, C, Q> Builder<S, D, A, C, Q> {
     }
 
     /// Whether topic messages arrive as [`Event::Envelope`](crate::Event::Envelope) instead of
-    /// [`Event::Message`](crate::Event::Message) (default off): an [`Envelope`](crate::envelope::Envelope) the application can store and hand to anyone to verify
-    /// offline. The node builds each envelope once, in one allocation that holds the topic, the origin's signed head and
-    /// the payload, where a plain message takes two; the head adds about 122 bytes for an Ed25519 origin and up to 5,415
-    /// for a hybrid one, also to each message held for an access check or the replay floors.
+    /// [`Event::Message`](crate::Event::Message) (default off): an [`Envelope`](crate::envelope::Envelope) the
+    /// application can store and hand to anyone to verify offline. The node builds each envelope once, in one
+    /// allocation that holds the topic, the origin's signed head and the payload, where a plain message takes two (the
+    /// topic and the payload); the head adds about 122 bytes for an Ed25519 origin and up to 5,415 for a hybrid one,
+    /// also to each message held for an access check or the replay floors.
     #[must_use]
     pub const fn envelopes(mut self, on: bool) -> Self {
         self.envelopes = on;
@@ -567,7 +568,9 @@ impl<H: Hosted, D: Discovery> Endpoint<H, D> {
     /// The same key signs the protocol's own statements, so `data` that begins with the start of one is refused: the
     /// label prefix `"VINC 2026 "`, `"VNCREC"` (a node record), `"VNCBCN"` (a beacon) or `"vinc-sleep"` (a sleep
     /// notice). Statements signed over a 32-byte hash, and a topic message's (`topic | id | hash | timestamp | flag`),
-    /// cannot be told by a prefix: never sign bytes a peer chose without wrapping them in a format of your own.
+    /// cannot be told by a prefix: never sign bytes a peer chose without wrapping them in a format of your own. A topic
+    /// message's statement has no label, so a peer that chooses `data` can make a signed envelope from the signature
+    /// that verifies as a message of this key (vinc#572).
     ///
     /// # Errors
     /// [`crate::ErrorKind::Config`] if `data` begins with a reserved prefix or the key store fails,

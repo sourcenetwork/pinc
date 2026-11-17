@@ -1,21 +1,24 @@
 //! The signed envelope of a topic message: the topic, the exact wire head and the body, as one value an application
 //! can store, hand to anyone and verify later with no endpoint, no session and no network.
 //!
-//! The canonical bytes are `version1 | kind1 | topic_len2 | topic | head | body`, with the lengths big endian and `head`
-//! exactly as it travels ([`Head`]; it names the body's length in `blen`). Version 1 is the only version and kind 1
-//! ([`KIND_TOPIC_V1`], a topic message) the only kind defined; any other kind is refused.
+//! The canonical bytes are `version1 | kind1 | topic_len2 | topic | head | body`, with the lengths big endian and
+//! `head` exactly as it travels ([`Head`]; it names the body's length in `blen`). Version 1 is the only version and
+//! kind 1 ([`KIND_TOPIC_V1`], a topic message) the only kind defined; any other kind is refused.
 //!
 //! What a verified envelope proves: the key behind `origin` signed this topic, this message id, this exact payload and
 //! this timestamp. What it does not prove: that the key was unrevoked at that time, the message's position among
 //! others (the id is a position hash, not a content hash), or that anyone received it. A kind 1 statement carries no
-//! label of its own (it begins with the topic's bytes), so a kind 1 proof also holds for a raw signature by the same key
-//! over bytes of that shape: an application that signs bytes a peer chose with `Endpoint::sign` can be made to produce
-//! one (its guard refuses the reserved label prefixes, which an unlabelled topic statement does not carry).
+//! label of its own (it begins with the topic's bytes), so a kind 1 proof also holds for a raw signature by the same
+//! key over bytes of that shape: an application that signs bytes a peer chose with `Endpoint::sign` can be made to
+//! produce one (vinc#572; its guard refuses the reserved label prefixes, which an unlabelled topic statement does not
+//! carry).
 //!
 //! Invariants: [`EnvelopeRef::decode`] validates the whole structure at this boundary (version, kind, the topic bound,
 //! the head, the body length, no trailing byte) and never panics or reads outside its input; [`EnvelopeRef::verify`]
-//! re-checks the parts it is given, so an envelope built by hand cannot verify unless it is well formed; neither
-//! allocates. An owned [`Envelope`] is built only by [`EnvelopeRef::into_owned`], in one allocation.
+//! re-checks the parts it is given, so an envelope built by hand cannot verify unless it is well formed;
+//! [`EnvelopeRef::decode`] borrows from its input and verifying allocates nothing (measured for each of the four
+//! algorithms). An owned [`Envelope`] is built only by [`EnvelopeRef::into_owned`], in one allocation (measured the
+//! same way).
 
 use vinc_crypto::{IdentityAlg, NodeId as AuthorId};
 use vinc_membership::NodeId;
@@ -76,7 +79,9 @@ impl From<Malformed> for EnvelopeError {
     }
 }
 
-/// What a verified envelope proves, borrowed from its bytes. See the module docs for what it does not prove.
+/// What a verified envelope proves, borrowed from its bytes. See the module docs for what it does not prove. A kind 1
+/// envelope proves only that the key signed an unlabelled statement, so an application that signs bytes a peer chose
+/// with `Endpoint::sign` lets that peer make an envelope that verifies (vinc#572).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Verified<'a> {
@@ -91,9 +96,11 @@ pub struct Verified<'a> {
     /// The message id: 8 bytes the origin chose. It is not unique across origins and not a content id, so a store must
     /// not use it alone as a key.
     pub mid: [u8; 8],
-    /// The signed timestamp's physical part, in milliseconds: the author's own claim, not a time anyone else vouches for.
+    /// The signed timestamp's physical part, in milliseconds: the author's own claim, not a time anyone else
+    /// vouches for.
     pub wall_ms: u64,
-    /// The signed timestamp's logical part, which orders messages inside one millisecond.
+    /// The signed timestamp's logical part, which orders messages inside one millisecond: like `wall_ms`, the author's
+    /// own claim.
     pub counter: u32,
     /// The signed body flag: whether the body is bytes rather than a stream slice.
     pub isb: bool,
@@ -188,6 +195,8 @@ impl<'a> EnvelopeRef<'a> {
 
     /// Check the origin's signature over the topic, the message id, the body and the timestamp, and that its key is
     /// the origin's. The parts are validated again, so an envelope built by hand verifies only if it is well formed.
+    /// A kind 1 envelope proves only that the key signed an unlabelled statement, so an application that signs bytes a
+    /// peer chose with `Endpoint::sign` lets that peer make an envelope that verifies (vinc#572).
     ///
     /// # Errors
     /// [`EnvelopeError::BadKind`] for a kind not defined; [`EnvelopeError::Malformed`] if a part does not fit the
