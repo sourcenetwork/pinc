@@ -81,6 +81,9 @@ pub struct Rec<const K: usize, const D: usize> {
     /// endpoint never rejects or drops it.
     pub genuine: bool,
     pub last_now: u64,
+    /// Rejects the endpoint kept to send, and rejects it counted as sent: equal once everything is written.
+    pub queued: u64,
+    pub written: u64,
 }
 
 impl<const K: usize, const D: usize> Rec<K, D> {
@@ -98,6 +101,8 @@ impl<const K: usize, const D: usize> Rec<K, D> {
             expect_resume: None,
             genuine: false,
             last_now: now,
+            queued: 0,
+            written: 0,
         };
         while r.ep.poll_trace().is_some() {}
         for (unit, out) in [(MS_NS, &mut r.ms), (1, &mut r.ns)] {
@@ -313,6 +318,10 @@ impl<const K: usize, const D: usize> Rec<K, D> {
         let Op::Dgram(kind, len) = *op else { return };
         let freed_first = steps.iter().position(|s| s[0] == 4);
         let decided_at = steps.iter().position(|s| s[0] == 0);
+        // a reject is kept to be sent unless the ledger or a full queue turned it away in this call
+        if steps.iter().any(|s| s[0] == 0 && s[1] == 2) {
+            self.queued += u64::from(dropped + otherwise == 0);
+        }
         if decided_at.is_some() {
             assert!(
                 n.is_some_and(|n| n < HOLDERS),
@@ -490,16 +499,20 @@ impl<const K: usize, const D: usize> Rec<K, D> {
 
     /// Everything the endpoint sends now.
     pub fn transmit(&mut self, now: u64) -> Vec<(SocketAddr, SocketAddr, Vec<u8>)> {
-        self.call(now, Op::Other, |ep| {
-            let mut v = Vec::new();
-            let mut buf = vec![0u8; 65_536];
+        let (v, sent) = self.call(now, Op::Other, |ep| {
+            let (mut v, mut buf) = (Vec::new(), vec![0u8; 65_536]);
+            let before = ep.node_stats().stateless_rejects;
             while let Some(t) = ep.poll_transmit(now, &mut buf) {
                 for chunk in buf[..t.len].chunks(t.segment_size) {
                     v.push((t.local, t.remote, chunk.to_vec()));
                 }
             }
-            v
-        })
+            (v, ep.node_stats().stateless_rejects - before)
+        });
+        // the exact count, read after the write: every reject kept was counted once when it left, none twice
+        self.written += sent;
+        assert_eq!(self.written, self.queued, "a reject was not counted exactly once when sent");
+        v
     }
 
     /// A host that ticks in milliseconds: run the timers when they are due.
