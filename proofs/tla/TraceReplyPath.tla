@@ -10,39 +10,46 @@
 (* path, on another it holds, on paths it does not hold or gave up, cut    *)
 (* over two paths, with forged Replies and a reject among them, and a      *)
 (* resume Reply with a 1-RTT packet behind it, also at a full table; the   *)
-(* key requests are answered one by one. Every call must be the step the   *)
-(* operators of PathOps.tla compute, for the kind of message the code      *)
-(* answered (rx: k), and the table recorded after it (the held paths in    *)
-(* slot order, the active one), whether the session is established,        *)
-(* whether the round trip has a sample and the dropped count must be the   *)
-(* model's. reply_from is not recorded: the model carries it, and the path *)
-(* a later key answer moves the session to checks it.                      *)
+(* key requests are answered one by one; the endpoint names the path the   *)
+(* session was answered on a relay path, and a timer step follows. Every   *)
+(* call must be the step the operators of PathOps.tla compute, for the     *)
+(* kind of message the code answered (rx: k), and the table recorded after *)
+(* it (the held paths in slot order, each with whether it has a round      *)
+(* trip, the active one), whether the session is established, whether the  *)
+(* round trip has a sample, whether the active path failed its probe       *)
+(* timeouts and the dropped count must be the model's. reply_from is not   *)
+(* recorded: the model carries it, and the path a later key answer moves   *)
+(* the session to checks it.                                               *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable VINC_TRACE_DIR, the directory that holds reply_path.ndjson.    *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, TLC, Json, IOUtils
-CONSTANTS NP
+CONSTANTS NP, RT
 VARIABLES i, c
 vars == <<i, c>>
-INSTANCE PathOps WITH RelayKeep <- TRUE
+INSTANCE PathOps WITH RelayKeep <- TRUE, Rank <- "full"
 
 Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/reply_path.ndjson")
 Ev0 == Trace[i]
 
 \* the dialing side on path id of kind kd: the path validated and active in the first slot
-C0(id, kd) == [t |-> [j \in 1..NP |-> IF j = 1 THEN [id |-> id, v |-> TRUE, k |-> kd] ELSE Empty], act |-> 1, hs |-> "wait",
-           rf |-> 0, pend |-> 0, smp |-> FALSE, hd |-> 0]
+C0(id, kd) ==
+    [t |-> [j \in 1..NP |-> IF j = 1 THEN [id |-> id, v |-> TRUE, k |-> kd, r |-> 0] ELSE Empty], act |-> 1,
+     hs |-> "wait", rf |-> 0, pend |-> 0, smp |-> FALSE, f |-> FALSE, hd |-> 0]
 
-\* the held paths in slot order with their kind, as path_list gives them
+\* the held paths in slot order with their kind and whether they have a round trip, as path_list and path_rtt give them
 RECURSIVE HeldFrom(_, _)
-HeldFrom(t, j) == IF j > NP THEN <<>>
-                  ELSE (IF t[j].id # 0 THEN <<[id |-> t[j].id, v |-> t[j].v, kind |-> t[j].k]>> ELSE <<>>) \o HeldFrom(t, j + 1)
+HeldFrom(t, j) ==
+    IF j > NP THEN <<>>
+    ELSE (IF t[j].id # 0 THEN <<[id |-> t[j].id, v |-> t[j].v, kind |-> t[j].k, m |-> t[j].r > 0]>> ELSE <<>>)
+         \o HeldFrom(t, j + 1)
 
 Same(x, v) == /\ HeldFrom(x.t, 1) = v.paths
               /\ x.t[x.act].id = v.act
               /\ (x.hs = "done") = v.est
               /\ x.smp = v.smp
+              /\ x.f = v.f
               /\ x.hd = v.hd
 
 InitEv == Ev0.op = "init" /\ Ev0.np = NP /\ c' = C0(Ev0.id, Ev0.kind) /\ Same(c', Ev0.v)
@@ -56,8 +63,12 @@ RxEv == Ev0.op = "rx" /\ Ev0.k \in Kinds /\ c' = Rx(c, Ev0.id, Ev0.k, Ev0.coal, 
 KeyEv == Ev0.op = "key" /\ c' = Key(c, Ev0.r, Ev0.v.smp) /\ Same(c', Ev0.v)
 
 Init == i = 1 /\ c = C0(1, "direct")
+\* the endpoint names the kind of a path (set_path_info); a timer pass (handle_timeout)
+InfoEv == Ev0.op = "info" /\ c' = SetInfo(c, Ev0.id, Ev0.kind) /\ Same(c', Ev0.v)
+TimerEv == Ev0.op = "timer" /\ c' = Timer(c) /\ Same(c', Ev0.v)
+
 Step == /\ i <= Len(Trace) /\ Ev0.t = "rp"
-        /\ (InitEv \/ AddEv \/ RmEv \/ RxEv \/ KeyEv) /\ i' = i + 1
+        /\ (InitEv \/ AddEv \/ RmEv \/ RxEv \/ KeyEv \/ InfoEv \/ TimerEv) /\ i' = i + 1
 Finished == i > Len(Trace) /\ UNCHANGED vars
 TNext == Step \/ Finished
 TraceSpec == Init /\ [][TNext]_vars

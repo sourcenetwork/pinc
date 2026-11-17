@@ -5,7 +5,10 @@
 //! with a 1-RTT packet behind it in the same datagram. After every call the dialing side's path table (`path_list`, in
 //! slot order with the kind of each path, direct or relay, and `active_path`), whether it is established, whether its
 //! round trip has a sample and its dropped handshake count are recorded as ndjson (`reply_path.ndjson`) for the TLA+
-//! trace check (`TraceReplyPath.tla`) and the Lean replay (`Vinc/TraceReplyPath.lean`). Four runs dial on a relay path.
+//! trace check (`TraceReplyPath.tla`) and the Lean replay (`Vinc/TraceReplyPath.lean`); each path of the table is also
+//! recorded with whether it has a round trip, and the view with whether the active path failed its probe timeouts.
+//! Five runs dial on a relay path; the last is answered on a relay path the dial does not hold, which the endpoint then
+//! names a relay path, before a timer step.
 //!
 //! A datagram is recorded with the path it arrived on, with what its handshake packet completed as the connection
 //! answered it (`bad` the dropped count rose, `auth` the session was established by it, `pend` it raised a key request:
@@ -49,19 +52,28 @@ struct Log {
     kinds: Vec<&'static str>,
     keys: Vec<&'static str>,
     coal: bool,
+    /// Whether the active path failed its probe timeouts in a row, as the last timer step read it.
+    fail: bool,
 }
 
 fn kind(k: PathKind) -> &'static str {
     if k == PathKind::Relay { "relay" } else { "direct" }
 }
 
-fn view(c: &Conn<'_>) -> String {
+fn view(c: &Conn<'_>, fail: bool) -> String {
     let paths: Vec<String> = c
         .path_list()
-        .map(|(id, info, v)| format!(r#"{{"id":{},"v":{v},"kind":"{}"}}"#, id.0, kind(info.kind)))
+        .map(|(id, info, v)| {
+            format!(
+                r#"{{"id":{},"v":{v},"kind":"{}","m":{}}}"#,
+                id.0,
+                kind(info.kind),
+                c.path_rtt(id).is_some()
+            )
+        })
         .collect();
     format!(
-        r#"{{"paths":[{}],"act":{},"est":{},"smp":{},"hd":{}}}"#,
+        r#"{{"paths":[{}],"act":{},"est":{},"smp":{},"f":{fail},"hd":{}}}"#,
         paths.join(","),
         c.active_path().map_or(0, |p| p.0),
         c.is_connected(),
@@ -75,8 +87,30 @@ fn log(l: &mut Log, net: &Net<'_, '_>, body: &str) {
         l.out,
         r#"{{"t":"rp","run":{},{body},"v":{}}}"#,
         l.run,
-        view(&net.a.conn)
+        view(&net.a.conn, l.fail)
     );
+}
+
+/// The endpoint names the kind of path `p`.
+fn info(l: &mut Log, net: &mut Net<'_, '_>, p: u64, k: PathKind) {
+    net.a.conn.set_path_info(
+        PathId(p),
+        PathInfo {
+            kind: k,
+            ..PathInfo::default()
+        },
+    );
+    log(l, net, &format!(r#""op":"info","id":{p},"kind":"{}""#, kind(k)));
+}
+
+/// A timer step of the dialing side. The failing flag is `PTO_FALLBACK` (3) probe timeouts in a row, as it read them.
+fn timer(l: &mut Log, net: &mut Net<'_, '_>) {
+    let now = net.now;
+    net.a.with_env(now, vinc_transport::conn::Connection::handle_timeout);
+    if let Some(v) = net.a.conn.trace_carrier_take() {
+        l.fail = v.ptos >= 3;
+    }
+    log(l, net, r#""op":"timer""#);
 }
 
 /// A new run: the dialing side holds its dialed path 1, a relay path when `relay`. Its key requests wait for the test.
@@ -256,6 +290,34 @@ fn full_on(l: &mut Log, alg: IdentityAlg, seed: u64, added: &[u64], removed: &[u
     bounded(&net);
 }
 
+/// The dial is sent on relay path 1 and answered on relay path 9, which it does not hold; the endpoint then names path
+/// 9 a relay path and a timer step follows. Path 9, the active one, is not ranked behind the dialed path 1, which has
+/// no round trip either: the session stays on 9.
+fn named(l: &mut Log, seed: u64) {
+    let mut w = World::new(IdentityAlg::Ed25519);
+    w.dial_info = PathInfo {
+        kind: PathKind::Relay,
+        ..PathInfo::default()
+    };
+    let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+    let mut net = setup(&mut w, &mut sa, &mut sb, Link::new(seed, Params::new(10 * MS)));
+    start(l, &mut net, true);
+    let reply = answer(&mut net);
+    for d in &reply {
+        rx(l, &mut net, 9, d);
+    }
+    keys(l, &mut net);
+    assert!(net.a.conn.is_connected() && active(&net) == 9);
+    info(l, &mut net, 9, PathKind::Relay);
+    assert_eq!(active(&net), 9, "naming the path a relay path moved the session");
+    timer(l, &mut net);
+    assert!(
+        held(&net, 1) && net.a.conn.path_validated(PathId(1)) && active(&net) == 9,
+        "a timer step took the session off the relay path it was answered on"
+    );
+    bounded(&net);
+}
+
 /// A Reply cut over two paths: the datagrams before the last one of the message on `p`, the rest on `q`; the session
 /// goes where the message completed.
 fn split(l: &mut Log, seed: u64, p: u64, q: u64) {
@@ -398,6 +460,8 @@ fn reply_path_traces() {
         full_on(&mut l, IdentityAlg::Ed25519, 96, &[2], &[], 2, true);
         full_on(&mut l, IdentityAlg::Ed25519, 97, &[3, 4, 5], &[], 9, true);
         full_on(&mut l, IdentityAlg::Ed25519, 98, &[], &[], 1, true);
+        // A reply on a relay path the dial does not hold, then the info that names it a relay path, then a timer step.
+        named(&mut l, 99);
         split(&mut l, 87, 9, 1);
         split(&mut l, 88, 1, 9);
         forged(&mut l, 89);
