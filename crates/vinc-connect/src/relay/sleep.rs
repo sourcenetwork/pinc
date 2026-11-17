@@ -21,7 +21,8 @@ pub const SKEW_MS: u64 = 10_000;
 /// The longest notice.
 pub const MAX_LEN: usize = NODE_ID_LEN + 8 + MAX_PUBLIC_KEY_LEN + MAX_SIGNATURE_LEN;
 
-const LABEL: &[u8] = b"vinc-sleep";
+/// The label every notice's signed message begins with.
+pub const LABEL: &[u8] = b"vinc-sleep";
 /// The length of the signed message of a notice.
 pub const MSG_LEN: usize = LABEL.len() + 2 * NODE_ID_LEN + 8;
 

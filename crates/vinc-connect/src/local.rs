@@ -49,7 +49,18 @@ pub const BURST: u64 = 5_000_000_000;
 /// The gap between beacons after the burst.
 pub const STEADY_GAP: u64 = 60_000_000_000;
 
-const MAGIC: &[u8; 8] = b"VNCBCN\x00\x01";
+/// The six letters every beacon begins with, whatever its version: the start of the bytes its signature covers.
+pub const MAGIC_PREFIX: &[u8; 6] = b"VNCBCN";
+const MAGIC: &[u8; 8] = &[
+    MAGIC_PREFIX[0],
+    MAGIC_PREFIX[1],
+    MAGIC_PREFIX[2],
+    MAGIC_PREFIX[3],
+    MAGIC_PREFIX[4],
+    MAGIC_PREFIX[5],
+    0,
+    1,
+];
 
 /// A parsed beacon.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

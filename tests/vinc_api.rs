@@ -67,6 +67,26 @@ async fn sign_refuses_the_bytes_reserved_for_the_protocol() {
         let e = within(30, a.sign(data)).await.unwrap_err();
         assert_eq!(e.kind(), ErrorKind::Config, "{data:?}");
     }
+    let id = a.id();
+    let sleep = vinc_connect::relay::sleep::message(&id, &id, 1).unwrap();
+    let mut beacon = vec![0u8; 512];
+    let addrs = ["127.0.0.1:9".parse().unwrap()];
+    let n = vinc_connect::local::prepare(&id, a.public_key(), 1, &addrs, &[], &mut beacon).unwrap();
+    let prefixes: [&[u8]; 3] = [
+        vinc_connect::record::MAGIC_PREFIX,
+        vinc_connect::local::MAGIC_PREFIX,
+        vinc_connect::relay::sleep::LABEL,
+    ];
+    for data in prefixes.iter().copied().chain([&sleep[..], &beacon[..n]]) {
+        let e = within(30, a.sign(data)).await.unwrap_err();
+        assert_eq!(e.kind(), ErrorKind::Config, "{data:?}");
+    }
+    for p in prefixes {
+        let mut last = p.to_vec();
+        *last.last_mut().unwrap() ^= 1;
+        within(30, a.sign(&last)).await.unwrap();
+        within(30, a.sign(&p[..p.len() - 1])).await.unwrap();
+    }
     for data in [&b"VINC 2026"[..], b"vinc 2026 v1 x", b" VINC 2026 v1 x", b""] {
         let sig = within(30, a.sign(data)).await.unwrap();
         vinc_crypto::identity::verify(vinc_crypto::IdentityAlg::Ed25519, a.public_key(), data, &sig).unwrap();

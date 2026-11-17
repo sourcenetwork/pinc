@@ -545,20 +545,16 @@ impl<H: Hosted, D: Discovery> Endpoint<H, D> {
 
     /// Sign `data` with the node's identity key (Ed25519: 64 bytes).
     ///
-    /// The same key signs the protocol's own statements, so `data` that begins with the reserved prefix `"VINC 2026 "`
-    /// is refused. A topic message's statement is not labelled yet: do not sign bytes you did not build yourself that
-    /// could be one (`topic | id | hash | timestamp | flag`), and never sign bytes a peer chose without wrapping them
-    /// in a format of your own.
+    /// The same key signs the protocol's own statements, so `data` that begins with the start of one is refused: the
+    /// label prefix `"VINC 2026 "`, `"VNCREC"` (a node record), `"VNCBCN"` (a beacon) or `"vinc-sleep"` (a sleep
+    /// notice). Statements signed over a 32-byte hash, and a topic message's (`topic | id | hash | timestamp | flag`),
+    /// cannot be told by a prefix: never sign bytes a peer chose without wrapping them in a format of your own.
     ///
     /// # Errors
-    /// [`crate::ErrorKind::Config`] if `data` begins with the reserved prefix or the key store fails,
+    /// [`crate::ErrorKind::Config`] if `data` begins with a reserved prefix or the key store fails,
     /// [`crate::ErrorKind::Shutdown`] if the endpoint stopped.
     pub async fn sign(&self, data: &[u8]) -> Result<Vec<u8>> {
-        if data.starts_with(vinc_crypto::labels::RESERVED.as_bytes()) {
-            return Err(Error::config(
-                "these bytes are reserved for the protocol's own signatures",
-            ));
-        }
+        crate::reserved::check(data)?;
         self.sign_unchecked(data).await
     }
 

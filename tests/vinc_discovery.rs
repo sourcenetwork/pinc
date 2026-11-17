@@ -71,6 +71,9 @@ async fn the_signed_record_still_verifies_beside_the_sign_guard() {
     let ep = bind(builder().discovery(Records::new(Table::default()))).await;
     let rec = within(30, ep.signed_record()).await.unwrap();
     Record::parse_verified(&rec).unwrap();
+    // A real record's bytes are the protocol's own statement: the public sign refuses them.
+    let e = within(30, ep.sign(&rec)).await.unwrap_err();
+    assert_eq!(e.kind(), vinc::ErrorKind::Config);
 }
 
 async fn echo<H: Hosted>(c: &vinc::Connection<H>) -> Vec<u8> {

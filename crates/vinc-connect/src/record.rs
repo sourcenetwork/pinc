@@ -47,7 +47,18 @@ pub const MAX_RECORD_LEN: usize = MAGIC.len()
     + MAX_PUBLIC_KEY_LEN
     + MAX_SIGNATURE_LEN;
 
-const MAGIC: &[u8; 8] = b"VNCREC\x00\x01";
+/// The six letters every record begins with, whatever its version: the start of the bytes its signature covers.
+pub const MAGIC_PREFIX: &[u8; 6] = b"VNCREC";
+const MAGIC: &[u8; 8] = &[
+    MAGIC_PREFIX[0],
+    MAGIC_PREFIX[1],
+    MAGIC_PREFIX[2],
+    MAGIC_PREFIX[3],
+    MAGIC_PREFIX[4],
+    MAGIC_PREFIX[5],
+    0,
+    1,
+];
 
 /// How a node is reachable (CMP-CON-02), as the node itself observed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

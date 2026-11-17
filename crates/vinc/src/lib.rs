@@ -82,6 +82,7 @@ mod node;
 mod protocol;
 mod records;
 pub mod relay;
+mod reserved;
 mod role;
 mod standby;
 mod start;
