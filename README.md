@@ -1,28 +1,29 @@
 <p align="center">
-  <img src="art/vinc-banner.png" alt="VINC: next-gen peer-to-peer networking stack" width="100%">
+  <img src="art/pinc-banner.png" alt="PINC: next-gen peer-to-peer networking stack" width="100%">
 </p>
 
-**VINC** stands for **V**erified **I**dentity-**N**ative **C**onnectivity:
+**PINC** stands for **P**rovable **I**dentity-**N**ative **C**onnectivity:
 
-- *Verified*: every session is mutually authenticated, and a value is checked against its root before the
-  application sees a byte of it.
+- *Provable*: its state machines are specified in TLA+, model checked and proved in Lean 4, crate by crate (see
+  [Proofs](#proofs)), and a node checks what it receives itself: every session is mutually authenticated, and a value
+  is checked against its root before the application sees a byte of it.
 - *Identity-native*: a node is reached by its id, which is derived from its key, not by an address.
 - *Connectivity*: one stack that connects nodes directly, through relays, and across links that are not there all
   the time.
 
-**VINCER**, the transport VINC runs on, stands for **VINC** **E**ncrypted **R**eliable transport.
+**PINCER**, the transport PINC runs on, stands for **PINC** **E**ncrypted **R**eliable transport.
 
-VINC is a peer-to-peer networking stack for Rust, written SANS-IO. It has its own encrypted, reliable transport
-(VINCER) with a hybrid post-quantum handshake (X25519 plus ML-KEM-768). The hybrid claim is the full handshake's: a
+PINC is a peer-to-peer networking stack for Rust, written SANS-IO. It has its own encrypted, reliable transport
+(PINCER) with a hybrid post-quantum handshake (X25519 plus ML-KEM-768). The hybrid claim is the full handshake's: a
 resumed session runs no ML-KEM, so its keys are as secret as its ticket's key (which a full handshake set up), and the
 key roll is an X25519 ratchet, so with X25519 broken it does not recover a session whose keys were stolen. On top of
 that core it builds membership, verified value transfer with no size limit, broadcast, set reconciliation and
 delay-tolerant delivery. It runs from a microcontroller to a data centre and in the browser, and you write your own
 protocols on top of it.
 
-VINC is a library, not a framework:
+PINC is a library, not a framework:
 - **No runtime dependency.** The protocol crates are state machines: you give them bytes, time and commands, and they
-  give back packets to send, timers and events. VINC depends on no async runtime.
+  give back packets to send, timers and events. PINC depends on no async runtime.
 - **The host owns the runtime.** You pass the facade your I/O as three async closures (receive a datagram, send a
   datagram, sleep until an instant) and call async methods. It starts no thread, no task and no socket loop: the futures
   you await drive the endpoint, on your executor and your core. tokio, smol and nuclei all work.
@@ -32,7 +33,9 @@ VINC is a library, not a framework:
 - **Hot path:** zero-copy parsing and no heap allocation in steady state are design rules.
 
 > **Status: pre-release.** The protocol crates are built and tested, and their proofs land crate by crate. Open work
-> is tracked in the [issues](https://github.com/sourcenetwork/vinc/issues).
+> is tracked in the [issues](https://github.com/sourcenetwork/vinc/issues). PINC was named VINC until November 2026:
+> the crates and this repository keep the `vinc` name until the rename lands
+> ([#668](https://github.com/sourcenetwork/vinc/issues/668)).
 
 ## Usage
 
@@ -98,7 +101,7 @@ keepalives) awaits `Endpoint::run()`.
 | `proofs/` | TLA+ specifications (TLC) and Lean 4 proofs, both validated against traces of the real code |
 | `tests/` | every test (integration, property, scenario, trace), run with [cargo-nextest](https://nexte.st) |
 | `benches/` | micro benchmarks (per packet, allocations, copies) and the loopback comparison with iroh and rust-libp2p; a workspace of its own |
-| `distributed/` | the distributed test harness: one binary that builds an emulated network of containers, runs VINC, iroh and rust-libp2p nodes on it with faults, measures them and serves a dashboard; a workspace of its own |
+| `distributed/` | the distributed test harness: one binary that builds an emulated network of containers, runs PINC, iroh and rust-libp2p nodes on it with faults, measures them and serves a dashboard; a workspace of its own |
 | `docs/` | [PROOFS.md](docs/PROOFS.md): what is proven, how it is checked, the assumptions |
 | `scripts/` | the gate and the proof runner |
 
@@ -112,7 +115,7 @@ keepalives) awaits `Endpoint::run()`.
 | `vinc-crypto` | RustCrypto primitives behind one `Provider`: AEADs, X25519, ML-KEM-768, four identity algorithms, BLAKE3 | yes | built |
 | `vinc-keystore` | long-term keys behind a `KeyStore` trait; a software store and a pure-Rust TPM 2.0 store (`hwenc`) | no | built |
 | `vinc-security` | hybrid post-quantum handshake, resumption with 0-RTT, key schedule, packet protection, key roll | yes | built, proven |
-| `vinc-transport` | VINCER: streams, datagrams, flow and congestion control, loss recovery, pacing, path MTU, migration | yes | built |
+| `vinc-transport` | PINCER: streams, datagrams, flow and congestion control, loss recovery, pacing, path MTU, migration | yes | built |
 | `vinc-core` | the SANS-IO endpoint: host interface, protocol dispatch, commands, events, queries | yes | built |
 | `vinc-node` | the endpoint, the connectivity client and every layer composed over real sessions | yes | built |
 | `vinc-connect` | carriers, relays, signed records and lookup, hole punching, the hub tunnel, the mailbox | yes | built; relay side proven |
@@ -140,7 +143,7 @@ just test         # every test with cargo-nextest (the hwenc TPM tests need swtp
 just proofs       # Lean proofs, TLC model checking, trace validation and model-based tests
 just tla-tools    # install the pinned TLA+ tools the proofs use
 just bench        # micro benchmarks
-just compare      # VINC against iroh and rust-libp2p on loopback (run it on an otherwise idle machine; needs sudo and tc)
+just compare      # PINC against iroh and rust-libp2p on loopback (run it on an otherwise idle machine; needs sudo and tc)
 just distributed run distributed/scenarios/wan.toml   # a scenario on an emulated network (Docker and sudo)
 just distributed run distributed/scenarios/wan.toml --hosts fleet.toml   # the same on real machines over SSH (see distributed/infra)
 just distributed serve                                # the dashboard, on http://127.0.0.1:7878
@@ -150,7 +153,7 @@ just e2e          # the harness end to end: a two-node scenario, every stack (Do
 ```
 
 The distributed harness gives every node its own container and network stack on one machine, shapes each link with
-`tc netem`, and runs VINC, iroh and rust-libp2p through the same tests: transport (setup, resumed setup, round trips,
+`tc netem`, and runs PINC, iroh and rust-libp2p through the same tests: transport (setup, resumed setup, round trips,
 bulk, many connections) and the layers above (publish and subscribe, fetching a value, reconciling two sets,
 delay-tolerant delivery). Scenarios are TOML files in `distributed/scenarios/`; a run writes its raw rows, its
 conditions and a summary to `distributed/results/`, measures only on a quiet machine and says so when it could not.
@@ -159,13 +162,13 @@ With `--hosts` the same run places the nodes on real machines over SSH; that has
 
 `just compare` and `just distributed` compile every library for the machine that runs them (`-C target-cpu=native`)
 and say so in their results. Every dependency is declared once, in its workspace's root `Cargo.toml`. The benchmarks
-and the harness are workspaces of their own, so the other libraries and their runtimes never enter VINC's graph; the
+and the harness are workspaces of their own, so the other libraries and their runtimes never enter PINC's graph; the
 gate checks that no crate under `crates/` depends on an async runtime and that nothing in the library's build
 compiles C.
 
 ## Proofs
 
-VINC's state machines and pure functions are specified in TLA+ and model checked with TLC, proved in Lean 4 without
+PINC's state machines and pure functions are specified in TLA+ and model checked with TLC, proved in Lean 4 without
 bounds, and both are validated against traces recorded from the real Rust code. The other way round, the real code of
 the endpoint's table of held first-flight fragments is driven along every edge of TLC's bounded state graph of its
 model (model-based tests). Only the dependencies are taken on trust: the cryptographic primitives and Rust `core` and
@@ -175,11 +178,11 @@ still being closed.
 
 ## Performance
 
-Measured on one build host (AMD EPYC 7R13, 16 cores), VINC, iroh and rust-libp2p in one quiet window, medians of the
-session of 15 November 2026 at commit `9dd66f05`. The best value of a row is in bold; a row VINC does not lead is
+Measured on one build host (AMD EPYC 7R13, 16 cores), PINC, iroh and rust-libp2p in one quiet window, medians of the
+session of 15 November 2026 at commit `9dd66f05`. The best value of a row is in bold; a row PINC does not lead is
 tracked in [#579](https://github.com/sourcenetwork/vinc/issues/579), which lists every such row, not only these.
 
-| | VINC | iroh | rust-libp2p |
+| | PINC | iroh | rust-libp2p |
 |---|---|---|---|
 | Bulk on loopback, one stream (MiB/s) | **710** | 507 | 471 |
 | CPU per byte moved, both ends (ns) | **2.66** | 4.83 | 5.03 |
@@ -195,4 +198,4 @@ tracked in [#579](https://github.com/sourcenetwork/vinc/issues/579), which lists
 
 The 1% loss row is an 8 MiB transfer; a 64 MiB fetch on the same path runs at 1.16 MiB/s against 0.31 and 0.32
 ([#564](https://github.com/sourcenetwork/vinc/issues/564)). `just compare` and the harness print every row, the ones
-VINC loses included.
+PINC loses included.
