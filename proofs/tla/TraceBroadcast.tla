@@ -26,7 +26,7 @@
 EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
 
 CONSTANTS TTL, SeenCap, LogRing, LogCap, LogWin, FholdMax, HeldMax, ChecksMax, AcpCap, AcpMax, FloorWait, OldSlack,
-          Mids, Origins, HeldDedup, HeldFullKeepsUnseen, TopicFull, AckAfterStore, Gather, EvictGuard, Revoked, AckById
+          Mids, Origins, HeldDedup, HeldFullKeepsUnseen, TopicFull, AckAfterStore, Gather, EvictGuard, Revoked, AckById, KeepPrint, DueOnly
 
 MidsDef == 1..400
 

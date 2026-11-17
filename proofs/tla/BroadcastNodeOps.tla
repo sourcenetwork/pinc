@@ -16,7 +16,9 @@
 (* [mid, origin, ts, kind, n] where kind says what the checks before the   *)
 (* signature find (good, badhead: the head does not parse, big: the body   *)
 (* is over the receiver's limit, badsig: the signature does not cover the  *)
-(* topic, id and body; BroadcastAuth establishes when that is the case),   *)
+(* topic, id and body; BroadcastAuth establishes when that is the case;    *)
+(* graft: the id and signature of a stored message under another body,     *)
+(* which never verifies as a new message),                                 *)
 (* ts is the hybrid timestamp as one totally ordered number, n is the      *)
 (* size of head and body in the log ring, and the signature's verdict is   *)
 (* the oracle's. The slot arrays behind Seen are the association           *)
@@ -33,18 +35,30 @@
 (* TopicFull: the topic table has no room for this topic.                  *)
 (*                                                                         *)
 (* A message also has a body (an opaque value: the body hash and the flag  *)
-(* the signature covers). A hub keeps what the log holds for each id in    *)
-(* `store` (origin, timestamp, body), set when the message is stored; a    *)
-(* known id is acknowledged only for the same message (origin, timestamp   *)
-(* and body equal), another message under a held id is refused with        *)
-(* IdTaken, and an id only the dedupe set remembers is no acknowledgement. *)
-(* AckById is the old rule, which acknowledged any known id: the witness.  *)
-(* An id the log no longer holds has no meaningful entry; Tidy drops it.   *)
+(* the signature covers). A hub keeps the print of each message it stored  *)
+(* in `store`, set when the message is stored: here the content (origin,   *)
+(* timestamp, body), which the signature binds, so two messages have the   *)
+(* same print exactly when their content is equal and the signature of the *)
+(* second verifies (kind "good"; the print is 64 bits in the code, an      *)
+(* assumption). The print lives in the log while the message is logged and *)
+(* in the dedupe map after the log let it go; an id that neither holds     *)
+(* has no meaningful entry and Tidy drops it. A known id (a duplicate) due *)
+(* an acknowledgement (a PUB or FANP at a hub) is compared with the print  *)
+(* held for it: the same print is acknowledged, another is refused with    *)
+(* IdTaken and no acknowledgement, after the log let the message go as     *)
+(* well as while it holds it. A copy due none is a plain duplicate and     *)
+(* compares nothing. A graft of the stored message carries the stored    *)
+(* print, so it is acknowledged like the message itself when due; it is   *)
+(* stored, forwarded and delivered never (its signature fails as a new     *)
+(* message). KeepPrint = FALSE (compare only while the id is logged),      *)
+(* DueOnly = FALSE (compare every copy) and AckById (acknowledge          *)
+(* any known id, the old rule) are the rules before the fix, kept as the   *)
+(* witnesses of BroadcastNode.                                             *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC
 
 CONSTANTS TTL, SeenCap, LogRing, LogCap, LogWin, FholdMax, HeldMax, ChecksMax, AcpCap, AcpMax, FloorWait, OldSlack,
-          Mids, Origins, Me, IsHub, Revoked, HeldDedup, HeldFullKeepsUnseen, TopicFull, AckAfterStore, Gather, EvictGuard, LogTrack, AckById
+          Mids, Origins, Me, IsHub, Revoked, HeldDedup, HeldFullKeepsUnseen, TopicFull, AckAfterStore, Gather, EvictGuard, LogTrack, AckById, KeepPrint, DueOnly
 
 LG == INSTANCE BroadcastLogOps WITH Ring <- LogRing, Cap <- LogCap, Window <- LogWin, Track <- LogTrack
 
@@ -168,9 +182,25 @@ HubStore(N, now, wall, fanned, m) ==
                THEN Bind(Plain(N1, st), LAMBDA x: Offer(x, now, m))
                ELSE Res([N1 EXCEPT !.seen = SInsert(N1.seen, m.mid, now, TRUE).s], st, <<>>, 0, {m.mid})
 
-\* what the log holds for the ids it holds; the entry of an id that left the log means nothing
-Tidy(N) == [N EXCEPT !.store = [x \in Mids |-> IF LG!Contains(N.lg, x) THEN N.store[x] ELSE NoM]]
+\* the print held for each id the log or the dedupe map holds; the entry of an id neither holds means nothing
+Tidy(N) == [N EXCEPT !.store = [x \in Mids |-> IF LG!Contains(N.lg, x) \/ N.seen.map[x] # NoT THEN N.store[x] ELSE NoM]]
 Content(m) == [origin |-> m.origin, ts |-> m.ts, body |-> m.body]
+\* the print a frame carries: a good frame's is its content; a graft (the id and signature of a stored message under
+\* another body) carries the print stored under its id; the other kinds carry none that is compared
+PrintOf(N, m) == IF m.kind = "graft" THEN N.store[m.mid] ELSE Content(m)
+\* the frame carries the print held for its id, and the signature it carries verifies against it
+Same(N, m) == (m.kind = "good" /\ N.store[m.mid] = Content(m)) \/ m.kind = "graft"
+
+(* ---- msg.rs on_msg: a known id ---- *)
+\* a copy due an acknowledgement (ack = 1) is compared with the print held for the id, while the log holds the id and,
+\* with KeepPrint, after it let it go; DueOnly = FALSE compares every copy. The same print is a duplicate that is
+\* acknowledged, another is IdTaken with none; an id that is not compared is a plain duplicate with none.
+Dup(N, m, ack) ==
+    LET look == (KeepPrint \/ LG!Contains(N.lg, m.mid)) /\ (ack = 1 \/ ~DueOnly)
+        same == Same(N, m)
+    IN IF AckById THEN Res(N, <<Rejected(m.mid, "Duplicate")>>, <<>>, ack, {})
+       ELSE IF look /\ ~same THEN Res(N, <<Rejected(m.mid, "IdTaken")>>, <<>>, 0, {})
+       ELSE Res(N, <<Rejected(m.mid, "Duplicate")>>, <<>>, IF look THEN ack ELSE 0, {})
 
 (* ---- msg.rs on_msg ---- *)
 Allowed(t, fromBoot) == IF t \in {"PUB", "FAN", "FANP"} THEN IsHub ELSE IF t = "MSG" THEN fromBoot ELSE TRUE
@@ -180,13 +210,10 @@ OnMsg(N, now, wall, t, fromBoot, m) ==
     ELSE IF m.kind = "badhead" THEN Plain(N, <<Rejected(0, "BadHead")>>)
     ELSE IF m.kind = "big" THEN Plain(N, <<Rejected(m.mid, "BadHead")>>)
     ELSE LET ack == IF IsHub /\ t \in {"PUB", "FANP"} THEN 1 ELSE 0
-             same == LG!Contains(N.lg, m.mid) /\ N.store[m.mid] = Content(m)
          IN IF IsDup(N, m.mid, now)
-            THEN IF same \/ AckById THEN Res(N, <<Rejected(m.mid, "Duplicate")>>, <<>>, ack, {})
-                 ELSE IF LG!Contains(N.lg, m.mid) THEN Res(N, <<Rejected(m.mid, "IdTaken")>>, <<>>, 0, {})
-                 ELSE Res(N, <<Rejected(m.mid, "Duplicate")>>, <<>>, 0, {})
+            THEN Dup(N, m, ack)
             ELSE IF m.origin \in Revoked THEN Plain(N, <<Rejected(m.mid, "Revoked")>>)
-            ELSE IF m.kind = "badsig" THEN Plain(N, <<Rejected(m.mid, "BadSignature")>>)
+            ELSE IF m.kind \in {"badsig", "graft"} THEN Plain(N, <<Rejected(m.mid, "BadSignature")>>)
             ELSE LET rep == m.mid \in N.req
                      N1 == [N EXCEPT !.req = @ \ {m.mid}]
                      o1 == IF rep THEN <<[k |-> "Repaired", mid |-> m.mid]>> ELSE <<>>
