@@ -37,7 +37,8 @@
 //! A relay path is valid from the moment the connection tracks it and is never challenged: the relay authenticated
 //! the node at each end, as the reference model takes a relay path to be. Like every validated standby path it is
 //! kept alive by the endpoint's keepalive, which is what keeps a member's carrier heard by its hub and the hub's by
-//! the member.
+//! the member. Leaving a relay path for another path (a dial answered through another relay) does not take its validity
+//! away; leaving a direct path does.
 //!
 //! Invariants: the active path index always names a live slot; an unvalidated path never sends past its
 //! amplification budget; a direct path is validated only by an answer to a challenge sent to it.
@@ -166,6 +167,14 @@ pub(crate) struct Path {
 }
 
 impl Path {
+    /// The session moves off this path to another: a direct path it leaves must validate again by a challenge, a relay
+    /// path stays valid for as long as the connection tracks it (the one rule of when a move takes validity away).
+    pub(crate) fn left(&mut self) {
+        if self.info.kind == PathKind::Direct {
+            self.validated = false;
+        }
+    }
+
     pub(crate) fn new(id: PathId, info: PathInfo) -> Self {
         let relay = info.kind == PathKind::Relay;
         let mut amp = AmpBudget::new();

@@ -218,9 +218,9 @@ conn_impl! {
     /// A dialing side's session is established, so the message that led there authenticated: the Reply's sealed block
     /// opened and the responder's signature verified, or the resume Reply's confirmation tag matched. Only now does
     /// the datagram that completed it count: its source id becomes the peer's first id, and the session continues on
-    /// its path (the answer to a flight sent on several paths came back there), while the path that did not answer
-    /// is validated only when a challenge on it is answered. A handshake packet whose message does not authenticate
-    /// moves no path, validates none and names no id.
+    /// its path (the answer to a flight sent on several paths came back there), while a direct path that did not
+    /// answer is validated only when a challenge on it is answered and a relay path stays valid. A handshake packet
+    /// whose message does not authenticate moves no path, validates none and names no id.
     ///
     /// The reference model acts on the server flight in the same order: it opens the sealed part and verifies the
     /// signature, and only then takes the peer's id and moves to the path the flight came on; a resumption moves only
@@ -240,7 +240,7 @@ conn_impl! {
         }
         let old = self.paths.active;
         if let Some(p) = self.paths.get_mut(old) {
-            p.validated = false;
+            p.left();
         }
         if let Some(p) = self.paths.get_mut(pi) {
             p.validated = true;
