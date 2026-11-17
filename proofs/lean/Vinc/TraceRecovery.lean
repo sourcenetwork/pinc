@@ -8,9 +8,9 @@ The Lean half of the trace validation of loss recovery (`recovery/engine.rs`, `a
 `sent.rs`, `rtt.rs`, `tail.rs`), the port of `proofs/tla/TraceRecovery.tla`. It reads the `rc` and `tr` events
 written by the Rust test `trace_recovery` and replays every call through the functions of
 `Vinc.TransportRecovery`: the state the model computes must be the state recorded (the loss timer and the next
-timer shown at most `2^31 - 1`, as the 32-bit checker saw them), and so must the events, the summary, the error
-and the ping of the call. The constants are those of the test: nanoseconds, a ring of 6, 8 paths, 200 ghosts, 32
-late sends; the saturation value is `u64::MAX`.
+timer shown at most `2^31 - 1`, as the 32-bit checker saw them), and so must the events (the path each acknowledgement
+and loss names is the one its packet left on), the summary, the error and the ping of the call. The constants are those
+of the test: nanoseconds, a ring of 6, 8 paths, 200 ghosts, 32 late sends; the saturation value is `u64::MAX`.
 -/
 
 namespace Vinc.TraceRecovery
@@ -75,11 +75,33 @@ def clampR (r : R) : R :=
 
 def evOf (j : J) : Except String Ev := do
   match j.arr? with
-  | some #[k, pn, size, fr, f1, f2] =>
+  | some #[k, pn, size, fr, f1, f2] | some #[k, pn, size, fr, f1, f2, _] =>
     match k.str?, pn.nat?, size.nat?, f1.bool?, f2.bool? with
     | some k, some pn, some size, some f1, some f2 => pure ⟨k, pn, size, ← boolList fr, f1, f2⟩
     | _, _, _, _, _ => throw "bad event"
   | _ => throw "bad event"
+
+/-- The path an acknowledgement or a loss reports is the path its packet left on: the 7th field of the event names a
+slot of the ring (before the call) with the packet's number. -/
+def evPathOk (r : R) (j : J) : Except String Unit := do
+  match j.arr? with
+  | some #[k, pn, _, _, _, _, path] =>
+    match k.str?, pn.nat?, path.nat? with
+    | some k, some pn, some path =>
+      if k == "acked" || k == "lost" then
+        check (r.ring.any (fun s => s.pn == pn && s.path == path)) s!"{k} of packet {pn}: the path {path} is not the one it left on"
+      else pure ()
+    | _, _, _ => throw "bad event path"
+  | some #[k, _, _, _, _, _] =>
+    match k.str? with
+    | some k => check (k != "acked" && k != "lost") s!"a {k} event without its path"
+    | none => throw "bad event"
+  | _ => throw "bad event"
+
+def evPathsOk (r : R) (j : J) : Except String Unit := do
+  match j.arr? with
+  | some a => a.toList.forM (evPathOk r)
+  | none => throw "evs is not an array"
 
 def evsOf (j : J) : Except String (List Ev) := do
   match j.arr? with
@@ -150,16 +172,19 @@ def replayEvent (j : J) (st : St') : Except String St' := do
     | "ack" =>
       let x := ack p r (← natF j "now") (← pairList (← field j "rgs"))
       checkRes j x "ack" true
+      evPathsOk r (← field j "evs")
       upd x.r "ack"
     | "timeout" =>
       let x := timeout p r (← natF j "now")
       check (x.ev == (← evsOf (← field j "evs"))) s!"timeout: the events differ: model {repr x.ev}"
+      evPathsOk r (← field j "evs")
       check (x.s == (← smOf (← field j "sum"))) s!"timeout: the summary differs"
       check (x.ping == (← boolF j "ping")) "timeout: the ping differs"
       upd x.r "timeout"
     | "flush" =>
       let x := flush r (← natF j "now")
       check (x.ev == (← evsOf (← field j "evs"))) "flush: the events differ"
+      evPathsOk r (← field j "evs")
       check (x.s == (← smOf (← field j "sum"))) "flush: the summary differs"
       upd x.r "flush"
     | "health" =>

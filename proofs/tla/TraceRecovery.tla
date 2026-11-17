@@ -15,7 +15,9 @@
 (* SetKind, SwitchPath, FollowPath, Asleep, Down, Activity, SeedRtt,       *)
 (* NodeRtt, HsRtt), with the events it reported, the summary and the error *)
 (* it returned, and the state the model computes must be the state         *)
-(* recorded, the next timer included. The tail repair tracker is checked  *)
+(* recorded, the next timer included. An acked or lost event also names    *)
+(* the path its packet left on, which must be the path of the ring slot    *)
+(* with that packet number (PathOk). The tail repair tracker is checked   *)
 (* on its own. The constants are the real ones: nanoseconds, a ring of 6,  *)
 (* 8 paths, 200 ghosts, 32 late sends. TOP is the largest 32-bit checker   *)
 (* integer: the test records a timer at or above it as TOP, and the        *)
@@ -48,6 +50,9 @@ ROf(v) ==
      reo |-> [p \in 0..(MP - 1) |-> [ext |-> v.reo[p + 1][1], seen |-> v.reo[p + 1][2]]], gs |-> v.gs, lat |-> v.lat]
 EvOf(e) == Ev(e[1], e[2], e[3], e[4], e[5], e[6])
 EvsOf(l) == [k \in 1..Len(l) |-> EvOf(l[k])]
+\* the path an acknowledgement or a loss reports is the path the packet left on (the 7th field of the event)
+PathOk(r, e) == e[1] \in {"acked", "lost"} => \E k \in DOMAIN r.ring : r.ring[k].pn = e[2] /\ r.ring[k].path = e[7]
+PathsOk(r, l) == \A k \in 1..Len(l) : PathOk(r, l[k])
 SumOf(s) == [ap |-> s[1], ab |-> s[2], lap |-> s[3], lp |-> s[4], lb |-> s[5]]
 
 \* the recorded state is the model's state, the next timer included
@@ -63,14 +68,14 @@ SendEv == LET X == Send(rs, [pn |-> Ev0.pn, time |-> Ev0.time, size |-> Ev0.size
 UntrackedEv == LET X == Untracked(rs, Ev0.pn)
                IN /\ Ev0.op = "untracked" /\ X.err = Ev0.err /\ Same(X.r, Ev0.v) /\ rs' = X.r
 AckEv == LET X == Ack(rs, Ev0.now, Ev0.rgs)
-         IN /\ Ev0.op = "ack" /\ X.err = Ev0.err /\ X.ev = EvsOf(Ev0.evs)
+         IN /\ Ev0.op = "ack" /\ X.err = Ev0.err /\ X.ev = EvsOf(Ev0.evs) /\ PathsOk(rs, Ev0.evs)
             /\ (Ev0.err = "ok" => X.s = SumOf(Ev0.sum))
             /\ Same(X.r, Ev0.v) /\ rs' = X.r
 TimeoutEv == LET X == Timeout(rs, Ev0.now)
-             IN /\ Ev0.op = "timeout" /\ X.ev = EvsOf(Ev0.evs) /\ X.s = SumOf(Ev0.sum) /\ X.ping = Ev0.ping
+             IN /\ Ev0.op = "timeout" /\ X.ev = EvsOf(Ev0.evs) /\ PathsOk(rs, Ev0.evs) /\ X.s = SumOf(Ev0.sum) /\ X.ping = Ev0.ping
                 /\ Same(X.r, Ev0.v) /\ rs' = X.r
 FlushEv == LET X == Flush(rs, Ev0.now)
-           IN /\ Ev0.op = "flush" /\ X.ev = EvsOf(Ev0.evs) /\ X.s = SumOf(Ev0.sum) /\ Same(X.r, Ev0.v) /\ rs' = X.r
+           IN /\ Ev0.op = "flush" /\ X.ev = EvsOf(Ev0.evs) /\ PathsOk(rs, Ev0.evs) /\ X.s = SumOf(Ev0.sum) /\ Same(X.r, Ev0.v) /\ rs' = X.r
 HealthEv == /\ Ev0.op = "health" /\ Health(rs, Ev0.now) = Ev0.h /\ Same(rs, Ev0.v) /\ rs' = rs
 KindEv == LET X == SetKind(rs, Ev0.path, Ev0.relay)
           IN /\ Ev0.op = "kind" /\ X.err = Ev0.err /\ Same(X.r, Ev0.v) /\ rs' = X.r

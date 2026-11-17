@@ -148,6 +148,7 @@ fn event_json(e: &Event<'_>, log: &mut Log, seen: &mut Seen) {
             frames,
             mtu_probe,
             repair,
+            path,
             ..
         } => {
             assert!(seen.acked.insert(*pn), "packet {pn} acknowledged twice");
@@ -157,7 +158,7 @@ fn event_json(e: &Event<'_>, log: &mut Log, seen: &mut Seen) {
             );
             let fr: Vec<bool> = frames.iter().map(is_data).collect();
             log.events.push(format!(
-                r#"["acked",{pn},{size},{},{},{}]"#,
+                r#"["acked",{pn},{size},{},{},{},{path}]"#,
                 bools(&fr),
                 b(*mtu_probe),
                 b(*repair)
@@ -174,6 +175,7 @@ fn event_json(e: &Event<'_>, log: &mut Log, seen: &mut Seen) {
         Event::Lost {
             pn,
             size,
+            path,
             frames,
             requeue,
             mtu_probe,
@@ -185,7 +187,7 @@ fn event_json(e: &Event<'_>, log: &mut Log, seen: &mut Seen) {
             );
             let fr: Vec<bool> = frames.iter().map(is_data).collect();
             log.events.push(format!(
-                r#"["lost",{pn},{size},{},{},{}]"#,
+                r#"["lost",{pn},{size},{},{},{},{path}]"#,
                 bools(&fr),
                 b(*requeue),
                 b(*mtu_probe)
