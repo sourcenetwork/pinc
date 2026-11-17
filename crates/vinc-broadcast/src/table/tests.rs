@@ -1,11 +1,13 @@
-//! The id tables place ids by a keyed hash, so a sender cannot choose where its ids land, and no walk passes the
-//! probe bound.
+//! The id tables place ids by a keyed hash, so a sender cannot choose where its ids land; no walk is refused, a long
+//! one is counted, and a print kept beside an entry moves with its slot.
 
 #![allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "tests assert")]
 
 use super::*;
 
-const KEY: IdKey = IdKey::from_seed(0x5eed);
+fn key(seed: u64) -> IdKey {
+    IdKey::new(seed, &TEST_SECRETS)
+}
 
 /// Ids that all share their low bits, which under a placement by those bits all start at one slot.
 fn colliding_low_bits(n: u64) -> impl Iterator<Item = u64> {
@@ -25,9 +27,9 @@ fn same_home(cap: usize, key: IdKey, home: usize, n: usize) -> Vec<u64> {
 
 #[test]
 fn ids_that_collide_by_their_low_bits_cost_a_bounded_number_of_probes() {
-    let mut m = MidMap::with_capacity(8192, KEY);
+    let mut m = MidMap::with_capacity(8192, key(0x5eed));
     for id in colliding_low_bits(4096) {
-        assert_eq!(m.insert(id, id), Ok(()), "id {id:#x}");
+        assert!(m.insert(id, id), "id {id:#x}");
     }
     let lens: Vec<usize> = colliding_low_bits(4096).map(|id| probe_len(&m, id)).collect();
     let (max, total) = (lens.iter().max().unwrap(), lens.iter().sum::<usize>());
@@ -37,10 +39,33 @@ fn ids_that_collide_by_their_low_bits_cost_a_bounded_number_of_probes() {
 }
 
 #[test]
+fn ids_in_a_row_are_spread_under_a_key_that_lines_them_up_in_one_step() {
+    // A first secret near a power of two keeps the keyed multiply of small ids below the fold, so one step alone puts
+    // ids in a row on slots in a row; the finishing multiply must break that up.
+    static LINED_UP: [u64; 7] = [
+        0x9e37_79b9_7f4a_4000,
+        0xbf58_476d_1ce4_e5b9,
+        0x94d0_49bb_1331_11eb,
+        0x2545_f491_4f6c_dd1d,
+        0xd6e8_feb8_6659_fd93,
+        0xff51_afd7_ed55_8ccd,
+        0xc4ce_b9fe_1a85_ec53,
+    ];
+    let mut m = MidMap::with_capacity(8192, IdKey::new(0, &LINED_UP));
+    for id in 1..=4096u64 {
+        assert!(m.insert(id, id), "id {id}");
+    }
+    let lens: Vec<usize> = (1..=4096u64).map(|id| probe_len(&m, id)).collect();
+    let (max, total) = (lens.iter().max().unwrap(), lens.iter().sum::<usize>());
+    assert!(*max <= 40, "the longest probe was {max}");
+    assert!(total <= 4096 * 4, "the probes added up to {total}");
+}
+
+#[test]
 fn the_slot_depends_on_the_key_and_not_on_the_low_bits_of_the_id() {
     let (a, b) = (
-        MidMap::with_capacity(8192, KEY),
-        MidMap::with_capacity(8192, IdKey::from_seed(0x5eee)),
+        MidMap::with_capacity(8192, key(0x5eed)),
+        MidMap::with_capacity(8192, key(0x5eee)),
     );
     let homes: alloc::collections::BTreeSet<usize> = colliding_low_bits(4096).map(|id| a.home(id)).collect();
     assert!(
@@ -56,43 +81,101 @@ fn the_slot_depends_on_the_key_and_not_on_the_low_bits_of_the_id() {
 }
 
 #[test]
-fn a_run_past_the_bound_is_refused_and_a_lookup_across_it_is_told_so() {
-    let mut m = MidMap::with_capacity(8192, KEY);
-    let ids = same_home(8192, KEY, 0, PROBE_MAX + 2);
-    for id in &ids[..PROBE_MAX] {
-        assert_eq!(m.insert(*id, 1), Ok(()));
+fn ids_are_placed_by_the_two_step_hash_of_the_endpoints_map_keys() {
+    let m = MidMap::with_capacity(8192, key(0x5eed));
+    let two_step = SeedableState::custom(0x5eed, &TEST_SECRETS);
+    for id in (0..1000u64).map(|i| i * 0x9e37_79b9 + 1) {
+        let want = usize::try_from(two_step.hash_one(id) & (m.keys.len() as u64 - 1)).unwrap();
+        assert_eq!(m.home(id), want, "id {id:#x}");
     }
-    let (over, next) = (ids[PROBE_MAX], ids[PROBE_MAX + 1]);
-    assert_eq!(m.insert(over, 1), Err(Refused::Probe));
-    assert_eq!(m.lookup(over), Err(ProbeLimit));
-    assert!(!m.fits_probe(over) && m.get(over).is_none());
-    assert_eq!(
-        m.lookup(ids[PROBE_MAX - 1]),
-        Ok(Some(1)),
-        "the last one inside the bound is found"
-    );
-    // Removing one makes room: the walk is bounded, the table is not stuck.
-    assert_eq!(m.remove(ids[3]), Some(1));
-    assert_eq!(m.insert(next, 2), Ok(()));
-    assert_eq!(m.get(next), Some(2));
-    assert!(
-        ids[..PROBE_MAX]
-            .iter()
-            .filter(|id| **id != ids[3])
-            .all(|id| m.get(*id) == Some(1))
-    );
 }
 
 #[test]
-fn the_dedupe_set_refuses_an_id_past_the_bound_and_keeps_the_rest() {
-    let mut s = Seen::with_capacity(8192, KEY);
-    let ids = same_home(8192, KEY, 7, PROBE_MAX + 1);
-    for id in &ids[..PROBE_MAX] {
-        assert_eq!(s.insert(*id, 10, false), Ok(()));
+fn a_long_run_is_walked_and_counted_not_refused() {
+    let mut m = MidMap::with_capacity(8192, key(0x5eed));
+    let ids = same_home(8192, key(0x5eed), 0, 300);
+    assert_eq!(m.long_walks(), 0);
+    for id in &ids {
+        assert!(m.insert(*id, 1), "id {id:#x}");
     }
-    assert_eq!(s.insert(ids[PROBE_MAX], 10, false), Err(Refused::Probe));
-    assert_eq!(s.insert(ids[PROBE_MAX], 10, true), Err(Refused::Probe));
-    assert_eq!(s.lookup(ids[PROBE_MAX], 10), Err(ProbeLimit));
-    assert_eq!(s.lookup(ids[0], 10), Ok(true));
-    assert_eq!(s.len(), PROBE_MAX, "a refused id is not queued for expiry");
+    assert!(ids.iter().all(|id| m.get(*id) == Some(1)), "every id is found");
+    assert!(m.long_walks() > 0, "the long walks are counted");
+    assert!(ids.iter().all(|id| m.remove(*id) == Some(1)));
+    assert_eq!(m.len, 0);
+}
+
+#[test]
+fn a_forced_insert_on_a_long_run_drops_only_the_oldest() {
+    let slots = 16384usize;
+    // Ids that start well away from the run, so they do not shorten or lengthen it.
+    let far = |h: usize| {
+        let d = (h + slots - 9) % slots;
+        (300..=slots - 300).contains(&d)
+    };
+    let probe = MidMap::with_capacity(8192, key(0x5eed));
+    let mut s = Seen::with_capacity(8192, key(0x5eed));
+    let run = same_home(8192, key(0x5eed), 9, PROBE_LONG + 1);
+    let mut fresh = (1u64 << 40..).filter(|id| far(probe.home(*id)));
+    let old = fresh.next().unwrap();
+    assert!(s.insert(old, 10, false));
+    for id in &run[..PROBE_LONG] {
+        assert!(s.insert(*id, 10, false));
+    }
+    while s.len() < 8192 {
+        assert!(s.insert(fresh.next().unwrap(), 10, false));
+    }
+    assert!(
+        !s.insert(run[PROBE_LONG], 10, false),
+        "a full set refuses an unforced insert"
+    );
+    assert!(s.insert(run[PROBE_LONG], 10, true), "a forced one makes room");
+    assert!(!s.contains(old, 10), "the oldest id left");
+    assert!(
+        run.iter().all(|id| s.contains(*id, 10)),
+        "the run, and the new id, are all there"
+    );
+    assert_eq!(s.len(), 8192);
+}
+
+#[test]
+fn a_print_moves_with_its_entry_and_leaves_with_it() {
+    let mut m = MidMap::with_capacity(8192, key(0x5eed));
+    m.with_prints();
+    let ids = same_home(8192, key(0x5eed), 3, 6);
+    for (k, id) in ids.iter().enumerate() {
+        assert!(m.insert(*id, 1));
+        m.set_print(*id, 100 + k as u64);
+    }
+    // Removing the second shifts the four behind it back by one slot, each with its print.
+    assert_eq!(m.remove(ids[1]), Some(1));
+    assert_eq!(m.print(ids[1]), 0, "an id that left has no print");
+    for (k, id) in ids.iter().enumerate().filter(|(k, _)| *k != 1) {
+        assert_eq!(m.print(*id), 100 + k as u64, "id {k} kept its print");
+    }
+    // The slot at the end of the run was cleared: an id that takes it starts with none.
+    let next = same_home(8192, key(0x5eed), 3, 7)[6];
+    assert!(m.insert(next, 1));
+    assert_eq!(m.print(next), 0, "a new entry carries no stale print");
+    // A map that keeps no prints answers none.
+    let mut bare = MidMap::with_capacity(8, key(1));
+    assert!(bare.insert(5, 1));
+    bare.set_print(5, 9);
+    assert_eq!(bare.print(5), 0);
+}
+
+#[test]
+fn the_dedupe_set_keeps_the_print_of_an_id_that_left_the_log() {
+    let mut s = Seen::with_capacity(8, key(0x5eed));
+    s.keep_prints();
+    s.keep(7, 42, 10);
+    assert_eq!((s.contains(7, 10), s.print(7, 10)), (true, Some(42)));
+    // An id already seen keeps its time and takes the print.
+    assert!(s.insert(8, 11, false));
+    assert_eq!(s.print(8, 11), None);
+    s.keep(8, 43, 12);
+    assert_eq!((s.len(), s.print(8, 12)), (2, Some(43)));
+    // The print lapses with the id.
+    assert_eq!(s.print(7, 10 + SEEN_TTL + 1), None);
+    s.expire(10 + SEEN_TTL + 1);
+    assert_eq!(s.print(7, 10 + SEEN_TTL + 1), None);
 }

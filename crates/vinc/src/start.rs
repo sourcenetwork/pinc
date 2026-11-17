@@ -12,8 +12,8 @@
 use alloc::boxed::Box;
 use alloc::vec;
 use alloc::vec::Vec;
-use vinc_broadcast::Limits as BroadcastLimits;
 use vinc_broadcast::consts::DEFAULT_MAX_SUBSCRIBERS;
+use vinc_broadcast::{IdKey, Limits as BroadcastLimits};
 use vinc_connect::client::Config as ConnectConfig;
 use vinc_crypto::{Drbg, Software};
 use vinc_keystore::KeyStore;
@@ -35,6 +35,50 @@ fn endpoint_config<S, A>(cfg: &CoreConfig<S, A>, seed: u64) -> vinc_core::Endpoi
     ecfg.conn.credit = vinc_security::CreditRecord::new(cfg.limits.stream_window, cfg.limits.streams, u16::MAX);
     ecfg.conn.tail_repair = !(cfg.hub || cfg.relaying);
     ecfg
+}
+
+/// The node configuration `cfg` asks for, and the endpoint's local address. The broadcast layer's id tables are
+/// placed by the endpoint's own map keys; the connectivity seed is not an input, because it is sent in the clear.
+fn node_config<S: KeyStore, A: Admit>(
+    cfg: &CoreConfig<S, A>,
+    now: u64,
+) -> Result<(NodeConfig<RELAYS>, core::net::SocketAddr)> {
+    let local = *cfg
+        .locals
+        .first()
+        .ok_or_else(|| Error::config("the endpoint has no local address"))?;
+    let mut relays = [None; RELAYS];
+    for (slot, relay) in relays.iter_mut().zip(&cfg.relays) {
+        *slot = Some(relay.cfg());
+    }
+    let (seed, secrets) = cfg.map_keys.parts();
+    let node_cfg = NodeConfig {
+        connect: ConnectConfig {
+            me: cfg.identity.node_id(),
+            identity: cfg.identity.local()?,
+            relays,
+            phone: false,
+            restarted: false,
+            start: now,
+            v6: false,
+            keep_learn: false,
+        },
+        is_hub: cfg.hub,
+        version: 1,
+        alpn: HUB_ALPN,
+        limits: BroadcastLimits {
+            max_body: cfg.limits.topic_message,
+            log_bytes: cfg.limits.topic_log.max(cfg.limits.topic_message.saturating_mul(4)),
+            max_topics: cfg.limits.topics,
+            max_subscribers: DEFAULT_MAX_SUBSCRIBERS,
+            ..BroadcastLimits::default()
+        },
+        map_keys: IdKey::new(seed, secrets),
+        wall_ms: wall_ms(),
+        local,
+        trace: false,
+    };
+    Ok((node_cfg, local))
 }
 
 /// Build a core at time `now`.
@@ -77,40 +121,7 @@ pub(crate) fn build<S: KeyStore, A: Admit>(mut cfg: CoreConfig<S, A>, now: u64) 
     let key = cfg.identity.take_signer().ok_or_else(|| {
         Error::config("the identity key is held where the broadcast layer cannot sign with it; use a seed or a generated identity")
     })?;
-    let me = cfg.identity.node_id();
-    let local = *cfg
-        .locals
-        .first()
-        .ok_or_else(|| Error::config("the endpoint has no local address"))?;
-    let mut relays = [None; RELAYS];
-    for (slot, relay) in relays.iter_mut().zip(&cfg.relays) {
-        *slot = Some(relay.cfg());
-    }
-    let node_cfg = NodeConfig {
-        connect: ConnectConfig {
-            me,
-            identity: cfg.identity.local()?,
-            relays,
-            phone: false,
-            restarted: false,
-            start: now,
-            v6: false,
-            keep_learn: false,
-        },
-        is_hub: cfg.hub,
-        version: 1,
-        alpn: HUB_ALPN,
-        limits: BroadcastLimits {
-            max_body: cfg.limits.topic_message,
-            log_bytes: cfg.limits.topic_log.max(cfg.limits.topic_message.saturating_mul(4)),
-            max_topics: cfg.limits.topics,
-            max_subscribers: DEFAULT_MAX_SUBSCRIBERS,
-            ..BroadcastLimits::default()
-        },
-        wall_ms: wall_ms(),
-        local,
-        trace: false,
-    };
+    let (node_cfg, local) = node_config(&cfg, now)?;
     let mut node = Node::<AnyEp, Software, (), RELAYS, PEERS>::new(
         &node_cfg,
         ep,
@@ -222,6 +233,21 @@ mod tests {
             .unwrap()
             .join()
             .unwrap();
+    }
+
+    /// The broadcast layer's id tables are keyed by the endpoint's map keys; the connectivity seed is no input of the
+    /// node configuration.
+    #[test]
+    fn the_broadcast_key_is_the_endpoints_map_keys() {
+        let c = cfg(1);
+        let (node_cfg, _) = node_config(&c, 0).unwrap();
+        let (seed, secrets) = c.map_keys.parts();
+        assert_eq!(node_cfg.map_keys, IdKey::new(seed, secrets));
+        let other = CoreConfig {
+            map_keys: crate::maps::Keys::for_tests(4),
+            ..cfg(1)
+        };
+        assert_ne!(node_config(&other, 0).unwrap().0.map_keys, node_cfg.map_keys);
     }
 
     /// A node repairs the tail of its bursts; an endpoint that is a hub or runs the relay role does not, on any

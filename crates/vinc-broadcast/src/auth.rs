@@ -17,6 +17,8 @@ use vinc_wire::hlc::Hlc;
 
 const LABEL_MID: &str = "VINC 2026 v1 broadcast message id";
 const LABEL_BODY: &str = "VINC 2026 v1 broadcast body hash";
+#[cfg(feature = "alloc")]
+const LABEL_PRINT: &str = "VINC 2026 v1 broadcast signature print";
 
 /// The most bytes of a signed statement: the longest topic, the id and the body hash.
 const SIGNED_MAX: usize = MAX_TOPIC + MID_LEN + 32 + TS_LEN + 1;
@@ -33,6 +35,17 @@ pub fn message_id(origin: &[u8; 32], inc: u64, seq: u64, topic: &[u8]) -> [u8; M
     h.update(&seq.to_be_bytes());
     h.update(topic);
     first8(&h.finalize())
+}
+
+/// The print of a signature: 8 bytes of a keyed hash of its bytes, read as a number and never zero (zero means "none").
+/// A hub keeps it beside a stored message's id, so a copy of that message is told from another under the same id.
+#[cfg(feature = "alloc")]
+pub(crate) fn sig_print(sig: &[u8]) -> u64 {
+    // vertexia: the print is of the signature bytes; of the content id a version 2 head carries once vinc#566
+    // lands, so another valid signature of the same content is not taken for a rival
+    let mut h = blake3::Hasher::new_derive_key(LABEL_PRINT);
+    h.update(sig);
+    u64::from_le_bytes(first8(&h.finalize())).max(1)
 }
 
 /// The hash of a message body, the third part of what the signature covers.

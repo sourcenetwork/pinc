@@ -13,7 +13,7 @@ use std::hint::black_box;
 
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use vinc_broadcast::wire::ty;
-use vinc_broadcast::{Config, Event, Host, Lane, Topics};
+use vinc_broadcast::{Config, Event, Host, IdKey, Lane, Topics};
 use vinc_crypto::{IdentityAlg, Keypair};
 
 type NodeId = [u8; 32];
@@ -21,6 +21,17 @@ type NodeId = [u8; 32];
 const T: &[u8] = b"bench";
 const STEP: u64 = 100_000_000;
 const WALL: u64 = 1_700_000_000_000;
+
+/// The secrets of the id tables of the benchmarked nodes, full width as the key store draws them.
+const MAP_SECRETS: [u64; 7] = [
+    0x9e37_79b9_7f4a_7c15,
+    0xbf58_476d_1ce4_e5b9,
+    0x94d0_49bb_1331_11eb,
+    0x2545_f491_4f6c_dd1d,
+    0xd6e8_feb8_6659_fd93,
+    0xff51_afd7_ed55_8ccd,
+    0xc4ce_b9fe_1a85_ec53,
+];
 
 /// A host that keeps the frames it is handed, in slots it reuses, so a round allocates nothing.
 #[derive(Default)]
@@ -101,7 +112,7 @@ impl Rig {
                 incarnation: 1 << 16,
                 trace: false,
                 limits: vinc_broadcast::Limits::default(),
-                map_seed: 0x5eed,
+                map_keys: IdKey::new(0x5eed, &MAP_SECRETS),
             };
             Topics::start(&cfg, Box::new(it.next().unwrap()), 1_000_000_000, WALL).unwrap()
         };

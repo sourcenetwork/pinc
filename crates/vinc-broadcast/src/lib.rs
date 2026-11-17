@@ -68,9 +68,11 @@ mod table;
 #[cfg(feature = "alloc")]
 mod timers;
 
-pub use event::{HoldWhy, PublishMode, Reject, SubsDrop, Tag, Trace, topic_tag};
+pub use event::{HoldWhy, PublishMode, Reject, RejectStats, SubsDrop, Tag, Trace, topic_tag};
 pub use host::{Event, Host, Lane};
 #[cfg(feature = "alloc")]
 pub use node::{Config, Limits, Refused, StartError, Topics};
 #[cfg(feature = "alloc")]
 pub use reach::ReachStats;
+#[cfg(feature = "alloc")]
+pub use table::IdKey;

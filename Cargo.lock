@@ -1638,6 +1638,7 @@ dependencies = [
  "nuclei",
  "p256",
  "proptest",
+ "rapidhash",
  "smol",
  "tokio",
  "tpm2-protocol",

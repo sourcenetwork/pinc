@@ -1,9 +1,10 @@
 //! A message arriving: verification, the hub log and push, local delivery, the access-control hold.
 //!
 //! Every message is checked before it is used: the head must parse, the origin must not be revoked, and the
-//! signature must cover the topic, the id and the exact body. A hub acknowledges a PUB or FANP only for a message it
-//! has stored, or one it receives again that IS the message it stored under that id (same origin, timestamp, flag and
-//! body), so an acknowledged message is one the hub verified. An id the hub holds for another message is refused.
+//! signature must cover the topic, the id and the exact body. A hub acknowledges a PUB or FANP for a message it has
+//! stored, or one it receives again whose signature has the print of the stored one (the print stays beside the id
+//! in the dedupe set after the log let the message go), so an acknowledged message is one the hub verified. An id the
+//! hub holds for another message is refused, and a copy that is due no acknowledgement is compared with nothing.
 //!
 //! Invariants: a message is delivered at most once per id within the dedupe window; a message from an origin the
 //! access-control layer has not yet answered for is held (at most [`HELD_MAX`]; one that finds no room is left unseen
@@ -22,67 +23,23 @@ use crate::event::{HoldWhy, Reject, Trace, topic_tag};
 use crate::host::{Event, Host, Lane};
 use crate::log::HubLog;
 use crate::node::{Held, Topics};
-use crate::table::{ProbeLimit, Refused};
 use crate::wire::{self, Head, ty};
 
-/// A publish whose id is known, compared with the message the log stored under it.
-enum Stored {
-    /// The same origin, timestamp, flag and body.
-    Same,
-    /// A different message under the same id.
-    Other,
-    /// The log does not hold the id (the dedupe set remembers it), so there is nothing to compare with.
-    Unknown,
-}
-
 impl Topics {
-    /// Whether the dedupe set or the hub log holds `key`; [`ProbeLimit`] when a lookup passed the probe bound, in
-    /// which case the message is refused and counted, not walked for.
-    fn is_dup(&self, topic: &[u8], key: u64, now: Nanos) -> Result<bool, ProbeLimit> {
-        let Some(st) = self.topics.get(topic) else {
-            return Ok(false);
-        };
-        Ok(st.seen.lookup(key, now)? || st.log.as_ref().map_or(Ok(false), |l| l.lookup(key))?)
-    }
-
-    /// What the hub's log holds under `key`, set against the publish that arrived with that id: the log has the
-    /// bytes of the message it stored, whose signature was verified then.
-    fn stored_as(&self, topic: &[u8], key: u64, head: &Head<'_>, body: &[u8]) -> Stored {
-        let Some(bytes) = self
-            .topics
+    fn is_dup(&self, topic: &[u8], key: u64, now: Nanos) -> bool {
+        self.topics
             .get(topic)
-            .and_then(|st| st.log.as_ref())
-            .and_then(|l| l.get(key))
-        else {
-            return Stored::Unknown;
-        };
-        let Ok((old, old_body)) = Head::parse(bytes) else {
-            return Stored::Unknown;
-        };
-        if old.origin == head.origin && old.ts == head.ts && old.isb == head.isb && old_body == body {
-            Stored::Same
-        } else {
-            Stored::Other
-        }
+            .is_some_and(|st| st.seen.contains(key, now) || st.log.as_ref().is_some_and(|l| l.contains(key)))
     }
 
-    /// Record `mid` as seen in `topic`. A refusal (the probe bound, a full set) is counted in the trace and returns
-    /// false: the id is then not remembered.
-    pub(crate) fn remember(&mut self, topic: &[u8], mid: [u8; 8], now: Nanos, force: bool) -> bool {
-        let Some(st) = self.topics.get_mut(topic) else {
-            return false;
-        };
-        let Err(why) = st.seen.insert(u64::from_le_bytes(mid), now, force) else {
-            return true;
-        };
-        self.note_reject(
-            mid,
-            match why {
-                Refused::Full => Reject::SeenFull,
-                Refused::Probe => Reject::ProbeLimit,
-            },
-        );
-        false
+    /// The print of the signature of the message the node holds under `key`: the log's entry while it is logged, the
+    /// dedupe set's record of it after.
+    fn print_of(&self, topic: &[u8], key: u64, now: Nanos) -> Option<u64> {
+        let st = self.topics.get(topic)?;
+        st.log
+            .as_ref()
+            .and_then(|l| l.print(key))
+            .or_else(|| st.seen.print(key, now))
     }
 
     fn send_pack<H: Host>(&mut self, h: &mut H, to: &NodeId, mid: [u8; 8]) {
@@ -111,30 +68,20 @@ impl Topics {
         }
         let (mid, key) = (head.mid, u64::from_le_bytes(head.mid));
         let ack = self.is_hub && matches!(t, ty::PUB | ty::FANP);
-        match self.is_dup(topic, key, now) {
-            Err(ProbeLimit) => {
-                self.note_reject(mid, Reject::ProbeLimit);
-                return;
+        if self.is_dup(topic, key, now) {
+            // The acknowledgement says this origin's this message is stored. The print of the signature is compared
+            // with the stored one, whose signature was verified when it was stored, so an exact copy needs no second
+            // verification. Anything else under a taken id is another message: refused and not acknowledged, so its
+            // publisher is not told it was stored. A copy due no acknowledgement compares nothing.
+            if !ack {
+                self.note_reject(mid, Reject::Duplicate);
+            } else if self.print_of(topic, key, now) == Some(auth::sig_print(head.sig)) {
+                self.send_pack(h, from, mid);
+                self.note_reject(mid, Reject::Duplicate);
+            } else {
+                self.note_reject(mid, Reject::IdTaken);
             }
-            Ok(true) => {
-                // The acknowledgement says this origin's this body is stored. The comparison is with the stored
-                // message, whose signature was verified when it was stored, so an exact duplicate needs no second
-                // verification. A known id with anything else in it is another message under a taken id: refused,
-                // not acknowledged, so its publisher is not told it was stored. An id the log no longer holds (only
-                // the dedupe set remembers it) cannot be compared, so it is not acknowledged either.
-                match self.stored_as(topic, key, &head, body) {
-                    Stored::Same => {
-                        if ack {
-                            self.send_pack(h, from, mid);
-                        }
-                        self.note_reject(mid, Reject::Duplicate);
-                    }
-                    Stored::Other => self.note_reject(mid, Reject::IdTaken),
-                    Stored::Unknown => self.note_reject(mid, Reject::Duplicate),
-                }
-                return;
-            }
-            Ok(false) => {}
+            return;
         }
         if self.revoked.contains(head.origin) {
             self.note_reject(mid, Reject::Revoked);
@@ -175,7 +122,9 @@ impl Topics {
         }
     }
 
+    /// Count a reject (always: [`Topics::reject_stats`]), then trace it if tracing is on.
     pub(crate) fn note_reject(&mut self, mid: [u8; 8], why: Reject) {
+        self.rejects.note(why);
         self.trace(|| Trace::Rejected { mid, why });
     }
 
@@ -205,13 +154,11 @@ impl Topics {
             return false;
         };
         let (log, seen, behind) = (&mut st.log, &mut st.seen, &mut st.behind);
-        let log = log.get_or_insert_with(|| HubLog::new(log_bytes, id_key));
-        // An id whose probe would pass the bound is not logged: it is counted and not acknowledged, so its
-        // publisher retries it (or gives up) and the log never holds a message it cannot find again.
-        if !log.admits(key) {
-            self.note_reject(head.mid, Reject::ProbeLimit);
-            return false;
-        }
+        // The set keeps the print of a message that leaves the log from the first message the log takes.
+        let log = log.get_or_insert_with(|| {
+            seen.keep_prints();
+            HubLog::new(log_bytes, id_key)
+        });
         let head_bytes = rest.get(..head.len()).unwrap_or_default();
         // A message still owed to a subscriber that is behind is not evicted: the new one is refused, so it is not
         // acknowledged and its publisher retries it.
@@ -219,18 +166,11 @@ impl Topics {
             self.note_reject(head.mid, Reject::LogFull);
             return false;
         }
-        // Ids the set could not take back (the probe bound), counted below; empty, and so unallocated, in the usual case.
-        let mut lost: Vec<u64> = Vec::new();
-        let stored = log.push(key, head.origin, now, wall, head_bytes, body, |old| {
-            // Only an id the set lost needs a record: a second one at the same instant would leave the id forgotten
-            // when the first is popped.
-            if !seen.contains(old, now) && seen.insert(old, now, true).is_err() {
-                lost.push(old);
-            }
+        let print = auth::sig_print(head.sig);
+        // An evicted id stays with its print, so a late copy is a duplicate and a retry is told from a rival.
+        let stored = log.push(key, head.origin, now, wall, head_bytes, body, print, |old, p| {
+            seen.keep(old, p, now);
         });
-        for old in lost {
-            self.note_reject(old.to_le_bytes(), Reject::ProbeLimit);
-        }
         if !stored {
             self.note_reject(head.mid, Reject::LogFull);
             return false;
@@ -273,8 +213,8 @@ impl Topics {
         if subscribed && *head.origin != self.me && self.may_reach(head.origin, &self.me) {
             let hop = sender.copied().unwrap_or(self.me);
             self.offer(h, now, topic, head.mid, head.origin, &hop, body, head.ts);
-        } else {
-            self.remember(topic, head.mid, now, true);
+        } else if let Some(st) = self.topics.get_mut(topic) {
+            st.seen.insert(key, now, true);
         }
         true
     }
@@ -293,6 +233,7 @@ impl Topics {
         body: &[u8],
         ts: Hlc,
     ) {
+        let key = u64::from_le_bytes(mid);
         if !self.ensure_topic(topic) {
             self.note_reject(mid, Reject::TopicsFull);
             return;
@@ -324,9 +265,8 @@ impl Topics {
             }
             return;
         }
-        // Not remembered means not delivered: it would be delivered again by the next copy.
-        if !self.remember(topic, mid, now, false) {
-            return;
+        if let Some(st) = self.topics.get_mut(topic) {
+            st.seen.insert(key, now, false);
         }
         if !subscribed || old || *origin == self.me {
             if old {
@@ -372,12 +312,10 @@ impl Topics {
 
     /// Offer a message that was held for the floors, unless it arrived by another path meanwhile.
     pub(crate) fn offer_held<H: Host>(&mut self, h: &mut H, now: Nanos, e: Held) {
-        if let Some((topic, body)) = Self::unpack(&e.data) {
-            match self.is_dup(topic, u64::from_le_bytes(e.mid), now) {
-                Ok(false) => self.offer(h, now, topic, e.mid, &e.origin, &e.hop, body, e.ts),
-                Ok(true) => {}
-                Err(ProbeLimit) => self.note_reject(e.mid, Reject::ProbeLimit),
-            }
+        if let Some((topic, body)) = Self::unpack(&e.data)
+            && !self.is_dup(topic, u64::from_le_bytes(e.mid), now)
+        {
+            self.offer(h, now, topic, e.mid, &e.origin, &e.hop, body, e.ts);
         }
         self.give_buf(e.data);
     }

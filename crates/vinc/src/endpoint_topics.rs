@@ -9,7 +9,7 @@
 use alloc::vec::Vec;
 use core::time::Duration;
 
-use vinc_broadcast::ReachStats;
+use vinc_broadcast::{ReachStats, RejectStats};
 use vinc_crypto::NodeId;
 
 use crate::addr::NodeAddr;
@@ -76,6 +76,12 @@ impl<H: Hosted, D: Discovery> Endpoint<H, D> {
     /// a member: how many records it signed. `None` once the endpoint stopped.
     pub fn reach_stats(&self) -> Option<ReachStats> {
         self.0.shared.lock().map(|core| core.node.reach_stats())
+    }
+
+    /// What the broadcast layer turned away, by reason, and how many long walks its id tables made, counted whether or
+    /// not tracing is on. `None` once the endpoint stopped.
+    pub fn reject_stats(&self) -> Option<RejectStats> {
+        self.0.shared.lock().map(|core| core.node.reject_stats())
     }
 
     /// The next event about a topic; `None` once the endpoint stopped and the events are read. Events queue while no one

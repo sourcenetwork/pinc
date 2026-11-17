@@ -24,6 +24,11 @@ use vinc_membership::NodeId;
 pub const SEC: u64 = 1_000_000_000;
 pub const WALL0: u64 = 1_700_000_000_000;
 
+/// The id key of node `i`.
+pub fn map_key(i: usize) -> vinc_broadcast::IdKey {
+    vinc_tests::id_key(0x5eed + i as u64)
+}
+
 pub const ALGS: [IdentityAlg; 4] = [
     IdentityAlg::Ed25519,
     IdentityAlg::EcdsaP256,
@@ -220,6 +225,8 @@ pub struct Net {
     pub algs: Vec<IdentityAlg>,
     pub limits: vinc_broadcast::Limits,
     pub hubs: usize,
+    /// Whether the nodes queue trace records.
+    pub trace: bool,
     pub nodes: Vec<Node>,
     queue: VecDeque<(usize, usize, bool, Vec<u8>)>,
     /// Look at (and maybe alter or drop) every frame in flight: `(from, to, &mut bytes) -> deliver?`.
@@ -274,6 +281,17 @@ impl Net {
     }
 
     pub fn with_limits(algs: &[IdentityAlg], hubs: usize, start: u64, limits: vinc_broadcast::Limits) -> Self {
+        Self::with_trace(algs, hubs, start, limits, true)
+    }
+
+    /// As [`Net::with_limits`], with the trace queue of every node on or off; a restart keeps the choice.
+    pub fn with_trace(
+        algs: &[IdentityAlg],
+        hubs: usize,
+        start: u64,
+        limits: vinc_broadcast::Limits,
+        trace: bool,
+    ) -> Self {
         let keys: Vec<Keypair> = algs
             .iter()
             .enumerate()
@@ -288,9 +306,9 @@ impl Net {
                 is_hub: i < hubs,
                 hubs: &hub_ids,
                 incarnation: (WALL0 + 1) << 16,
-                trace: true,
+                trace,
                 limits,
-                map_seed: 0x5eed + i as u64,
+                map_keys: map_key(i),
             };
             let t = Topics::start(&cfg, Box::new(k), start, WALL0 + start / 1_000_000).unwrap();
             let h = NodeHost {
@@ -310,6 +328,7 @@ impl Net {
         let mut net = Self {
             now: start,
             algs: algs.to_vec(),
+            trace,
             limits,
             hubs,
             nodes,
@@ -336,9 +355,9 @@ impl Net {
             is_hub: i < self.hubs,
             hubs: &hub_ids,
             incarnation: ((WALL0 + at / 1_000_000 + 1) << 16) | 1,
-            trace: true,
+            trace: self.trace,
             limits: self.limits,
-            map_seed: 0x5eed + i as u64,
+            map_keys: map_key(i),
         };
         let skew = self.nodes[i].h.skew_ms;
         let wall = WALL0.saturating_add_signed(skew + i64::try_from(at / 1_000_000).unwrap());

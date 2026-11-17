@@ -209,6 +209,7 @@ fn node_built<A: Apps<Caps>>(
         version: 1,
         alpn,
         limits: Limits::default(),
+        map_keys: vinc_tests::id_key(0x5eed),
         wall_ms: 1_700_000_000_000,
         local,
         trace,

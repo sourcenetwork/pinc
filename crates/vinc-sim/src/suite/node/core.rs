@@ -21,7 +21,7 @@ use vinc_core::{
     state_len,
 };
 use vinc_crypto::{Drbg, IdentityAlg, Keypair, Software};
-use vinc_node::{Config as NodeConfig, HUB_ALPN, Node};
+use vinc_node::{Config as NodeConfig, HUB_ALPN, IdKey, Node};
 use vinc_security::{Env, LocalIdentity, PrekeyPolicy, SoftPrekeys};
 
 use super::apps::SuiteApps;
@@ -476,6 +476,10 @@ impl Core {
             version: self.shared.version_at(self.idx, now),
             alpn: HUB_ALPN,
             limits: Default::default(),
+            map_keys: IdKey::new(
+                id_table_seed(self.shared.world.seed, self.idx, self.incarnation),
+                &MAP_SECRETS,
+            ),
             wall_ms: self.wall_ms(),
             local,
             trace: self.shared.is_watched(self.idx),
@@ -803,6 +807,22 @@ fn first8(b: &[u8; 32]) -> [u8; 8] {
     let mut out = [0u8; 8];
     out.copy_from_slice(&b[..8]);
     out
+}
+
+/// The secrets of the node's broadcast id tables: fixed, as a simulated world has no adversary that reads them.
+const MAP_SECRETS: [u64; 7] = [
+    0x9e37_79b9_7f4a_7c15,
+    0xbf58_476d_1ce4_e5b9,
+    0x94d0_49bb_1331_11eb,
+    0x2545_f491_4f6c_dd1d,
+    0xd6e8_feb8_6659_fd93,
+    0xff51_afd7_ed55_8ccd,
+    0xc4ce_b9fe_1a85_ec53,
+];
+
+/// The seed of a node's broadcast id tables: one per node and incarnation.
+fn id_table_seed(world_seed: u64, idx: usize, inc: u64) -> u64 {
+    u64::from_be_bytes(first8(&derive(b"suite-maps", world_seed, idx as u64, inc)))
 }
 
 /// The seed of a hub's relay tables: one per node and incarnation.

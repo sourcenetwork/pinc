@@ -32,6 +32,7 @@ vinc-dtn = { workspace = true }
 vinc-values = { workspace = true }
 vinc-core = { workspace = true, features = ["alloc", "trace", "inject"] }
 vinc-broadcast = { workspace = true, features = ["alloc"] }
+rapidhash = { workspace = true }
 vinc = { workspace = true, features = ["trace"] }
 nuclei = { workspace = true }
 tokio = { workspace = true }

@@ -6,8 +6,9 @@
 //!
 //! Invariants: entries are in arrival order; an entry's bytes are contiguous in the ring (a message that would
 //! straddle the end starts at the beginning, and the skipped tail is charged to it); a message id is in the log at
-//! most once; `origins` counts the entries of each origin, kept where an entry is pushed and popped; `gone` is the
-//! newest stamp of a message that left the log, so a hub can say whether it still holds everything since a time.
+//! most once; an entry keeps the print of its message's signature and hands it on with the id when it leaves; `origins`
+//! counts the entries of each origin, kept where an entry is pushed and popped; `gone` is the newest stamp of a message
+//! that left the log, so a hub can say whether it still holds everything since a time.
 
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::vec;
@@ -15,7 +16,7 @@ use alloc::vec::Vec;
 use vinc_membership::{Nanos, NodeId};
 
 use crate::consts::{LOG_CAP, LOG_WINDOW};
-use crate::table::{IdKey, MidMap, ProbeLimit};
+use crate::table::{IdKey, MidMap};
 
 #[derive(Debug, Clone, Copy)]
 struct Entry {
@@ -23,6 +24,8 @@ struct Entry {
     origin: NodeId,
     at: Nanos,
     wall_ms: u64,
+    // The print of the logged message's signature, handed on with the id when the entry leaves the log.
+    print: u64,
     off: usize,
     len: usize,
     // Bytes this entry occupies in the ring, its own length plus any tail skipped to keep it contiguous.
@@ -77,14 +80,9 @@ impl HubLog {
         self.index.get(mid).is_some()
     }
 
-    /// Whether `mid` is logged, or [`ProbeLimit`] when the lookup passed the table's probe bound.
-    pub(crate) fn lookup(&self, mid: u64) -> Result<bool, ProbeLimit> {
-        Ok(self.index.lookup(mid)?.is_some())
-    }
-
-    /// Whether the index can take `mid` within its probe bound; a message whose id it cannot take is not logged.
-    pub(crate) fn admits(&self, mid: u64) -> bool {
-        self.index.fits_probe(mid)
+    /// How many walks of the index read as many slots as [`PROBE_LONG`](crate::table::PROBE_LONG) or more.
+    pub(crate) fn long_walks(&self) -> u64 {
+        self.index.long_walks()
     }
 
     /// When the oldest message leaves the window (strictly after this instant), if any.
@@ -160,8 +158,13 @@ impl HubLog {
         self.ring.get(e.off..e.off + e.len)
     }
 
-    /// Drop the oldest message; returns its id.
-    pub(crate) fn pop(&mut self) -> Option<u64> {
+    /// The print of the signature of a logged message.
+    pub(crate) fn print(&self, mid: u64) -> Option<u64> {
+        self.entry(mid).map(|e| e.print)
+    }
+
+    /// Drop the oldest message; returns its id and its print.
+    pub(crate) fn pop(&mut self) -> Option<(u64, u64)> {
         let e = self.entries.pop_front()?;
         if let Some(n) = self.origins.get_mut(&e.origin) {
             *n -= 1;
@@ -179,11 +182,11 @@ impl HubLog {
             self.wpos = 0;
             self.used = 0;
         }
-        Some(e.mid)
+        Some((e.mid, e.print))
     }
 
-    /// Log a message of `origin` made of `head` then `body`. Evicted ids go to `evicted`. Returns false if it
-    /// cannot fit.
+    /// Log a message of `origin` made of `head` then `body`, with the `print` of its signature. Each evicted message's
+    /// id and print go to `evicted`. Returns false if it cannot fit.
     #[allow(clippy::too_many_arguments, reason = "the parts of one logged message")]
     pub(crate) fn push(
         &mut self,
@@ -193,10 +196,11 @@ impl HubLog {
         wall_ms: u64,
         head: &[u8],
         body: &[u8],
-        mut evicted: impl FnMut(u64),
+        print: u64,
+        mut evicted: impl FnMut(u64, u64),
     ) -> bool {
         let n = head.len() + body.len();
-        if n > self.ring.len() || self.contains(mid) || !self.admits(mid) {
+        if n > self.ring.len() || self.contains(mid) {
             return false;
         }
         loop {
@@ -214,41 +218,38 @@ impl HubLog {
                     d.copy_from_slice(body);
                 }
                 let seq = self.base + u64::try_from(self.entries.len()).unwrap_or(0);
-                // The evictions above made room, and `admits` held, so this cannot be refused; if it ever were, the
-                // message is not logged rather than logged without its id.
-                if self.index.insert(mid, seq).is_err() {
-                    return false;
-                }
                 self.entries.push_back(Entry {
                     mid,
                     origin: *origin,
                     at,
                     wall_ms,
+                    print,
                     off,
                     len: n,
                     cost: pad + n,
                 });
+                self.index.insert(mid, seq);
                 *self.origins.entry(*origin).or_insert(0) += 1;
                 self.used += pad + n;
                 self.wpos = (off + n) % self.ring.len();
                 return true;
             }
             match self.pop() {
-                Some(old) => evicted(old),
+                Some((old, p)) => evicted(old, p),
                 None => return false,
             }
         }
     }
 
-    /// Drop the messages older than the window; each dropped id goes to `gone`.
-    pub(crate) fn expire(&mut self, now: Nanos, mut gone: impl FnMut(u64)) {
+    /// Drop the messages older than the window; each dropped id and its print go to `gone`.
+    pub(crate) fn expire(&mut self, now: Nanos, mut gone: impl FnMut(u64, u64)) {
         while self
             .entries
             .front()
             .is_some_and(|e| now.saturating_sub(e.at) > LOG_WINDOW)
         {
-            if let Some(m) = self.pop() {
-                gone(m);
+            if let Some((m, p)) = self.pop() {
+                gone(m, p);
             }
         }
     }
@@ -274,10 +275,14 @@ impl HubLog {
 mod tests {
     use super::*;
 
+    fn key() -> IdKey {
+        IdKey::new(7, &crate::table::TEST_SECRETS)
+    }
+
     /// `evicts` names exactly the messages `push` then evicts, across wraps, padding and the entry cap.
     #[test]
     fn evicts_predicts_push() {
-        let mut log = HubLog::new(10_000, IdKey::from_seed(7));
+        let mut log = HubLog::new(10_000, key());
         let mut x = 7u64;
         for mid in 0..20_000u64 {
             x = x.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
@@ -291,7 +296,7 @@ mod tests {
             let want = log.evicts(n);
             let mut got = 0;
             let origin = [u8::try_from(mid % 3).unwrap_or(0); 32];
-            assert!(log.push(mid, &origin, 0, 0, &[], &body, |_| got += 1));
+            assert!(log.push(mid, &origin, 0, 0, &[], &body, mid + 1, |_, _| got += 1));
             assert_eq!(want, got, "message {mid} of {n} bytes");
             assert_eq!(log.at(log.end() - 1).map(<[u8]>::len), Some(n));
             // The count of each origin is that of its entries still logged (looked at every 97th message).
@@ -300,27 +305,24 @@ mod tests {
                 assert_eq!(log.holds(&[o; 32]), logged, "origin {o} after message {mid}");
             }
         }
-        log.expire(LOG_WINDOW + 1, |_| {});
+        log.expire(LOG_WINDOW + 1, |_, _| {});
         assert!((0..3u8).all(|o| !log.holds(&[o; 32])), "an empty log holds no origin");
     }
 
-    /// An id whose probe would pass the index's bound is not logged, and nothing else changes.
+    /// An evicted entry hands its id and its print on, and so does an expired one; a logged entry answers its print.
     #[test]
-    #[allow(clippy::indexing_slicing, reason = "tests assert")]
-    fn an_id_the_index_cannot_take_is_not_logged() {
-        use crate::table::PROBE_MAX;
-        let key = IdKey::from_seed(7);
-        let probe = crate::table::MidMap::with_capacity(LOG_CAP, key);
-        let ids: Vec<u64> = (0u64..).filter(|id| probe.home(*id) == 3).take(PROBE_MAX + 1).collect();
-        let mut log = HubLog::new(1 << 20, key);
-        for id in &ids[..PROBE_MAX] {
-            assert!(log.push(*id, &[1; 32], 0, 0, &[], b"x", |_| {}));
-        }
-        let over = ids[PROBE_MAX];
-        assert!(!log.admits(over));
-        assert!(!log.push(over, &[1; 32], 0, 0, &[], b"x", |_| {}));
-        assert_eq!((log.len(), log.contains(over)), (PROBE_MAX, false));
-        assert_eq!(log.lookup(over), Err(ProbeLimit));
+    fn an_evicted_entry_hands_over_its_print() {
+        let mut log = HubLog::new(100, key());
+        let body = [0u8; 60];
+        let mut gone = Vec::new();
+        assert!(log.push(1, &[1; 32], 0, 0, &[], &body, 11, |m, p| gone.push((m, p))));
+        assert_eq!((log.print(1), gone.len()), (Some(11), 0));
+        assert!(log.push(2, &[1; 32], 1, 1, &[], &body, 22, |m, p| gone.push((m, p))));
+        assert_eq!(gone, vec![(1, 11)], "the first left with its print");
+        assert_eq!((log.print(1), log.print(2)), (None, Some(22)));
+        log.expire(LOG_WINDOW + 2, |m, p| gone.push((m, p)));
+        assert_eq!(gone, vec![(1, 11), (2, 22)], "the expired one left with its print");
+        assert_eq!(log.print(2), None);
     }
 
     fn seq_mid(log: &HubLog, seq: u64) -> u64 {

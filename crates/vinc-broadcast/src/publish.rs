@@ -138,8 +138,10 @@ impl Topics {
             &mut data,
         );
         data.extend_from_slice(body);
-        // A refusal is counted by `remember`; the publish goes on, as the log and the pending table hold the message.
-        self.remember(topic, mid, now, true);
+        let key = u64::from_le_bytes(mid);
+        if let Some(st) = self.topics.get_mut(topic) {
+            st.seen.insert(key, now, true);
+        }
         let tlen = topic.len();
         if self.is_hub {
             self.trace(|| Trace::Published {

@@ -20,7 +20,7 @@ use crate::consts::{
     DEFAULT_LOG_BYTES, DEFAULT_MAX_BODY, DEFAULT_MAX_SUBSCRIBERS, DEFAULT_MAX_TOPICS, DEFAULT_REACH_BYTES, GAP_EVERY,
     HAVE_MAX, MAX_TOPIC, QUEUE_CAP, SEEN_CAP,
 };
-use crate::event::Trace;
+use crate::event::{RejectStats, Trace};
 use crate::floors::{Gather, SentFloors};
 use crate::log::HubLog;
 use crate::table::{IdKey, Seen};
@@ -94,10 +94,10 @@ pub struct Config<'a> {
     pub trace: bool,
     /// The size limits.
     pub limits: Limits,
-    /// A seed the node's key store drew, unknown to every peer: it places message ids in the dedupe sets and the
-    /// hub logs, so that no sender can choose where its ids land. The seed that keys the facade's tables is the
-    /// model; two nodes need not share it.
-    pub map_seed: u64,
+    /// The key that places message ids in the dedupe sets and the hub logs, so that no sender can choose where its ids
+    /// land: the endpoint's own map keys, drawn from its key store and unknown to every peer. Never a value a peer
+    /// can see, such as the connectivity seed.
+    pub map_keys: IdKey,
 }
 
 /// Why a node could not start.
@@ -305,7 +305,7 @@ pub struct Topics {
     pub(crate) is_hub: bool,
     pub(crate) hubs: Vec<NodeId>,
     pub(crate) limits: Limits,
-    /// Places message ids in the dedupe sets and the hub logs (see [`Config::map_seed`]).
+    /// Places message ids in the dedupe sets and the hub logs (see [`Config::map_keys`]).
     pub(crate) id_key: IdKey,
     pub(crate) key: alloc::boxed::Box<Keypair>,
     pub(crate) alg: IdentityAlg,
@@ -346,6 +346,8 @@ pub struct Topics {
     pub(crate) nodes: Vec<NodeId>,
     pub(crate) spare: Vec<Vec<u8>>,
     pub(crate) tq: TraceQueue,
+    /// What was turned away, by reason, counted with tracing on or off.
+    pub(crate) rejects: RejectStats,
     /// The adjacency records and the components they make (see `reach.rs`).
     pub(crate) reach: crate::reach::Reach,
 }
@@ -410,7 +412,7 @@ impl Topics {
             is_hub: cfg.is_hub,
             hubs,
             limits: cfg.limits,
-            id_key: IdKey::from_seed(cfg.map_seed),
+            id_key: cfg.map_keys,
             key,
             alg,
             pk,
@@ -450,6 +452,7 @@ impl Topics {
                 },
                 lost: 0,
             },
+            rejects: RejectStats::default(),
             reach: crate::reach::Reach::new(unscoped, cfg.limits.reach_bytes),
         })
     }

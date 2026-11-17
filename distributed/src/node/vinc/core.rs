@@ -21,7 +21,7 @@ use vinc_core::{Command, Endpoint, EndpointConfig, Event, Query, relay_parts};
 use vinc_crypto::{Drbg, IdentityAlg, Keypair, NodeId, Software};
 use vinc_dtn::seal::RecipientKeys;
 use vinc_node::{
-    Body, Config as NodeConfig, DtnPlan, DtnRestored, HUB_ALPN, MemberNotice, Node, NodeEvent, NodeTrace,
+    Body, Config as NodeConfig, DtnPlan, DtnRestored, HUB_ALPN, IdKey, MemberNotice, Node, NodeEvent, NodeTrace,
     ValuesRequest, is_relay_request,
 };
 use vinc_security::{ConnId, Env, KeyHandle, LocalIdentity, PrekeyPolicy, ResponderStores, SoftPrekeys};
@@ -306,6 +306,7 @@ fn build<const K: usize, const D: usize>(
             log_bytes: TOPIC_LOG_BYTES,
             ..vinc_broadcast::Limits::default()
         },
+        map_keys: map_keys(&spec.name),
         wall_ms,
         local: spec.addr,
         // The delay-tolerant layer's decisions are observable only through the trace: on with the layer.
@@ -968,3 +969,15 @@ impl<const K: usize, const D: usize> Core<K, D> {
 
 #[cfg(test)]
 mod tests;
+
+/// The broadcast id tables' key of the node `name`: eight words drawn from its name, so a run is reproducible. Not a
+/// secret, as the harness has no adversary that reads it.
+fn map_keys(name: &str) -> IdKey {
+    let bytes = seed_bytes(name, "vinc-maps", 64);
+    let mut words = bytes.as_chunks::<8>().0.iter().map(|c| u64::from_le_bytes(*c));
+    let seed = words.next().unwrap_or(1);
+    let mut secrets = [0u64; 7];
+    secrets.iter_mut().zip(words).for_each(|(s, w)| *s = w);
+    // The tables want secrets that live as long as the node; a node lives as long as the process, one leak per start.
+    IdKey::new(seed, Box::leak(Box::new(secrets)))
+}

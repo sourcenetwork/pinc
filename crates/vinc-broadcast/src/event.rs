@@ -51,12 +51,74 @@ pub enum Reject {
     /// The messages held for an access answer are at their limit; the message is left unseen so the gap repair
     /// brings it again.
     HeldFull,
-    /// A hub holds the id for another message (another origin, or the same origin with another body, timestamp or
-    /// flag), so the publish is not acknowledged.
+    /// A hub holds the id for another message (the print of the signature differs from the stored one, also after
+    /// the log let the message go), so the publish is not acknowledged. A copy due no acknowledgement is a
+    /// [`Reject::Duplicate`] and is compared with nothing.
     IdTaken,
-    /// The id's probe in the dedupe set or the log index would pass the probe bound, so the message is refused (or
-    /// its id is not remembered). With ids placed by a keyed hash this does not happen for any honest sender.
-    ProbeLimit,
+}
+
+impl Reject {
+    /// Every reason, in the order [`RejectStats`] counts them.
+    pub const ALL: [Self; 10] = [
+        Self::BadHead,
+        Self::BadSignature,
+        Self::Duplicate,
+        Self::Revoked,
+        Self::SeenFull,
+        Self::TopicsFull,
+        Self::LogFull,
+        Self::Old,
+        Self::HeldFull,
+        Self::IdTaken,
+    ];
+}
+
+/// How many messages each [`Reject`] reason turned away, and how many long walks the id tables made. Counted whether or
+/// not tracing is on ([`Topics::reject_stats`](crate::Topics::reject_stats)).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RejectStats {
+    counts: [u64; Reject::ALL.len()],
+    long_walks: u64,
+}
+
+impl RejectStats {
+    /// How many messages were turned away for `why`.
+    pub fn count(&self, why: Reject) -> u64 {
+        Reject::ALL
+            .iter()
+            .position(|r| *r == why)
+            .and_then(|i| self.counts.get(i))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// How many messages were turned away, for any reason.
+    pub fn total(&self) -> u64 {
+        self.counts.iter().fold(0, |a, n| a.saturating_add(*n))
+    }
+
+    /// How many walks in the dedupe sets and the hub logs read 128 slots or more: with ids placed by a secret key it
+    /// is rare, so a count that grows says a sender knows the key.
+    pub const fn long_walks(&self) -> u64 {
+        self.long_walks
+    }
+
+    #[cfg(feature = "alloc")]
+    pub(crate) fn note(&mut self, why: Reject) {
+        if let Some(n) = Reject::ALL
+            .iter()
+            .position(|r| *r == why)
+            .and_then(|i| self.counts.get_mut(i))
+        {
+            *n = n.saturating_add(1);
+        }
+    }
+
+    #[cfg(feature = "alloc")]
+    pub(crate) const fn with_long_walks(mut self, n: u64) -> Self {
+        self.long_walks = n;
+        self
+    }
 }
 
 /// Why a SUBS frame changed nothing.
@@ -263,4 +325,24 @@ pub enum Trace {
         /// How many.
         count: u32,
     },
+}
+
+#[cfg(all(test, feature = "alloc"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_reason_has_its_own_counter() {
+        let mut s = RejectStats::default();
+        for (i, why) in Reject::ALL.iter().enumerate() {
+            for _ in 0..=i {
+                s.note(*why);
+            }
+        }
+        for (i, why) in Reject::ALL.iter().enumerate() {
+            assert_eq!(s.count(*why), i as u64 + 1);
+        }
+        assert_eq!(s.total(), (1..=Reject::ALL.len() as u64).sum::<u64>());
+        assert_eq!(s.with_long_walks(7).long_walks(), 7);
+    }
 }

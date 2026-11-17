@@ -24,7 +24,7 @@ use alloc::vec::Vec;
 use core::cell::Cell;
 use core::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-use vinc_broadcast::{Config as BcConfig, ReachStats, Refused, StartError as BcStartError, Topics};
+use vinc_broadcast::{Config as BcConfig, StartError as BcStartError, Topics};
 use vinc_connect::client::Connectivity;
 use vinc_connect::record::MAX_ADDRS;
 use vinc_connect::ticket::Ticket;
@@ -170,9 +170,10 @@ where
     A: Apps<P>,
     E::Src: ServeSource<A::Values>,
 {
-    /// Start a node. `ep` is an endpoint with its interfaces and prekey set; `key` signs broadcast messages and must `ep` is an endpoint with its interfaces and prekey set; `key` signs broadcast messages and must
-    /// be the key of the configured identity; `seed` keys the connectivity layer's tables. `apps` says which layers
-    /// above broadcast run and gives them their stores.
+    /// Start a node. `ep` is an endpoint with its interfaces and prekey set; `key` signs broadcast messages and must
+    /// be the key of the configured identity; `seed` is the first carrier connection id, which is sent in the clear, so
+    /// it keys nothing secret (the broadcast tables are keyed by [`Config::map_keys`]). `apps` says which layers above
+    /// broadcast run and gives them their stores.
     ///
     /// # Errors
     /// [`StartError`] if a protocol id cannot be registered or is claimed by two owners (the hub stream and a layer),
@@ -267,7 +268,7 @@ where
             incarnation: mem.incarnation(),
             trace: cfg.trace,
             limits: cfg.limits,
-            map_seed: seed,
+            map_keys: cfg.map_keys,
         };
         let topics = Topics::start(&bc_cfg, key, now, cfg.wall_ms).map_err(StartError::Broadcast)?;
         io.trace(NodeTrace::Started {
@@ -746,78 +747,6 @@ where
         &self.conn
     }
 
-    /// Publish `body` to `topic`; returns the message id.
-    ///
-    /// # Errors
-    /// [`Refused`] for a long topic, a body over the configured limit, a full topic table or a signing failure.
-    pub fn publish(&mut self, now: Nanos, topic: &[u8], body: &[u8]) -> Result<[u8; 8], Refused> {
-        self.begin(now);
-        self.refresh_alive(now);
-        let (t, mut h) = self.bc_host();
-        let r = t.publish(&mut h, now, topic, body);
-        self.settle(now);
-        r
-    }
-
-    /// Subscribe to `topic`.
-    ///
-    /// # Errors
-    /// [`Refused`] for a long topic or a full topic table.
-    pub fn subscribe(&mut self, now: Nanos, topic: &[u8]) -> Result<(), Refused> {
-        self.begin(now);
-        self.refresh_alive(now);
-        let (t, mut h) = self.bc_host();
-        let r = t.subscribe(&mut h, now, topic);
-        self.settle(now);
-        r
-    }
-
-    /// Unsubscribe from `topic`.
-    pub fn unsubscribe(&mut self, now: Nanos, topic: &[u8]) {
-        self.begin(now);
-        self.refresh_alive(now);
-        let (t, mut h) = self.bc_host();
-        t.unsubscribe(&mut h, topic);
-        self.settle(now);
-    }
-
-    /// Take `member` as a subscriber of `topic` to send to straight when no hub is reachable.
-    pub fn hint_subscriber(&mut self, topic: &[u8], member: &NodeId) -> bool {
-        self.deadline.set(Due::Stale);
-        self.topics.hint(topic, member)
-    }
-
-    /// Name the peers this node holds sessions with: from then on the hubs hand it topic messages only from its
-    /// connected component (see [`Topics::set_adjacent`](vinc_broadcast::Topics::set_adjacent)). Returns how many
-    /// peers the record names.
-    ///
-    /// # Errors
-    /// [`Refused::Sign`] if the record cannot be signed.
-    pub fn set_adjacent(&mut self, now: Nanos, peers: &[NodeId]) -> Result<usize, Refused> {
-        self.begin(now);
-        self.refresh_alive(now);
-        let (t, mut h) = self.bc_host();
-        let r = t.set_adjacent(&mut h, now, peers);
-        self.settle(now);
-        r
-    }
-
-    /// On a hub: what its adjacency table holds, what it refused and whether it is closed
-    /// ([`NodeEvent::ReachClosed`]); on a member: how many adjacency records it signed. See
-    /// [`Topics::reach_stats`](vinc_broadcast::Topics::reach_stats).
-    pub fn reach_stats(&self) -> ReachStats {
-        self.topics.reach_stats()
-    }
-
-    /// The access-control layer answered a broadcast check ([`NodeEvent::BroadcastAcpCheck`]).
-    pub fn broadcast_acp_answer(&mut self, now: Nanos, id: u32, allow: bool) {
-        self.begin(now);
-        self.refresh_alive(now);
-        let (t, mut h) = self.bc_host();
-        t.acp_answer(&mut h, now, id, allow);
-        self.settle(now);
-    }
-
     /// Leave the group: close every hub session with the leave code and every other session after it. A hub reports
     /// the member as left.
     pub fn leave(&mut self, now: Nanos) {
@@ -1016,6 +945,8 @@ where
         self.io.is_hub
     }
 }
+
+mod broadcast;
 
 #[cfg(test)]
 mod inbound_tests;

@@ -6,40 +6,58 @@
 //! length stays short however long it runs.
 //!
 //! A message id is chosen by the origin that sends it, so the map never places an id by its own bits: the home slot
-//! is a keyed hash of the id under the node's [`IdKey`], drawn from the node's key store, which a sender cannot
-//! read. The guarantee is the hasher's own: a seeded hash that is not cryptographic, as for the facade's tables.
+//! is a keyed hash of the id under the node's [`IdKey`], the endpoint's own map keys, which a sender cannot read.
+//! The hash has two steps, the keyed multiply and the hasher's finishing multiply, because the keyed multiply alone puts
+//! ids that form an arithmetic progression on slots that form one. It is a seeded hash that is not cryptographic.
+//! Nothing is refused for a long walk: the tables hold at most half their slots, so a walk reads at most one slot more than
+//! the table holds entries (8,193 for the dedupe set, 2,049 for a log index), whatever the placement. A walk of
+//! [`PROBE_LONG`] slots or more is counted, so a sender that did learn the key shows.
 //!
 //! Invariants: the map never holds more than its capacity (an insert past it is refused); a value stored is never
-//! `u64::MAX`; no entry sits more than [`PROBE_MAX`] slots from its home, and a lookup or an insert never walks
-//! further (it is refused and the caller counts it); the set's entries are in insertion order, which is time order
-//! because time only goes forward, so expiry stops at the first live entry.
+//! `u64::MAX`; the set's entries are in insertion order, which is time order because time only goes forward, so
+//! expiry stops at the first live entry; a print kept beside an entry moves with its slot and leaves with it.
 
 use alloc::collections::VecDeque;
 use alloc::vec;
 use alloc::vec::Vec;
-use rapidhash::v3::{RapidSecrets, rapidhash_v3_seeded};
+use core::cell::Cell;
+use core::hash::BuildHasher;
+use rapidhash::quality::SeedableState;
 use vinc_membership::Nanos;
 
 use crate::consts::SEEN_TTL;
 
-/// The most slots a lookup or an insert walks from an id's home. The tables hold at most half their slots, so for
-/// ids spread by the keyed hash a walk this long is far out in the tail (the chance falls off exponentially with the
-/// length, roughly `exp(-0.19 * n)` at half load: about 1e-11 at 128), while a sender who could choose where its ids
-/// land would make every lookup of the topic scan the whole table. Past it the id is refused, never walked.
-pub(crate) const PROBE_MAX: usize = 128;
+/// The secrets of the unit tests, full width as the key store draws them.
+#[cfg(test)]
+pub(crate) static TEST_SECRETS: [u64; 7] = [
+    0x9e37_79b9_7f4a_7c15,
+    0xbf58_476d_1ce4_e5b9,
+    0x94d0_49bb_1331_11eb,
+    0x2545_f491_4f6c_dd1d,
+    0xd6e8_feb8_6659_fd93,
+    0xff51_afd7_ed55_8ccd,
+    0xc4ce_b9fe_1a85_ec53,
+];
 
-/// The key that places ids in the tables of one node: a 64-bit seed drawn from the node's key store, expanded by the
-/// hasher into its secrets once.
-#[derive(Clone, Copy)]
-pub(crate) struct IdKey(RapidSecrets);
+/// A walk of this many slots or more is counted ([`Seen::long_walks`]): for ids spread by a secret key it is far out
+/// in the tail of the walks of a table at most half full.
+pub(crate) const PROBE_LONG: usize = 128;
+
+/// The key that places message ids in the dedupe sets and the hub logs of a node: a 64-bit seed and seven 64-bit
+/// secrets, the endpoint's map keys, which its key store draws. The hash has two steps, the keyed multiply and the
+/// hasher's finishing multiply; it is seeded and not cryptographic.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct IdKey(SeedableState<'static>);
 
 impl IdKey {
-    pub(crate) const fn from_seed(seed: u64) -> Self {
-        Self(RapidSecrets::seed(seed))
+    /// The key of `seed` and `secrets`. A weak key costs only speed: every bound of the tables holds under any
+    /// placement.
+    pub fn new(seed: u64, secrets: &'static [u64; 7]) -> Self {
+        Self(SeedableState::custom(seed, secrets))
     }
 
     fn hash(&self, id: u64) -> u64 {
-        rapidhash_v3_seeded(&id.to_le_bytes(), &self.0)
+        self.0.hash_one(id)
     }
 }
 
@@ -49,24 +67,14 @@ impl core::fmt::Debug for IdKey {
     }
 }
 
-/// Why an id was not recorded.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Refused {
-    /// The table holds its capacity.
-    Full,
-    /// The id's probe would pass [`PROBE_MAX`].
-    Probe,
-}
-
-/// A lookup that would pass [`PROBE_MAX`] slots: nothing was found within the bound, and the id cannot be recorded.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ProbeLimit;
-
-/// Where a probe for an id ended.
-enum Probe {
+/// Where a walk for an id ended.
+enum Walk {
+    /// The slot holding the id.
     Found(usize),
+    /// The first empty slot after the id's home.
     Absent(usize),
-    Over,
+    /// No empty slot (a table kept at most half full never gives this).
+    Full,
 }
 
 /// A map from a message id to a `u64`, with a fixed capacity chosen at creation.
@@ -75,9 +83,12 @@ pub(crate) struct MidMap {
     keys: Vec<u64>,
     // The value plus one; zero marks an empty slot, so a zeroed allocation is an empty map.
     vals: Vec<u64>,
+    // A word kept beside each slot (zero: none), empty until `with_prints`.
+    prints: Vec<u64>,
     len: usize,
     cap: usize,
     key: IdKey,
+    long: Cell<u64>,
 }
 
 impl MidMap {
@@ -87,9 +98,18 @@ impl MidMap {
         Self {
             keys: vec![0; slots],
             vals: vec![0; slots],
+            prints: Vec::new(),
             len: 0,
             cap,
             key,
+            long: Cell::new(0),
+        }
+    }
+
+    /// Keep a word beside each entry from now on (allocates once; a no-op when it is kept already).
+    pub(crate) fn with_prints(&mut self) {
+        if self.prints.is_empty() {
+            self.prints = vec![0; self.keys.len()];
         }
     }
 
@@ -97,74 +117,86 @@ impl MidMap {
         self.keys.len() - 1
     }
 
-    /// The slot a probe for `key` starts at.
+    /// The slot a walk for `key` starts at.
     pub(crate) fn home(&self, key: u64) -> usize {
         usize::try_from(self.key.hash(key) & self.mask() as u64).unwrap_or(0)
     }
 
-    fn probe(&self, key: u64) -> Probe {
+    /// Walk from the home of `key` to its slot or to the first empty one. A walk of [`PROBE_LONG`] slots or more is
+    /// counted.
+    fn walk(&self, key: u64) -> Walk {
         let mut i = self.home(key);
-        for _ in 0..PROBE_MAX.min(self.keys.len()) {
+        let mut found = Walk::Full;
+        let mut n = 0;
+        for step in 1..=self.keys.len() {
+            n = step;
             match (self.vals.get(i).copied(), self.keys.get(i).copied()) {
-                (Some(0), _) => return Probe::Absent(i),
-                (Some(_), Some(k)) if k == key => return Probe::Found(i),
-                (Some(_), Some(_)) => i = (i + 1) & self.mask(),
-                _ => return Probe::Over,
+                (Some(0), _) => {
+                    found = Walk::Absent(i);
+                    break;
+                }
+                (Some(_), Some(k)) if k == key => {
+                    found = Walk::Found(i);
+                    break;
+                }
+                _ => i = (i + 1) & self.mask(),
             }
         }
-        Probe::Over
+        if n >= PROBE_LONG {
+            self.long.set(self.long.get().saturating_add(1));
+        }
+        found
     }
 
     fn slot(&self, key: u64) -> Option<usize> {
-        match self.probe(key) {
-            Probe::Found(i) => Some(i),
-            Probe::Absent(_) | Probe::Over => None,
+        match self.walk(key) {
+            Walk::Found(i) => Some(i),
+            Walk::Absent(_) | Walk::Full => None,
         }
+    }
+
+    /// How many walks read [`PROBE_LONG`] slots or more.
+    pub(crate) fn long_walks(&self) -> u64 {
+        self.long.get()
     }
 
     pub(crate) fn get(&self, key: u64) -> Option<u64> {
         self.slot(key).and_then(|i| self.vals.get(i)).map(|v| v - 1)
     }
 
-    /// The value under `key`, or [`ProbeLimit`] when the walk passed [`PROBE_MAX`] slots without an answer.
-    pub(crate) fn lookup(&self, key: u64) -> Result<Option<u64>, ProbeLimit> {
-        match self.probe(key) {
-            Probe::Found(i) => Ok(self.vals.get(i).map(|v| v - 1)),
-            Probe::Absent(_) => Ok(None),
-            Probe::Over => Err(ProbeLimit),
-        }
-    }
-
-    /// Whether an insert of `key` stays within [`PROBE_MAX`] (the capacity is not looked at).
-    pub(crate) fn fits_probe(&self, key: u64) -> bool {
-        !matches!(self.probe(key), Probe::Over)
-    }
-
-    /// Store `val` under `key`.
-    ///
-    /// # Errors
-    /// [`Refused::Full`] if the map is full and `key` is new, [`Refused::Probe`] if `key` is new and its home run is
-    /// [`PROBE_MAX`] slots long: the caller counts the refusal and does not rely on the id being remembered.
-    pub(crate) fn insert(&mut self, key: u64, val: u64) -> Result<(), Refused> {
-        let at = match self.probe(key) {
-            Probe::Found(i) => {
+    /// Store `val` under `key`; false if the map is full and `key` is new.
+    pub(crate) fn insert(&mut self, key: u64, val: u64) -> bool {
+        let at = match self.walk(key) {
+            Walk::Found(i) => {
                 if let Some(v) = self.vals.get_mut(i) {
                     *v = val.saturating_add(1);
                 }
-                return Ok(());
+                return true;
             }
-            Probe::Absent(i) => i,
-            Probe::Over => return Err(Refused::Probe),
+            Walk::Absent(i) => i,
+            Walk::Full => return false,
         };
         if self.len >= self.cap {
-            return Err(Refused::Full);
+            return false;
         }
         if let (Some(k), Some(v)) = (self.keys.get_mut(at), self.vals.get_mut(at)) {
             *k = key;
             *v = val.saturating_add(1);
             self.len += 1;
         }
-        Ok(())
+        true
+    }
+
+    /// Keep `print` beside the entry of `key`, if the map holds it and keeps prints.
+    pub(crate) fn set_print(&mut self, key: u64, print: u64) {
+        if let Some(p) = self.slot(key).and_then(|i| self.prints.get_mut(i)) {
+            *p = print;
+        }
+    }
+
+    /// The word kept beside the entry of `key`; zero if the map does not hold it or none was set.
+    pub(crate) fn print(&self, key: u64) -> u64 {
+        self.slot(key).and_then(|i| self.prints.get(i)).copied().unwrap_or(0)
     }
 
     pub(crate) fn remove(&mut self, key: u64) -> Option<u64> {
@@ -192,10 +224,18 @@ impl MidMap {
                 *k = kj;
                 *v = vj;
             }
+            if let Some(pj) = self.prints.get(j).copied()
+                && let Some(p) = self.prints.get_mut(hole)
+            {
+                *p = pj;
+            }
             hole = j;
         }
         if let Some(v) = self.vals.get_mut(hole) {
             *v = 0;
+        }
+        if let Some(p) = self.prints.get_mut(hole) {
+            *p = 0;
         }
         self.len -= 1;
         old
@@ -221,17 +261,25 @@ impl Seen {
         }
     }
 
+    /// Keep the print of a message beside its id from now on (a hub does, from the first message it logs). Allocates
+    /// once, 8 bytes a slot.
+    pub(crate) fn keep_prints(&mut self) {
+        self.map.with_prints();
+    }
+
     /// Whether `mid` was seen within the time to live.
     pub(crate) fn contains(&self, mid: u64, now: Nanos) -> bool {
         self.map.get(mid).is_some_and(|at| now.saturating_sub(at) <= SEEN_TTL)
     }
 
-    /// Whether `mid` was seen within the time to live, or [`ProbeLimit`] when the lookup passed [`PROBE_MAX`] slots.
-    pub(crate) fn lookup(&self, mid: u64, now: Nanos) -> Result<bool, ProbeLimit> {
-        Ok(self
-            .map
-            .lookup(mid)?
-            .is_some_and(|at| now.saturating_sub(at) <= SEEN_TTL))
+    /// The print kept for `mid`, if it was seen within the time to live and one was kept.
+    pub(crate) fn print(&self, mid: u64, now: Nanos) -> Option<u64> {
+        Some(self.map.print(mid)).filter(|p| *p != 0 && self.contains(mid, now))
+    }
+
+    /// How many walks of the set read [`PROBE_LONG`] slots or more.
+    pub(crate) fn long_walks(&self) -> u64 {
+        self.map.long_walks()
     }
 
     pub(crate) fn len(&self) -> usize {
@@ -251,21 +299,29 @@ impl Seen {
     }
 
     /// Record `mid`. A full set refuses unless `force` is set, which drops the oldest id to make room.
-    ///
-    /// # Errors
-    /// [`Refused::Full`] for a full set, [`Refused::Probe`] for an id whose probe would pass [`PROBE_MAX`]: the id is
-    /// then not remembered, and the caller counts it.
-    pub(crate) fn insert(&mut self, mid: u64, now: Nanos, force: bool) -> Result<(), Refused> {
+    pub(crate) fn insert(&mut self, mid: u64, now: Nanos, force: bool) -> bool {
         if self.order.len() >= self.cap {
             if !force {
-                return Err(Refused::Full);
+                return false;
             }
             self.pop_front();
         }
-        self.map.insert(mid, now)?;
-        self.order.push_back((mid, now));
-        self.last = now;
-        Ok(())
+        if self.map.insert(mid, now) {
+            self.order.push_back((mid, now));
+            self.last = now;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Record a message that left the log, with the print of its signature: the id is recorded (forced) unless it is
+    /// already, and the print is kept beside it, so a retry of that message is told from another under the same id.
+    pub(crate) fn keep(&mut self, mid: u64, print: u64, now: Nanos) {
+        if !self.contains(mid, now) {
+            self.insert(mid, now, true);
+        }
+        self.map.set_print(mid, print);
     }
 
     fn pop_front(&mut self) {

@@ -188,3 +188,19 @@ pub fn measure(f: impl FnOnce()) -> AllocStats {
         bytes: after.bytes - before.bytes,
     }
 }
+
+/// The secrets of the broadcast id tables of the test nodes, full width as the key store draws them.
+pub static MAP_SECRETS: [u64; 7] = [
+    0x9e37_79b9_7f4a_7c15,
+    0xbf58_476d_1ce4_e5b9,
+    0x94d0_49bb_1331_11eb,
+    0x2545_f491_4f6c_dd1d,
+    0xd6e8_feb8_6659_fd93,
+    0xff51_afd7_ed55_8ccd,
+    0xc4ce_b9fe_1a85_ec53,
+];
+
+/// The id key of a test node with `seed`, over [`MAP_SECRETS`].
+pub fn id_key(seed: u64) -> vinc_broadcast::IdKey {
+    vinc_broadcast::IdKey::new(seed, &MAP_SECRETS)
+}

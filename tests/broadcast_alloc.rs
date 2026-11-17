@@ -87,7 +87,7 @@ fn world(alg: IdentityAlg) -> World {
         incarnation: 1 << 16,
         trace: false,
         limits: vinc_broadcast::Limits::default(),
-        map_seed: 0x5eed,
+        map_keys: vinc_tests::id_key(0x5eed),
     };
     let now = SEC;
     let wall = 1_700_000_000_000;

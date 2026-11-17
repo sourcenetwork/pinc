@@ -178,6 +178,7 @@ fn world() -> World {
         version: 1,
         alpn: HUB_ALPN,
         limits: Limits::default(),
+        map_keys: vinc_tests::id_key(0x5eed),
         wall_ms: 1_700_000_000_000,
         local: local(),
         trace: false,

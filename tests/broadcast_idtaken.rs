@@ -1,5 +1,6 @@
-//! A hub acknowledges a publish only for the message it stored under that id: an exact retry is acknowledged without
-//! checking the signature again, another message under a taken id is refused and its publisher gives up.
+//! A hub acknowledges a publish only for the message it stored under that id, told by the print of its signature,
+//! also after the log let the message go: a retry is acknowledged without checking the signature again, another
+//! message under a taken id is refused and its publisher gives up.
 #![allow(
     clippy::unwrap_used,
     clippy::indexing_slicing,
@@ -12,11 +13,13 @@
 mod common;
 
 use std::cell::{Cell, RefCell};
+use std::hash::BuildHasher;
 use std::rc::Rc;
 
 use common::{Ev, Net, SEC, WALL0, keypair, ty};
+use rapidhash::quality::SeedableState;
 use vinc_broadcast::wire::Head;
-use vinc_broadcast::{Reject, Trace, auth};
+use vinc_broadcast::{Limits, Reject, Trace, auth};
 use vinc_crypto::IdentityAlg;
 use vinc_crypto::identity::MAX_SIGNATURE_LEN;
 use vinc_wire::hlc::Hlc;
@@ -46,10 +49,14 @@ fn signed(i: usize, mid: [u8; 8], body: &[u8], ts: Hlc) -> Vec<u8> {
 }
 
 fn hub_gets(net: &mut Net, from: usize, rest: &[u8]) {
+    hub_gets_as(net, from, ty::PUB, rest);
+}
+
+fn hub_gets_as(net: &mut Net, from: usize, t: u8, rest: &[u8]) {
     let (now, from) = (net.now, net.id(from));
     let n = &mut net.nodes[0];
     n.h.tick(now);
-    n.t.frame(&mut n.h, now, &from, ty::PUB, T, rest);
+    n.t.frame(&mut n.h, now, &from, t, T, rest);
     net.pump();
 }
 
@@ -61,6 +68,26 @@ fn rejects(net: &mut Net, i: usize) -> Vec<Reject> {
         }
     }
     out
+}
+
+/// The head and body of a frame as a hub gets them.
+fn rest_of(frame: &[u8]) -> Vec<u8> {
+    frame[6 + T.len()..].to_vec()
+}
+
+/// The first publish of node `i` that reaches hub 0, kept as it was sent.
+type Tap = Rc<RefCell<Option<Vec<u8>>>>;
+
+fn tap_first(net: &mut Net, i: usize) -> Tap {
+    let first = Tap::default();
+    let tap = Rc::clone(&first);
+    net.filter = Some(Box::new(move |from, to, bytes| {
+        if from == i && to == 0 && matches!(bytes.get(4), Some(&ty::PUB | &ty::FANP)) {
+            tap.borrow_mut().get_or_insert_with(|| bytes.clone());
+        }
+        true
+    }));
+    first
 }
 
 /// Two origins publish different messages under one id. The hub keeps the first and acknowledges only its publisher;
@@ -92,34 +119,140 @@ fn a_different_message_under_a_taken_id_is_refused_and_its_publisher_gives_up() 
     assert!(net.events(2).contains(&Ev::GaveUp(mid)), "its app gets the give-up");
 }
 
-/// A retry of the stored message is acknowledged with no second signature check: a copy whose signature bytes are
-/// damaged but whose origin, body and timestamp are the stored ones is acknowledged and no `BadSignature` is counted.
+/// A retry of the stored message is acknowledged with no second signature check, and a copy whose signature bytes
+/// differ is not the stored message: it is refused unverified and not acknowledged.
 #[test]
-fn an_exact_retry_is_acknowledged_without_a_second_verification() {
+fn a_copy_with_other_signature_bytes_is_refused_unverified() {
     let mut net = Net::new(ALG, 1, 2, SEC);
-    let first: Rc<RefCell<Option<Vec<u8>>>> = Rc::default();
-    let tap = Rc::clone(&first);
-    net.filter = Some(Box::new(move |from, to, bytes| {
-        if from == 1 && to == 0 && matches!(bytes.get(4), Some(&ty::PUB | &ty::FANP)) {
-            *tap.borrow_mut() = Some(bytes.clone());
-        }
-        true
-    }));
+    let first = tap_first(&mut net, 1);
     let mid = net.publish(1, T, b"body");
     net.filter = None;
     assert!(net.events(1).contains(&Ev::Acked(mid)));
     let _ = rejects(&mut net, 0);
-    let frame = first.borrow().clone().unwrap();
-    let mut rest = frame[6 + T.len()..].to_vec();
-    // mid (8) + origin (32) + alg (1) + the signature, which has no key before it for Ed25519.
-    rest[8 + 32 + 1 + 3] ^= 1;
+    let mut rest = rest_of(&first.borrow().clone().unwrap());
     let acks = net.count(ty::PACK);
     hub_gets(&mut net, 1, &rest);
-    assert_eq!(net.count(ty::PACK), acks + 1, "the retry is acknowledged");
-    let why = rejects(&mut net, 0);
+    assert_eq!(net.count(ty::PACK), acks + 1, "the exact retry is acknowledged");
+    assert_eq!(rejects(&mut net, 0), vec![Reject::Duplicate]);
+    // Flip a byte of the signature, found where the head says it is.
+    let at = {
+        let (head, _) = Head::parse(&rest).unwrap();
+        head.sig.as_ptr() as usize - rest.as_ptr() as usize
+    };
+    rest[at + 3] ^= 1;
+    hub_gets(&mut net, 1, &rest);
+    assert_eq!(net.count(ty::PACK), acks + 1, "the copy is not acknowledged");
     assert_eq!(
-        why,
-        vec![Reject::Duplicate],
-        "it is a duplicate and its signature is not checked again"
+        rejects(&mut net, 0),
+        vec![Reject::IdTaken],
+        "it is refused and its signature is not checked"
     );
+}
+
+/// A hub with an 8 KiB log and two members. Node 1 publishes and its acknowledgement is lost; node 2 then publishes
+/// ten messages of 1 KiB, so the log has let the first go. Returns the net and the first message's id.
+fn log_let_go() -> (Net, [u8; 8]) {
+    let limits = Limits {
+        max_body: 1024,
+        log_bytes: 8192,
+        ..Limits::default()
+    };
+    let mut net = Net::with_limits(&[ALG; 3], 1, SEC, limits);
+    net.attach(1);
+    net.attach(2);
+    let lost = Rc::new(Cell::new(false));
+    net.filter = Some(Box::new(move |from, to, bytes| {
+        !(from == 0 && to == 1 && bytes.get(4) == Some(&ty::PACK) && !lost.replace(true))
+    }));
+    let mid = net.publish(1, T, b"first");
+    assert!(!net.events(1).contains(&Ev::Acked(mid)), "its acknowledgement was lost");
+    for _ in 0..10 {
+        net.publish(2, T, &[7u8; 1024]);
+    }
+    net.filter = None;
+    (net, mid)
+}
+
+/// The hub stored a message and its acknowledgement was lost; the log then let the message go. The publisher's retry
+/// is acknowledged all the same: the hub remembers the print of the signature it stored.
+#[test]
+fn a_retry_after_the_log_let_the_message_go_is_acknowledged() {
+    let (mut net, mid) = log_let_go();
+    net.run_until(10 * SEC);
+    assert!(
+        net.events(1).contains(&Ev::Acked(mid)),
+        "the retry was acknowledged: {:?}",
+        net.events(1)
+    );
+}
+
+/// After the log let a message go, another origin's message under its id is refused, not acknowledged.
+#[test]
+fn a_rival_after_the_log_let_the_message_go_is_refused() {
+    let (mut net, mid) = log_let_go();
+    let _ = rejects(&mut net, 0);
+    let acks = net.count(ty::PACK);
+    hub_gets(&mut net, 2, &signed(2, mid, b"rival", Hlc::new(WALL0 + 1000, 0)));
+    assert_eq!(rejects(&mut net, 0), vec![Reject::IdTaken]);
+    assert_eq!(net.count(ty::PACK), acks, "the rival is not acknowledged");
+}
+
+/// A copy that is due no acknowledgement (a FAN) compares nothing: another body under a stored id is a duplicate.
+#[test]
+fn a_copy_due_no_acknowledgement_is_a_plain_duplicate() {
+    let mut net = Net::new(ALG, 1, 2, SEC);
+    let mid = net.publish(1, T, b"mine");
+    let _ = rejects(&mut net, 0);
+    let acks = net.count(ty::PACK);
+    hub_gets_as(
+        &mut net,
+        2,
+        ty::FAN,
+        &signed(2, mid, b"rival", Hlc::new(WALL0 + 1000, 0)),
+    );
+    assert_eq!(rejects(&mut net, 0), vec![Reject::Duplicate]);
+    assert_eq!(net.count(ty::PACK), acks, "a FAN is never acknowledged");
+}
+
+/// A run of ids that share a home slot in the hub's dedupe set is delivered,
+/// stored and acknowledged in full: no id is refused for the length of the walk, and the long walks are counted.
+#[test]
+fn a_long_run_is_delivered_stored_and_acknowledged() {
+    let two_step = SeedableState::custom(0x5eed, &vinc_tests::MAP_SECRETS);
+    let home = |id: u64| two_step.hash_one(id) & 16383;
+    let ids: Vec<u64> = (0u64..).filter(|id| home(*id) == 0).take(140).collect();
+    let mut net = Net::new(ALG, 1, 2, SEC);
+    net.subscribe(0, T);
+    let _ = rejects(&mut net, 0);
+    for (k, id) in ids.iter().enumerate() {
+        let ts = Hlc::new(WALL0 + 2000 + k as u64, 0);
+        hub_gets(&mut net, 1, &signed(1, id.to_le_bytes(), b"x", ts));
+    }
+    assert_eq!(net.count(ty::PACK), 140, "every message is acknowledged");
+    assert_eq!(net.delivered(0).len(), 140, "every message is delivered");
+    assert!(rejects(&mut net, 0).is_empty(), "nothing is refused");
+    assert!(
+        net.nodes[0].t.reject_stats().long_walks() > 0,
+        "the long walks are counted"
+    );
+}
+
+/// The rejections are counted whether or not the node queues trace records.
+#[test]
+fn rejects_are_counted_with_tracing_off() {
+    let mut net = Net::new(ALG, 1, 2, SEC);
+    net.trace = false;
+    net.restart(0, 2 * SEC);
+    let first = tap_first(&mut net, 1);
+    let mid = net.publish(1, T, b"mine");
+    let frame = first.borrow().clone().unwrap();
+    hub_gets(&mut net, 1, &rest_of(&frame));
+    hub_gets(&mut net, 2, &signed(2, mid, b"rival", Hlc::new(WALL0 + 1000, 0)));
+    hub_gets(&mut net, 1, &[0u8; 3]);
+    let stats = net.nodes[0].t.reject_stats();
+    assert_eq!(stats.count(Reject::Duplicate), 1);
+    assert_eq!(stats.count(Reject::IdTaken), 1);
+    assert_eq!(stats.count(Reject::BadHead), 1);
+    assert_eq!(stats.total(), 3);
+    assert!(rejects(&mut net, 0).is_empty(), "no trace record is queued");
 }

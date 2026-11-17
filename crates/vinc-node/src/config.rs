@@ -2,7 +2,7 @@
 
 use core::net::SocketAddr;
 
-use vinc_broadcast::Limits;
+use vinc_broadcast::{IdKey, Limits};
 use vinc_connect::client::Config as ConnectConfig;
 use vinc_membership::session::StoreError;
 
@@ -121,6 +121,9 @@ pub struct Config<const R: usize> {
     pub alpn: &'static [u8],
     /// The size limits of broadcast.
     pub limits: Limits,
+    /// The key that places message ids in the broadcast layer's tables: the endpoint's own map keys. Never the
+    /// connectivity seed, which is sent in the clear.
+    pub map_keys: IdKey,
     /// The wall clock in milliseconds when the node starts.
     pub wall_ms: u64,
     /// The address datagrams from relay paths are delivered to the endpoint as.

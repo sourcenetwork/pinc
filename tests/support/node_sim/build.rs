@@ -59,6 +59,7 @@ fn build<A: SimApps>(
         version: 1,
         alpn: HUB_ALPN,
         limits: spec.limits,
+        map_keys: crate::id_key(0x5eed),
         wall_ms: (WALL_EPOCH + now) / 1_000_000,
         local: spec.addr,
         trace: spec.trace,

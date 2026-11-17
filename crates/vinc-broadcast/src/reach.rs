@@ -62,6 +62,7 @@ use vinc_crypto::identity::MAX_SIGNATURE_LEN;
 use vinc_membership::{Nanos, NodeId};
 
 use crate::consts::{ADJ_MAX, REFRESH};
+use crate::event::RejectStats;
 use crate::host::{Event, Host, Lane};
 use crate::log::HubLog;
 use crate::node::{Refused, Topics};
@@ -147,6 +148,16 @@ impl Topics {
     /// it signed.
     pub fn reach_stats(&self) -> ReachStats {
         self.reach.stats()
+    }
+
+    /// What this node turned away, by reason, and how many long walks its id tables made. Counted whether or not
+    /// tracing is on.
+    pub fn reject_stats(&self) -> RejectStats {
+        let long = self.topics.values().fold(0u64, |a, st| {
+            a.saturating_add(st.seen.long_walks())
+                .saturating_add(st.log.as_ref().map_or(0, HubLog::long_walks))
+        });
+        self.rejects.with_long_walks(long)
     }
 
     /// On a hub: whether `a` and `b` are in one class (one component, or both unscoped).
