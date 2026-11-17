@@ -300,7 +300,7 @@ impl Run<'_> {
     }
 
     fn burst(&mut self) {
-        // Many one-byte frames at even offsets of one stream fragment its stored ranges past the 96 it can track.
+        // Many one-byte frames at even offsets of one stream spill its stored ranges past the 96 it keeps inline.
         let id = REMOTE[self.below(4) as usize];
         let limit = self.slot(id).map_or(WINDOW, |s| s.limit);
         for k in 0..110u64 {
@@ -671,8 +671,8 @@ struct Reached {
     ctl_released: bool,
 }
 
-/// One seeded run; `early` makes it an optimistic dial, and `reset_early` resets its last early stream at once.
-fn run(seed: u64, out: &mut String, run: u32, early: bool, reset_early: bool) -> Reached {
+/// A table of the runs' shape, before any event.
+fn fresh(seed: u64, out: &mut String, run: u32) -> Run<'_> {
     let mut config = Config::new(false);
     config.initial_stream_window = WINDOW;
     config.max_stream_window = 6 * CH;
@@ -683,7 +683,7 @@ fn run(seed: u64, out: &mut String, run: u32, early: bool, reset_early: bool) ->
     };
     let pool = BufferPool::new_boxed(POOL);
     let t = Box::new(Table::new(&config, &pool));
-    let mut r = Run {
+    Run {
         t,
         pool,
         rng: SplitMix64::traced(seed),
@@ -701,7 +701,12 @@ fn run(seed: u64, out: &mut String, run: u32, early: bool, reset_early: bool) ->
         released: false,
         ctl_released: false,
         cover: 0,
-    };
+    }
+}
+
+/// One seeded run; `early` makes it an optimistic dial, and `reset_early` resets its last early stream at once.
+fn run(seed: u64, out: &mut String, run: u32, early: bool, reset_early: bool) -> Reached {
+    let mut r = fresh(seed, out, run);
     r.log(r#""op":"init""#);
     // An optimistic dial: the application opens streams and queues data before the peer's limits are known
     // (`Connection::allow_early_streams`), and the establishment applies them some time later.
@@ -818,6 +823,24 @@ fn stream_table_runs_match_the_models() {
         if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
             std::fs::create_dir_all(&dir).unwrap();
             std::fs::write(std::path::Path::new(&dir).join("streams.ndjson"), &out).unwrap();
+        }
+    });
+}
+
+/// A stream whose ranges filled the pool chunk they spilled into refuses the next hole with `Fragmented`: 1,024 ranges
+/// of one byte, then one more. The runs above never get that far, so the refusal has a run of its own.
+#[test]
+fn a_stream_that_fills_its_spill_chunk_is_refused_fragmented_in_the_trace() {
+    big_stack(|| {
+        let mut out = String::new();
+        let mut r = fresh(0x5354_5245_414d_f000, &mut out, 99);
+        r.log(r#""op":"init""#);
+        for k in 0..1030u64 {
+            r.frame(0, 2 * k + 8, 1, false, false);
+        }
+        drop(r);
+        for needle in [r#""sp":true"#, r#""err":"Fragmented""#] {
+            assert!(out.contains(needle), "the run never reaches {needle}");
         }
     });
 }
