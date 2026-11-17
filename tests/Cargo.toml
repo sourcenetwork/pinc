@@ -1117,6 +1117,10 @@ name = "layers_values"
 path = "layers_values.rs"
 
 [[test]]
+name = "layers_values_slots"
+path = "layers_values_slots.rs"
+
+[[test]]
 name = "layers_flight"
 path = "layers_flight.rs"
 
