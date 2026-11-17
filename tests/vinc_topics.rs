@@ -505,7 +505,10 @@ async fn a_message_comes_as_an_envelope_that_verifies_offline_when_asked_for_and
             }
         }
         let (origin, envelope) = kept.expect("the keeper heard nothing");
-        assert_eq!((envelope.topic(), envelope.payload()), (&topic[..], &b"signed words"[..]));
+        assert_eq!(
+            (envelope.topic(), envelope.payload()),
+            (&topic[..], &b"signed words"[..])
+        );
         assert_eq!(origin, publisher.id());
         let v = vinc::envelope::verify(envelope.as_bytes()).unwrap();
         assert_eq!(
@@ -532,8 +535,14 @@ async fn a_message_comes_as_an_envelope_that_verifies_offline_when_asked_for_and
         let (t, _, _, _, payload) = seen.expect("the endpoint without envelopes heard nothing");
         assert_eq!((t, &payload[..]), (topic.clone(), &b"signed words"[..]));
         // Each endpoint hears the one kind of event it asked for, never both.
-        assert!(next_message!(keeper, 300).is_none(), "an envelope replaces the plain message");
-        assert!(next_envelope(&plain, 300).await.is_none(), "no envelope unless the endpoint asked for one");
+        assert!(
+            next_message!(keeper, 300).is_none(),
+            "an envelope replaces the plain message"
+        );
+        assert!(
+            next_envelope(&plain, 300).await.is_none(),
+            "no envelope unless the endpoint asked for one"
+        );
     })
     .await;
 }

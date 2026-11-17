@@ -54,10 +54,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
                 });
             }
             NodeEvent::Envelope {
-                origin,
-                hop,
-                envelope,
-                ..
+                origin, hop, envelope, ..
             } => {
                 let (origin, hop) = (self.node.full_id(&origin), self.node.full_id(&hop));
                 self.push_event(Event::Envelope {
