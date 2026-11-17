@@ -48,6 +48,8 @@ pub struct SlotView {
     pub reset: Option<u64>,
     /// The application has seen the end.
     pub observed: bool,
+    /// The application abandoned the receive half (a stop): what arrives is checked and discarded.
+    pub dropped: bool,
     /// The send half is closed, or its end marker and every byte are acknowledged.
     pub send_done: bool,
     /// The send half's reset: 0 none, 1 pending, 2 sent, 3 acknowledged.

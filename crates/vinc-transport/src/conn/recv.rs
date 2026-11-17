@@ -551,12 +551,15 @@ conn_impl! {
             Frame::Ack(ack) => self.on_ack(pi, now, &ack)?,
             Frame::ResetStream { id, error, final_size } => {
                 let first = self.first_unopened(id);
-                match self.streams.on_reset_stream(&mut self.pool, id, error, final_size) {
-                    Ok(()) => {}
+                // Heard for every half the table holds, a stopped one included; nothing for a freed stream.
+                let held = match self.streams.on_reset_stream(&mut self.pool, id, error, final_size) {
+                    Ok(held) => held,
                     Err(e) => return Err(stream_fault(e)),
-                }
+                };
                 self.push_opened(id, first);
-                self.push(Ev::Reset(id, error));
+                if held {
+                    self.push(Ev::Reset(id, error));
+                }
             }
             Frame::StopSending { id, error } => {
                 let first = self.first_unopened(id);
@@ -572,12 +575,15 @@ conn_impl! {
             }
             Frame::Stream { id, offset, fin, data, .. } => {
                 let first = self.first_unopened(id);
-                match self.streams.on_stream_frame(&mut self.pool, id, offset, data, fin) {
-                    Ok(()) => {}
+                // Readable only for a held half the application has not stopped; its data was only checked.
+                let readable = match self.streams.on_stream_frame(&mut self.pool, id, offset, data, fin) {
+                    Ok(readable) => readable,
                     Err(e) => return Err(stream_fault(e)),
-                }
+                };
                 self.push_opened(id, first);
-                self.push(Ev::Readable(id));
+                if readable {
+                    self.push(Ev::Readable(id));
+                }
             }
             Frame::MaxStreamData { id, max } => {
                 match self.streams.on_max_stream_data(&self.pool, id, max) {

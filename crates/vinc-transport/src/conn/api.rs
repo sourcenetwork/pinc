@@ -234,12 +234,14 @@ conn_impl! {
     }
 
     /// Ask the peer to stop sending on a stream; it resets the stream with `error`, which arrives as a reset. The
-    /// request is repeated until acknowledged. Nothing happens if the peer already ended the stream.
+    /// request is repeated until acknowledged. Nothing is asked if the peer already ended the stream. The stream is
+    /// abandoned on this side at once: what is buffered is released, what still arrives is discarded and no more credit
+    /// is granted.
     ///
     /// # Errors
     /// The errors of [`Streams::stop_sending`](crate::stream::Streams::stop_sending).
     pub fn stop_sending(&mut self, id: StreamId, error: u64) -> Result<(), StreamError> {
-        self.streams.stop_sending(id, error)
+        self.streams.stop_sending(&mut self.pool, id, error)
     }
 
     /// The readable bytes of a stream, borrowed from the pool. Release them with [`consume`](Self::consume).

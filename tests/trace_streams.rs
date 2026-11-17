@@ -87,7 +87,7 @@ fn slot_json(s: &SlotView) -> String {
     let id = i64::try_from(s.id).unwrap();
     let rs: Vec<String> = s.ranges.iter().map(|(a, z)| format!("[{a},{z}]")).collect();
     format!(
-        r#"{{"id":{id},"open":{},"held":{},"rs":[{}],"read":{},"hi":{},"contig":{},"fin":{},"limit":{},"size":{},"pend":{},"defer":{},"rst":{},"obs":{},"sdone":{},"srst":{},"stop":{},"qcode":{},"scode":{},"ord":{},"ms":{},"mb":{},"mr":{}}}"#,
+        r#"{{"id":{id},"open":{},"held":{},"rs":[{}],"read":{},"hi":{},"contig":{},"fin":{},"limit":{},"size":{},"pend":{},"defer":{},"rst":{},"obs":{},"dropped":{},"sdone":{},"srst":{},"stop":{},"qcode":{},"scode":{},"ord":{},"ms":{},"mb":{},"mr":{}}}"#,
         b(s.open),
         list(&s.held),
         rs.join(","),
@@ -101,6 +101,7 @@ fn slot_json(s: &SlotView) -> String {
         b(s.deferred),
         opt(s.reset),
         b(s.observed),
+        b(s.dropped),
         b(s.send_done),
         s.send_reset,
         s.stop,
@@ -444,6 +445,11 @@ impl Run<'_> {
         let id = REMOTE[self.below(REMOTE.len() as u64) as usize];
         let hi = self.slot(id).map_or(0, |s| s.highest);
         let fs = hi + [0, 0, 1, 100][self.below(4) as usize];
+        self.reset_stream(id, fs);
+    }
+
+    /// The peer reset stream `id` with code 1 and final size `fs`.
+    fn reset_stream(&mut self, id: u64, fs: u64) {
         let res = self.t.on_reset_stream(&mut self.pool, id, 1, fs);
         let err = res.as_ref().err().map_or("ok", |e| err_name(*e));
         self.log(&format!(r#""op":"reset","id":{id},"code":1,"fs":{fs},"err":"{err}""#));
@@ -456,7 +462,12 @@ impl Run<'_> {
             return;
         }
         let id = ids[self.below(ids.len() as u64) as usize];
-        let res = self.t.stop_sending(id, 7);
+        self.stop(id);
+    }
+
+    /// Stop reading stream `id` with code 7: its buffered bytes are released and what arrives is discarded.
+    fn stop(&mut self, id: u64) {
+        let res = self.t.stop_sending(&mut self.pool, id, 7);
         let err = res.as_ref().err().map_or("ok", |e| err_name(*e));
         self.log(&format!(r#""op":"stopreq","id":{id},"code":7,"err":"{err}""#));
     }
@@ -670,8 +681,8 @@ struct Reached {
     ctl_released: bool,
 }
 
-/// One seeded run; `early` makes it an optimistic dial, and `reset_early` resets its last early stream at once.
-fn run(seed: u64, out: &mut String, run: u32, early: bool, reset_early: bool) -> Reached {
+/// A run over an empty server-side table.
+fn start(seed: u64, out: &mut String, run: u32) -> Run<'_> {
     let mut config = Config::new(false);
     config.initial_stream_window = WINDOW;
     config.max_stream_window = 6 * CH;
@@ -682,7 +693,7 @@ fn run(seed: u64, out: &mut String, run: u32, early: bool, reset_early: bool) ->
     };
     let pool = BufferPool::new_boxed(POOL);
     let t = Box::new(Table::new(&config, &pool));
-    let mut r = Run {
+    Run {
         t,
         pool,
         rng: SplitMix64::traced(seed),
@@ -700,7 +711,12 @@ fn run(seed: u64, out: &mut String, run: u32, early: bool, reset_early: bool) ->
         released: false,
         ctl_released: false,
         cover: 0,
-    };
+    }
+}
+
+/// One seeded run; `early` makes it an optimistic dial, and `reset_early` resets its last early stream at once.
+fn run(seed: u64, out: &mut String, run: u32, early: bool, reset_early: bool) -> Reached {
+    let mut r = start(seed, out, run);
     r.log(r#""op":"init""#);
     // An optimistic dial: the application opens streams and queues data before the peer's limits are known
     // (`Connection::allow_early_streams`), and the establishment applies them some time later.
@@ -734,6 +750,67 @@ fn run(seed: u64, out: &mut String, run: u32, early: bool, reset_early: bool) ->
     }
 }
 
+/// The steps of a stop that a random run reaches only by chance, in a fixed order: a stop with bytes buffered gives
+/// them back, data after it is checked and not stored, a frame past the window is still a violation, no credit is
+/// granted, and the final size or a reset of the peer frees the slot once the send half is done.
+fn stopped(out: &mut String, run: u32) {
+    let mut r = start(0x5354_4f50_0000_0000 + u64::from(run), out, run);
+    r.log(r#""op":"init""#);
+    // A stream of the peer with no send half: the final size after the stop frees the slot.
+    r.frame(2, 0, 100, false, false);
+    assert_eq!(r.slot(2).unwrap().held.len(), 1);
+    assert_eq!(r.pool.used_chunks(), 1);
+    r.stop(2);
+    let s = r.slot(2).unwrap();
+    assert!(s.dropped && s.held.is_empty() && s.ranges.is_empty() && s.contig == 0);
+    assert_eq!(r.pool.used_chunks(), 0, "a stop kept a chunk");
+    r.frame(2, 100, 50, false, false);
+    let s = r.slot(2).unwrap();
+    assert!(
+        s.held.is_empty() && s.highest == 150,
+        "data after a stop was stored or not counted"
+    );
+    r.frame(2, WINDOW - 5, 10, false, false);
+    assert_eq!(r.slot(2).unwrap().highest, 150, "a frame past the window was counted");
+    for _ in 0..2 {
+        r.pending();
+    }
+    assert!(
+        r.control
+            .iter()
+            .all(|f| !matches!(f, ControlFrame::MaxStreamData { .. })),
+        "a stopped stream was granted credit"
+    );
+    r.frame(2, 150, 0, true, false);
+    assert!(r.slot(2).is_none(), "the final size after a stop did not free the slot");
+    // The same, ended by a reset of the peer.
+    r.frame(6, 0, 100, false, false);
+    r.stop(6);
+    r.frame(6, 100, 10, false, false);
+    r.reset_stream(6, 110);
+    assert!(r.slot(6).is_none(), "a reset after a stop did not free the slot");
+    // A stream with a send half stays until that half is done too.
+    r.frame(0, 0, 100, false, false);
+    r.stop(0);
+    r.frame(0, 100, 50, true, false);
+    let s = r.slot(0).unwrap();
+    assert!(s.dropped && s.fin == Some(150) && s.held.is_empty());
+    r.t.reset(&mut r.pool, 0, 9).unwrap();
+    r.log(r#""op":"appreset","id":0,"code":9"#);
+    for _ in 0..3 {
+        r.pending();
+    }
+    for f in std::mem::take(&mut r.control) {
+        if let ControlFrame::ResetStream { id, .. } = f {
+            r.t.on_control_acked(&mut r.pool, &f);
+            r.log(&format!(r#""op":"ackedreset","id":{id}"#));
+        }
+    }
+    assert!(r.slot(0).is_none(), "the slot stayed after both halves were done");
+    assert_eq!(r.pool.used_chunks(), 0);
+    r.log(r#""op":"end""#);
+}
+
 #[test]
 fn stream_table_runs_match_the_models() {
     big_stack(|| {
@@ -752,6 +829,7 @@ fn stream_table_runs_match_the_models() {
             released |= r.released;
             ctl_released |= r.ctl_released;
         }
+        stopped(&mut out, 41);
         assert!(jumped, "no frame opened a skipped stream inside the credit");
         assert!(
             vinc_tests::soaking() || past,
@@ -808,6 +886,7 @@ fn stream_table_runs_match_the_models() {
             r#""kind":"msd""#,
             r#""kind":"msts""#,
             r#""kind":"reset""#,
+            r#""dropped":true"#,
         ] {
             assert!(
                 vinc_tests::soaking() || out.contains(needle),

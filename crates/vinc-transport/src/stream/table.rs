@@ -22,6 +22,7 @@ use super::{
 };
 
 mod pick;
+mod stop;
 #[cfg(feature = "trace")]
 mod view;
 
@@ -612,7 +613,9 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
 
     // ---- receive ----------------------------------------------------------------------------------------------
 
-    /// A stream data frame arrived.
+    /// A stream data frame arrived. Returns whether the stream has a half the application can read: `false` for a
+    /// stream the table does not hold (already freed) and for a half the application abandoned
+    /// ([`Streams::stop_sending`]), whose data was only checked.
     ///
     /// # Errors
     /// A violation by the peer ([`StreamError::StreamLimit`], [`StreamError::StreamState`], [`StreamError::FlowControl`],
@@ -626,61 +629,24 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         offset: u64,
         data: &[u8],
         fin: bool,
-    ) -> Result<(), StreamError> {
-        if is_uni(id) && self.is_local(id) {
-            return Err(StreamError::StreamState);
-        }
-        let Some(i) = self.locate(pool, id)? else { return Ok(()) };
-        let slot = self.slots.get_mut(i).ok_or(StreamError::UnknownStream)?;
-        let result = slot.recv.on_data(pool, offset, data, fin);
-        self.stats.held_back += u64::from(result == Err(StreamError::Exhausted));
-        self.settle(pool, i);
-        result
-    }
-
-    /// A stop request arrived for a stream we send on: reset it with `error_code`. Returns whether this call reset it
-    /// (false if it was already reset, finished or gone).
-    ///
-    /// # Errors
-    /// [`StreamError::StreamState`] for a stream we cannot send on; the errors of opening a peer stream as in
-    /// [`Streams::on_stream_frame`].
-    pub fn on_stop_sending(
-        &mut self,
-        pool: &mut BufferPool<'_>,
-        id: StreamId,
-        error_code: u64,
     ) -> Result<bool, StreamError> {
-        if is_uni(id) && !self.is_local(id) {
+        if is_uni(id) && self.is_local(id) {
             return Err(StreamError::StreamState);
         }
         let Some(i) = self.locate(pool, id)? else {
             return Ok(false);
         };
-        let fresh = self.slots.get(i).is_some_and(|s| s.send.can_stop());
-        let result = self
-            .with_send(i, |send| send.reset(pool, error_code))
-            .unwrap_or(Err(StreamError::UnknownStream));
-        self.settle(pool, i);
-        result.map(|()| fresh)
-    }
-
-    /// Ask the peer to stop sending on a stream we receive on; it resets the stream with `error_code`. The request is
-    /// queued as a control frame and sent again if lost. Nothing is queued if the peer already ended the stream.
-    ///
-    /// # Errors
-    /// [`StreamError::UnknownStream`], or [`StreamError::StreamState`] for a stream we cannot receive on.
-    pub fn stop_sending(&mut self, id: StreamId, error_code: u64) -> Result<(), StreamError> {
-        let i = self.require(id)?;
         let slot = self.slots.get_mut(i).ok_or(StreamError::UnknownStream)?;
-        if !slot.recv.open {
-            return Err(StreamError::StreamState);
-        }
-        slot.recv.request_stop(error_code);
-        self.refresh(i);
-        Ok(())
+        let readable = !slot.recv.dropped;
+        let result = slot.recv.on_data(pool, offset, data, fin);
+        self.stats.held_back += u64::from(result == Err(StreamError::Exhausted));
+        self.settle(pool, i);
+        result.map(|()| readable)
     }
 
-    /// A stream reset frame arrived.
+    /// A stream reset frame arrived. Returns whether the table holds the stream: `true` for every held half, an
+    /// abandoned one included (the side that stopped hears the peer's reset and its code), `false` for a stream
+    /// already freed.
     ///
     /// # Errors
     /// As [`Streams::on_stream_frame`].
@@ -690,15 +656,17 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         id: StreamId,
         error_code: u64,
         final_size: u64,
-    ) -> Result<(), StreamError> {
+    ) -> Result<bool, StreamError> {
         if is_uni(id) && self.is_local(id) {
             return Err(StreamError::StreamState);
         }
-        let Some(i) = self.locate(pool, id)? else { return Ok(()) };
+        let Some(i) = self.locate(pool, id)? else {
+            return Ok(false);
+        };
         let slot = self.slots.get_mut(i).ok_or(StreamError::UnknownStream)?;
         let result = slot.recv.on_reset(pool, error_code, final_size);
         self.settle(pool, i);
-        result
+        result.map(|()| true)
     }
 
     /// The contiguous readable bytes of a stream (up to the end of one chunk), borrowed from the pool.

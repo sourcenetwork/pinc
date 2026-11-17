@@ -445,7 +445,8 @@ pub enum Command<'c, S = vinc_transport::stream::NoSource> {
         /// The application error code.
         error: u64,
     },
-    /// Ask the peer to stop sending on a stream; it resets the stream with `error`.
+    /// Ask the peer to stop sending on a stream; it resets the stream with `error`. What is buffered of the stream is
+    /// released, what still arrives is discarded, and no more credit is granted for it.
     StopSending {
         /// The session.
         session: SessionId,

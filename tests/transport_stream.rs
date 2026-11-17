@@ -101,7 +101,7 @@ proptest! {
             guard += 1;
             prop_assert!(guard < 100_000);
             match t.on_stream_frame(&mut pool, 0, a as u64, &data[a..b], b == len) {
-                Ok(()) => {}
+                Ok(_) => {}
                 // Too many holes right now: the peer would retransmit it later.
                 Err(StreamError::Fragmented) => queue.push_back((a, b)),
                 Err(e) => prop_assert!(false, "unexpected {e}"),

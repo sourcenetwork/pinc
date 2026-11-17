@@ -484,6 +484,10 @@ name = "core_session_from"
 path = "core_session_from.rs"
 
 [[test]]
+name = "node_stopped_streams"
+path = "node_stopped_streams.rs"
+
+[[test]]
 name = "core_extras"
 path = "core_extras.rs"
 
@@ -522,6 +526,10 @@ path = "core_datagram.rs"
 [[test]]
 name = "transport_events"
 path = "transport_events.rs"
+
+[[test]]
+name = "transport_stream_ends"
+path = "transport_stream_ends.rs"
 
 [[test]]
 name = "core_acp"

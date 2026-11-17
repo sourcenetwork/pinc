@@ -2,7 +2,9 @@
 //!
 //! Invariants: bytes live in the chunk ring at their absolute offset; `ranges` records which offsets were stored and
 //! `contig` is the end of the prefix stored without holes; chunks wholly below `read_off` are returned to the pool; a
-//! byte received twice must be identical. Window grants are decided by the table, which owns the pool accounting.
+//! byte received twice must be identical. Window grants are decided by the table, which owns the pool accounting. A
+//! half the application abandoned (`abandon`) holds no chunk, reads nothing, grants no more credit and counts nothing
+//! in the ledger, but still checks every frame against its window and final size and waits for the peer's end.
 
 use super::flow::{Meter, Window};
 use super::pool::{BufferPool, CHUNK_SIZE, Ring};
@@ -34,6 +36,8 @@ pub(super) struct Recv<const C: usize> {
     stop: Stop,
     /// The application has seen the end (a consume after the final size, or a reset).
     observed: bool,
+    /// The application abandoned the half: what arrives is checked and discarded.
+    pub(super) dropped: bool,
 }
 
 impl<const C: usize> Recv<C> {
@@ -50,6 +54,7 @@ impl<const C: usize> Recv<C> {
         reset: None,
         stop: Stop::None,
         observed: false,
+        dropped: false,
     };
 
     pub(super) const fn init(&mut self, size: u64) {
@@ -77,6 +82,7 @@ impl<const C: usize> Recv<C> {
             deferred: self.win.deferred,
             reset: self.reset,
             observed: self.observed,
+            dropped: self.dropped,
             send_done: false,
             send_reset: 0,
             send_code: None,
@@ -97,7 +103,7 @@ impl<const C: usize> Recv<C> {
     pub(super) fn status(&self) -> RecvStatus {
         match (self.reset, self.final_size) {
             (Some(code), _) => RecvStatus::Reset(code),
-            (None, Some(f)) if f == self.read_off => RecvStatus::Finished,
+            (None, Some(f)) if f == self.read_off || self.dropped => RecvStatus::Finished,
             _ => RecvStatus::Open,
         }
     }
@@ -141,6 +147,19 @@ impl<const C: usize> Recv<C> {
         }
     }
 
+    /// The application will not read the half: ask the sender to stop with `code` (as [`Recv::request_stop`]), free
+    /// what is buffered and grant no more credit. What still arrives is checked and discarded, and the half is done
+    /// once the sender's end arrives.
+    pub(super) fn abandon(&mut self, pool: &mut BufferPool<'_>, code: u64) {
+        self.request_stop(code);
+        self.dropped = true;
+        self.observed = true;
+        self.win.pending = false;
+        self.win.deferred = false;
+        self.release_all(pool);
+        self.contig = 0;
+    }
+
     pub(super) fn release_all(&mut self, pool: &mut BufferPool<'_>) {
         self.ring.release_all(pool);
         self.ranges.clear();
@@ -168,7 +187,7 @@ impl<const C: usize> Recv<C> {
     /// The pool bytes credit up to `limit` may claim, as [`Recv::unreceived`].
     pub(super) fn pool_demand(&self, limit: u64) -> u64 {
         let reach = self.final_size.map_or(limit, |f| f.min(limit));
-        if !self.open || reach <= self.read_off {
+        if !self.open || self.dropped || reach <= self.read_off {
             return 0;
         }
         let chunk = CHUNK_SIZE as u64;
@@ -178,7 +197,7 @@ impl<const C: usize> Recv<C> {
 
     /// The limit the window is due to move to, when at least an eighth of the window was freed.
     pub(super) fn due(&self) -> Option<u64> {
-        if !self.open {
+        if !self.open || self.dropped {
             return None;
         }
         let cap = self.final_size.unwrap_or(MAX_OFFSET);
@@ -188,7 +207,7 @@ impl<const C: usize> Recv<C> {
     }
 
     fn readable(&self) -> u64 {
-        if self.reset.is_some() {
+        if self.reset.is_some() || self.dropped {
             return 0;
         }
         self.contig.saturating_sub(self.read_off)
@@ -214,7 +233,7 @@ impl<const C: usize> Recv<C> {
         if end > self.win.limit {
             return Err(StreamError::FlowControl);
         }
-        if self.reset.is_none() {
+        if self.reset.is_none() && !self.dropped {
             self.store(pool, offset, data, end)?;
         }
         self.highest = self.highest.max(end);
@@ -269,7 +288,7 @@ impl<const C: usize> Recv<C> {
     /// The stored bytes from absolute offset `at`, to the end of the stored run holding it or of its chunk; the run
     /// may lie beyond a hole. `None` below the read position, past a reset, or where nothing is stored.
     pub(super) fn read_at<'a>(&self, pool: &'a BufferPool<'_>, at: u64) -> Option<&'a [u8]> {
-        if self.reset.is_some() || at < self.read_off {
+        if self.reset.is_some() || self.dropped || at < self.read_off {
             return None;
         }
         let run = self.ranges.containing(at)?;
@@ -280,7 +299,7 @@ impl<const C: usize> Recv<C> {
 
     /// The first stored run that reaches past `from`, cut to start at `from` or later.
     pub(super) fn stored_after(&self, from: u64) -> Option<core::ops::Range<u64>> {
-        if self.reset.is_some() {
+        if self.reset.is_some() || self.dropped {
             return None;
         }
         let from = from.max(self.read_off);

@@ -115,6 +115,7 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
                 if let Some(i) = self.find(id) {
                     if let Some(slot) = self.slots.get_mut(i)
                         && max >= slot.recv.win.limit
+                        && !slot.recv.dropped
                     {
                         slot.recv.win.pending = true;
                     }
