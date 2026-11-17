@@ -543,10 +543,13 @@ theorem ofMid_susp (e : Env) (n : N) (now peer : Nat) (f : NFrame) (fromHub : Bo
   all_goals simp [ofHub_susp]
 
 theorem onLeft_so (e : Env) (n : N) (now m : Nat) (rc : Rec) (hs : n.SuspOk) : (N.onLeft e n now m rc).SuspOk := by
+  have ht : (n.trace (.leaveSeen m)).SuspOk := SuspOk.of_eq (by simp) hs
+  have hd : (N.hubDown e (n.trace (.leaveSeen m)) now m .left).SuspOk := (hubDown_susp _ _ _ _ _).1 ht
   unfold N.onLeft
-  split
-  · exact hs
-  · exact (hubDown_susp _ _ _ _ _).1 (SuspOk.of_eq (by simp) hs)
+  repeat' split
+  all_goals first
+    | exact hs
+    | exact hd
 
 theorem ofDelta_so (e : Env) (n : N) (now peer m : Nat) (rc : Rec) (a : Alive) (hs : n.SuspOk) :
     (N.ofDelta e n now peer m rc a).SuspOk := by

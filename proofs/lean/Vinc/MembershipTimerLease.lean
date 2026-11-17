@@ -324,13 +324,17 @@ theorem onDown_held (t0 m : Nat) (e : Env) (n : N) (now m' inc : Nat) (pf : Proo
 
 theorem onLeft_held (t0 m : Nat) (e : Env) (n : N) (now m' : Nat) (rc : Rec) (hh : Held t0 m n) :
     Held t0 m (N.onLeft e n now m' rc) := by
-  unfold N.onLeft
-  split
-  · exact hh
-  · rw [Held, hubDown_roster_cp]
+  have hd : Held t0 m (N.hubDown e (n.trace (.leaveSeen m')) now m' .left) := by
+    unfold Held
+    rw [hubDown_roster_cp, trace_rs]
     by_cases hk : m = m'
     · subst hk; left; exact AMap.get?_erase_self _ _
-    · rw [AMap.get?_erase_ne _ _ _ hk]; simp only [trace_rs]; exact hh
+    · rw [AMap.get?_erase_ne _ _ _ hk]; exact hh
+  unfold N.onLeft
+  repeat' split
+  all_goals first
+    | exact hh
+    | exact hd
 
 theorem ofDelta_held (t0 m : Nat) (e : Env) (n : N) (now peer m' : Nat) (rc : Rec) (a : Alive) (hh : Held t0 m n) :
     Held t0 m (N.ofDelta e n now peer m' rc a) := by
