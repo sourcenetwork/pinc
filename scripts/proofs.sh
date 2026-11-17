@@ -485,6 +485,8 @@ par run_tlc recovery_flushdown Recovery Recovery_flushdown
 par run_tlc recovery_asleep Recovery Recovery_asleep
 par witness_tlc recovery_asleep_w Recovery Recovery_asleep_w StrictProps
 par run_tlc recovery_tail Recovery Recovery_tail
+par run_tlc recovery_forget Recovery Recovery_forget
+par witness_tlc recovery_forget_w Recovery Recovery_forget_w PathRttFresh
 par run_tlc rx Rx Rx
 par run_tlc rx_wide Rx Rx_wide
 par run_tlc cid Cid Cid
@@ -663,6 +665,8 @@ par run_tlc reply_path_moves ReplyPath ReplyPath_moves
 par witness_tlc reply_path_rank ReplyPath ReplyPath_rank RankRule
 par witness_tlc reply_path_escape ReplyPath ReplyPath_escape EscapeRule
 par witness_tlc reply_path_fall ReplyPath ReplyPath_fall FallRule
+par witness_tlc reply_path_back ReplyPath ReplyPath_back BackRule
+par witness_tlc reply_path_slot ReplyPath ReplyPath_slot SlotFresh
 par run_tlc timers Timers Timers
 par witness_tlc timers_close Timers Timers_close NoCloseSent
 par witness_tlc timers_nowake Timers Timers_nowake PollLeLife

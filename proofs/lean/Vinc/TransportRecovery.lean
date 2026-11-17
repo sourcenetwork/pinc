@@ -8,6 +8,10 @@ runs uses the same value and compares what the 32-bit checker saw through the sa
 replays the recorded calls of the real code through these functions; the theorems about them are in
 `Vinc.TransportRecoveryThm`.
 
+A path slot has a generation, and a packet records the generation of its slot when it is sent: the round trip of the
+newest acknowledged packet is kept for its path only when that occupant is still in the slot (`nwPath`; a path leaving
+the slot is `forgetPath`), by occupant and not by clock. The reorder state of a slot is kept when another path takes it.
+
 A slot of the sent ring is in flight, declared lost (a ghost) or done. The congestion controller and the
 pacer are not part of the state; recovery only tells them what happened (see `RecoveryOps.tla`).
 -/
@@ -64,6 +68,8 @@ structure Slot where
   fr : List Bool
   st : St
   lostAt : Nat
+  /-- The generation of the path's slot when the packet was sent: the occupant that sent it. -/
+  occ : Nat
   deriving DecidableEq, Repr, Inhabited
 
 structure Rtt where
@@ -97,6 +103,8 @@ structure R where
   prtt : List Nat
   act : Nat
   flip : Option Nat
+  /-- The generation of each path slot: a path that takes the slot after another left it is the next one. -/
+  gen : List Nat
   late : List (Nat × Nat)
   saved : Option Nat
   reo : List (Nat × Option Nat)
@@ -108,7 +116,8 @@ def R.init (p : P) : R :=
   { ring := [], ls := none, la := none, sent := 0, acked := 0, lost := 0, inf := 0, infp := 0, lt := none, pc := 0,
     lp := 0, asleep := false, down := false, hrd := 0, clock := 0, tgr := 0, lrtt := 0,
     rtt := { lat := none, sm := p.irtt, var := p.irtt / 2, mn := none, has := false },
-    rel := List.replicate p.mp false, prtt := List.replicate p.mp 0, act := 0, flip := none, late := [], saved := none,
+    rel := List.replicate p.mp false, prtt := List.replicate p.mp 0, act := 0, flip := none,
+    gen := List.replicate p.mp 0, late := [], saved := none,
     reo := List.replicate p.mp (0, none), gs := 0, lat := 0 }
 
 /-- An event the engine reports: `kind` is `acked`, `late` or `lost`; `f1` and `f2` are probe and repair for an
@@ -408,7 +417,7 @@ def send (p : P) (r : R) (k : Pkt) : Res :=
   else if k.path ≥ p.mp then res r [] {} "PathOutOfRange" false
   else
     let r1 := { r with clock := max r.clock k.time, ring := trim p k.time r.ring }
-    match push p r1.ring ⟨k.pn, k.time, k.size, k.path, k.rep, k.probe, k.fr, .fl, 0⟩ with
+    match push p r1.ring ⟨k.pn, k.time, k.size, k.path, k.rep, k.probe, k.fr, .fl, 0, r1.gen.getD k.path 0⟩ with
     | none => res r1 [] {} "RingFull" false
     | some ring =>
       res { r1 with ring, ls := some k.pn, sent := r1.sent + k.size, inf := r1.inf + k.size, infp := r1.infp + 1 }
@@ -428,6 +437,11 @@ structure X where
   nw : Option (Nat × Nat × Nat)
   gh : Bool
   err : String
+
+/-- The path whose round trip a newest acknowledged packet may set: its own when the path in that slot is still the
+occupant that sent the packet, and an index past the table (which `List.set` leaves alone) when another path has taken
+the slot since. The bound is the occupant, not a time, so it holds for a boundary kept as a packet number too. -/
+def nwPath (r : R) (sl : Slot) : Nat := if sl.occ == r.gen.getD sl.path 0 then sl.path else r.prtt.length
 
 def ackRing (p : P) (now b : Nat) : Nat → Nat → X → X
   | 0, _, x => x
@@ -454,8 +468,8 @@ def ackRing (p : P) (now b : Nat) : Nat → Nat → X → X
                      s := { x.s with ap := x.s.ap + 1, ab := x.s.ab + sl.size },
                      ev := x.ev ++ [⟨"acked", sl.pn, sl.size, sl.fr, sl.probe, sl.rep⟩],
                      nw := match x.nw with
-                       | none => some (sl.pn, sl.time, sl.path)
-                       | some n => if sl.pn > n.1 then some (sl.pn, sl.time, sl.path) else x.nw }
+                       | none => some (sl.pn, sl.time, nwPath x.r sl)
+                       | some n => if sl.pn > n.1 then some (sl.pn, sl.time, nwPath x.r sl) else x.nw }
 
 /-- One acknowledged range `[a, b]` with no error: its largest number is noted, a saved window it covers is restored,
 the packets inside are acknowledged. -/
@@ -523,6 +537,12 @@ def followPath (r : R) (mp path : Nat) : R × String :=
   if path ≥ mp then (r, "PathOutOfRange")
   else if path != r.act then ({ r with act := path, flip := some r.clock }, "ok")
   else (r, "ok")
+
+/-- The path in slot `path` goes and another takes the slot: its round trip is cleared and a packet sent before is
+stale (`nwPath`). The reorder state of the slot is kept. -/
+def forgetPath (r : R) (mp path : Nat) : R × String :=
+  if path ≥ mp then (r, "PathOutOfRange")
+  else ({ r with prtt := r.prtt.set path 0, gen := r.gen.set path (r.gen.getD path 0 + 1) }, "ok")
 
 def setKind (r : R) (mp path : Nat) (relay : Bool) : R × String :=
   if path ≥ mp then (r, "PathOutOfRange") else ({ r with rel := r.rel.set path relay }, "ok")

@@ -26,6 +26,17 @@
 (* error instead of wrapping. The constants MS and SEC scale the time:     *)
 (* TLC runs them small, the trace runs the real 10^6 and 10^9.             *)
 (*                                                                         *)
+(* Slots that change hands. A path slot has a generation (gen); a packet   *)
+(* records the generation of its slot when it is sent (occ), and           *)
+(* ForgetPath, which is a path leaving the slot for another, clears the    *)
+(* slot's round trip and raises the generation. The round trip of the      *)
+(* newest acknowledged packet is kept for its path only when the packet's  *)
+(* occ is the slot's generation now (Occupant): the occupant sent it, not  *)
+(* a clock, so the rule is right for a boundary kept as a time and for one *)
+(* kept as a packet number. The reorder state of the slot is kept, as in   *)
+(* the code. ps is a ghost: the occupant of the packet whose round trip a  *)
+(* slot holds. Guard = FALSE writes it regardless (the witness).           *)
+(*                                                                         *)
 (* Not modelled: a packet number above 2^62 - 1 (the model never produces  *)
 (* one, the code answers PacketNumberOutOfRange), the cwnd and ssthresh    *)
 (* values of the saved window (only the packet that saved them), the       *)
@@ -33,7 +44,7 @@
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
 
-CONSTANTS N, MS, SEC, MP, TOP, MAXG, LATEN
+CONSTANTS N, MS, SEC, MP, TOP, MAXG, LATEN, Guard
 
 Mx(a, b) == IF a > b THEN a ELSE b
 Mn(a, b) == IF a < b THEN a ELSE b
@@ -55,13 +66,14 @@ SLOWSRTT == SMul(LONG, 4)
 GIVEUPSLOW == SMul(SEC, 20)
 
 (* ---- the states ---- *)
-NoNew == <<-1, 0, 0>>
+NoNew == <<-1, 0, 0, 0>>
 S0 == [ap |-> 0, ab |-> 0, lap |-> 0, lp |-> 0, lb |-> 0]
 
 Init0 == [ring |-> <<>>, ls |-> -1, la |-> -1, sent |-> 0, acked |-> 0, lost |-> 0, inf |-> 0, infp |-> 0,
           lt |-> -1, pc |-> 0, lp |-> 0, asleep |-> FALSE, down |-> FALSE, hrd |-> 0, clock |-> 0, tgr |-> 0, lrtt |-> 0,
           rtt |-> [lat |-> -1, sm |-> IRTT, var |-> IRTT \div 2, mn |-> -1, has |-> FALSE],
           rel |-> [p \in 0..(MP - 1) |-> FALSE], prtt |-> [p \in 0..(MP - 1) |-> 0], act |-> 0, flip |-> -1,
+          gen |-> [p \in 0..(MP - 1) |-> 0], ps |-> [p \in 0..(MP - 1) |-> -1],
           late |-> <<>>, saved |-> -1, reo |-> [p \in 0..(MP - 1) |-> [ext |-> 0, seen |-> -1]], gs |-> 0, lat |-> 0]
 
 (* ---- the round-trip estimate (rtt.rs) ---- *)
@@ -74,7 +86,8 @@ RttUpdate(e, x) ==
 RttSeed(e, x) == IF e.has THEN e ELSE [e EXCEPT !.has = TRUE, !.sm = Mx(x, MS), !.var = Mx(x, MS) \div 2]
 IsLongRtt(mn) == mn >= 0 /\ mn >= LONG
 
-(* ---- the sent ring (sent.rs); slot: pn time size path rep probe fr st at ---- *)
+(* ---- the sent ring (sent.rs); slot: pn time size path occ rep probe fr st at ---- *)
+\* occ: the generation of the path's slot when the packet was sent (R.gen[path]), the occupant that sent it
 \* st: 0 in flight, 1 declared lost (a ghost), 2 done
 RECURSIVE Trim(_, _)
 Trim(ring, now) ==
@@ -249,8 +262,8 @@ Send(R, p) ==
     IF R.ls >= 0 /\ p.pn <= R.ls THEN Res(R, <<>>, S0, "PacketNumberNotIncreasing", FALSE)
     ELSE IF p.path >= MP THEN Res(R, <<>>, S0, "PathOutOfRange", FALSE)
     ELSE LET R1 == [R EXCEPT !.clock = Mx(R.clock, p.time), !.ring = Trim(R.ring, p.time)]
-             pu == Push(R1.ring, [pn |-> p.pn, time |-> p.time, size |-> p.size, path |-> p.path, rep |-> p.rep,
-                                  probe |-> p.probe, fr |-> p.fr, st |-> 0, at |-> 0])
+             pu == Push(R1.ring, [pn |-> p.pn, time |-> p.time, size |-> p.size, path |-> p.path, occ |-> R.gen[p.path],
+                                  rep |-> p.rep, probe |-> p.probe, fr |-> p.fr, st |-> 0, at |-> 0])
          IN IF ~pu.ok THEN Res(R1, <<>>, S0, "RingFull", FALSE)
             ELSE Res([R1 EXCEPT !.ring = pu.ring, !.ls = p.pn, !.sent = R1.sent + p.size, !.inf = R1.inf + p.size,
                                 !.infp = R1.infp + 1], <<>>, S0, "ok", FALSE)
@@ -259,7 +272,7 @@ Untracked(R, pn) ==
     ELSE Res([R EXCEPT !.ls = pn], <<>>, S0, "ok", FALSE)
 
 (* ---- acknowledgements (ack.rs) ---- *)
-\* X: [r, ev, s, fl, nw, gh, err]; nw = <<pn, time, path>>
+\* X: [r, ev, s, fl, nw, gh, err]; nw = <<pn, time, path, occ>>
 RECURSIVE AckRing(_, _, _, _)
 AckRing(X, now, i, b) ==
     IF i > Len(X.r.ring) \/ X.r.ring[i].pn > b THEN X
@@ -279,7 +292,8 @@ AckRing(X, now, i, b) ==
                                                       !.infp = R1.infp - 1],
                                      !.s.ap = X.s.ap + 1, !.s.ab = X.s.ab + sl.size,
                                      !.ev = Append(X.ev, Ev("acked", sl.pn, sl.size, sl.fr, sl.probe, sl.rep)),
-                                     !.nw = IF X.nw[1] < 0 \/ sl.pn > X.nw[1] THEN <<sl.pn, sl.time, sl.path>> ELSE X.nw],
+                                     !.nw = IF X.nw[1] < 0 \/ sl.pn > X.nw[1]
+                                            THEN <<sl.pn, sl.time, sl.path, sl.occ>> ELSE X.nw],
                            now, i + 1, b)
 
 RECURSIVE AckRanges(_, _, _, _)
@@ -294,6 +308,9 @@ AckRanges(X, now, rgs, k) ==
                  IN AckRanges(AckRing(X1, now, LowerBound(X1.r.ring, a), b), now, rgs, k + 1)
 
 \* rgs: a sequence of <<start, end>>, largest first
+\* a round trip is kept for a path only when the newest acknowledged packet was sent by the path's present occupant:
+\* a path that took the slot after the packet was sent has no part in it (Guard off is the witness, Recovery_forget_w)
+Occupant(R, nw) == ~Guard \/ nw[4] = R.gen[nw[3]]
 Ack(R, now, rgs) ==
     LET R0 == [R EXCEPT !.clock = Mx(R.clock, now)]
         gh == SSub(now, R0.gs) >= GSCAN /\ HasGhost(R0.ring)
@@ -306,7 +323,7 @@ Ack(R, now, rgs) ==
              lst == LateTime(R2.late, X.fl)
              R3 == [R2 EXCEPT !.late = LateTake(R2.late, X.fl)]
              seeded == lst >= 0 /\ X.nw[1] # X.fl /\ ~R3.rtt.has
-             nw == IF seeded THEN <<X.fl, Mx(lst, SSub(now, LATESAMPLE)), R3.act>> ELSE X.nw
+             nw == IF seeded THEN <<X.fl, Mx(lst, SSub(now, LATESAMPLE)), R3.act, R3.gen[R3.act]>> ELSE X.nw
              R4 == IF seeded THEN [R3 EXCEPT !.pc = 0] ELSE R3
          IN IF nw[1] < 0 THEN Res([R4 EXCEPT !.ring = Trim(R4.ring, now)], X.ev, X.s, "ok", FALSE)
             ELSE
@@ -314,7 +331,8 @@ Ack(R, now, rgs) ==
                   e2 == RttUpdate(R4.rtt, sample)
                   R5 == IF nw[1] = X.fl
                         THEN [R4 EXCEPT !.lat = nw[2], !.rtt = e2, !.tgr = Mx(e2.sm, R4.tgr - (R4.tgr \div 32)),
-                                        !.prtt[nw[3]] = e2.sm]
+                                        !.prtt[nw[3]] = IF Occupant(R4, nw) THEN e2.sm ELSE R4.prtt[nw[3]],
+                                        !.ps[nw[3]] = IF Occupant(R4, nw) THEN nw[4] ELSE R4.ps[nw[3]]]
                         ELSE R4
                   Y == Detect([r |-> [R5 EXCEPT !.pc = 0], ev |-> X.ev, s |-> X.s, nl |-> -1], now, X.fl)
               IN Res([Y.r EXCEPT !.ring = Trim(Y.r.ring, now)], Y.ev, Y.s, "ok", FALSE)
@@ -330,6 +348,11 @@ FollowPath(R, p) ==
     ELSE IF p # R.act THEN [r |-> [R EXCEPT !.act = p, !.flip = R.clock], err |-> "ok"]
     ELSE [r |-> R, err |-> "ok"]
 SetKind(R, p, relay) == IF p >= MP THEN [r |-> R, err |-> "PathOutOfRange"] ELSE [r |-> [R EXCEPT !.rel[p] = relay], err |-> "ok"]
+\* the path in slot p goes and another takes the slot: its round trip is cleared and a packet sent before is stale; the
+\* reorder state of the slot is kept
+ForgetPath(R, p) ==
+    IF p >= MP THEN [r |-> R, err |-> "PathOutOfRange"]
+    ELSE [r |-> [R EXCEPT !.prtt[p] = 0, !.ps[p] = -1, !.gen[p] = R.gen[p] + 1], err |-> "ok"]
 SeedRtt(R, x) == [R EXCEPT !.rtt = RttSeed(R.rtt, x)]
 Activity(R, now) == [R EXCEPT !.hrd = Mx(R.hrd, now), !.clock = Mx(R.clock, now)]
 Asleep(R, b) == [R EXCEPT !.asleep = b]

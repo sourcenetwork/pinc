@@ -31,10 +31,14 @@
 (*    (GhostBound); the ghost look runs at most once per 25 ms;            *)
 (*  - tail repair: a candidate exists only after a burst of exactly one    *)
 (*    packet (TailShape).                                                  *)
+(*  - a path that takes a slot: the round trip kept for a path comes from a *)
+(*    packet its present occupant sent; an acknowledgement of a packet an  *)
+(*    earlier occupant sent sets none (PathRttFresh; Recovery_forget_w is  *)
+(*    the witness without the guard).                                      *)
 (* Lean counterpart: proofs/lean/Vinc/TransportRecovery*.lean.             *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
-CONSTANTS N, MS, SEC, MP, TOP, MAXG, LATEN, DELTAS, PNMAX, SIZES, HOR, OPS, KMAX, FLAGS, PMAX, FRN
+CONSTANTS N, MS, SEC, MP, TOP, MAXG, LATEN, Guard, DELTAS, PNMAX, SIZES, HOR, OPS, KMAX, FLAGS, PMAX, FRN
 VARIABLES R, ev, H, T, L, stepc
 vars == <<R, ev, H, T, L, stepc>>
 
@@ -67,6 +71,7 @@ TimeoutA == /\ "timeout" \in OPS
 FlushA == /\ "flush" \in OPS /\ \E d \in DELTAS : R.clock + d <= HOR /\ Step("flush", Flush(R, R.clock + d))
 SwitchA == /\ "switch" \in OPS /\ \E p \in 0..MP : Quiet("switch", SwitchPath(R, p).r)
 FollowA == /\ "follow" \in OPS /\ \E p \in 0..MP : Quiet("follow", FollowPath(R, p).r)
+ForgetA == /\ "forget" \in OPS /\ \E p \in 0..MP : Quiet("forget", ForgetPath(R, p).r)
 KindA == /\ "kind" \in OPS /\ \E p \in 0..MP, k \in BOOLEAN : Quiet("kind", SetKind(R, p, k).r)
 AsleepA == /\ "asleep" \in OPS /\ \E b \in BOOLEAN : Quiet("asleep", Asleep(R, b))
 DownA == /\ "down" \in OPS /\ \E b \in BOOLEAN : Quiet("down", Down(R, b))
@@ -78,7 +83,7 @@ TailA == /\ "tail" \in OPS
             \/ T' = TailDrain(T).t
          /\ ev' = <<>> /\ L' = [L0 EXCEPT !.op = "tail"] /\ stepc' = stepc + 1 /\ UNCHANGED <<R, H>>
 
-Next == SendA \/ UntrackedA \/ AckA \/ TimeoutA \/ FlushA \/ SwitchA \/ FollowA \/ KindA \/ AsleepA \/ DownA
+Next == SendA \/ UntrackedA \/ AckA \/ TimeoutA \/ FlushA \/ SwitchA \/ FollowA \/ ForgetA \/ KindA \/ AsleepA \/ DownA
         \/ ActivityA \/ SeedA \/ NodeA \/ TailA
 Spec == Init /\ [][Next]_vars
 
@@ -102,6 +107,8 @@ DurMonotone == PtoDur([R EXCEPT !.pc = R.pc + 1]) >= PtoDur(R)
 DurCapped == /\ PtoDur(R) <= IF PtoSlow(R) THEN PtoWide(R) ELSE PTOCAP
              /\ PtoDur(R) >= Mn(PtoSrtt(R), PTOCAP)
 TailShape == /\ T.burst <= 2 /\ (T.cand >= 0 => T.burst = 1)
+\* a round trip held for a path comes from the packet of its present occupant (a stale acknowledgement writes none)
+PathRttFresh == \A p \in 0..(MP - 1) : R.ps[p] >= 0 => R.ps[p] = R.gen[p]
 ReoShape == \A p \in 0..(MP - 1) : R.reo[p].seen >= 0 \/ R.reo[p].ext = 0
 
 (* ---- action properties (ev' and L' are the events and results of the step) ---- *)

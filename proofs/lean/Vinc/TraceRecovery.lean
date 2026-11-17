@@ -38,7 +38,7 @@ def stOf (n : Nat) : Except String St :=
 def slotOf (j : J) : Except String Slot := do
   pure { pn := ← natF j "pn", time := ← natF j "time", size := ← natF j "size", path := ← natF j "path",
          rep := ← boolF j "rep", probe := ← boolF j "probe", fr := ← boolList (← field j "fr"),
-         st := ← stOf (← natF j "st"), lostAt := ← natF j "at" }
+         st := ← stOf (← natF j "st"), lostAt := ← natF j "at", occ := 0 }
 
 def reoOf (j : J) : Except String (Nat × Option Nat) := do
   match j.arr? with
@@ -64,7 +64,8 @@ def rOf (v : J) : Except String R := do
          rtt := { lat := ← optNat rt "lat", sm := ← natF rt "sm", var := ← natF rt "var", mn := ← optNat rt "mn",
                   has := ← boolF rt "has" },
          rel := ← boolList (← field v "rel"), prtt := ← natList (← field v "prtt"), act := ← natF v "act",
-         flip := ← optNat v "flip", late := ← pairList (← field v "late"), saved := ← optNat v "saved", reo,
+         flip := ← optNat v "flip",
+         gen := List.replicate (← natList (← field v "prtt")).length 0, late := ← pairList (← field v "late"), saved := ← optNat v "saved", reo,
          gs := ← natF v "gs", lat := ← natF v "lat" }
 
 /-- The model's state as the 32-bit checker records the loss timer. -/

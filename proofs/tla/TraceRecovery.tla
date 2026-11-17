@@ -26,7 +26,7 @@
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
 
-CONSTANTS N, MS, SEC, MP, TOP, MAXG, LATEN
+CONSTANTS N, MS, SEC, MP, TOP, MAXG, LATEN, Guard
 VARIABLES i, rs, tl
 vars == <<i, rs, tl>>
 
@@ -36,14 +36,15 @@ Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/recovery.ndjson")
 Ev0 == Trace[i]
 
 SlotOf(s) == [pn |-> s.pn, time |-> s.time, size |-> s.size, path |-> s.path, rep |-> s.rep, probe |-> s.probe,
-              fr |-> s.fr, st |-> s.st, at |-> s.at]
+              fr |-> s.fr, st |-> s.st, at |-> s.at, occ |-> 0]
 ROf(v) ==
     [ring |-> [k \in 1..Len(v.ring) |-> SlotOf(v.ring[k])], ls |-> v.ls, la |-> v.la, sent |-> v.sent, acked |-> v.acked,
      lost |-> v.lost, inf |-> v.inf, infp |-> v.infp, lt |-> v.lt, pc |-> v.pc, lp |-> v.lp, asleep |-> v.asleep,
      down |-> v.down, hrd |-> v.hrd, clock |-> v.clock, tgr |-> v.tgr, lrtt |-> v.lrtt,
      rtt |-> [lat |-> v.rtt.lat, sm |-> v.rtt.sm, var |-> v.rtt.var, mn |-> v.rtt.mn, has |-> v.rtt.has],
      rel |-> [p \in 0..(MP - 1) |-> v.rel[p + 1]], prtt |-> [p \in 0..(MP - 1) |-> v.prtt[p + 1]],
-     act |-> v.act, flip |-> v.flip, late |-> [k \in 1..Len(v.late) |-> <<v.late[k][1], v.late[k][2]>>],
+     act |-> v.act, flip |-> v.flip,
+     gen |-> [p \in 0..(MP - 1) |-> 0], ps |-> [p \in 0..(MP - 1) |-> -1], late |-> [k \in 1..Len(v.late) |-> <<v.late[k][1], v.late[k][2]>>],
      saved |-> v.saved,
      reo |-> [p \in 0..(MP - 1) |-> [ext |-> v.reo[p + 1][1], seen |-> v.reo[p + 1][2]]], gs |-> v.gs, lat |-> v.lat]
 EvOf(e) == Ev(e[1], e[2], e[3], e[4], e[5], e[6])
@@ -52,7 +53,9 @@ SumOf(s) == [ap |-> s[1], ab |-> s[2], lap |-> s[3], lp |-> s[4], lb |-> s[5]]
 
 \* the recorded state is the model's state, the next timer included
 \* the code shows the time of the loss only for a slot that is a ghost
-Norm(r) == [r EXCEPT !.ring = [k \in DOMAIN r.ring |-> IF r.ring[k].st = 1 THEN r.ring[k] ELSE [r.ring[k] EXCEPT !.at = 0]]]
+\* the recorded calls have no path leaving a slot: every generation is 0, and the ghost ps is not recorded
+Norm(r) == [r EXCEPT !.ring = [k \in DOMAIN r.ring |-> IF r.ring[k].st = 1 THEN r.ring[k] ELSE [r.ring[k] EXCEPT !.at = 0]],
+                    !.ps = [p \in 0..(MP - 1) |-> -1]]
 Same(r, v) == ROf(v) = Norm(r) /\ v.nt = NextTimeout(r)
 
 InitEv == /\ Ev0.op = "init" /\ ROf(Ev0.v) = Init0 /\ Ev0.v.nt = NextTimeout(Init0) /\ rs' = Init0

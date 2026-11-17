@@ -263,15 +263,15 @@ theorem send_path (p : P) (r : R) (k : Pkt) (ok : RingPath p r.ring) : RingPath 
           intro s hs
           rcases List.mem_append.1 hs with h3 | h3
           · exact ht s h3
-          · have : s = ⟨k.pn, k.time, k.size, k.path, k.rep, k.probe, k.fr, .fl, 0⟩ := by simpa using h3
-            rw [this]; exact hk
+          · rw [List.mem_singleton] at h3
+            rw [h3]; exact hk
         · rw [h]
           intro s hs
           rcases List.mem_append.1 hs with h3 | h3
           · apply ht s
             rw [he]; exact List.mem_cons_of_mem _ h3
-          · have : s = ⟨k.pn, k.time, k.size, k.path, k.rep, k.probe, k.fr, .fl, 0⟩ := by simpa using h3
-            rw [this]; exact hk
+          · rw [List.mem_singleton] at h3
+            rw [h3]; exact hk
 
 /-! ### The largest acknowledged number is not above the last one sent -/
 
@@ -409,7 +409,48 @@ theorem ack_laLs (p : P) (r : R) (now : Nat) (rgs : List (Nat × Nat)) (ok : LaL
         cases hlf
         exact ⟨lf, hl, by omega⟩
 
+/-! ### A path that took the slot: a stale acknowledgement sets no round trip -/
+
+/-- A packet sent by an earlier occupant of its path slot names no path: the index is past the table. -/
+theorem nwPath_stale (r : R) (sl : Slot) (h : sl.occ ≠ r.gen.getD sl.path 0) : nwPath r sl = r.prtt.length := by
+  have hn : ¬ ((sl.occ == r.gen.getD sl.path 0) = true) := fun e => h (beq_iff_eq.1 e)
+  unfold nwPath
+  rw [if_neg hn]
+
+/-- A packet sent by the present occupant names its own path. -/
+theorem nwPath_current (r : R) (sl : Slot) (h : sl.occ = r.gen.getD sl.path 0) : nwPath r sl = sl.path := by
+  simp [nwPath, h]
+
+/-- The round-trip sample of an acknowledgement leaves the paths' round trips alone when the path it names is past the
+table. -/
+theorem ackSample_far (p : P) (r4 : R) (npn ntime npath now fl : Nat) (h : r4.prtt.length ≤ npath) :
+    (ackSample p r4 npn ntime npath now fl).prtt = r4.prtt := by
+  unfold ackSample
+  split
+  · exact List.set_eq_of_length_le h
+  · rfl
+
+/-- After the path in slot `q` goes, a packet that it sent names no path (it is stale), so the acknowledgement of it
+sets no round trip for the path that took the slot, whatever the older estimate was. -/
+theorem forget_stale (r : R) (mp q : Nat) (sl : Slot) (hm : q < mp) (hq : q < r.gen.length) (hp : sl.path = q)
+    (ho : sl.occ = r.gen.getD q 0) :
+    nwPath (forgetPath r mp q).1 sl = (forgetPath r mp q).1.prtt.length := by
+  apply nwPath_stale
+  have h1 : (r.gen.set q (r.gen.getD q 0 + 1)).getD q 0 = r.gen.getD q 0 + 1 := by
+    simp [List.getD_eq_getElem?_getD, hq]
+  simp only [forgetPath, if_neg (Nat.not_le.2 hm), hp, ho, h1]
+  omega
+
+/-- The path in slot `q` that goes has no round trip left for the next occupant to inherit. -/
+theorem forget_clears (r : R) (mp q : Nat) (hm : q < mp) (hq : q < r.prtt.length) :
+    (forgetPath r mp q).1.prtt.getD q 1 = 0 := by
+  simp [forgetPath, Nat.not_le.2 hm, List.getD_eq_getElem?_getD, hq]
+
 #audit_axioms Vinc.TransportRecovery.ackRing_events
+#audit_axioms Vinc.TransportRecovery.nwPath_stale
+#audit_axioms Vinc.TransportRecovery.ackSample_far
+#audit_axioms Vinc.TransportRecovery.forget_stale
+#audit_axioms Vinc.TransportRecovery.forget_clears
 #audit_axioms Vinc.TransportRecovery.ackRange1_events
 #audit_axioms Vinc.TransportRecovery.ackRanges_events
 #audit_axioms Vinc.TransportRecovery.timeout_path
