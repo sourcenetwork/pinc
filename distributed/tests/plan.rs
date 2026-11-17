@@ -83,6 +83,14 @@ fn vinc_endpoints_default_to_one_and_per_core_is_read_validated_and_refused_when
     let sc = scenario("lan-per-core");
     assert_eq!(sc.vinc_endpoints, VincEndpoints::PerCore);
     assert!(sc.to_toml().unwrap().contains("vinc_endpoints = \"per-core\""));
+    // Every row of the scenario is a row per-core applies to: a test that runs on one endpoint would read as per-core.
+    let Workload::Transport(t) = &sc.workload else {
+        panic!("lan-per-core is a transport scenario")
+    };
+    assert!(
+        t.tests.iter().all(|t| matches!(t, TransportTest::Many { .. })),
+        "only the many test"
+    );
     // The default is not written back, so a file made before the field existed stays as it was.
     assert!(!scenario("lan").to_toml().unwrap().contains("vinc_endpoints"));
     let text = std::fs::read_to_string(format!("{}/scenarios/lan-per-core.toml", env!("CARGO_MANIFEST_DIR"))).unwrap();
