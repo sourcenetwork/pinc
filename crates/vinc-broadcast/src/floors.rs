@@ -243,7 +243,7 @@ impl Topics {
         }
     }
 
-    /// Hold a message until the floors are known, unless it is already held. Returns whether it was taken.
+    /// Hold a message until the floors are known, unless it is already held or the set is full.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn hold_for_floor(
         &mut self,
@@ -269,6 +269,7 @@ impl Topics {
             hop: *hop,
             ts,
             data,
+            hlen: head.len(),
         });
         self.trace(|| Trace::Held {
             mid,

@@ -287,14 +287,26 @@ pub(crate) struct Pending {
     pub(crate) unsent: bool,
 }
 
-/// A message set aside until a decision arrives, laid out by [`Topics::pack`].
+/// A message set aside until a decision arrives.
 #[derive(Debug)]
 pub(crate) struct Held {
     pub(crate) mid: [u8; 8],
     pub(crate) origin: NodeId,
     pub(crate) hop: NodeId,
     pub(crate) ts: Hlc,
+    /// `topic_len | topic | head | body`; the head is empty unless the node keeps heads.
     pub(crate) data: Vec<u8>,
+    pub(crate) hlen: usize,
+}
+
+impl Held {
+    /// Split `data` into the topic, the head and the body.
+    pub(crate) fn parts(&self) -> Option<(&[u8], &[u8], &[u8])> {
+        let (&tl, rest) = self.data.split_first()?;
+        let (topic, rest) = rest.split_at_checked(usize::from(tl))?;
+        let (head, body) = rest.split_at_checked(self.hlen)?;
+        Some((topic, head, body))
+    }
 }
 
 /// The topic machine. See the module docs.
@@ -591,19 +603,6 @@ impl Topics {
         out.extend_from_slice(head);
         out.extend_from_slice(body);
         true
-    }
-
-    /// Split what [`Topics::pack`] laid out into the topic, the head and the body. The head is told from the body by
-    /// parsing it, which only a node that keeps heads has to do.
-    pub(crate) fn unpack(keep_heads: bool, data: &[u8]) -> Option<(&[u8], &[u8], &[u8])> {
-        let (&tl, rest) = data.split_first()?;
-        let (topic, rest) = rest.split_at_checked(usize::from(tl))?;
-        if !keep_heads {
-            return Some((topic, &[], rest));
-        }
-        let (head, _, _) = crate::wire::Head::parse_prefix(rest).ok()?;
-        let (head, body) = rest.split_at_checked(head.len())?;
-        Some((topic, head, body))
     }
 
     /// The bytes of the messages held for the replay floors or an access check, heads included.
