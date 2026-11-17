@@ -283,8 +283,9 @@ impl<S, D, A, C, Q> Builder<S, D, A, C, Q> {
     }
 
     /// Whether every topic message arrives with its signed [`Envelope`](crate::envelope::Envelope), which the
-    /// application can store and later hand to anyone to verify offline (default off). An envelope costs the message's
-    /// signed head in bytes, about 122 for an Ed25519 origin and several kilobytes for a hybrid one.
+    /// application can store and later hand to anyone to verify offline (default off). Each delivered message then costs
+    /// its signed head (about 122 bytes for an Ed25519 origin, several kilobytes for a hybrid one) and a second copy of
+    /// the topic and the payload, in one more allocation.
     #[must_use]
     pub const fn envelopes(mut self, on: bool) -> Self {
         self.envelopes = on;

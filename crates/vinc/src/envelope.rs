@@ -7,10 +7,15 @@
 //!
 //! A verified envelope proves that the key behind the origin's id signed this topic, this message id, this exact
 //! payload and this timestamp. It does not prove the key was unrevoked at that time, the message's position among
-//! others (the id is not a content hash), or that anyone received it.
+//! others (the id is not a content hash), or that anyone received it. A kind 1 statement carries no label of its own
+//! (it begins with the topic's bytes), so a kind 1 proof also holds for a raw signature by the same key over bytes of
+//! that shape: an application that signs bytes a peer chose with [`Endpoint::sign`](crate::Endpoint::sign) can be made
+//! to produce one.
 //!
 //! Invariants: an envelope is one buffer, built once per delivered message; [`Envelope::from_bytes`] checks nothing, and
 //! every check is in [`verify`].
+
+use alloc::vec::Vec;
 
 pub use vinc_broadcast::envelope::{EnvelopeError, Verified, verify_bytes as verify};
 
@@ -21,7 +26,7 @@ pub struct Envelope(Vec<u8>);
 impl Envelope {
     /// The envelope of a message from its parts; one allocation.
     pub(crate) fn new(topic: &[u8], head: &[u8], body: &[u8]) -> Self {
-        let parts = vinc_broadcast::envelope::Envelope { topic, head, body };
+        let parts = vinc_broadcast::envelope::Envelope::topic(topic, head, body);
         let mut bytes = Vec::with_capacity(parts.encoded_len());
         parts.encode_into(&mut bytes);
         Self(bytes)

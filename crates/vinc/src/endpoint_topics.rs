@@ -13,7 +13,9 @@
 //! checks it with [`envelope::verify`](crate::envelope::verify), with no endpoint, no session and no network. A verified
 //! envelope proves that the key behind the origin's id signed this topic, this message id, this exact payload and this
 //! timestamp. It does not prove the key was unrevoked then, the message's position among others, or that anyone
-//! received it. Everything sent on a stream or as a datagram is deniable by construction (both ends hold the keys), and
+//! received it. A kind 1 statement carries no label of its own (it begins with the topic's bytes), so such a proof also
+//! holds for a raw signature by the same key over bytes of that shape: an application that signs bytes a peer chose
+//! with [`Endpoint::sign`] can be made to produce one. Everything sent on a stream or as a datagram is deniable by construction (both ends hold the keys), and
 //! is never part of an envelope.
 
 use alloc::vec::Vec;
