@@ -251,6 +251,10 @@ par witness_tlc valuesverify_rx_nowhole ValuesVerifyRx ValuesVerifyRx_nowhole Wh
 par run_tlc_deep valueswire ValuesWire ValuesWire
 par run_tlc connect_mailbox ConnectMailbox ConnectMailbox
 par witness_tlc connect_mailbox_wold ConnectMailbox ConnectMailbox_wold RefusedKept
+par run_tlc connect_mailbox_drain ConnectMailbox ConnectMailbox_drain
+par witness_tlc connect_mailbox_worder ConnectMailbox ConnectMailbox_worder DrainOffered
+par witness_tlc connect_mailbox_wlose ConnectMailbox ConnectMailbox_wlose DrainKept
+par witness_tlc connect_mailbox_wbytes ConnectMailbox ConnectMailbox_wbytes DrainBooks
 par run_tlc connect_pack ConnectPack ConnectPack
 par run_tlc connect_pack_tight ConnectPack ConnectPack_tight
 par run_tlc connect_pack_noroom ConnectPack ConnectPack_noroom
@@ -321,10 +325,12 @@ par run_tlc connect_relay_sleep ConnectRelay ConnectRelay_sleep
 par run_tlc connect_relay_ready ConnectRelay ConnectRelay_ready
 par run_tlc connect_relay_fwd ConnectRelay ConnectRelay_fwd
 par run_tlc connect_relay_long ConnectRelay ConnectRelay_long
+par run_tlc connect_relay_full ConnectRelay ConnectRelay_full
 par witness_tlc connect_relay_refused ConnectRelay ConnectRelay_refused NoRefusal
 par witness_tlc connect_relay_wheard ConnectRelay ConnectRelay_wheard HeardDelivers
 par witness_tlc connect_relay_wfwd ConnectRelay ConnectRelay_wfwd Forwarded
 par witness_tlc connect_relay_wstop ConnectRelay ConnectRelay_wstop StepsOver
+par witness_tlc connect_relay_wfull ConnectRelay ConnectRelay_wfull SpuSilent
 par run_tlc connect_records ConnectRecords ConnectRecords
 par run_tlc connect_records_own ConnectRecords ConnectRecords_own
 par witness_tlc connect_records_nocheck ConnectRecords ConnectRecords_nocheck OnlyGood
