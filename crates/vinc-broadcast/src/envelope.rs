@@ -342,11 +342,17 @@ mod tests {
             let bytes = encoded(b"news", &head, b"hello");
             for cut in 0..bytes.len() {
                 let got = verify_bytes(&bytes[..cut]);
-                assert!(matches!(got, Err(EnvelopeError::Malformed(_))), "{alg:?} cut {cut}: {got:?}");
+                assert!(
+                    matches!(got, Err(EnvelopeError::Malformed(_))),
+                    "{alg:?} cut {cut}: {got:?}"
+                );
             }
             let mut longer = bytes.clone();
             longer.push(0);
-            assert!(matches!(verify_bytes(&longer), Err(EnvelopeError::Malformed(_))), "{alg:?}");
+            assert!(
+                matches!(verify_bytes(&longer), Err(EnvelopeError::Malformed(_))),
+                "{alg:?}"
+            );
         }
     }
 
@@ -358,13 +364,21 @@ mod tests {
             for v in 0..=255u8 {
                 let mut b = bytes.clone();
                 b[0] = v;
-                let want = if v == VERSION { Ok(()) } else { Err(EnvelopeError::BadVersion) };
+                let want = if v == VERSION {
+                    Ok(())
+                } else {
+                    Err(EnvelopeError::BadVersion)
+                };
                 assert_eq!(verify_bytes(&b).map(drop), want, "{alg:?} version {v}");
             }
             for k in 0..=255u8 {
                 let mut b = bytes.clone();
                 b[1] = k;
-                let want = if k == KIND_TOPIC_V1 { Ok(()) } else { Err(EnvelopeError::BadKind) };
+                let want = if k == KIND_TOPIC_V1 {
+                    Ok(())
+                } else {
+                    Err(EnvelopeError::BadKind)
+                };
                 assert_eq!(verify_bytes(&b).map(drop), want, "{alg:?} kind {k}");
             }
             let e = Envelope {
