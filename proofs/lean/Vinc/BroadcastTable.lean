@@ -12,9 +12,11 @@ subtraction is saturating, as in the Rust and in `Sub` of the TLA+ model.
 `contains` is `now - at <= ttl` on the recorded time. `popFront` removes the map entry only when the map still holds
 the head record's time (the Rust `pop_front`), so a later record of the same id survives the pop of an older one.
 `expire` pops while the head is older than `ttl`; it is a fuel loop with fuel `order.length`, which suffices because
-each pop shortens the queue. `push` always succeeds: the Rust `MidMap` refusal (no room for a new id) is unreachable,
-because the queue holds at most `cap` records and the map is sized to the same bound, so the model does not have it.
-`insert` refuses a full set unless forced, in which case the oldest record is popped first. `insert` does not read
+each pop shortens the queue. `push` always succeeds: the capacity refusal of the Rust `MidMap` is unreachable,
+because the queue holds at most `cap` records and the map is sized to the same bound. The other refusal, an id whose
+probe would pass the probe bound, is stated in the last section (`insertChecked`, `probe`): the id's home slot is a keyed
+hash of the id under a key the sender does not know (`home`), the old rule `maskHome` is the sender's to choose, and a
+probe of `bound` slots is refused when all of them are taken. `insert` refuses a full set unless forced, in which case the oldest record is popped first. `insert` does not read
 `ttl`, so it takes no `ttl` argument.
 
 Proven for every `ttl`, `cap` and time: the size bound (`insert_len_le`, `expire_len_le`), that `expire` never changes
@@ -274,5 +276,88 @@ theorem duplicate_record (S : Seen) (ttl mid now : Nat) (rest : List (Nat × Nat
     contains (popFront S) ttl mid t = false ∧ (mid, now) ∈ (popFront S).order := by
   refine ⟨?_, by simp [hS]⟩
   unfold popFront; rw [hS]; simp [contains, hm]
+
+/-! ### The home slot and the probe bound -/
+
+/-- `IdKey::hash` reduced to a slot: a keyed hash of the id (`hash` is abstract, `key` is the node's secret, which a
+sender does not know). -/
+def home (hash : Nat → Nat → Nat) (key slots id : Nat) : Nat := hash key id % slots
+
+/-- The old placement, `id & mask` for a power-of-two `slots`: the sender chooses the id, so it chooses this. -/
+def maskHome (slots id : Nat) : Nat := id % slots
+
+/-- Under the old rule, ids that agree in their low bits start at one slot: a sender can make a run as long as it
+likes. -/
+theorem maskHome_collides (slots a b : Nat) (h : a % slots = b % slots) : maskHome slots a = maskHome slots b := h
+
+/-- Under the keyed rule the start of an id is fixed by the key and the hash alone, not by the id's low bits. -/
+theorem home_eq_iff (hash : Nat → Nat → Nat) (key slots a b : Nat) :
+    home hash key slots a = home hash key slots b ↔ hash key a % slots = hash key b % slots := Iff.rfl
+
+/-- `slot`: walk at most `n` slots from the home `h`, `d` already walked; the offset of the first free slot, or
+`none` (refused) when all `n` are taken. `occ` says which slots are taken. -/
+def probe (occ : Nat → Bool) (slots h : Nat) : Nat → Nat → Option Nat
+  | 0, _ => none
+  | n + 1, d => if occ ((h + d) % slots) then probe occ slots h n (d + 1) else some d
+
+/-- A probe of `n` slots ends within them: the walk is bounded. -/
+theorem probe_range (occ : Nat → Bool) (slots h : Nat) : ∀ (n d e : Nat),
+    probe occ slots h n d = some e → d ≤ e ∧ e < d + n := by
+  intro n
+  induction n with
+  | zero => intro d e hp; simp [probe] at hp
+  | succ n ih =>
+    intro d e hp
+    cases hb : occ ((h + d) % slots) with
+    | true =>
+      have hp' : probe occ slots h n (d + 1) = some e := by simpa [probe, hb] using hp
+      have := ih (d + 1) e hp'
+      omega
+    | false =>
+      have : d = e := by simpa [probe, hb] using hp
+      omega
+
+/-- The slot a probe ends at is free. -/
+theorem probe_free (occ : Nat → Bool) (slots h : Nat) : ∀ (n d e : Nat),
+    probe occ slots h n d = some e → occ ((h + e) % slots) = false := by
+  intro n
+  induction n with
+  | zero => intro d e hp; simp [probe] at hp
+  | succ n ih =>
+    intro d e hp
+    cases hb : occ ((h + d) % slots) with
+    | true =>
+      have hp' : probe occ slots h n (d + 1) = some e := by simpa [probe, hb] using hp
+      exact ih (d + 1) e hp'
+    | false =>
+      have : d = e := by simpa [probe, hb] using hp
+      subst this
+      exact hb
+
+/-- A probe is refused when all the slots it may walk are taken. -/
+theorem probe_refused (occ : Nat → Bool) (slots h : Nat) : ∀ (n d : Nat),
+    (∀ i, i < n → occ ((h + d + i) % slots) = true) → probe occ slots h n d = none := by
+  intro n
+  induction n with
+  | zero => intro d _; simp [probe]
+  | succ n ih =>
+    intro d H
+    have h0 : occ ((h + d) % slots) = true := by simpa using H 0 (by omega)
+    have hrest : ∀ i, i < n → occ ((h + (d + 1) + i) % slots) = true := by
+      intro i hi
+      have := H (i + 1) (by omega)
+      rwa [show h + d + (i + 1) = h + (d + 1) + i by omega] at this
+    simp [probe, h0, ih (d + 1) hrest]
+
+/-- `insert` with the probe bound: an id whose probe would pass the bound (`fits = false`) is refused and nothing
+changes; otherwise it is `insert`. The caller counts the refusal and does not rely on the id being remembered. -/
+def insertChecked (S : Seen) (cap mid now : Nat) (force fits : Bool) : Seen × Bool :=
+  if fits then insert S cap mid now force else (S, false)
+
+theorem insertChecked_refused (S : Seen) (cap mid now : Nat) (force : Bool) :
+    insertChecked S cap mid now force false = (S, false) := rfl
+
+theorem insertChecked_fits (S : Seen) (cap mid now : Nat) (force : Bool) :
+    insertChecked S cap mid now force true = insert S cap mid now force := rfl
 
 end Vinc.BroadcastTable

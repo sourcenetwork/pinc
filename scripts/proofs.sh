@@ -694,6 +694,9 @@ par witness_tlc broadcast_auth_notopic BroadcastAuth BroadcastAuth_notopic Deliv
 par witness_tlc broadcast_auth_nots BroadcastAuth BroadcastAuth_nots DeliverExact
 par run_tlc broadcast_wire BroadcastWire BroadcastWire
 par run_tlc broadcast_midmap BroadcastMidMap BroadcastMidMap
+par run_tlc broadcast_midmap_keyed BroadcastMidMap BroadcastMidMap_keyed
+par run_tlc broadcast_midmap_bound BroadcastMidMap BroadcastMidMap_bound
+par witness_tlc broadcast_midmap_masked BroadcastMidMap BroadcastMidMap_masked NoneRefused
 par run_tlc broadcast_log BroadcastLog BroadcastLog
 par run_tlc broadcast_log_cap BroadcastLog BroadcastLog_cap
 par run_tlc broadcast_log_big BroadcastLog BroadcastLog_big
