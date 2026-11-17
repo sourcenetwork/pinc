@@ -9,11 +9,11 @@ use crate::scenario::{Problem, Scenario, Stack, TransportTest, Workload};
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Reading {
-    /// Client endpoints driven while the connections are open, 1.5 s before the reading.
+    /// VINC's client endpoints left undriven, 500 ms before the reading: the reading the row has always had.
     #[default]
-    Driven,
-    /// VINC's client endpoints left undriven, 500 ms before the reading: the reading the row had before.
     Undriven,
+    /// Client endpoints driven while the connections are open, 1.5 s before the reading.
+    Driven,
 }
 
 impl Reading {
@@ -30,7 +30,7 @@ impl Reading {
         reason = "serde's skip_serializing_if passes a reference"
     )]
     pub(crate) fn is_default(&self) -> bool {
-        *self == Self::Driven
+        *self == Self::Undriven
     }
 }
 

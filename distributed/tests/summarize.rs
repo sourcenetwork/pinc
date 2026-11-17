@@ -78,22 +78,24 @@ fn many_row(stack: &str, test: &str, server_peak: f64, client_peak: f64) -> Row 
 }
 
 #[test]
-fn the_peak_rows_and_the_undriven_reading_pass_through_a_rebuilt_summary_and_a_stack_without_a_value_never_wins() {
-    let mut gone = many_row("libp2p", "many_undriven", 1.0, 1.0);
+fn the_peak_rows_and_the_driven_reading_pass_through_a_rebuilt_summary_and_a_stack_without_a_value_never_wins() {
+    let mut gone = many_row("libp2p", "many_driven", 1.0, 1.0);
     gone.node.clear();
     gone.status = "not measured: the client printed no result".into();
     let rows = vec![
         many_row("vinc", "many", 120.0, 190.0),
         many_row("iroh", "many", 150.0, 170.0),
         many_row("libp2p", "many", 300.0, 400.0),
-        many_row("vinc", "many_undriven", 110.0, 180.0),
-        many_row("iroh", "many_undriven", 140.0, 160.0),
+        many_row("vinc", "many_driven", 110.0, 180.0),
+        many_row("iroh", "many_driven", 140.0, 160.0),
         gone,
     ];
     let stacks: Vec<String> = ["vinc", "iroh", "libp2p"].iter().map(|s| (*s).to_owned()).collect();
     let tables = summarize(&rows, &stacks);
     let tests: Vec<&str> = tables.iter().map(|t| t.test.as_str()).collect();
-    assert_eq!(tests, ["many", "many_undriven"], "each reading is a table of its own");
+    assert_eq!(tests, ["many", "many_driven"], "each reading is a table of its own");
+    assert!(tables[0].notes[0].contains("500 ms") && tables[0].notes[0].contains("undriven"));
+    assert!(tables[1].notes[0].contains("1.5 s") && !tables[1].notes[0].contains("undriven"));
     for t in &tables {
         let line = |label: &str| t.lines.iter().find(|l| l.label == label).unwrap();
         assert_eq!(line("server peak memory per connection").best, Some(0), "{}", t.test);
@@ -116,7 +118,7 @@ fn the_peak_rows_and_the_undriven_reading_pass_through_a_rebuilt_summary_and_a_s
     assert!(resummarize(&d).unwrap());
     let new = std::fs::read_to_string(d.join("summary.md")).unwrap();
     for want in [
-        "many_undriven",
+        "many_driven",
         "server peak memory per connection",
         "client peak memory per connection",
     ] {
@@ -127,4 +129,22 @@ fn the_peak_rows_and_the_undriven_reading_pass_through_a_rebuilt_summary_and_a_s
         markdown(&title, &conditions, &tables),
         "the rebuilt rows print what the run printed"
     );
+}
+
+#[test]
+fn a_many_cell_that_was_null_in_the_line_is_missing_and_never_ranked() {
+    let mut unknown = many_row("iroh", "many", 1.0, 1.0);
+    unknown
+        .node
+        .insert("server_peak_kib_per_conn".into(), serde_json::Value::Null);
+    let rows = vec![many_row("vinc", "many", 120.0, 190.0), unknown];
+    let stacks: Vec<String> = ["vinc", "iroh"].iter().map(|s| (*s).to_owned()).collect();
+    let tables = summarize(&rows, &stacks);
+    let line = tables[0]
+        .lines
+        .iter()
+        .find(|l| l.label == "server peak memory per connection")
+        .unwrap();
+    assert!(matches!(line.cells[1], vinc_distributed::results::Cell::Missing(_)));
+    assert_ne!(line.best, Some(1), "a value that was not measured is not the best");
 }

@@ -625,7 +625,7 @@ format!(
         },
     ];
     if ctx.sc.vinc_endpoints == VincEndpoints::PerCore {
-        c.push("VINC endpoints: per-core. In the many test VINC runs one endpoint on each CPU of a node (one identity on one port; the client spreads its connections over one endpoint per CPU); every other test runs VINC on one endpoint, and the other stacks run their runtime over all the node's CPUs.".into());
+        c.push("VINC endpoints: per-core. In the many test VINC runs one endpoint on each CPU of a node (one identity on one port; the client spreads its connections over one endpoint per CPU); every other test runs VINC on one endpoint, and the other stacks run their runtime over all the node's CPUs. Each endpoint also has its own admission limits and socket buffers, so part of any gain at many connections is that added capacity.".into());
     }
     if ctx.fleet.as_ref().is_some_and(|f| f.hosts.len() == 1) && !ctx.sc.links.is_empty() {
         c.push("The fleet is one machine, so every node talks to the others over its own network stack and the scenario's link shapes are not applied: this run measures the stacks, not a network.".into());

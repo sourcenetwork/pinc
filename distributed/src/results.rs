@@ -210,7 +210,7 @@ pub fn metrics_of(test: &str) -> Vec<Metric> {
             m(Node("streams_ok"), "streams done", "", Higher),
             m(WirePerByte, "wire bytes per payload byte", "", Lower),
         ],
-        "many" | "many_undriven" => vec![
+        "many" | "many_driven" => vec![
             m(Node("connected_and_moved"), "connected", "", Higher),
             m(Node("all_done_s"), "all done", "s", Lower),
             m(Node("first_byte_p50_ms"), "first byte p50", "ms", Lower),
@@ -437,6 +437,9 @@ pub fn summarize(rows: &[Row], stacks: &[String]) -> Vec<Table> {
                 .collect();
             notes.sort();
             notes.dedup();
+            if let Some(reads) = reading_note(&test) {
+                notes.insert(0, reads.into());
+            }
             let discarded = mine.iter().filter(|r| r.status.starts_with(DISCARDED)).count();
             if discarded > 0 {
                 notes.push(format!(
@@ -455,6 +458,19 @@ pub fn summarize(rows: &[Row], stacks: &[String]) -> Vec<Table> {
             }
         })
         .collect()
+}
+
+/// What a many-connection table reads, in one line: the two readings are rows of different tables.
+fn reading_note(test: &str) -> Option<&'static str> {
+    match test {
+        "many" => Some(
+            "Memory is read 500 ms after the burst, with VINC's client endpoints left undriven, as every earlier session read it.",
+        ),
+        "many_driven" => Some(
+            "Memory is read 1.5 s after the burst, with every client endpoint driven while its connection is open.",
+        ),
+        _ => None,
+    }
 }
 
 /// The note a table carries when some cell is marked [`MARK`].

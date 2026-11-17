@@ -106,7 +106,7 @@ fn vinc_endpoints_default_to_one_and_per_core_is_read_validated_and_refused_when
 }
 
 #[test]
-fn the_many_test_reads_driven_by_default_undriven_on_request_and_names_each_reading() {
+fn the_many_test_reads_undriven_by_default_driven_on_request_and_names_each_reading() {
     for name in ["lan", "lan-per-core"] {
         let sc = scenario(name);
         let Workload::Transport(t) = &sc.workload else {
@@ -119,7 +119,7 @@ fn the_many_test_reads_driven_by_default_undriven_on_request_and_names_each_read
             .collect();
         assert_eq!(many.len(), 2, "{name} has the many test in both readings");
         assert_eq!(many[0].id(), "many", "{name}");
-        assert_eq!(many[1].id(), "many_undriven", "{name}");
+        assert_eq!(many[1].id(), "many_driven", "{name}");
         assert_eq!(
             many[0].scenario(),
             many[1].scenario(),
@@ -128,16 +128,16 @@ fn the_many_test_reads_driven_by_default_undriven_on_request_and_names_each_read
         assert!(matches!(
             many[0],
             TransportTest::Many {
-                reading: ReadingMode::Driven,
+                reading: ReadingMode::Undriven,
                 ..
             }
         ));
     }
     let text = std::fs::read_to_string(format!("{}/scenarios/lan.toml", env!("CARGO_MANIFEST_DIR"))).unwrap();
-    let bad = text.replace("reading = \"undriven\"", "reading = \"idle\"");
+    let bad = text.replace("reading = \"driven\"", "reading = \"idle\"");
     assert!(
         Scenario::parse(&bad).is_err(),
-        "a reading that is neither driven nor undriven is refused"
+        "a reading that is neither undriven nor driven is refused"
     );
 }
 

@@ -51,7 +51,7 @@ pub enum TransportTest {
         connections: u32,
         /// Bytes each.
         bytes_each: u64,
-        /// How memory is read (`driven`, or `undriven` for the reading the row had before).
+        /// How memory is read (`undriven`, the reading the row has always had, or `driven`).
         #[serde(default, skip_serializing_if = "Reading::is_default")]
         reading: Reading,
     },
@@ -92,9 +92,9 @@ impl TransportTest {
             Self::Requests { size, concurrency, .. } => format!("requests_{size}b_c{concurrency}"),
             Self::Throughput { streams, .. } => format!("throughput_{streams}s"),
             Self::Many {
-                reading: Reading::Undriven,
+                reading: Reading::Driven,
                 ..
-            } => "many_undriven".into(),
+            } => "many_driven".into(),
             Self::Many { .. } => "many".into(),
         }
     }
