@@ -67,17 +67,17 @@ const PROBE_BASE: u64 = 33_300_000;
 /// The largest gap between probes to a new path.
 const PROBE_CAP: u64 = 2 * SECOND;
 /// The gap between challenges to a path abandoned after probe timeouts.
-const REJOIN_GAP: u64 = 60 * MS;
+pub(super) const REJOIN_GAP: u64 = 60 * MS;
 /// The number of re-join challenges (at [`REJOIN_GAP`], 6 s).
-const REJOIN_PROBES: u64 = 100;
+pub(super) const REJOIN_PROBES: u64 = 100;
 /// How many of the oldest packets sent on another path are sent again at once when an abandoned path answers.
 const REJOIN_RESEND: usize = 8;
 /// The shortest gap between re-join challenges on a thin node, and the shortest wait for a migration challenge.
 pub const RJ_THIN_GAP: u64 = SECOND;
 /// The cadence of the re-challenge of an idled-out direct path on a thin node.
-const RJ_RETRY: u64 = 20 * SECOND;
+pub(super) const RJ_RETRY: u64 = 20 * SECOND;
 /// The longest back-off of that cadence.
-const RJ_IDLE_MAX: u64 = 160 * SECOND;
+pub(super) const RJ_IDLE_MAX: u64 = 160 * SECOND;
 /// A relay path costs this much more than a direct one when choosing the active path.
 const RELAY_PENALTY: u64 = SECOND;
 /// An IPv6 path costs this much less.
@@ -93,7 +93,7 @@ const QUIET_RTT: u64 = 700 * MS;
 /// A session is quiet only if it heard the peer within this long.
 const QUIET_RX: u64 = 75 * SECOND;
 /// A round trip at least this long is a slow path.
-const SLOW_RTT: u64 = 250 * MS;
+pub(super) const SLOW_RTT: u64 = 250 * MS;
 /// Outstanding challenges kept per path with their send times.
 const CHALLENGES: usize = 4;
 /// Data larger than this is more than a control message.
@@ -410,7 +410,7 @@ conn_impl! {
 
     /// Whether the session counts as thin for its path rules: the host declared the node thin, or the session has no
     /// round trip yet, or the node's, its minimum or half its smoothed round trip reaches 250 ms.
-    fn thin_session(&self) -> bool {
+    pub(super) fn thin_session(&self) -> bool {
         self.cfg.thin || self.rec.is_thin()
     }
 
@@ -928,35 +928,6 @@ conn_impl! {
         }
     }
 
-    /// A validated direct path was silent for 15 s: it is no longer validated; a thin node keeps re-challenging it on
-    /// a slow cadence, and the active path moves to a relay.
-    fn idle_out(&mut self, env: &mut Env<'_, P>, i: usize) {
-        let now = env.now;
-        if let Some(p) = self.paths.get_mut(i) {
-            p.validated = false;
-        }
-        let quiet = self.quiet_ok(now);
-        let thin = self.thin_session();
-        if thin && self.paths.get(i).is_some_and(|p| p.probes_left == 0) {
-            self.set_challenge(env, i);
-            if let Some(p) = self.paths.get_mut(i) {
-                p.rejoin = true;
-                p.probes_left = 1;
-                p.probe_gap = RJ_RETRY;
-                if quiet {
-                    p.rj_back = RJ_IDLE_MAX.min(RJ_RETRY.max(p.rj_back.saturating_mul(2)));
-                    p.next_probe = now.saturating_add(p.rj_back);
-                } else {
-                    p.rj_back = 0;
-                    p.next_probe = now.saturating_add(RJ_THIN_GAP);
-                }
-            }
-        }
-        if i == self.paths.active {
-            self.relay_fallback();
-        }
-    }
-
     /// Send the probe of path `i` that is due and plan the next one. A re-join challenge of a thin session waits for
     /// the floor the endpoint set, and is reported to it once it leaves.
     fn fire_probe(&mut self, env: &mut Env<'_, P>, i: usize) {
@@ -991,44 +962,5 @@ conn_impl! {
             }
         }
         p.send_challenge = p.challenge.is_some();
-    }
-
-    /// The active direct path failed three probe timeouts in a row: it is no longer validated and is challenged on
-    /// the re-join cadence, and the connection falls back to a relay path if it has one.
-    pub(super) fn fail_over(&mut self, env: &mut Env<'_, P>) {
-        let now = env.now;
-        let i = self.paths.active;
-        let srtt = if self.rec.rtt().has_sample() { self.rec.rtt().smoothed() } else { 0 };
-        let slow = self.rec.rtt().min_rtt().unwrap_or(0) >= SLOW_RTT;
-        let thin = self.thin_session();
-        let node = self.rec.peak_rtt();
-        let Some(p) = self.paths.get_mut(i) else { return };
-        if p.info.kind != PathKind::Direct || !p.validated {
-            return;
-        }
-        p.validated = false;
-        // A re-join already running is not set up again.
-        if !(p.rejoin && p.probes_left > 0) {
-            let mut gap = REJOIN_GAP.max(if slow { srtt } else { srtt / 2 });
-            let mut probes = 4.max(REJOIN_PROBES * REJOIN_GAP / gap);
-            if thin {
-                gap = gap.max(RJ_THIN_GAP).max(srtt).max(node);
-                probes = 4.max(12 * SECOND / gap);
-            }
-            p.probes_left = u32::try_from(probes).unwrap_or(u32::MAX);
-            p.probe_gap = gap;
-            p.next_probe = now.saturating_add(gap);
-            p.rejoin = true;
-            self.set_challenge(env, i);
-        }
-        self.relay_fallback();
-    }
-
-    /// Move the active path to the newest relay path, if the connection has one.
-    fn relay_fallback(&mut self) {
-        let relay = self.paths.iter().filter(|(_, p)| p.info.kind == PathKind::Relay).map(|(i, _)| i).last();
-        if let Some(r) = relay {
-            self.switch_active(r);
-        }
     }
 }

@@ -166,6 +166,34 @@ fn a_direct_path_that_validates_while_a_relay_path_is_held_takes_the_session() {
 }
 
 #[test]
+fn the_fall_back_from_a_failed_direct_path_takes_the_measured_relay_path() {
+    answered_elsewhere(relay(), Some(relay()), |net| {
+        with_direct_path(net);
+        let now = net.now;
+        net.a
+            .with_env(now, |c, env| c.add_path(env, PathId(10), relay()))
+            .unwrap();
+        assert!(
+            net.a.conn.path_rtt(OTHER).is_some(),
+            "the relay path the session left has no round trip"
+        );
+        net.link.route(PathId(3)).up = false;
+        let id = net.a.conn.open_bi().unwrap();
+        net.a.conn.write(id, &pattern(2_000, 3)).unwrap();
+        let until = net.now + 30 * SEC;
+        assert!(
+            net.run(until, |n| n.a.conn.stats().ptos >= 3),
+            "the direct path never failed three probe timeouts"
+        );
+        assert_eq!(
+            net.a.conn.active_path(),
+            Some(OTHER),
+            "the fall-back took a relay path that was never measured"
+        );
+    });
+}
+
+#[test]
 fn an_unmeasured_relay_path_failing_three_probe_timeouts_gives_way_to_a_measured_one() {
     answered_elsewhere(relay(), Some(relay()), |net| {
         net.a.conn.set_active(PathId(1)).unwrap();
