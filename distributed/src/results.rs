@@ -464,7 +464,8 @@ pub fn summarize(rows: &[Row], stacks: &[String]) -> Vec<Table> {
 fn reading_note(test: &str) -> Option<&'static str> {
     match test {
         "many" => Some(
-            "Memory is read 500 ms after the burst, with VINC's client endpoints left undriven, as every earlier session read it.",
+            "Memory is read 500 ms after the burst, with VINC's client endpoints left undriven, \
+             as every earlier session read it.",
         ),
         "many_driven" => Some(
             "Memory is read 1.5 s after the burst, with every client endpoint driven while its connection is open.",
