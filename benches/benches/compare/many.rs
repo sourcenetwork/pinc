@@ -3,7 +3,8 @@
 //!
 //! Invariant: a cell of the result line is a measured number or `null`. A reading that failed (the server's counters
 //! before or after the burst, the reset of a peak) and a count of zero connections leave the cells that need them
-//! `null`; nothing stands in for them, so the summary never ranks them.
+//! `null`; nothing stands in for them, so the summary never ranks them. The exception is the process's own memory and
+//! CPU: a failed read of those is still 0 (issue 619).
 
 use std::io;
 use std::time::{Duration, Instant};
@@ -49,6 +50,13 @@ fn client_made() -> (Stats, bool) {
     (Stats::now(), reset)
 }
 
+/// Keep the first reason a client could not start, so a row whose every failure is of that kind still says why.
+fn keep_first(why: &mut String, e: &io::Error) {
+    if why.is_empty() {
+        *why = e.to_string();
+    }
+}
+
 /// The result line of a burst. A cell is `null`, not a number, when a reading it needs failed or nothing connected.
 fn line(lib: &str, b: &Burst, r: &Readings) -> Rec {
     let per_conn = |kb: Option<u64>| match kb {
@@ -62,7 +70,7 @@ fn line(lib: &str, b: &Burst, r: &Readings) -> Rec {
         .n("requested", b.requested as f64)
         .n("connected_and_moved", f64::from(b.ok))
         .n("failed", f64::from(b.failed))
-        .n("all_done_s", b.secs)
+        .n("all_done_s", if b.ok > 0 { b.secs } else { f64::NAN })
         .n("first_byte_p50_ms", pct(&b.up, 0.5) / 1e3)
         .n("first_byte_p99_ms", pct(&b.up, 0.99) / 1e3)
         .n("server_rss_base_mib", mib(r.s_base))
@@ -97,7 +105,10 @@ fn no_control<L: Lib>() -> Rec {
 /// `n` clients, each with its own endpoint, connect at once and move `each` bytes; the server's memory and CPU are read
 /// while every connection is still open. The line goes to `sink` as soon as it is read, before the clients let go.
 async fn many_one<L: Lib>(addr: &str, n: usize, each: u64, sink: impl FnOnce(Rec)) {
-    let Ok(ctl_ep) = L::burst_client().await else { return };
+    let Ok(ctl_ep) = L::burst_client().await else {
+        sink(no_control::<L>());
+        return;
+    };
     let Ok(ctl) = L::hello(&ctl_ep, addr, false).await else {
         sink(no_control::<L>());
         return;
@@ -105,11 +116,14 @@ async fn many_one<L: Lib>(addr: &str, n: usize, each: u64, sink: impl FnOnce(Rec
     let s_base = server_base::<L>(&ctl).await.ok();
     let c_before = Stats::now();
     let mut eps = Vec::with_capacity(n);
-    let mut no_endpoint = 0u32;
+    let (mut no_endpoint, mut why) = (0u32, String::new());
     for _ in 0..n {
         match L::burst_client().await {
             Ok(e) => eps.push(e),
-            Err(_) => no_endpoint += 1,
+            Err(e) => {
+                no_endpoint += 1;
+                keep_first(&mut why, &e);
+            }
         }
     }
     let (c_made, c_peak_reset) = client_made();
@@ -129,7 +143,7 @@ async fn many_one<L: Lib>(addr: &str, n: usize, each: u64, sink: impl FnOnce(Rec
         });
     }
     drop(done);
-    let (mut held, mut up, mut failed, mut why) = (Vec::with_capacity(n), Vec::new(), no_endpoint, String::new());
+    let (mut held, mut up, mut failed) = (Vec::with_capacity(n), Vec::new(), no_endpoint);
     while let Some((ep, r)) = results.next().await {
         match r {
             Ok((u, c)) => {
@@ -186,21 +200,25 @@ pub(super) async fn many<L: Lib>(addr: &str, n: usize, each: u64) {
 /// Each client is one job that [`Lib::spawn_client`] starts (on a worker of its own when the endpoints are per core):
 /// it makes its endpoint, waits for the start, connects and uploads, then holds its connection until it is released.
 /// The readings are the same either way: the client's memory after every endpoint is made and while every connection
-/// is open, the time from the start to the last upload. A client the library did not start counts as having no endpoint.
+/// is open, the time from the start to the last upload. A client the library did not start counts as having no
+/// endpoint.
 #[allow(clippy::too_many_lines)]
 async fn many_spread<L: Lib>(addr: &str, n: usize, each: u64, sink: impl FnOnce(Rec)) {
-    let Ok(ctl_ep) = L::burst_client().await else { return };
+    let Ok(ctl_ep) = L::burst_client().await else {
+        sink(no_control::<L>());
+        return;
+    };
     let Ok(ctl) = L::hello(&ctl_ep, addr, false).await else {
         sink(no_control::<L>());
         return;
     };
     let s_base = server_base::<L>(&ctl).await.ok();
     let c_before = Stats::now();
-    let (made, mut made_rx) = mpsc::unbounded::<bool>();
+    let (made, mut made_rx) = mpsc::unbounded::<Result<(), String>>();
     let (done, mut results) = mpsc::unbounded::<Result<Duration, String>>();
     let (ended, mut ended_rx) = mpsc::unbounded::<()>();
     let (mut go, mut release) = (Vec::with_capacity(n), Vec::with_capacity(n));
-    let mut refused = 0usize;
+    let (mut refused, mut why) = (0usize, String::new());
     for i in 0..n {
         let (go_tx, go_rx) = oneshot::channel::<Instant>();
         let (release_tx, release_rx) = oneshot::channel::<()>();
@@ -210,11 +228,14 @@ async fn many_spread<L: Lib>(addr: &str, n: usize, each: u64, sink: impl FnOnce(
         let started = L::spawn_client(i, move || async move {
             // Each sender goes as soon as it has spoken: a job that ends early closes its channels instead of leaving
             // the crowd waiting for it.
-            let Ok(ep) = L::burst_client().await else {
-                let _ = made.unbounded_send(false);
-                return;
+            let ep = match L::burst_client().await {
+                Ok(ep) => ep,
+                Err(e) => {
+                    let _ = made.unbounded_send(Err(e.to_string()));
+                    return;
+                }
             };
-            let _ = made.unbounded_send(true);
+            let _ = made.unbounded_send(Ok(()));
             drop(made);
             let held = match go_rx.await {
                 Ok(t) => {
@@ -247,16 +268,23 @@ async fn many_spread<L: Lib>(addr: &str, n: usize, each: u64, sink: impl FnOnce(
             L::shutdown(ep).await;
             let _ = ended.unbounded_send(());
         });
-        if !started {
+        if let Err(e) = started {
             refused += 1;
+            keep_first(&mut why, &e);
         }
     }
     drop((made, done, ended));
     let mut no_endpoint = u32::try_from(refused).unwrap_or(u32::MAX);
     for _ in 0..n - refused {
         match made_rx.next().await {
-            Some(true) => {}
-            Some(false) | None => no_endpoint += 1,
+            Some(Ok(())) => {}
+            Some(Err(e)) => {
+                no_endpoint += 1;
+                if why.is_empty() {
+                    why = e;
+                }
+            }
+            None => no_endpoint += 1,
         }
     }
     let (c_made, c_peak_reset) = client_made();
@@ -264,7 +292,7 @@ async fn many_spread<L: Lib>(addr: &str, n: usize, each: u64, sink: impl FnOnce(
     for g in go {
         let _ = g.send(t);
     }
-    let (mut ok, mut up, mut failed, mut why) = (0u32, Vec::new(), no_endpoint, String::new());
+    let (mut ok, mut up, mut failed) = (0u32, Vec::new(), no_endpoint);
     for _ in 0..n.saturating_sub(no_endpoint as usize) {
         match results.next().await {
             Some(Ok(u)) => {
@@ -403,12 +431,12 @@ mod tests {
         fn spawn_client<F: std::future::Future<Output = ()> + 'static>(
             i: usize,
             make: impl FnOnce() -> F + Send + 'static,
-        ) -> bool {
+        ) -> io::Result<()> {
             if i == REFUSE.load(Relaxed) {
-                return false;
+                return Err(io::Error::other("the client was not started"));
             }
             Self::spawn(make());
-            true
+            Ok(())
         }
         async fn sleep(d: Duration) {
             nuclei::time::sleep(d).await;
@@ -456,6 +484,9 @@ mod tests {
     /// The result line of a burst of `n` clients with the given failures: `spread` runs the per-core path.
     fn burst(spread: bool, n: usize, faults: u8, refuse: usize, bad_endpoint: usize) -> String {
         let _one = ONE_AT_A_TIME.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _switches = super::super::SWITCHES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         FAULTS.store(faults, Relaxed);
         REFUSE.store(refuse, Relaxed);
         BAD_ENDPOINT.store(bad_endpoint, Relaxed);
@@ -507,9 +538,45 @@ mod tests {
                 "server_cpu_s",
                 "client_cpu_s",
                 "first_byte_p50_ms",
+                "all_done_s",
             ] {
                 number(&v, k);
             }
+            // Both peaks are measured exactly when this process could reset its peak, as the fake server is in it.
+            let reset = reset_peak();
+            for k in ["server_peak_kib_per_conn", "client_peak_kib_per_conn"] {
+                assert_eq!(!is_null(&v, k), reset, "{k} (spread {spread}): {v}");
+                if reset {
+                    number(&v, k);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_client_that_could_not_start_leaves_its_reason_in_the_row() {
+        for spread in [false, true] {
+            let v = burst(spread, 6, 0, usize::MAX, 3);
+            assert!(
+                v.contains("\"last_error\":\"no endpoint\""),
+                "an endpoint that failed (spread {spread}): {v}"
+            );
+        }
+        let v = burst(true, 6, 0, 3, usize::MAX);
+        assert!(
+            v.contains("\"last_error\":\"the client was not started\""),
+            "a refused client: {v}"
+        );
+    }
+
+    #[test]
+    fn a_control_endpoint_that_cannot_be_made_is_reported_not_dropped() {
+        for spread in [false, true] {
+            let v = burst(spread, 4, 0, usize::MAX, 0);
+            assert!(
+                v.contains("\"status\":\"failed: no control connection\""),
+                "spread {spread}: {v}"
+            );
         }
     }
 
@@ -573,6 +640,7 @@ mod tests {
                 "client_peak_kib_per_conn",
                 "first_byte_p50_ms",
                 "first_byte_p99_ms",
+                "all_done_s",
             ] {
                 assert!(is_null(&v, k), "{k} with no connection (spread {spread}): {v}");
             }
@@ -588,12 +656,17 @@ mod tests {
     }
 
     fn pure_line(s_base: Stats, s_end: Stats, c_made: Stats, c_end: Stats, c_peak_reset: bool) -> String {
+        pure_line_of(10, s_base, s_end, c_made, c_end, c_peak_reset)
+    }
+
+    /// The line of a burst that asked for 10 clients and had `ok` connect.
+    fn pure_line_of(ok: u32, s_base: Stats, s_end: Stats, c_made: Stats, c_end: Stats, c_peak_reset: bool) -> String {
         let burst = Burst {
             requested: 10,
-            ok: 10,
-            failed: 0,
+            ok,
+            failed: 10 - ok,
             secs: 1.0,
-            up: vec![1.0; 10],
+            up: vec![1.0; ok as usize],
             why: String::new(),
         };
         let readings = Readings {
@@ -619,6 +692,22 @@ mod tests {
         // The server: (6000 - 1000) / 10. The client: (4500 - 1500) / 10, not from the 500 before its endpoints.
         assert_eq!(number(&v, "server_peak_kib_per_conn"), 500.0);
         assert_eq!(number(&v, "client_peak_kib_per_conn"), 300.0);
+    }
+
+    #[test]
+    fn a_cell_per_connection_divides_by_the_clients_that_connected_not_the_ones_asked_for() {
+        let v = pure_line_of(
+            5,
+            stats(1000, 1000),
+            stats(2000, 6000),
+            stats(1500, 1500),
+            stats(2500, 4500),
+            true,
+        );
+        assert_eq!(number(&v, "server_kib_per_conn"), 200.0);
+        assert_eq!(number(&v, "client_kib_per_conn"), 200.0);
+        assert_eq!(number(&v, "server_peak_kib_per_conn"), 1000.0);
+        assert_eq!(number(&v, "client_peak_kib_per_conn"), 600.0);
     }
 
     #[test]

@@ -58,6 +58,31 @@ const ALPN: &[u8] = b"bench/1";
 /// What the socket's send and receive buffers are asked to hold.
 const SOCKET_BUFFER: u32 = 8 << 20;
 
+/// Give the executor one turn: this task is polled again after the tasks that were ready.
+async fn yield_once() {
+    let mut yielded = false;
+    std::future::poll_fn(|cx| {
+        if yielded {
+            return std::task::Poll::Ready(());
+        }
+        yielded = true;
+        cx.waker().wake_by_ref();
+        std::task::Poll::Pending
+    })
+    .await;
+}
+
+/// The first polls of endpoint drivers, so a test can see that one ran.
+#[cfg(test)]
+static DRIVER_POLLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// The connections each worker of a test runtime accepted.
+#[cfg(test)]
+static ACCEPTED: [std::sync::atomic::AtomicUsize; 2] = [
+    std::sync::atomic::AtomicUsize::new(0),
+    std::sync::atomic::AtomicUsize::new(0),
+];
+
 fn io_err(e: vinc::Error) -> io::Error {
     io::Error::other(e.to_string())
 }
@@ -166,6 +191,8 @@ fn endpoint(sock: Handle<UdpSocket>, limits: Limits, seed: Option<&[u8; 32]>, ru
     if run {
         let runner = ep.clone();
         nuclei::spawn_local(async move {
+            #[cfg(test)]
+            DRIVER_POLLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let _ = runner.run().await;
         })
         .detach();
@@ -177,6 +204,10 @@ fn endpoint(sock: Handle<UdpSocket>, limits: Limits, seed: Option<&[u8; 32]>, ru
 async fn accept_all(ep: Ep) {
     while let Some(inc) = ep.accept().await {
         let conn = inc.into_connection();
+        #[cfg(test)]
+        if let Some(w) = nuclei::runtime::worker_index().and_then(|w| ACCEPTED.get(w)) {
+            w.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
         nuclei::spawn_local(async move {
             while let Ok((tx, rx)) = conn.accept_bi().await {
                 nuclei::spawn_local(async move {
@@ -276,16 +307,18 @@ impl Lib for Vinc1 {
         nuclei::spawn_local(f).detach();
     }
 
-    fn spawn_client<F: Future<Output = ()> + 'static>(i: usize, make: impl FnOnce() -> F + Send + 'static) -> bool {
+    fn spawn_client<F: Future<Output = ()> + 'static>(
+        i: usize,
+        make: impl FnOnce() -> F + Send + 'static,
+    ) -> io::Result<()> {
         let rt = nuclei::RuntimeHandle::current();
         let workers = rt.workers();
         if workers == 0 || !super::per_core() {
             Self::spawn(make());
-            return true;
+            return Ok(());
         }
-        rt.spawn_local_on_worker(i % workers, make)
-            .map(nuclei::Task::detach)
-            .is_ok()
+        rt.spawn_local_on_worker(i % workers, make)?.detach();
+        Ok(())
     }
 
     async fn sleep(d: Duration) {
@@ -314,13 +347,20 @@ impl Lib for Vinc1 {
 
     async fn burst_client() -> io::Result<Ep> {
         // A host that keeps connections drives its endpoint (`run()`); the undriven reading leaves it to the dial.
-        bind(
+        let driven = super::driven();
+        let ep = bind(
             Limits {
                 connections: 1,
                 ..Limits::default()
             },
-            super::driven(),
-        )
+            driven,
+        )?;
+        if driven {
+            // The driver has had its first poll when the endpoint is returned, as the other libraries' drivers have
+            // when their endpoint is made, so what it allocates there is not read as the connection's.
+            yield_once().await;
+        }
+        Ok(ep)
     }
 
     async fn connect(ep: &Ep, addr: &str) -> io::Result<Conn> {
@@ -361,7 +401,7 @@ mod tests {
             let started = Vinc1::spawn_client(i, move || async move {
                 let _ = tx.unbounded_send((i, nuclei::runtime::worker_index()));
             });
-            assert!(started, "client {i} was started");
+            assert!(started.is_ok(), "client {i} was started");
         }
         drop(tx);
         let mut at = vec![None; n];
@@ -378,20 +418,80 @@ mod tests {
         at
     }
 
+    /// Run `f` with the process-wide switches `per_core` and `driven` set, then put back what was found.
+    fn with_switches<T>(per_core: bool, driven: bool, f: impl FnOnce() -> T) -> T {
+        use super::super::{DRIVEN, PER_CORE, SWITCHES};
+        let _one = SWITCHES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let found = (PER_CORE.load(Relaxed), DRIVEN.load(Relaxed));
+        PER_CORE.store(per_core, Relaxed);
+        DRIVEN.store(driven, Relaxed);
+        let out = f();
+        PER_CORE.store(found.0, Relaxed);
+        DRIVEN.store(found.1, Relaxed);
+        out
+    }
+
     #[test]
     fn per_core_clients_run_on_worker_i_modulo_the_workers() {
-        super::super::PER_CORE.store(true, Relaxed);
-        let at = on_two_workers(workers_of(6));
+        let at = with_switches(true, false, || on_two_workers(workers_of(6)));
         assert_eq!(at, [Some(0), Some(1), Some(0), Some(1), Some(0), Some(1)]);
     }
 
     #[test]
     fn without_per_core_a_client_runs_where_it_was_started() {
-        super::super::PER_CORE.store(false, Relaxed);
-        let at = on_two_workers(workers_of(4));
+        let at = with_switches(false, false, || on_two_workers(workers_of(4)));
         assert!(
             at.iter().all(|w| w == &at[0]),
             "one-endpoint clients all run on one thread: {at:?}"
         );
+    }
+
+    #[test]
+    fn a_driven_client_endpoint_has_had_its_drivers_first_poll_when_it_is_returned() {
+        use std::sync::atomic::Ordering::Relaxed;
+        let polled = |driven| {
+            with_switches(false, driven, || {
+                on_two_workers(async {
+                    let before = DRIVER_POLLS.load(Relaxed);
+                    let ep = Vinc1::burst_client().await.unwrap();
+                    let after = DRIVER_POLLS.load(Relaxed);
+                    drop(ep);
+                    after - before
+                })
+            })
+        };
+        assert_eq!(polled(true), 1, "the driver ran before burst_client returned");
+        assert_eq!(polled(false), 0, "an undriven endpoint has no driver");
+    }
+
+    #[test]
+    fn the_per_core_server_serves_every_dial_from_both_workers() {
+        use std::sync::atomic::Ordering::Relaxed;
+        let served = with_switches(false, false, || {
+            on_two_workers(async {
+                let addr = serve_per_core().await.unwrap();
+                let before: Vec<usize> = ACCEPTED.iter().map(|a| a.load(Relaxed)).collect();
+                let mut held = Vec::new();
+                for _ in 0..16 {
+                    let ep = Vinc1::client().await.unwrap();
+                    // A bound on the dial: a lost datagram must fail the test, not hang it.
+                    let dial = Box::pin(Vinc1::hello(&ep, &addr, false));
+                    let limit = Box::pin(nuclei::time::sleep(Duration::from_secs(30)));
+                    let futures::future::Either::Left((conn, _)) = futures::future::select(dial, limit).await else {
+                        panic!("a dial was not served in 30 s");
+                    };
+                    held.push((ep, conn.unwrap()));
+                }
+                let after: Vec<usize> = ACCEPTED.iter().map(|a| a.load(Relaxed)).collect();
+                after.iter().zip(&before).map(|(a, b)| a - b).collect::<Vec<_>>()
+            })
+        });
+        assert_eq!(
+            served.iter().sum::<usize>(),
+            16,
+            "every dial was accepted once: {served:?}"
+        );
+        // The kernel hashes each peer's address to a socket: all 16 on one worker has a chance of 2^-15.
+        assert!(served.iter().all(|&s| s > 0), "both workers served some: {served:?}");
     }
 }

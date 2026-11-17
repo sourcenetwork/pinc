@@ -9,21 +9,21 @@
 //!
 //! `--endpoints=per-core` (or `VINC_BENCH_ENDPOINTS=per-core`; the default is `1`) asks a library that can for one
 //! endpoint on every worker of its runtime: the server serves on all of them and the `many` test spreads its clients
-//! over them. Every result line of a per-core process says so (`endpoints`: `per-core`; a line without it ran on one endpoint); the
-//! default code path is untouched, and the other tests run on one endpoint either way.
+//! over them. Every result line of a per-core process says so (`endpoints`: `per-core`; a line without it ran on one
+//! endpoint); the default code path is untouched, and the other tests run on one endpoint either way.
 //!
-//! `--reading=undriven|driven` (or `VINC_BENCH_READING`; the default is `undriven`) is how the `many` test reads memory:
-//! `undriven` leaves VINC's client endpoints undriven and settles 500 ms, as the row was always read; `driven` runs every
-//! client endpoint's own driver while the connections are open (VINC's `run()`; the other libraries always do) and
-//! settles 1.5 s before reading. Every `many` line says which (`reading`).
+//! `--reading=undriven|driven` (the default is `undriven`; only the argument names it) is how the `many` test reads
+//! memory: `undriven` leaves VINC's client endpoints undriven and settles 500 ms, as the row was read before; `driven`
+//! runs every client endpoint's own driver while the connections are open (VINC's `run()`; the other libraries always
+//! do) and settles 1.5 s before reading. Every `many` line says which (`reading`).
 //!
 //! The wire protocol is the same for every library: a bidirectional stream starts with a mode byte. `H` is answered
 //! with `k` (the first byte of a connection), `S` is a sink that answers the byte count, `E` echoes everything it reads
-//! until the end of the stream (the `requests` scenario opens one such stream per request), and `T` answers the server's own resource counters (resident memory, CPU time,
-//! allocations) so the client can read what the server paid for a phase. `B` is `T` after the server has reset its
-//! peak resident memory, so a peak read later starts from that point (the peak is 0 when it could not be reset). The scenarios are written once against the
-//! [`Lib`] trait; each library's module (`vinc`, `iroh`, `libp2p`) only maps its own endpoint, connection and stream
-//! types onto it.
+//! until the end of the stream (the `requests` scenario opens one such stream per request), and `T` answers the
+//! server's own resource counters (resident memory, CPU time, allocations) so the client can read what the server paid
+//! for a phase. `B` is `T` after the server has reset its peak resident memory, so a peak read later starts from that
+//! point (the peak is 0 when it could not be reset). The scenarios are written once against the [`Lib`] trait; each
+//! library's module (`vinc`, `iroh`, `libp2p`) only maps its own endpoint, connection and stream types onto it.
 //!
 //! Invariants: nothing here is specific to one library; a number is printed only when it was measured in this run;
 //! a failure is counted and printed, never dropped.
@@ -285,16 +285,19 @@ pub trait Lib: Sized + 'static {
     fn run<T>(f: impl Future<Output = T>) -> T;
     /// Start `f` on the runtime.
     fn spawn(f: impl Future<Output = ()> + 'static);
-    /// Start the future `make` builds for client `i` of a crowd, and say whether it started. A library that runs one
-    /// endpoint on every worker ([`per_core`]) starts it on worker `i` modulo the workers, where the client's endpoint is
-    /// made; the default starts it here, as [`spawn`](Self::spawn) does.
-    fn spawn_client<F: Future<Output = ()> + 'static>(i: usize, make: impl FnOnce() -> F + Send + 'static) -> bool {
+    /// Start the future `make` builds for client `i` of a crowd, or say why it did not start. A library that runs one
+    /// endpoint on every worker ([`per_core`]) starts it on worker `i` modulo the workers, where the client's endpoint
+    /// is made; the default starts it here, as [`spawn`](Self::spawn) does.
+    fn spawn_client<F: Future<Output = ()> + 'static>(
+        i: usize,
+        make: impl FnOnce() -> F + Send + 'static,
+    ) -> io::Result<()> {
         let _ = i;
         Self::spawn(make());
-        true
+        Ok(())
     }
-    /// A client endpoint of the many-connection test: [`client`](Self::client), driven by its own task when the reading is
-    /// `driven` for a library whose endpoint needs one (the others always are).
+    /// A client endpoint of the many-connection test: [`client`](Self::client), driven by its own task when the reading
+    /// is `driven` for a library whose endpoint needs one (the others always are).
     fn burst_client() -> impl Future<Output = io::Result<Self::Ep>> {
         Self::client()
     }
@@ -754,6 +757,10 @@ async fn bulk_allocs<L: Lib>(addr: &str, total: u64) {
 
 static DRIVEN: AtomicBool = AtomicBool::new(false);
 
+/// Held by every test that sets `DRIVEN` or `PER_CORE`, so they also pass together in one process.
+#[cfg(test)]
+pub(crate) static SWITCHES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Whether the many-connection test reads memory from driven client endpoints rather than undriven ones (the default).
 pub fn driven() -> bool {
     DRIVEN.load(Relaxed)
@@ -778,14 +785,13 @@ fn parse_reading(v: Option<&str>) -> Result<bool, String> {
     }
 }
 
-/// Read the reading option: the `--reading=` argument (removed from `args`), else `VINC_BENCH_READING`, else `undriven`.
+/// Read the reading option: the `--reading=` argument (removed from `args`), else `undriven`.
 fn reading_option(args: &mut Vec<String>) -> Result<(), String> {
     let arg = args
         .iter()
         .position(|a| a.starts_with("--reading="))
         .map(|i| args.remove(i).trim_start_matches("--reading=").to_owned());
-    let env = std::env::var("VINC_BENCH_READING").ok();
-    DRIVEN.store(parse_reading(arg.or(env).as_deref())?, Relaxed);
+    DRIVEN.store(parse_reading(arg.as_deref())?, Relaxed);
     Ok(())
 }
 
@@ -894,7 +900,8 @@ pub fn run_args<L: Lib>(mut args: Vec<String>) {
         }
         _ => {
             eprintln!(
-                "usage: [--endpoints=1|per-core] [--reading=undriven|driven] server [--count-allocs] | client <addr> <setup|resume|throughput|latency|requests|allocs|many> [numbers]"
+                "usage: [--endpoints=1|per-core] [--reading=undriven|driven] server [--count-allocs] \
+                 | client <addr> <setup|resume|throughput|latency|requests|allocs|many> [numbers]"
             );
             std::process::exit(2);
         }
@@ -926,13 +933,15 @@ mod tests {
 
     #[test]
     fn the_reading_argument_is_taken_out_of_the_arguments() {
+        let _one = SWITCHES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let found = driven();
         let mut args = vec!["--reading=driven".to_owned(), "server".to_owned()];
         assert_eq!(reading_option(&mut args), Ok(()));
         assert_eq!(args, ["server"]);
         assert!(driven());
-        DRIVEN.store(false, Relaxed);
         let mut bad = vec!["--reading=never".to_owned()];
         assert!(reading_option(&mut bad).is_err());
+        DRIVEN.store(found, Relaxed);
     }
 
     #[test]
@@ -952,6 +961,8 @@ mod tests {
 
     #[test]
     fn per_core_is_taken_only_by_a_library_that_can_and_every_line_of_a_per_core_process_says_so() {
+        let _one = SWITCHES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let found = per_core();
         let line = || Rec::new("x", "many").0;
         let mut args = vec!["--endpoints=per-core".to_owned(), "server".to_owned()];
         assert_eq!(endpoints_option::<iroh::Iroh>(&mut args), Ok(()));
@@ -969,7 +980,7 @@ mod tests {
         );
         assert!(per_core());
         assert!(line().contains("\"endpoints\":\"per-core\""), "{}", line());
-        PER_CORE.store(false, Relaxed);
         assert!(endpoints_option::<vinc::Vinc1>(&mut vec!["--endpoints=two".to_owned()]).is_err());
+        PER_CORE.store(found, Relaxed);
     }
 }
