@@ -418,6 +418,11 @@ mod tests {
             EnvelopeRef::topic(b"news", &head[..MID_LEN], b"hello").verify(),
             Err(EnvelopeError::Malformed(_))
         ));
+        let longer = [&head[..], &b"x"[..]].concat();
+        assert!(matches!(
+            EnvelopeRef::topic(b"news", &longer, b"hello").verify(),
+            Err(EnvelopeError::Malformed(_))
+        ));
     }
 
     /// An origin that names B but carries A's signature, and (for every algorithm with a key in the head) B's id with
