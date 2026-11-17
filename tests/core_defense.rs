@@ -696,9 +696,15 @@ fn first_datagram(odcid: u64, message: &[u8], len: usize) -> Vec<u8> {
 
 /// A well-formed resumption Hello for a ticket nobody issued: random ticket id, key and binder.
 fn forged_hello(seed: u64) -> Vec<u8> {
+    hello_naming(None, seed)
+}
+
+/// The same forged Hello, naming ticket `named` when given.
+fn hello_naming(named: Option<[u8; 16]>, seed: u64) -> Vec<u8> {
     let mut rng = SplitMix64::new(seed);
     let (mut tid, mut e, mut binder) = ([0u8; 16], [0u8; 32], [0u8; 32]);
     rng.fill(&mut tid);
+    tid = named.unwrap_or(tid);
     rng.fill(&mut e);
     rng.fill(&mut binder);
     let cid = ConnId::new(&[1, 2, 3, 4]).unwrap();
@@ -899,6 +905,33 @@ fn rejects_wait_in_a_queue_of_sixteen_and_the_seventeenth_is_dropped() {
             d.srv.poll_transmit(now, &mut out).is_some(),
             "the queue stayed full after it drained"
         );
+    });
+}
+
+#[test]
+fn a_forged_hello_naming_an_expired_ticket_is_rejected_and_the_ticket_is_gone() {
+    big_stack(|| {
+        let mut d = Duo::new();
+        let first = d.dial();
+        d.hang_up(first);
+        let held: Vec<_> = d.srv.stores().tickets.slot_table().flatten().collect();
+        assert_eq!(held.len(), 1, "the server holds the ticket the dialer was given");
+        let (tid, expiry) = held[0];
+        let ns0 = d.srv.node_stats();
+        let (now, from): (u64, SocketAddr) = (expiry + 1, "10.3.0.1:9".parse().unwrap());
+        let mut dg = first_datagram(77, &hello_naming(Some(tid), 5), 0);
+        d.srv.handle_datagram(now, d.addr, from, &mut dg);
+        assert!(
+            d.srv.poll_transmit(now, &mut vec![0u8; 65_536]).is_some(),
+            "no reject for an expired ticket"
+        );
+        let ns = d.srv.node_stats();
+        assert_eq!(
+            (ns.stateless_rejects - ns0.stateless_rejects, ns.half_open),
+            (1, 0),
+            "{ns:?}"
+        );
+        assert_eq!(d.srv.stores().tickets.len(), 0, "the expired ticket stayed");
     });
 }
 
