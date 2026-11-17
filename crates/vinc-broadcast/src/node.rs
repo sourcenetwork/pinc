@@ -183,8 +183,8 @@ pub(crate) struct Topic {
     pub(crate) peers_ver: Option<(u64, u32)>,
     /// Member: `peers` was cut to this member's `max_subscribers`, so it lacks ids the hub's list has past the cut.
     pub(crate) peers_cut: bool,
-    /// Member: join hints, nodes taken as subscribers beside the hub's list; at most `max_subscribers`, none of them
-    /// in `peers`. A hint leaves when a hub's list names it and when the topic is left.
+    /// Member: join hints, nodes taken as subscribers beside the hub's list, in id order; at most `max_subscribers`,
+    /// none of them in `peers`. A hint leaves when a hub's list names it and when the topic is left.
     pub(crate) hints: Vec<NodeId>,
     /// Hub: the list last told the recipients (see `subs`).
     pub(crate) told: Vec<NodeId>,
@@ -498,7 +498,9 @@ impl Topics {
     }
 
     /// The subscribers a hub reported for `topic`, for the member-to-member fallback: that hub's list at the version
-    /// this node holds, cut to this node's limit. Join hints are beside it ([`Topics::hinted_subscribers`]).
+    /// this node holds, cut to this node's limit, in id order. While the node waits for a whole list (after a missed
+    /// change or a change of primary) it is the last list held. Join hints are beside it
+    /// ([`Topics::hinted_subscribers`]).
     pub fn known_subscribers(&self, topic: &[u8]) -> &[NodeId] {
         self.topics.get(topic).map_or(&[], |t| t.peers.as_slice())
     }
@@ -522,14 +524,17 @@ impl Topics {
         let Some(st) = self.topics.get_mut(topic) else {
             return false;
         };
-        if st.peers.contains(member) || st.hints.contains(member) {
+        if st.peers.binary_search(member).is_ok() {
             return true;
         }
-        if st.hints.len() >= max {
-            return false;
+        match st.hints.binary_search(member) {
+            Ok(_) => true,
+            Err(_) if st.hints.len() >= max => false,
+            Err(at) => {
+                st.hints.insert(at, *member);
+                true
+            }
         }
-        st.hints.push(*member);
-        true
     }
 
     /// The next trace record.

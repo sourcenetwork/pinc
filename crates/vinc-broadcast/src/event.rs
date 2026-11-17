@@ -65,7 +65,8 @@ pub enum SubsDrop {
     /// A change from a hub other than the one the member's list came from; from the member's primary it also makes the
     /// primary the source, and the member asks it for the whole list.
     OtherHub,
-    /// A change on a version the member does not hold; it asks for the whole list once.
+    /// A change on a version the member does not hold, or a removal from a list the member cut below its hub's; it
+    /// asks for the whole list once.
     OffBase,
     /// A change at or below the version the member holds (from an old session): ignored, the member keeps its version.
     Old,
