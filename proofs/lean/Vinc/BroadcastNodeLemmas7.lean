@@ -171,7 +171,7 @@ theorem OnMsg_mapStep (p : Params) (N : Node) (now wall : Nat) (t : Frame) (b : 
   by_cases h5 : p.revoked.contains m.origin = true
   · rw [if_pos h5]; exact MapStep.refl now _
   rw [if_neg h5]
-  by_cases h6 : m.kind = .badsig
+  by_cases h6 : (m.kind = .badsig ∨ m.kind = .graft)
   · rw [if_pos h6]; exact MapStep.refl now _
   rw [if_neg h6]
   by_cases hhub : p.isHub = true

@@ -38,6 +38,8 @@ def paramsOf (n : Nat) : Params where
   ackAfterStore := true
   gather := true
   evictGuard := true
+  keepPrint := true
+  dueOnly := true
 
 /-- A signature the oracle knows: the signature id and the statement it covers. -/
 structure Sig where

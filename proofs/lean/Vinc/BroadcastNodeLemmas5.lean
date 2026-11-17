@@ -274,7 +274,7 @@ theorem OnMsg_post {p : Params} {N : Node} {now wall : Nat} {t : Frame} {b : Boo
   by_cases h5 : p.revoked.contains m.origin = true
   · rw [if_pos h5]; exact Post_req hI N.req _ 0 (by simp [Plain, NoDA])
   rw [if_neg h5]
-  by_cases h6 : m.kind = .badsig
+  by_cases h6 : (m.kind = .badsig ∨ m.kind = .graft)
   · rw [if_pos h6]; exact Post_req hI N.req _ 0 (by simp [Plain, NoDA])
   rw [if_neg h6]
   have hd : SContains p N.seen m.mid now = false ∧ LContains N.lg m.mid = false := by

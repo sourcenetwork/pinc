@@ -25,6 +25,9 @@ Differences from the TLA text, each exact for what is stated:
   which is what keeps that case away.
 * The TLA assertion in `SPush` ("the map refused an id the set had room for") is not repeated: it cannot
   fire, because every map entry is an order entry (`SeenInv.map` in `BroadcastNodeLemmas1`).
+* `store` (the print of each stored message, the content here) is not tidied: the TLA `Tidy` drops the entry of an
+  id that neither the log nor the dedupe map holds, and a duplicate reads it only for an id one of them holds, where
+  the two agree. `AckById` (the old rule) is a TLA witness only.
 * The environment is unbounded: `MaxNow` and `MaxLife` (bounds for the model checker) are dropped, `Stamps`,
   `Sizes`, `Paths` are all values.
 -/
@@ -56,10 +59,16 @@ structure Params where
   ackAfterStore : Bool
   gather : Bool
   evictGuard : Bool
+  /-- A hub keeps the print of a message it stored after the log let it go (the dedupe map carries it); `false`
+  compares only while the log holds the id. -/
+  keepPrint : Bool
+  /-- Only a copy due an acknowledgement is compared with the stored print; `false` compares every copy. -/
+  dueOnly : Bool
 
-/-- What the checks before the signature find. -/
+/-- What the checks before the signature find (`graft`: the id and signature of a stored message under another body,
+which never verifies as a new message). -/
 inductive MsgKind where
-  | good | badhead | big | badsig
+  | good | badhead | big | badsig | graft
   deriving DecidableEq, Repr
 
 /-- A message: id, origin, hybrid timestamp as one number, what the checks find, size of head and body, and the
@@ -382,14 +391,25 @@ def Offer (p : Params) (N : Node) (now : Nat) (m : Ent) : Res :=
 /-- The id is a duplicate: recorded and unexpired, or in the log. -/
 def IsDup (p : Params) (N : Node) (mid now : Nat) : Bool := SContains p N.seen mid now || LContains N.lg mid
 
-/-- The log holds this very message (same origin, timestamp and body) under its id. -/
-def SameStored (N : Node) (m : Msg) : Bool := LContains N.lg m.mid && decide (N.store m.mid = some m.content)
+/-- The print a frame carries: a good message's is its content; a graft (the id and signature of a stored message
+under another body) carries the print stored under its id. The other kinds carry none that is compared. -/
+def Print (N : Node) (m : Msg) : Option Content := if m.kind = .graft then N.store m.mid else some m.content
 
-/-- A known id: acknowledged only for the message the log holds; another message under a held id is refused with
-`idTaken`; an id only the dedupe set remembers is a duplicate with no acknowledgement. -/
-def DupRes (N : Node) (m : Msg) (ack : Nat) : Res :=
-  ⟨N, [.rejected m.mid (if SameStored N m || !LContains N.lg m.mid then .duplicate else .idTaken)], [],
-    if SameStored N m then ack else 0, []⟩
+/-- The print held for the id is the frame's: a message whose signature verifies, with the origin, timestamp and body
+the node stored under the id (the signature binds them, so another message has another print), or a graft of the
+stored message, whose signature is the stored one. A frame that fails the signature check otherwise never has the
+stored print. -/
+def SameStored (N : Node) (m : Msg) : Bool :=
+  (decide (m.kind = .good) && decide (N.store m.mid = some m.content)) || decide (m.kind = .graft)
+
+/-- A known id: a copy due an acknowledgement (`0 < ack`) is compared with the print held for the id, while the log
+holds the id and, with `keepPrint`, after the log let it go. The same print is a duplicate that is acknowledged, a
+different one is refused with `idTaken` and no acknowledgement. A copy due none is a plain duplicate and compares
+nothing (`dueOnly`; `false` compares every copy). -/
+def DupRes (p : Params) (N : Node) (m : Msg) (ack : Nat) : Res :=
+  let look := (p.keepPrint || LContains N.lg m.mid) && (decide (0 < ack) || !p.dueOnly)
+  ⟨N, [.rejected m.mid (if look && !SameStored N m then .idTaken else .duplicate)], [],
+    if look && SameStored N m then ack else 0, []⟩
 
 /-- `offer_held`: offered again unless it arrived another way meanwhile. -/
 def OfferHeld (p : Params) (N : Node) (now : Nat) (e : Ent) : Res :=
@@ -445,9 +465,9 @@ def OnMsg (p : Params) (N : Node) (now wall : Nat) (t : Frame) (fromBoot : Bool)
   else if m.kind = .big then Plain N [.rejected m.mid .badHead]
   else
     let ack := if p.isHub && (t = .pub || t = .fanp) then 1 else 0
-    if IsDup p N m.mid now then DupRes N m ack
+    if IsDup p N m.mid now then DupRes p N m ack
     else if p.revoked.contains m.origin then Plain N [.rejected m.mid .revoked]
-    else if m.kind = .badsig then Plain N [.rejected m.mid .badSignature]
+    else if m.kind = .badsig ∨ m.kind = .graft then Plain N [.rejected m.mid .badSignature]
     else
       let rep := N.req.contains m.mid
       let N1 := {N with req := N.req.filter (fun x => x != m.mid)}
@@ -515,7 +535,7 @@ inductive Last where
 
 /-- The harness state: the node, the clock, the life, and the ghosts `cnt` (deliveries in the life), `recd` (when
 an id was last recorded), `capd` (the set dropped it early), `ep` (epochs), the accounted ids, the last step's
-records, deliveries, acks and message. -/
+records, deliveries, acks and the acknowledged message. -/
 structure Sys where
   node : Node
   now : Nat
@@ -554,10 +574,11 @@ def CapG (p : Params) (now : Nat) (old new : Node) (capd : Nat → Bool) : Nat �
 def EpG (p : Params) (now : Nat) (old new : Node) (ep : Nat → Nat) : Nat → Nat :=
   fun m => if NewRec p now old new m then ep m + 1 else ep m
 
-/-- `Apply`: take the result of an operator as one step of the system. -/
+/-- `Apply`: take the result of an operator as one step of the system. The ghost `lm` is the message only when the
+step acknowledged one (`NoMsg` otherwise, `lm' = IF r.ack > 0 THEN msg ELSE NoMsg` of the TLA text). -/
 def Apply (p : Params) (s : Sys) (r : Res) (what : Last) (m : Msg) : Sys :=
   ⟨r.n, s.now, s.life, fun m => s.cnt m + r.dl.count m, RecG s.node r.n s.recd, CapG p s.now s.node r.n s.capd,
-   EpG p s.now s.node r.n s.ep, s.acct ++ r.acc, r.outs, r.dl, what, r.ack, m⟩
+   EpG p s.now s.node r.n s.ep, s.acct ++ r.acc, r.outs, r.dl, what, r.ack, if 0 < r.ack then m else Msg.zero⟩
 
 /-- The tick guard: time passes only up to the next deadline `PollTimeout` names. -/
 def TickOk (p : Params) (N : Node) (now : Nat) : Bool :=
