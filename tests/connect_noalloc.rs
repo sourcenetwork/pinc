@@ -106,6 +106,7 @@ fn the_relay_allocates_nothing_in_steady_state() {
             .unwrap();
             r.datagram(now, src, Some(&m), &spu, s).unwrap();
             r.datagram(now, src, None, &qad, s).unwrap();
+            r.udp_heard(now, &m, s).unwrap();
             r.handle_timeout(now, s);
             let _ = r.send_local(now, &a, 0, &packet[..100], s);
             // a packet nobody can take is a refusal, which is also allocation free

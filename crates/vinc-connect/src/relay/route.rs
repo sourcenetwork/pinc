@@ -103,6 +103,13 @@ impl<const C: usize, const R: usize, const MN: usize, const MB: usize> Relay<C, 
         true
     }
 
+    /// Whether `node` has a UDP session heard within [`rule::HUB_TUNNEL_FRESH_NS`].
+    fn fresh(&self, now: u64, node: &NodeId) -> bool {
+        self.udp
+            .get(node)
+            .is_some_and(|heard| now.saturating_sub(*heard) < rule::HUB_TUNNEL_FRESH_NS)
+    }
+
     /// SPL down `dst`'s UDP session if it is fresh and the packet fits.
     pub(crate) fn tunnel_down<S: Sink>(
         &mut self,
@@ -113,11 +120,11 @@ impl<const C: usize, const R: usize, const MN: usize, const MB: usize> Relay<C, 
         packet: &[u8],
         sink: &mut S,
     ) -> bool {
-        let fresh = self
-            .udp
-            .get(dst)
-            .is_some_and(|heard| now.saturating_sub(*heard) < rule::HUB_TUNNEL_FRESH_NS);
-        if !fresh || !sink.tunnel_ready(dst) || packet.is_empty() || 35 + packet.len() > MAX_TUNNEL_DATAGRAM {
+        if !self.fresh(now, dst)
+            || !sink.tunnel_ready(dst)
+            || packet.is_empty()
+            || 35 + packet.len() > MAX_TUNNEL_DATAGRAM
+        {
             return false;
         }
         sink.emit(Effect::Udp {
@@ -202,20 +209,28 @@ impl<const C: usize, const R: usize, const MN: usize, const MB: usize> Relay<C, 
         Ok(())
     }
 
+    /// Hand over what `node` holds if its route is ready (a fresh UDP session the host can send on): silent and
+    /// one comparison when the mailbox holds nothing, and silent when the route is not ready.
+    pub(super) fn release_held<S: Sink>(&mut self, now: u64, node: &NodeId, sink: &mut S) {
+        if self.mailbox.members() == 0 || self.mailbox.pending(node).0 == 0 {
+            return;
+        }
+        if self.fresh(now, node) && sink.tunnel_ready(node) {
+            self.deliver_held(now, node, sink);
+        }
+    }
+
     /// Hand the mailbox contents of `node` to it, oldest first, each at most once: on its carrier if one is open,
     /// else down its fresh UDP session. A message leaves the mailbox only when it was handed over (or expires): the
-    /// pass stops at the first one that cannot go, which stays held in front and is counted once as
-    /// [`Reject::NoTunnel`].
+    /// pass stops at the first one that cannot go, which stays held in front. A hand-over the host refuses is counted
+    /// once as [`Reject::NoTunnel`]; a message too long for a datagram stops the pass silently and waits for the
+    /// carrier.
     pub(crate) fn deliver_held<S: Sink>(&mut self, now: u64, node: &NodeId, sink: &mut S) {
         if self.mailbox.pending(node).0 == 0 {
             return;
         }
         let open = self.clients.contains(node);
-        let fresh = self
-            .udp
-            .get(node)
-            .is_some_and(|heard| now.saturating_sub(*heard) < rule::HUB_TUNNEL_FRESH_NS);
-        if !open && !fresh {
+        if !open && !self.fresh(now, node) {
             return;
         }
         let mut buf = [0u8; crate::carrier::frame::MAX_PACKET_LEN];
@@ -255,19 +270,34 @@ impl<const C: usize, const R: usize, const MN: usize, const MB: usize> Relay<C, 
     }
 
     /// A member came back without reopening its carrier (its UDP session woke): the sleep mark is cleared and the
-    /// mailbox is delivered down the UDP session. Call it after [`Relay::udp_heard`].
+    /// mailbox is delivered down the UDP session if it is fresh and its route is ready. Otherwise the mail stays held
+    /// and the refusal is counted once as [`Reject::NoTunnel`]; the next packet heard from the member hands it over
+    /// when the route is ready ([`Relay::udp_heard`]).
     pub fn member_returned<S: Sink>(&mut self, now: u64, node: &NodeId, sink: &mut S) {
         self.sleeping.remove(node);
         self.deliver_held(now, node, sink);
     }
 
+    /// Record that `node` was heard on its validated UDP session at `now`; false if the table has no room for it.
+    pub(super) fn stamp(&mut self, now: u64, node: &NodeId) -> bool {
+        self.udp.insert(*node, now).is_ok()
+    }
+
     /// The host heard `node` on its validated UDP session at `now`: tunnel packets may use it for
-    /// [`rule::HUB_TUNNEL_FRESH_NS`].
+    /// [`rule::HUB_TUNNEL_FRESH_NS`], and what the mailbox holds for `node` is handed over if its route is ready.
+    /// A host calls it once after the endpoint read each packet from the member's validated direct route (the relay
+    /// itself stamps and releases for each datagram from a validated member it is given), and applies the effects it
+    /// emits. A release stops at a refused hand-over and counts it once as [`Reject::NoTunnel`]; a route that is not
+    /// ready is silent. With no member holding mail it costs the stamp and one comparison.
     ///
     /// # Errors
-    /// [`Reject::SessionsFull`] if the table has no room for a new member.
-    pub fn udp_heard<S: Sink>(&mut self, now: u64, node: &NodeId, _sink: &mut S) -> Result<(), Reject> {
-        self.udp.insert(*node, now).map(|_| ()).map_err(|_| Reject::SessionsFull)
+    /// [`Reject::SessionsFull`] if the table has no room for a new member; it is traced and counted once.
+    pub fn udp_heard<S: Sink>(&mut self, now: u64, node: &NodeId, sink: &mut S) -> Result<(), Reject> {
+        if !self.stamp(now, node) {
+            return Err(self.reject(sink, Reject::SessionsFull, Some(*node)));
+        }
+        self.release_held(now, node, sink);
+        Ok(())
     }
 
     /// Forget the UDP session of `node`.

@@ -24,7 +24,6 @@ use vinc_connect::mailbox;
 use vinc_connect::relay::datagram::{Datagram, MAX_TUNNEL_DATAGRAM};
 use vinc_connect::relay::sleep;
 use vinc_connect::relay::{NodeState, Reject, SessionId, Trace, UdpTarget, rule};
-use vinc_crypto::NodeId;
 
 #[test]
 fn the_hub_tunnel_up_requires_an_authenticated_member_and_routes_like_a_carrier_packet() {
@@ -745,94 +744,6 @@ fn a_held_packet_too_long_for_a_datagram_stays_held_until_the_carrier_reopens() 
     );
     assert_eq!(fx.r.mailbox_pending(&m).0, 0);
     assert_eq!(fx.r.mailbox_stats().delivered, 1);
-}
-
-/// A relay holding `n` one-byte-numbered packets from `a` for the sleeping `m`.
-fn hold_for_sleeper(fx: &mut Fx, n: u8) -> (NodeId, NodeId, Vec<u64>) {
-    let a = nid(0xa1);
-    let sa = fx.open(T0, a);
-    let kp = ed(0x61);
-    let m = id(&kp);
-    let sm = fx.open(T0, m);
-    let me = fx.me;
-    fx.r.sleep_notice(T0, &notice(&kp, &me, T0 / 1_000_000), None, &mut fx.s)
-        .unwrap();
-    fx.r.carrier_closed(T0 + SEC, &m, sm, &mut fx.s);
-    for i in 0..n {
-        fx.send(
-            T0 + 2 * SEC,
-            a,
-            sa,
-            &Frame::Send {
-                dst: m,
-                flag: 7,
-                packet: &[i + 1, 2, 3],
-            },
-        )
-        .unwrap();
-    }
-    fx.fx();
-    let seqs =
-        fx.s.1
-            .iter()
-            .filter_map(|t| match t {
-                Trace::MailboxStored { seq, .. } => Some(*seq),
-                _ => None,
-            })
-            .collect();
-    fx.s.1.clear();
-    (a, m, seqs)
-}
-
-fn delivered(fx: &Fx) -> Vec<u64> {
-    fx.s.1
-        .iter()
-        .filter_map(|t| match t {
-            Trace::MailboxDelivered { seq, .. } => Some(*seq),
-            _ => None,
-        })
-        .collect()
-}
-
-#[test]
-fn held_messages_stay_held_while_the_tunnel_is_not_ready_and_arrive_in_order_once_it_is() {
-    let mut fx = Fx::new();
-    let (a, m, seqs) = hold_for_sleeper(&mut fx, 3);
-    assert_eq!(seqs.len(), 3);
-    // its UDP session is fresh but it has no validated direct route: the tunnel refuses
-    fx.r.udp_heard(T0 + 3 * SEC, &m, &mut fx.s).unwrap();
-    fx.s.2.push(m);
-    let rejected = fx.r.stats().rejected;
-    fx.r.member_returned(T0 + 3 * SEC, &m, &mut fx.s);
-    assert!(fx.fx().iter().all(|r| !matches!(r, Rec::Udp(..))));
-    assert_eq!(fx.r.mailbox_pending(&m).0, 3, "nothing was lost");
-    assert_eq!(fx.r.stats().rejected, rejected + 1, "the refused pass is counted once");
-    assert_eq!(fx.r.mailbox_stats().delivered, 0);
-    assert!(
-        delivered(&fx).is_empty(),
-        "no delivery trace for a message not handed over"
-    );
-    // the route is validated: all three go down in order, once, with their sequence numbers
-    fx.s.2.clear();
-    fx.r.member_returned(T0 + 4 * SEC, &m, &mut fx.s);
-    let want: Vec<Rec> = (1..=3u8)
-        .map(|i| {
-            Rec::Udp(
-                UdpTarget::Member(m),
-                dg(&Datagram::Spl {
-                    src: a,
-                    flag: 7,
-                    packet: &[i, 2, 3],
-                }),
-            )
-        })
-        .collect();
-    let got: Vec<Rec> = fx.fx().into_iter().filter(|r| matches!(r, Rec::Udp(..))).collect();
-    assert_eq!(got, want);
-    assert_eq!(delivered(&fx), seqs);
-    assert_eq!(fx.r.mailbox_pending(&m).0, 0);
-    fx.r.member_returned(T0 + 5 * SEC, &m, &mut fx.s);
-    assert!(fx.fx().iter().all(|r| !matches!(r, Rec::Udp(..))), "once");
 }
 
 #[test]

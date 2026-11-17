@@ -328,6 +328,10 @@ name = "connect_hub"
 path = "connect_hub.rs"
 
 [[test]]
+name = "connect_hub_held"
+path = "connect_hub_held.rs"
+
+[[test]]
 name = "connect_mailbox"
 path = "connect_mailbox.rs"
 

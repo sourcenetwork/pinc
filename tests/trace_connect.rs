@@ -212,6 +212,7 @@ struct Cov {
     fwdback: u32,
     wake: u32,
     held_out: u32,
+    heard_deliv: u32,
     tunnel_held: u32,
     refused_held: u32,
 }
@@ -335,7 +336,7 @@ fn run(seed: u64, out: &mut Vec<String>, cov: &mut Cov, cache: &mut Cache) {
                     (13, k, 0, 0, 1, 0),
                 ]),
                 // the sleeper's UDP session wakes with no validated direct route: the mailbox stays held and the pass
-                // is refused once; when the route is validated the held packets go down in order
+                // is refused once; when the route is ready the next heard packet hands all three over in order
                 10 => script.extend([
                     (0, k, 0, 0, 1, 0),
                     (3, k, 11, 0, 1, 0),
@@ -346,9 +347,8 @@ fn run(seed: u64, out: &mut Vec<String>, cov: &mut Cov, cache: &mut Cache) {
                     (17, k, 0, 0, 0, 0),
                     (11, k, 0, 0, 1, 0),
                     (13, k, 0, 0, 1, 0),
-                    (13, k, 0, 0, 1, 0),
                     (17, k, 1, 0, 0, 0),
-                    (13, k, 0, 0, 1, 0),
+                    (11, k, 0, 0, 1, 0),
                 ]),
                 // a record is dropped after three republish periods, not before
                 _ => script.extend([
@@ -591,17 +591,9 @@ fn run(seed: u64, out: &mut Vec<String>, cov: &mut Cov, cache: &mut Cache) {
                     res = "ok".into();
                     head = format!(r#"{{"t":"rudpg","n":{}"#, node + 1);
                 } else {
-                    let at = if forced.is_some() {
-                        now
-                    } else {
-                        // Whole seconds back: the trace records `at / SEC`. (This was `k * SEC.min(now / SEC)`, that is
-                        // `k * secs` nanoseconds, which the trace rounded away: the code saw a heard time 19.000009 s
-                        // before a frame and the model 20 s, the edge of the freshness bound.)
-                        now - ((rng.next_u64() % 25) * SEC).min(now)
-                    };
-                    let x = r.udp_heard(at, &ids[node], &mut sink);
+                    let x = r.udp_heard(now, &ids[node], &mut sink);
                     res = res_name(&x);
-                    head = format!(r#"{{"t":"rudph","n":{},"at":{}"#, node + 1, at / SEC);
+                    head = format!(r#"{{"t":"rudph","now":{secs},"n":{}"#, node + 1);
                 }
             }
             12 => {
@@ -671,6 +663,8 @@ fn run(seed: u64, out: &mut Vec<String>, cov: &mut Cov, cache: &mut Cache) {
             cov.refused_held += u32::from(e.contains(r#""notunnel""#));
         }
 
+        let delivered = sink.out.iter().any(|e| e.contains("mdeliv"));
+        cov.heard_deliv += u32::from(op == 11 && delivered);
         cov.tunnel_held += u32::from(
             sink.out.iter().any(|e| e.starts_with(r#"["udp"#)) && sink.out.iter().any(|e| e.contains("mdeliv")),
         );
@@ -692,6 +686,7 @@ fn the_relay_records_its_trace() {
         fwdback: 0,
         wake: 0,
         held_out: 0,
+        heard_deliv: 0,
         tunnel_held: 0,
         refused_held: 0,
     };
@@ -707,6 +702,10 @@ fn the_relay_records_its_trace() {
     assert!(vinc_tests::soaking() || cov.wake > 0, "no wake-up");
     assert!(vinc_tests::soaking() || cov.held_out > 0, "no held packet delivered");
     assert!(vinc_tests::soaking() || cov.stale_copy > 0, "no tunnel packet");
+    assert!(
+        vinc_tests::soaking() || cov.heard_deliv > 0,
+        "no held packet delivered by a heard packet"
+    );
     assert!(
         vinc_tests::soaking() || cov.tunnel_held > 0,
         "no held packet delivered down the tunnel"

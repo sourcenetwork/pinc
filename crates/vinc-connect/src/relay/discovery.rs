@@ -35,7 +35,10 @@ impl<const C: usize, const R: usize, const MN: usize, const MB: usize> Relay<C, 
     ) -> Result<(), Reject> {
         let d = Datagram::decode(bytes).map_err(|e| self.reject(sink, Reject::BadDatagram(e), from_member.copied()))?;
         if let Some(m) = from_member {
-            let _ = self.udp_heard(now, m, sink);
+            // A full table is not a refusal of the datagram: it is served, and the stamp is simply not kept.
+            if self.stamp(now, m) {
+                self.release_held(now, m, sink);
+            }
         }
         match d {
             Datagram::Qad { nonce } => {
