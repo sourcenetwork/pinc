@@ -269,7 +269,6 @@ impl Topics {
                     hop: *hop,
                     ts,
                     data,
-                    hlen: head.len(),
                 });
                 self.trace(|| Trace::Held { mid, why: HoldWhy::Acp });
             } else {
@@ -292,7 +291,7 @@ impl Topics {
 
     /// Offer a message that was held for the floors, unless it arrived by another path meanwhile.
     pub(crate) fn offer_held<H: Host>(&mut self, h: &mut H, now: Nanos, e: Held) {
-        if let Some((topic, head, body)) = e.parts()
+        if let Some((topic, head, body)) = Self::unpack(self.limits.keep_heads, &e.data)
             && !self.is_dup(topic, u64::from_le_bytes(e.mid), now)
         {
             self.offer(h, now, topic, e.mid, &e.origin, &e.hop, head, body, e.ts);
@@ -343,7 +342,7 @@ impl Topics {
                 continue;
             }
             let e = self.held.remove(i);
-            if allow && let Some((topic, head, body)) = e.parts() {
+            if allow && let Some((topic, head, body)) = Self::unpack(self.limits.keep_heads, &e.data) {
                 self.deliver(h, topic, e.mid, &e.origin, &e.hop, head, body);
             }
             self.give_buf(e.data);

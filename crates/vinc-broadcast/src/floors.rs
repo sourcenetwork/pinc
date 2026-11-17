@@ -269,7 +269,6 @@ impl Topics {
             hop: *hop,
             ts,
             data,
-            hlen: head.len(),
         });
         self.trace(|| Trace::Held {
             mid,
