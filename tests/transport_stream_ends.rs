@@ -1,5 +1,6 @@
 //! How a stream ends at the connection: data for a stream nobody can read raises no readable event (a reset is heard
-//! for every stream the table holds).
+//! for every stream the table holds), and an error code no frame can carry is refused where it enters without
+//! stalling the other streams.
 #![allow(
     clippy::unwrap_used,
     clippy::indexing_slicing,
@@ -11,6 +12,7 @@ use vinc_crypto::IdentityAlg;
 use vinc_tests::*;
 use vinc_transport::conn::{Event, PathId};
 use vinc_transport::frame::Frame;
+use vinc_transport::stream::StreamError;
 use vinc_wire::Writer;
 
 /// A connected pair; `f` runs on it with the server's startup events already read.
@@ -129,5 +131,34 @@ fn a_frame_for_a_live_half_still_raises_its_event() {
         assert!(readable(&more, 10), "data for a live half raised no readable event");
         let end = deliver(net, 7002, &[reset(10, 6)]);
         assert!(reset_seen(&end, 10), "a reset for a live half raised no event");
+    });
+}
+
+#[test]
+fn a_code_no_frame_can_carry_is_refused_and_the_other_streams_still_send() {
+    pair(|net| {
+        let bad = net.a.conn.open_bi().unwrap();
+        let other = net.a.conn.open_bi().unwrap();
+        let again = net.a.conn.open_bi().unwrap();
+        for id in [bad, other, again] {
+            net.a.conn.write(id, b"request").unwrap();
+        }
+        let refused = net.a.conn.reset(bad, 1 << 63);
+        let t = net.now + SEC;
+        net.run(t, |_| false);
+        net.a.conn.reset(other, 5).unwrap();
+        let t = net.now + 2 * SEC;
+        net.run(t, |n| n.b.saw(|r| matches!(r, Rec::Reset(i, 5) if *i == other)));
+        assert!(
+            net.b.saw(|r| matches!(r, Rec::Reset(i, 5) if *i == other)),
+            "the reset of another stream never left after a code no frame can carry ({refused:?})"
+        );
+        assert_eq!(refused, Err(StreamError::BadCode));
+        // The refused call changed nothing: the stream takes a valid reset afterwards.
+        net.a.conn.reset(bad, 3).unwrap();
+        let t = net.now + 2 * SEC;
+        net.run(t, |n| n.b.saw(|r| matches!(r, Rec::Reset(i, 3) if *i == bad)));
+        assert!(net.b.saw(|r| matches!(r, Rec::Reset(i, 3) if *i == bad)));
+        assert_eq!(net.a.conn.stop_sending(again, u64::MAX), Err(StreamError::BadCode));
     });
 }

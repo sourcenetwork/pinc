@@ -20,6 +20,7 @@ use super::{
     Config, DEFAULT_URGENCY, FIRST_CHARGE, NoSource, PeerLimits, RecvStatus, StreamError, StreamId, StreamSource,
     StreamStats, is_uni,
 };
+use crate::frame::encodable;
 
 mod pick;
 mod stop;
@@ -888,8 +889,12 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
     /// Abandon the send side: drop its buffers and queue a stream reset.
     ///
     /// # Errors
-    /// [`StreamError::UnknownStream`] or [`StreamError::StreamState`] for a receive-only stream.
+    /// [`StreamError::UnknownStream`] or [`StreamError::StreamState`] for a receive-only stream;
+    /// [`StreamError::BadCode`] for a code the frame encoder cannot write (2^63 and above), which changes nothing.
     pub fn reset(&mut self, pool: &mut BufferPool<'_>, id: StreamId, error_code: u64) -> Result<(), StreamError> {
+        if !encodable(error_code) {
+            return Err(StreamError::BadCode);
+        }
         let i = self.require(id)?;
         let result = self
             .with_send(i, |send| send.reset(pool, error_code))

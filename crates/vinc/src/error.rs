@@ -175,6 +175,7 @@ impl Error {
             }
             CommandError::Refused => Self::new(ErrorKind::Config, "a node cannot dial itself"),
             CommandError::EventsPending => Self::new(ErrorKind::Busy, "the endpoint is catching up: try again"),
+            CommandError::BadCode => Self::new(ErrorKind::Config, "the error code is too large"),
             CommandError::BufferTooSmall { .. } => {
                 Self::new(ErrorKind::TooLarge, "the datagram does not fit the buffer")
             }

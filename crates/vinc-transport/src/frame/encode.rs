@@ -8,6 +8,12 @@ use super::{EXTENSION_BASE, Frame, FrameError, MAX_STREAM_END, ty};
 /// The most a varint can hold: values from 2^63 are refused.
 const VARINT_LIMIT: u64 = 1 << 63;
 
+/// Whether a frame field (a stream error code, a close code) can be written: it is below 2^63. The one test the
+/// encoder and every call that takes such a value from the application share.
+pub const fn encodable(value: u64) -> bool {
+    value < VARINT_LIMIT
+}
+
 /// The bytes of one ticket on the wire: its id and its lifetime.
 const TICKET_LEN: usize = 16 + 4;
 
@@ -72,7 +78,7 @@ impl Frame<'_> {
 
     /// Reject a frame that cannot be encoded, before any byte is written.
     fn validate(&self) -> Result<(), FrameError> {
-        if self.varint_fields().iter().any(|v| *v >= VARINT_LIMIT) {
+        if !self.varint_fields().into_iter().all(encodable) {
             return Err(vinc_wire::WireError::VarintOverflow.into());
         }
         match *self {

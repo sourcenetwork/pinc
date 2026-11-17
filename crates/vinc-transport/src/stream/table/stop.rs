@@ -6,6 +6,7 @@
 //! discarded.
 
 use super::Streams;
+use crate::frame::encodable;
 use crate::stream::pool::BufferPool;
 use crate::stream::{StreamError, StreamId, StreamSource, is_uni};
 
@@ -43,13 +44,17 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
     /// is done. Calling it again changes nothing.
     ///
     /// # Errors
-    /// [`StreamError::UnknownStream`], or [`StreamError::StreamState`] for a stream we cannot receive on.
+    /// [`StreamError::UnknownStream`], or [`StreamError::StreamState`] for a stream we cannot receive on;
+    /// [`StreamError::BadCode`] for a code the frame encoder cannot write (2^63 and above), which changes nothing.
     pub fn stop_sending(
         &mut self,
         pool: &mut BufferPool<'_>,
         id: StreamId,
         error_code: u64,
     ) -> Result<(), StreamError> {
+        if !encodable(error_code) {
+            return Err(StreamError::BadCode);
+        }
         let i = self.require(id)?;
         let slot = self.slots.get_mut(i).ok_or(StreamError::UnknownStream)?;
         if !slot.recv.open {

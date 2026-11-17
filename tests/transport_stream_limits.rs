@@ -366,3 +366,32 @@ fn the_credit_given_to_the_peer_keeps_its_windows_in_the_pool() {
     t.on_stream_frame(&mut pool, 4, 0, &[1; 10], false).unwrap();
     assert_eq!(t.open_streams(), 5);
 }
+
+#[test]
+fn a_code_the_frame_encoder_cannot_write_is_refused_and_changes_nothing() {
+    let (mut pool, mut t) = setup(1024, |c| c.initial_stream_window = 64 * 1024);
+    let sending = t.open_stream(&pool, true).unwrap();
+    t.write(&mut pool, sending, b"data", NO_CAP).unwrap();
+    t.on_stream_frame(&mut pool, 0, 0, b"hello", false).unwrap();
+    for code in [1u64 << 63, u64::MAX] {
+        assert_eq!(t.reset(&mut pool, sending, code), Err(StreamError::BadCode));
+        assert_eq!(t.stop_sending(&mut pool, 0, code), Err(StreamError::BadCode));
+    }
+    assert!(drain_control(&mut t).is_empty(), "a refused code queued a frame");
+    assert_eq!(
+        t.read_chunk(&pool, 0),
+        Some(&b"hello"[..]),
+        "a refused stop released the data"
+    );
+    let top = (1u64 << 63) - 1;
+    t.reset(&mut pool, sending, top).unwrap();
+    t.stop_sending(&mut pool, 0, top).unwrap();
+    let frames = drain_control(&mut t);
+    assert!(
+        frames.iter().any(
+            |f| matches!(f, ControlFrame::ResetStream { id, error_code, .. } if *id == sending && *error_code == top)
+        ),
+        "the largest code was not sent in a reset: {frames:?}"
+    );
+    assert!(frames.contains(&ControlFrame::StopSending { id: 0, error_code: top }));
+}

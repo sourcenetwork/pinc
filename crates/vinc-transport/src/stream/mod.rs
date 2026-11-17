@@ -132,6 +132,8 @@ pub enum StreamError {
     DataUnavailable,
     /// The destination of a copy is shorter than the frame.
     BufferTooSmall,
+    /// An error code the frame encoder cannot write: it is 2^63 or more.
+    BadCode,
 }
 
 impl fmt::Display for StreamError {
@@ -151,6 +153,7 @@ impl fmt::Display for StreamError {
             Self::InvalidConsume => "consumed more than readable",
             Self::DataUnavailable => "stream data unavailable",
             Self::BufferTooSmall => "destination too small",
+            Self::BadCode => "error code too large",
         })
     }
 }

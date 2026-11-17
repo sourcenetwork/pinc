@@ -181,6 +181,9 @@ ep_impl! {
                 Ok(Value::None)
             }
             Command::Close { session, error } => {
+                if !vinc_transport::frame::encodable(error) {
+                    return Err(CommandError::BadCode);
+                }
                 let i = self.live(session)?;
                 let conn = self.slots.get_mut(i).and_then(|s| s.conn.as_mut()).ok_or(CommandError::NoSession)?;
                 let mut env = env!(self, now);

@@ -63,7 +63,7 @@ use vinc_wire::WireError;
 
 pub use ack::{Ack, AckRanges, MAX_ACK_RANGES, ack_len, write_ack};
 pub use decode::FrameIter;
-pub use encode::{datagram_overhead, stream_overhead};
+pub use encode::{datagram_overhead, encodable, stream_overhead};
 
 use vinc_security::{Rekey, TicketBatch};
 

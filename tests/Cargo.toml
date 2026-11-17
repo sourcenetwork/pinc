@@ -484,6 +484,10 @@ name = "core_session_from"
 path = "core_session_from.rs"
 
 [[test]]
+name = "core_stream_ends"
+path = "core_stream_ends.rs"
+
+[[test]]
 name = "node_stopped_streams"
 path = "node_stopped_streams.rs"
 

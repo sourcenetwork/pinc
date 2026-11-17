@@ -361,6 +361,8 @@ pub enum CommandError {
     Refused,
     /// The host left too many events unread: read them with `poll_event` and send the command again.
     EventsPending,
+    /// The error code is 2^63 or more, which no frame can carry; nothing was sent.
+    BadCode,
     /// The next received datagram does not fit the buffer; it stays queued. `len` is its size.
     BufferTooSmall {
         /// The size of the datagram.
@@ -471,7 +473,7 @@ pub enum Command<'c, S = vinc_transport::stream::NoSource> {
         /// The bytes.
         data: &'c [u8],
     },
-    /// Close a session with `error`.
+    /// Close a session with `error`, which must be below 2^63 ([`CommandError::BadCode`] otherwise).
     Close {
         /// The session.
         session: SessionId,
