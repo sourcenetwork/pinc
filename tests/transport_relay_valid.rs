@@ -7,7 +7,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use vinc_core::{Command, Event, Role, Value, relay_addr};
+use vinc_core::{Answer, Command, Event, Query, Role, Value, relay_addr};
 use vinc_crypto::IdentityAlg;
 use vinc_tests::*;
 use vinc_transport::conn::{PathId, PathInfo};
@@ -53,9 +53,10 @@ fn deliver_on(net: &mut Net<'_, '_>, path: PathId, datagrams: &[Vec<u8>]) {
     net.a.service(now);
 }
 
-/// A dial on path 1 of kind `dial`, with the path `OTHER` of kind `other` added, whose Reply has come back on
-/// `OTHER`; runs `then` on the established session.
-fn answered_elsewhere(dial: PathInfo, other: PathInfo, then: impl FnOnce(&mut Net<'_, '_>) + Send + 'static) {
+/// A dial on path 1 of kind `dial`, with the path `OTHER` added when `other` names its info (else the dial does not
+/// hold it and learns it from the Reply), whose Reply has come back on `OTHER`; runs `then` on the established
+/// session.
+fn answered_elsewhere(dial: PathInfo, other: Option<PathInfo>, then: impl FnOnce(&mut Net<'_, '_>) + Send + 'static) {
     big_stack(move || {
         let mut w = World::new(IdentityAlg::Ed25519);
         w.dial_info = dial;
@@ -64,7 +65,9 @@ fn answered_elsewhere(dial: PathInfo, other: PathInfo, then: impl FnOnce(&mut Ne
         let b = w.server(&mut sb);
         let mut net = Net::new(a, b, Link::new(81, Params::new(10 * MS)), &mut w.stores);
         let now = net.now;
-        net.a.with_env(now, |c, env| c.add_path(env, OTHER, other)).unwrap();
+        if let Some(info) = other {
+            net.a.with_env(now, |c, env| c.add_path(env, OTHER, info)).unwrap();
+        }
         let reply = reply_datagrams(&mut net);
         deliver_on(&mut net, OTHER, &reply);
         assert!(net.a.conn.is_connected(), "the Reply on the other path was not taken");
@@ -75,7 +78,7 @@ fn answered_elsewhere(dial: PathInfo, other: PathInfo, then: impl FnOnce(&mut Ne
 
 #[test]
 fn the_relay_path_a_session_leaves_stays_validated_and_is_chosen_again_when_the_active_path_is_lost() {
-    answered_elsewhere(relay(), relay(), |net| {
+    answered_elsewhere(relay(), Some(relay()), |net| {
         assert!(
             net.a.conn.path_validated(PathId(1)),
             "the relay path the session left is no longer validated"
@@ -91,12 +94,111 @@ fn the_relay_path_a_session_leaves_stays_validated_and_is_chosen_again_when_the_
 
 #[test]
 fn the_direct_path_a_session_leaves_is_no_longer_validated() {
-    answered_elsewhere(PathInfo::default(), relay(), |net| {
+    answered_elsewhere(PathInfo::default(), Some(relay()), |net| {
         assert!(net.a.conn.path_validated(OTHER));
         assert!(
             !net.a.conn.path_validated(PathId(1)),
             "the direct path the session left is still validated"
         );
+    });
+}
+
+/// One timer pass of the dialing side, 1 ms after the last event.
+fn timer_step(net: &mut Net<'_, '_>) {
+    let t = net.now + MS;
+    net.a.with_env(t, vinc_transport::conn::Connection::handle_timeout);
+    net.a.service(t);
+}
+
+#[test]
+fn a_session_answered_through_another_relay_stays_on_it_after_a_timer_step() {
+    answered_elsewhere(relay(), Some(relay()), |net| {
+        timer_step(net);
+        assert_eq!(
+            net.a.conn.active_path(),
+            Some(OTHER),
+            "the timer took the session back to the relay path that did not answer"
+        );
+        assert!(net.a.conn.path_validated(PathId(1)));
+    });
+}
+
+#[test]
+fn a_reply_on_a_relay_path_the_dial_does_not_hold_stays_on_it_once_named_a_relay() {
+    answered_elsewhere(relay(), None, |net| {
+        net.a.conn.set_path_info(OTHER, relay());
+        timer_step(net);
+        assert_eq!(
+            net.a.conn.active_path(),
+            Some(OTHER),
+            "naming the path a relay took the session back to the relay path that did not answer"
+        );
+    });
+}
+
+/// Add a direct route 3/4 beside the two relay paths, and a route for the Reply's path so that the responder
+/// completes; return once the session is on the direct path.
+fn with_direct_path(net: &mut Net<'_, '_>) {
+    let p = Params::new(10 * MS);
+    net.link.add_route(OTHER, PathId(19), p, p);
+    net.link.add_route(PathId(3), PathId(4), p, p);
+    let now = net.now;
+    net.a
+        .with_env(now, |c, env| c.add_path(env, PathId(3), PathInfo::default()))
+        .unwrap();
+    net.b
+        .with_env(now, |c, env| c.add_path(env, PathId(4), PathInfo::default()))
+        .unwrap();
+    let until = net.now + 10 * SEC;
+    assert!(
+        net.run(until, |n| n.a.conn.active_path() == Some(PathId(3))),
+        "the session did not move to the direct path"
+    );
+}
+
+#[test]
+fn a_direct_path_that_validates_while_a_relay_path_is_held_takes_the_session() {
+    answered_elsewhere(relay(), Some(relay()), |net| {
+        with_direct_path(net);
+        assert!(net.a.conn.path_validated(PathId(1)));
+        assert!(net.a.conn.path_validated(OTHER));
+    });
+}
+
+#[test]
+fn an_unmeasured_relay_path_failing_three_probe_timeouts_gives_way_to_a_measured_one() {
+    answered_elsewhere(relay(), Some(relay()), |net| {
+        net.a.conn.set_active(PathId(1)).unwrap();
+        assert!(
+            net.a.conn.path_rtt(OTHER).is_some(),
+            "the relay path the session left has no round trip"
+        );
+        assert!(net.a.conn.path_rtt(PathId(1)).is_none());
+        net.link.route(PathId(1)).ab.p.loss_ppm = 1_000_000;
+        let id = net.a.conn.open_bi().unwrap();
+        net.a.conn.write(id, &pattern(2_000, 2)).unwrap();
+        let until = net.now + 30 * SEC;
+        assert!(
+            net.run(until, |n| {
+                let ptos = n.a.conn.stats().ptos;
+                if ptos < 3 {
+                    assert_eq!(
+                        n.a.conn.active_path(),
+                        Some(PathId(1)),
+                        "the session left the path early"
+                    );
+                    return false;
+                }
+                assert_eq!(
+                    n.a.conn.active_path(),
+                    Some(OTHER),
+                    "the session stayed on the failing path"
+                );
+                true
+            }),
+            "the path never failed three probe timeouts"
+        );
+        assert!(net.a.conn.is_connected(), "the session closed");
     });
 }
 
@@ -131,7 +233,7 @@ fn send(net: &mut CoreNet, s: vinc_core::SessionId, data: &[u8]) {
 }
 
 #[test]
-fn a_dial_sent_through_one_relay_and_answered_through_another_pings_the_first_as_a_standby() {
+fn a_dial_sent_through_one_relay_and_answered_through_another_stays_on_it_and_pings_the_first_as_a_standby() {
     big_stack(|| {
         let mut net = CoreNet::new(10 * MS);
         let (a, b) = (net.add(1), net.add(2));
@@ -174,9 +276,77 @@ fn a_dial_sent_through_one_relay_and_answered_through_another_pings_the_first_as
         let connected = net.now;
         send(&mut net, s, &pattern(2_000, 1));
         net.run_for(12 * SEC_NS);
+        let Answer::Stats(st) = net.nodes[a].ep.query(Query::Stats(s)) else {
+            panic!("no stats")
+        };
+        assert_eq!(
+            st.route.map(|(_, r)| r),
+            Some(via_b),
+            "the session went back to the relay that did not answer"
+        );
+        let to_first: Vec<usize> = net
+            .tapped
+            .iter()
+            .filter(|t| t.0 > connected && t.2 == via_a)
+            .map(|t| t.3)
+            .collect();
+        eprintln!("datagrams to the first relay after connecting: {to_first:?}");
         assert!(
-            net.tapped.iter().any(|t| t.0 > connected && t.2 == via_a),
+            !to_first.is_empty(),
             "nothing was sent to the first relay after the session left it"
+        );
+        assert!(
+            to_first.iter().all(|n| *n < 100),
+            "more than a ping went to the first relay: {to_first:?}"
+        );
+    });
+}
+
+#[test]
+fn a_dial_whose_copy_through_the_first_relay_is_lost_completes_on_the_second() {
+    big_stack(|| {
+        let mut net = CoreNet::new(10 * MS_NS);
+        let (a, b) = (net.add(1), net.add(2));
+        let (via_a, via_b) = (relay_addr(false, 3, 7), relay_addr(false, 4, 7));
+        net.nodes[b].extra.extend([via_a, via_b]);
+        net.loss = Some(Box::new(move |_, to, _| to == via_a));
+        let (peer, now) = (net.nodes[b].node, net.now);
+        let rep = net.nodes[a].connect(now, peer, ALPN_A, via_a, Role::Other).unwrap();
+        let s = net.nodes[a].session(&rep);
+        net.nodes[a]
+            .cmd(
+                now,
+                Command::FlightPaths {
+                    session: s,
+                    addrs: &[via_b],
+                    skip_primary: false,
+                },
+            )
+            .unwrap();
+        net.pump(a);
+        let up = net.run(now + 5 * SEC_NS, |n| {
+            n.nodes[a].saw(|e| matches!(e, Event::Connected { .. }))
+        });
+        assert!(up, "the dial did not connect through the second relay");
+        let connected = net.now;
+        let data = pattern(2_000, 1);
+        send(&mut net, s, &data);
+        net.run_for(12 * SEC_NS);
+        assert_eq!(
+            net.nodes[b].read.values().next(),
+            Some(&data),
+            "the responder did not read the stream"
+        );
+        let to_first: Vec<usize> = net
+            .tapped
+            .iter()
+            .filter(|t| t.0 > connected && t.2 == via_a)
+            .map(|t| t.3)
+            .collect();
+        eprintln!("datagrams to the first relay after connecting, copy lost: {to_first:?}");
+        assert!(
+            to_first.iter().all(|n| *n < 100),
+            "more than a ping went to the first relay: {to_first:?}"
         );
     });
 }
