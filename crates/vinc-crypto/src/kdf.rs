@@ -16,8 +16,9 @@ pub mod labels {
     pub const NODE_ID: &str = "VINC 2026 v1 node id";
     /// Domain of the message digest both halves of a hybrid signature sign.
     pub const HYBRID_SIGNATURE: &str = "VINC 2026 v1 hybrid signature";
-    /// The label of every signed statement's signature. It is not in [`ALL`] yet: the label registry the trace
-    /// tests and the models replay stays closed until the statement lands in them.
+    // vertexia: kept out of ALL because the label registry the trace tests and the models replay is closed; the
+    // cutover that wires the statement adds it there together with the models.
+    /// The label of every signed statement's signature.
     pub const STATEMENT: &str = "VINC 2026 v1 statement";
 
     /// Every label above except [`PREFIX`] and [`STATEMENT`], for tests that check uniqueness and the prefix.

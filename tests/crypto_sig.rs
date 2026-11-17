@@ -375,3 +375,18 @@ fn sign_and_verify_do_not_allocate() {
         assert_eq!(stats.count(), 0, "{alg:?} allocated {stats:?}");
     }
 }
+
+/// A buffer one byte short is refused before any signature byte is written, a hybrid's first half included.
+#[test]
+fn a_short_signature_buffer_is_left_untouched() {
+    big(|| {
+        for alg in ALL {
+            let kp = Keypair::from_seed(alg, &seed_for(alg, 3)).unwrap();
+            let mut out = vec![0xaa_u8; alg.signature_len() - 1];
+            assert_eq!(kp.sign(b"msg", &mut out), Err(CryptoError::InvalidLength), "{alg:?}");
+            assert!(out.iter().all(|b| *b == 0xaa), "{alg:?} wrote into a short buffer");
+            let mut ok = vec![0xaa_u8; alg.signature_len()];
+            assert_eq!(kp.sign(b"msg", &mut ok), Ok(alg.signature_len()));
+        }
+    });
+}

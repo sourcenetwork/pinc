@@ -328,6 +328,10 @@ impl Keypair {
     /// # Errors
     /// [`CryptoError::InvalidLength`] if `out` is shorter than [`IdentityAlg::signature_len`].
     pub fn sign_with_rnd(&self, msg: &[u8], rnd: &[u8; 32], out: &mut [u8]) -> Result<usize, CryptoError> {
+        // Checked first so a short buffer is left untouched, never holding the first half of a hybrid signature.
+        if out.len() < self.alg().signature_len() {
+            return Err(CryptoError::InvalidLength);
+        }
         match &self.0 {
             Inner::Ed25519(k) => put(out, 0, &k.sign(msg).to_bytes())?,
             Inner::P256(k) => {

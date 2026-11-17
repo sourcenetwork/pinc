@@ -346,6 +346,7 @@ fn labels_are_unique_and_prefixed() {
     let all: Vec<&str> = vinc_dtn::labels::ALL
         .into_iter()
         .chain(vinc_crypto::labels::ALL)
+        .chain([vinc_crypto::labels::STATEMENT])
         .chain(vinc_security::labels::ALL)
         .collect();
     let set: HashSet<_> = all.iter().collect();
