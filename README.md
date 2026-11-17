@@ -2,7 +2,7 @@
   <img src="art/pinc-banner.png" alt="PINC: next-gen peer-to-peer networking stack" width="100%">
 </p>
 
-**PINC** stands for **P**rovable **I**dentity-**N**ative **C**onnectivity:
+**PINC** (read "pins") stands for **P**rovable **I**dentity-**N**ative **C**onnectivity:
 
 - *Provable*: its state machines are specified in TLA+, model checked and proved in Lean 4, crate by crate (see
   [Proofs](#proofs)), and a node checks what it receives itself: every session is mutually authenticated, and a value
