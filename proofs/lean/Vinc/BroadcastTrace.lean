@@ -71,6 +71,7 @@ def whyOf : String → Except String Why
   | "HeldFull" => pure .heldFull
   | "BadHead" => pure .badHead
   | "Duplicate" => pure .duplicate
+  | "IdTaken" => pure .idTaken
   | "Revoked" => pure .revoked
   | "BadSignature" => pure .badSignature
   | "LogFull" => pure .logFull
@@ -147,7 +148,7 @@ def replayEvent (j : J) (w : W) : Except String W := do
     let ok ← verified w j
     let big ← boolF j "big"
     let kind : MsgKind := if !hd then .badhead else if big then .big else if !ok then .badsig else .good
-    let m : Msg := ⟨← natF j "mid", ← natF j "org", ← natF j "ts", kind, ← natF j "sz"⟩
+    let m : Msg := ⟨← natF j "mid", ← natF j "org", ← natF j "ts", kind, ← natF j "sz", (← natF j "bid", ← boolF j "isb")⟩
     let at_ ← natF j "at"
     let r := OnMsg (paramsOf n) (← node w n) at_ at_ (← frameOf (← natF j "ft")) (← boolF j "boot") m
     check (r.ack == (← natF j "ack")) s!"frame: PACK count differs: model {r.ack}"

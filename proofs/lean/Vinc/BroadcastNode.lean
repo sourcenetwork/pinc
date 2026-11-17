@@ -62,14 +62,25 @@ inductive MsgKind where
   | good | badhead | big | badsig
   deriving DecidableEq, Repr
 
-/-- A message: id, origin, hybrid timestamp as one number, what the checks find, size of head and body. -/
+/-- A message: id, origin, hybrid timestamp as one number, what the checks find, size of head and body, and the
+body (an opaque value: the hash of the body and the flag the signature covers). -/
 structure Msg where
   mid : Nat
   origin : Nat
   ts : Nat
   kind : MsgKind
   n : Nat
+  body : Nat × Bool
   deriving DecidableEq, Repr
+
+/-- What a hub's log holds for an id besides the id: origin, timestamp, body (`Content` of the TLA text). -/
+abbrev Content := Nat × Nat × (Nat × Bool)
+
+/-- The content of a message. -/
+def Msg.content (m : Msg) : Content := (m.origin, m.ts, m.body)
+
+/-- A message that no step uses: the ghost of a step that is not a message. -/
+def Msg.zero : Msg := ⟨0, 0, 0, .good, 0, (0, false)⟩
 
 /-- The part of a message that is held and offered again (`mid`, `origin`, `ts`). -/
 structure Ent where
@@ -261,10 +272,12 @@ structure Node where
   nextCheck : Nat
   held : List Ent
   born : Nat
+  /-- What the log holds for each id it holds (the entry of an id that left the log means nothing). -/
+  store : Nat → Option Content
 
 /-- Why a message was refused. -/
 inductive Why where
-  | topicsFull | seenFull | old | heldFull | badHead | duplicate | revoked | badSignature | logFull
+  | topicsFull | seenFull | old | heldFull | badHead | duplicate | idTaken | revoked | badSignature | logFull
   deriving DecidableEq, Repr
 
 /-- Why a message is held. -/
@@ -308,7 +321,7 @@ def Bind (r : Res) (F : Node → Res) : Res :=
 /-- `NodeInit`. -/
 def NodeInit (p : Params) (born : Nat) : Node :=
   ⟨SeenEmpty, LEmpty, true, [], if p.isHub then .never else if p.gather then .gathering else .done,
-   none, none, false, [], [], [], 1, [], born⟩
+   none, none, false, [], [], [], 1, [], born, fun _ => none⟩
 
 /-! ## `floors.rs` -/
 
@@ -369,6 +382,15 @@ def Offer (p : Params) (N : Node) (now : Nat) (m : Ent) : Res :=
 /-- The id is a duplicate: recorded and unexpired, or in the log. -/
 def IsDup (p : Params) (N : Node) (mid now : Nat) : Bool := SContains p N.seen mid now || LContains N.lg mid
 
+/-- The log holds this very message (same origin, timestamp and body) under its id. -/
+def SameStored (N : Node) (m : Msg) : Bool := LContains N.lg m.mid && decide (N.store m.mid = some m.content)
+
+/-- A known id: acknowledged only for the message the log holds; another message under a held id is refused with
+`idTaken`; an id only the dedupe set remembers is a duplicate with no acknowledgement. -/
+def DupRes (N : Node) (m : Msg) (ack : Nat) : Res :=
+  ⟨N, [.rejected m.mid (if SameStored N m || !LContains N.lg m.mid then .duplicate else .idTaken)], [],
+    if SameStored N m then ack else 0, []⟩
+
 /-- `offer_held`: offered again unless it arrived another way meanwhile. -/
 def OfferHeld (p : Params) (N : Node) (now : Nat) (e : Ent) : Res :=
   if IsDup p N e.mid now then Plain N [] else Offer p N now e
@@ -410,6 +432,12 @@ def IsStored : TraceRec → Bool
   | .stored .. => true
   | _ => false
 
+/-- Once a message is stored the log holds it: its content is the entry of its id. -/
+def NoteStored (m : Msg) (r : Res) : Res :=
+  if r.outs.any IsStored then
+    {r with n := {r.n with store := fun x => if x = m.mid then some m.content else r.n.store x}}
+  else r
+
 /-- `on_msg`. -/
 def OnMsg (p : Params) (N : Node) (now wall : Nat) (t : Frame) (fromBoot : Bool) (m : Msg) : Res :=
   if !Allowed p t fromBoot then Plain N []
@@ -417,7 +445,7 @@ def OnMsg (p : Params) (N : Node) (now wall : Nat) (t : Frame) (fromBoot : Bool)
   else if m.kind = .big then Plain N [.rejected m.mid .badHead]
   else
     let ack := if p.isHub && (t = .pub || t = .fanp) then 1 else 0
-    if IsDup p N m.mid now then ⟨N, [.rejected m.mid .duplicate], [], ack, []⟩
+    if IsDup p N m.mid now then DupRes N m ack
     else if p.revoked.contains m.origin then Plain N [.rejected m.mid .revoked]
     else if m.kind = .badsig then Plain N [.rejected m.mid .badSignature]
     else
@@ -428,7 +456,7 @@ def OnMsg (p : Params) (N : Node) (now wall : Nat) (t : Frame) (fromBoot : Bool)
       let r0 : Res := ⟨N1, o1, [], early, []⟩
       if p.isHub then
         let rh := Bind r0 (fun x => HubStore p x now wall (t = .fan || t = .fanp) m)
-        {rh with ack := rh.ack + (if p.ackAfterStore && rh.outs.any IsStored then ack else 0)}
+        NoteStored m {rh with ack := rh.ack + (if p.ackAfterStore && rh.outs.any IsStored then ack else 0)}
       else Bind r0 (fun x => Offer p x now m.ent)
 
 /-- `acp_answer`: a verdict arrives for an outstanding check. -/
@@ -487,7 +515,7 @@ inductive Last where
 
 /-- The harness state: the node, the clock, the life, and the ghosts `cnt` (deliveries in the life), `recd` (when
 an id was last recorded), `capd` (the set dropped it early), `ep` (epochs), the accounted ids, the last step's
-records, deliveries, acks and message id. -/
+records, deliveries, acks and message. -/
 structure Sys where
   node : Node
   now : Nat
@@ -501,11 +529,11 @@ structure Sys where
   dls : List Nat
   last : Last
   ackd : Nat
-  lm : Nat
+  lm : Msg
 
 /-- `Init`. -/
 def SInit (p : Params) : Sys :=
-  ⟨NodeInit p 0, 0, 0, fun _ => 0, fun _ => 0, fun _ => false, fun _ => 0, [], [], [], .init, 0, 0⟩
+  ⟨NodeInit p 0, 0, 0, fun _ => 0, fun _ => 0, fun _ => false, fun _ => 0, [], [], [], .init, 0, Msg.zero⟩
 
 /-- `NewRec`: a new record of the id, not a refresh of a live one. -/
 def NewRec (p : Params) (now : Nat) (old new : Node) (m : Nat) : Bool :=
@@ -527,9 +555,9 @@ def EpG (p : Params) (now : Nat) (old new : Node) (ep : Nat → Nat) : Nat → N
   fun m => if NewRec p now old new m then ep m + 1 else ep m
 
 /-- `Apply`: take the result of an operator as one step of the system. -/
-def Apply (p : Params) (s : Sys) (r : Res) (what : Last) (mid : Nat) : Sys :=
+def Apply (p : Params) (s : Sys) (r : Res) (what : Last) (m : Msg) : Sys :=
   ⟨r.n, s.now, s.life, fun m => s.cnt m + r.dl.count m, RecG s.node r.n s.recd, CapG p s.now s.node r.n s.capd,
-   EpG p s.now s.node r.n s.ep, s.acct ++ r.acc, r.outs, r.dl, what, r.ack, mid⟩
+   EpG p s.now s.node r.n s.ep, s.acct ++ r.acc, r.outs, r.dl, what, r.ack, m⟩
 
 /-- The tick guard: time passes only up to the next deadline `PollTimeout` names. -/
 def TickOk (p : Params) (N : Node) (now : Nat) : Bool :=
@@ -537,22 +565,22 @@ def TickOk (p : Params) (N : Node) (now : Nat) : Bool :=
 
 /-- The restart of the node. -/
 def Restarted (p : Params) (s : Sys) : Sys :=
-  ⟨NodeInit p s.now, s.now, s.life + 1, fun _ => 0, fun _ => 0, fun _ => false, fun _ => 0, [], [], [], .restart, 0, 0⟩
+  ⟨NodeInit p s.now, s.now, s.life + 1, fun _ => 0, fun _ => 0, fun _ => false, fun _ => 0, [], [], [], .restart, 0, Msg.zero⟩
 
 /-- Time passes by one: the step records are cleared. -/
-def Ticked (s : Sys) : Sys := {s with now := s.now + 1, outs := [], dls := [], last := .tick, ackd := 0, lm := 0}
+def Ticked (s : Sys) : Sys := {s with now := s.now + 1, outs := [], dls := [], last := .tick, ackd := 0, lm := Msg.zero}
 
 /-- `Next`: a message by any frame, the timer, an answer to an outstanding check, the floors settled in any way
 (`rf`, `of_`, `nh` are any values), time passing, a restart. -/
 inductive Step (p : Params) : Sys → Sys → Prop where
   | msg (s : Sys) (t : Frame) (b : Bool) (m : Msg) :
-      Step p s (Apply p s (OnMsg p s.node s.now s.now t b m) .msg m.mid)
-  | timer (s : Sys) : Step p s (Apply p s (OnTimer p s.node s.now) .timer 0)
+      Step p s (Apply p s (OnMsg p s.node s.now s.now t b m) .msg m)
+  | timer (s : Sys) : Step p s (Apply p s (OnTimer p s.node s.now) .timer Msg.zero)
   | answer (s : Sys) (c : Check) (hc : c ∈ s.node.checks) (allow : Bool) :
-      Step p s (Apply p s (AcpAnswer p s.node s.now c.id allow) .answer 0)
+      Step p s (Apply p s (AcpAnswer p s.node s.now c.id allow) .answer Msg.zero)
   | floors (s : Sys) (rf : Option Nat) (of_ : Option (Nat → Option Nat)) (nh : Bool)
       (h : s.node.phase = .gathering) :
-      Step p s (Apply p s (FloorsSettled p s.node s.now true rf of_ nh) .floors 0)
+      Step p s (Apply p s (FloorsSettled p s.node s.now true rf of_ nh) .floors Msg.zero)
   | tick (s : Sys) (h : TickOk p s.node s.now = true) :
       Step p s (Ticked s)
   | restart (s : Sys) : Step p s (Restarted p s)

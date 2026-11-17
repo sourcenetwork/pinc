@@ -366,7 +366,8 @@ theorem Sweep_keep {p : Params} {N : Node} {now : Nat} (hcap : 0 < p.seenCap) (h
 theorem OnMsg_hub (p : Params) (N : Node) (now wall : Nat) (t : Frame) (b : Bool) (m : Msg) (hhub : p.isHub = true) :
     ((OnMsg p N now wall t b m).n.seen = N.seen ∧ (OnMsg p N now wall t b m).n.lg = N.lg) ∨
     (IsDup p N m.mid now = false ∧ ∃ fanned,
-      (OnMsg p N now wall t b m).n = (HubStore p {N with req := N.req.filter (fun x => x != m.mid)} now wall fanned m).n) := by
+      (OnMsg p N now wall t b m).n.seen = (HubStore p {N with req := N.req.filter (fun x => x != m.mid)} now wall fanned m).n.seen ∧
+      (OnMsg p N now wall t b m).n.lg = (HubStore p {N with req := N.req.filter (fun x => x != m.mid)} now wall fanned m).n.lg) := by
   unfold OnMsg
   by_cases h1 : (!Allowed p t b) = true
   · rw [if_pos h1]; exact Or.inl ⟨rfl, rfl⟩
@@ -388,16 +389,20 @@ theorem OnMsg_hub (p : Params) (N : Node) (now wall : Nat) (t : Frame) (b : Bool
   · rw [if_pos h6]; exact Or.inl ⟨rfl, rfl⟩
   rw [if_neg h6]
   rw [if_pos hhub]
-  exact Or.inr ⟨by simpa using h4, _, rfl⟩
+  exact Or.inr ⟨by simpa using h4, _, NoteStored_seen _ _, NoteStored_lg _ _⟩
 
 theorem OnMsg_keep {p : Params} {N : Node} {now wall : Nat} {t : Frame} {b : Bool} {m : Msg} (hcap : 0 < p.seenCap)
     (h2 : 2 * p.logCap ≤ p.seenCap) (hg : p.evictGuard = true) (hhub : p.isHub = true) (h : EI p N now) :
     EI p (OnMsg p N now wall t b m).n now ∧ Evicted N (OnMsg p N now wall t b m).n := by
-  rcases OnMsg_hub p N now wall t b m hhub with ⟨hs, hl⟩ | ⟨hdup, fanned, he⟩
+  rcases OnMsg_hub p N now wall t b m hhub with ⟨hs, hl⟩ | ⟨hdup, fanned, hs, hl⟩
   · exact h.of_eq hs hl
-  · rw [he]
-    have h' : EI p {N with req := N.req.filter (fun x => x != m.mid)} now := ⟨h.g, h.nodup, h.len, h.keep⟩
-    exact HubStore_keep (N := {N with req := N.req.filter (fun x => x != m.mid)}) hcap h2 hg h' hdup
+  · have h' : EI p {N with req := N.req.filter (fun x => x != m.mid)} now := ⟨h.g, h.nodup, h.len, h.keep⟩
+    have H := HubStore_keep (N := {N with req := N.req.filter (fun x => x != m.mid)}) (now := now) (wall := wall) (fanned := fanned) (m := m) hcap h2 hg h' hdup
+    refine ⟨(EI.of_eq H.1 hs hl).1, ?_⟩
+    intro x hx hn
+    rw [hl] at hn
+    have := H.2 x hx hn
+    rwa [hs]
 
 theorem OnTimer_hub {p : Params} {N : Node} {now : Nat} (hhub : p.isHub = true) (hI : NodeInv p N) :
     (OnTimer p N now).n = Sweep p N now := by

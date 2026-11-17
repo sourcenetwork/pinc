@@ -17,7 +17,8 @@ projections, with the names of the TLA properties:
 * `seenAccounted`: every id the set or the log holds was delivered, held, refused with a reason or dropped for a
   stated cause (with full holds keeping the id unseen);
 * `deliveredAllowed`, `denyDrops`, `floorRespected`, `floorHold`, `bounds`, `gatherBound`;
-* `ackOnlyStored`: a hub acknowledges only a message it holds; `garbage_inert`: a frame that is not a good message
+* `ackOnlyStored`: a hub acknowledges only the very message it holds (same id, origin, timestamp and body; a
+  different message under a held id is refused, `rival_refused`); `garbage_inert`: a frame that is not a good message
   changes nothing (`OnMsg_garbage`); `gather_ends`: the first timer past the wait ends the gathering.
 -/
 
@@ -128,7 +129,7 @@ theorem OnMsg_garbage {p : Params} {N : Node} {now wall : Nat} {t : Frame} {b : 
 theorem OnMsg_ack {p : Params} {N : Node} {now wall : Nat} {t : Frame} {b : Bool} {m : Msg}
     (hcap : 0 < p.seenCap) (hack : p.ackAfterStore = true) (hI : NodeInv p N)
     (h : 0 < (OnMsg p N now wall t b m).ack) :
-    m.mid ∈ LIds (OnMsg p N now wall t b m).n.lg ∨ (OnMsg p N now wall t b m).n.seen.map m.mid ≠ none := by
+    m.mid ∈ LIds (OnMsg p N now wall t b m).n.lg ∧ (OnMsg p N now wall t b m).n.store m.mid = some m.content := by
   unfold OnMsg at h ⊢
   by_cases h1 : (!Allowed p t b) = true
   · rw [if_pos h1] at h; simp [Plain] at h
@@ -141,15 +142,14 @@ theorem OnMsg_ack {p : Params} {N : Node} {now wall : Nat} {t : Frame} {b : Bool
   rw [if_neg h3] at h ⊢
   dsimp only at h ⊢
   by_cases h4 : IsDup p N m.mid now = true
-  · rw [if_pos h4] at ⊢
-    simp only [IsDup, Bool.or_eq_true] at h4
-    rcases h4 with h4 | h4
-    · right
-      rw [SContains_iff] at h4
-      obtain ⟨t', ht, _⟩ := h4
-      show N.seen.map m.mid ≠ none
-      rw [ht]; simp
-    · left; exact (LContains_iff N.lg m.mid).1 h4
+  · rw [if_pos h4] at h ⊢
+    -- a known id is acknowledged only when the log holds this very message
+    by_cases hs : SameStored N m = true
+    · unfold SameStored at hs
+      rw [Bool.and_eq_true, decide_eq_true_eq] at hs
+      exact ⟨(LContains_iff N.lg m.mid).1 hs.1, hs.2⟩
+    · have hs' : SameStored N m = false := by simpa using hs
+      simp [DupRes, hs'] at h
   rw [if_neg h4] at h ⊢
   by_cases h5 : p.revoked.contains m.origin = true
   · rw [if_pos h5] at h; simp [Plain] at h
@@ -159,15 +159,12 @@ theorem OnMsg_ack {p : Params} {N : Node} {now wall : Nat} {t : Frame} {b : Bool
   rw [if_neg h6] at h ⊢
   by_cases hhub : p.isHub = true
   · rw [if_pos hhub] at h ⊢
+    rw [NoteStored_ack] at h
     have HS := HubStore_stored (p := p) (N := {N with req := N.req.filter (fun x => x != m.mid)}) (now := now)
       (wall := wall) (fanned := (decide (t = .fan) || decide (t = .fanp))) (m := m) hhub
-    left
-    show m.mid ∈ LIds (HubStore p {N with req := N.req.filter (fun x => x != m.mid)} now wall
-      (decide (t = .fan) || decide (t = .fanp)) m).n.lg
-    by_cases hs : (HubStore p {N with req := N.req.filter (fun x => x != m.mid)} now wall
-        (decide (t = .fan) || decide (t = .fanp)) m).outs.any IsStored = true
-    · exact HS.2 hs
-    · exfalso
+    have hs : (HubStore p {N with req := N.req.filter (fun x => x != m.mid)} now wall
+        (decide (t = .fan) || decide (t = .fanp)) m).outs.any IsStored = true := by
+      refine Classical.byContradiction fun hs => ?_
       have hany : ∀ (o1 l : List TraceRec), (∀ o ∈ o1, ¬ IsStored o = true) → (o1 ++ l).any IsStored = l.any IsStored := by
         intro o1 l ho
         rw [List.any_append]
@@ -184,6 +181,13 @@ theorem OnMsg_ack {p : Params} {N : Node} {now wall : Nat} {t : Frame} {b : Bool
       have hs' : (HubStore p {N with req := N.req.filter (fun x => x != m.mid)} now wall
           (decide (t = .fan) || decide (t = .fanp)) m).outs.any IsStored = false := by simpa using hs
       simp [hs'] at h
+    refine ⟨?_, NoteStored_store m _ ?_⟩
+    · rw [NoteStored_lg]
+      exact HS.2 hs
+    · show List.any (_ ++ (HubStore p {N with req := N.req.filter (fun x => x != m.mid)} now wall
+        (decide (t = .fan) || decide (t = .fanp)) m).outs) IsStored = true
+      rw [List.any_append, hs]
+      simp
   · rw [if_neg hhub] at h
     exfalso
     have S := Offer_spec p {N with req := N.req.filter (fun x => x != m.mid)} now m.ent
@@ -191,6 +195,21 @@ theorem OnMsg_ack {p : Params} {N : Node} {now wall : Nat} {t : Frame} {b : Bool
     have h' : 0 < 0 + (Offer p {N with req := N.req.filter (fun x => x != m.mid)} now m.ent).ack := h
     rw [S.ack] at h'
     exact absurd h' (Nat.lt_irrefl _)
+
+/-- Another message under a held id is not acknowledged: the log holds a different content for the id. -/
+theorem rival_not_same {N : Node} {m : Msg} {c : Content} (hl : LContains N.lg m.mid = true)
+    (hst : N.store m.mid = some c) (hne : c ≠ m.content) : SameStored N m = false := by
+  unfold SameStored
+  simp [hl, hst, hne]
+
+/-- The rival is refused with `idTaken` and no acknowledgement; the old rule (acknowledge any known id) would have
+acknowledged it, as the id is a duplicate (`IsDup`). -/
+theorem rival_refused {p : Params} {N : Node} {m : Msg} {c : Content} {now ack : Nat}
+    (hl : LContains N.lg m.mid = true) (hst : N.store m.mid = some c) (hne : c ≠ m.content) :
+    IsDup p N m.mid now = true ∧ (DupRes N m ack).ack = 0 ∧
+      (DupRes N m ack).outs = [.rejected m.mid .idTaken] := by
+  have hs := rival_not_same hl hst hne
+  refine ⟨by simp [IsDup, hl], ?_, ?_⟩ <;> simp [DupRes, hs, hl]
 
 /-! ## The system invariant -/
 
@@ -206,7 +225,8 @@ structure SInv (p : Params) (s : Sys) : Prop where
   floor : p.isHub = false → (s.last = .msg ∨ s.last = .timer ∨ s.last = .answer) → s.node.phase = .gathering →
     ∀ o ∈ s.outs, NoDel o
   gather : s.node.phase = .gathering → s.now ≤ s.node.born + p.floorWait + 1
-  ack : p.ackAfterStore = true → 0 < s.ackd → s.lm ∈ LIds s.node.lg ∨ s.node.seen.map s.lm ≠ none
+  ack : p.ackAfterStore = true → 0 < s.ackd →
+    s.lm.mid ∈ LIds s.node.lg ∧ s.node.store s.lm.mid = some s.lm.content
 
 theorem sinit_inv (p : Params) : SInv p (SInit p) := by
   refine ⟨NodeInit_inv p 0, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
@@ -220,10 +240,10 @@ theorem sinit_inv (p : Params) : SInv p (SInit p) := by
   · intro _; simp [SInit]
   · intro _ h; simp [SInit] at h
 
-theorem apply_inv {p : Params} {s : Sys} {r : Res} {what : Last} {mid : Nat} (hcap : 0 < p.seenCap)
+theorem apply_inv {p : Params} {s : Sys} {r : Res} {what : Last} {m : Msg} (hcap : 0 < p.seenCap)
     (hs : SInv p s) (P : Post p s.node s.now r) (hlast : what = .msg ∨ what = .timer ∨ what = .answer ∨ what = .floors)
-    (hack : p.ackAfterStore = true → 0 < r.ack → mid ∈ LIds r.n.lg ∨ r.n.seen.map mid ≠ none) :
-    SInv p (Apply p s r what mid) := by
+    (hack : p.ackAfterStore = true → 0 < r.ack → m.mid ∈ LIds r.n.lg ∧ r.n.store m.mid = some m.content) :
+    SInv p (Apply p s r what m) := by
   refine ⟨P.inv, ?_, P.nodup, ?_, P.del, P.deny, P.resp, ?_, ?_, hack⟩
   · intro m
     have d := P.delta m
@@ -318,13 +338,13 @@ theorem gatherBound (h : s.node.phase = .gathering) : s.now ≤ s.node.born + p.
   (reach_inv hcap r).gather h
 
 theorem ackOnlyStored (hk : p.ackAfterStore = true) (h : 0 < s.ackd) :
-    s.lm ∈ LIds s.node.lg ∨ s.node.seen.map s.lm ≠ none := (reach_inv hcap r).ack hk h
+    s.lm.mid ∈ LIds s.node.lg ∧ s.node.store s.lm.mid = some s.lm.content := (reach_inv hcap r).ack hk h
 
 end Named
 
 /-- A step whose message is not a good one changes nothing but the records. -/
 theorem garbage_inert {p : Params} {s s' : Sys} {t : Frame} {b : Bool} {m : Msg} (h : m.kind ≠ .good)
-    (st : s' = Apply p s (OnMsg p s.node s.now s.now t b m) .msg m.mid) : s'.node = s.node ∧ s'.dls = [] := by
+    (st : s' = Apply p s (OnMsg p s.node s.now s.now t b m) .msg m) : s'.node = s.node ∧ s'.dls = [] := by
   subst st
   exact OnMsg_garbage h
 
@@ -414,6 +434,8 @@ theorem AcpAnswer_cached {p : Params} {N : Node} {now id : Nat} {allow : Bool} {
 #audit_axioms Vinc.BroadcastNode.floorHold
 #audit_axioms Vinc.BroadcastNode.gatherBound
 #audit_axioms Vinc.BroadcastNode.ackOnlyStored
+#audit_axioms Vinc.BroadcastNode.rival_not_same
+#audit_axioms Vinc.BroadcastNode.rival_refused
 #audit_axioms Vinc.BroadcastNode.garbage_inert
 #audit_axioms Vinc.BroadcastNode.gather_ends
 

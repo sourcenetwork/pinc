@@ -40,14 +40,14 @@
 EXTENDS Integers, Sequences, FiniteSets, TLC
 
 CONSTANTS TTL, SeenCap, LogRing, LogCap, LogWin, FholdMax, HeldMax, ChecksMax, AcpCap, AcpMax, FloorWait, OldSlack,
-          Mids, Origins, Me, IsHub, Revoked, HeldDedup, HeldFullKeepsUnseen, TopicFull, AckAfterStore, Gather, EvictGuard, LogTrack, Stamps, Sizes, MaxNow, MaxLife, Paths
+          Mids, Origins, Me, IsHub, Revoked, HeldDedup, HeldFullKeepsUnseen, TopicFull, AckAfterStore, Gather, EvictGuard, LogTrack, Stamps, Sizes, MaxNow, MaxLife, Paths, AckById, Bodies
 
 N == INSTANCE BroadcastNodeOps
 
 VARIABLES n, now, life, cnt, rec, capd, ep, acct, outs, dls, last, ackd, lm
 vars == <<n, now, life, cnt, rec, capd, ep, acct, outs, dls, last, ackd, lm>>
 
-Msgs == [mid : Mids, origin : Origins, ts : Stamps, kind : {"good", "badhead", "big", "badsig"}, n : Sizes]
+Msgs == [mid : Mids, origin : Origins, ts : Stamps, kind : {"good", "badhead", "big", "badsig"}, n : Sizes, body : Bodies]
 
 Init == /\ n = N!NodeInit(0) /\ now = 0 /\ life = 0 /\ cnt = [m \in Mids |-> 0] /\ rec = [m \in Mids |-> 0] /\ capd = [m \in Mids |-> FALSE] /\ ep = [m \in Mids |-> 0]
         /\ acct = {} /\ outs = <<>> /\ dls = <<>> /\ last = "init" /\ ackd = 0 /\ lm = 0
@@ -66,12 +66,12 @@ Ep(old, new) == [m \in Mids |-> IF NewRec(old, new, m) THEN ep[m] + 1 ELSE ep[m]
 
 Count(dl) == [m \in Mids |-> cnt[m] + Cardinality({i \in 1..Len(dl) : dl[i] = m})]
 
-Apply(r, what, mid) ==
-    /\ n' = r.n /\ outs' = r.outs /\ dls' = r.dl /\ cnt' = Count(r.dl) /\ rec' = Rec(n, r.n) /\ capd' = Cap(n, r.n) /\ ep' = Ep(n, r.n)
-    /\ acct' = acct \union r.acc /\ last' = what /\ ackd' = r.ack /\ lm' = mid
+Apply(r, what, msg) ==
+    /\ n' = N!Tidy(r.n) /\ outs' = r.outs /\ dls' = r.dl /\ cnt' = Count(r.dl) /\ rec' = Rec(n, r.n) /\ capd' = Cap(n, r.n) /\ ep' = Ep(n, r.n)
+    /\ acct' = acct \union r.acc /\ last' = what /\ ackd' = r.ack /\ lm' = msg
     /\ UNCHANGED <<now, life>>
 
-Msg == \E t \in Paths, b \in BOOLEAN, m \in Msgs : Apply(N!OnMsg(n, now, now, t, b, m), IF m.kind = "good" THEN "msg" ELSE "garbage", m.mid)
+Msg == \E t \in Paths, b \in BOOLEAN, m \in Msgs : Apply(N!OnMsg(n, now, now, t, b, m), IF m.kind = "good" THEN "msg" ELSE "garbage", m)
 
 Timer == Apply(N!OnTimer(n, now), "timer", 0)
 
@@ -147,6 +147,6 @@ GarbageInert == [][ last' = "garbage" => n' = n /\ dls' = <<>> ]_vars
 Swept == last = "timer" => /\ \A i \in 1..Len(n.seen.order) : now - n.seen.order[i][2] <= TTL
                            /\ \A i \in 1..Len(n.lg.entries) : now - n.lg.entries[i].at <= LogWin
 
-\* a hub acknowledges (PACK) only a message it holds
-AckOnlyStored == ackd > 0 => (lm \in LogIds(n.lg) \/ n.seen.map[lm] # N!NoT)
+\* a hub acknowledges (PACK) only the very message it holds: same id, origin, timestamp and body
+AckOnlyStored == ackd > 0 => (lm.mid \in LogIds(n.lg) /\ n.store[lm.mid] = N!Content(lm))
 =============================================================================

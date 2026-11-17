@@ -247,6 +247,29 @@ theorem pending_bounded (cap : Nat) (ops : List (Option Nat)) : (ops.foldl (run 
     | some x => exact push_bounded cap l x h
     | none => simp [run]; omega
 
+/-! ## An acknowledgement is for the publisher's own message
+
+`on_pack` ends the pending publish with the id it names, so the hub must name an id only for the message it stored
+under it. A hub whose log holds the id for another message (`rival`) sends no acknowledgement (`acks`), so when every
+hub holds the id for another message the publish is never acknowledged and ends in the give-up
+(`taken_never_acked`, with the give-up instant `giveup_scheduled`). The old rule acknowledged any known id
+(`acksById`): `old_rule_acks_rival` is its witness. -/
+
+/-- A hub sends a PACK for the id when it stored this message: not when another message holds the id. -/
+def acks (rival : Nat → Bool) (h : Nat) : Bool := !rival h
+
+/-- The old rule: any known id was acknowledged. -/
+def acksById (_rival : Nat → Bool) (_h : Nat) : Bool := true
+
+theorem taken_never_acked (hubs : List Nat) (rival : Nat → Bool) (hall : ∀ h ∈ hubs, rival h = true) :
+    ∀ h ∈ hubs, acks rival h = false := by
+  intro h hh
+  simp [acks, hall h hh]
+
+theorem old_rule_acks_rival (rival : Nat → Bool) (h : Nat) (hr : rival h = true) :
+    acksById rival h = true ∧ acks rival h = false := by
+  simp [acksById, acks, hr]
+
 /-! ## The constants of `consts.rs` -/
 
 def S : Nat := 1000000000

@@ -26,7 +26,7 @@
 EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
 
 CONSTANTS TTL, SeenCap, LogRing, LogCap, LogWin, FholdMax, HeldMax, ChecksMax, AcpCap, AcpMax, FloorWait, OldSlack,
-          Mids, Origins, HeldDedup, HeldFullKeepsUnseen, TopicFull, AckAfterStore, Gather, EvictGuard, Revoked
+          Mids, Origins, HeldDedup, HeldFullKeepsUnseen, TopicFull, AckAfterStore, Gather, EvictGuard, Revoked, AckById
 
 MidsDef == 1..400
 
@@ -88,7 +88,7 @@ SignEv == /\ Ev.op = "sign"
 
 FrameEv ==
     LET kind == IF ~Ev.hd THEN "badhead" ELSE IF Ev.big THEN "big" ELSE IF ~Verified THEN "badsig" ELSE "good"
-        m == [mid |-> Ev.mid, origin |-> Ev.org, ts |-> Ev.ts, kind |-> kind, n |-> Ev.sz]
+        m == [mid |-> Ev.mid, origin |-> Ev.org, ts |-> Ev.ts, kind |-> kind, n |-> Ev.sz, body |-> <<Ev.bid, Ev.isb>>]
         r == OnMsgOf(Ev.n, Ev.at, FrameName(Ev.ft), Ev.boot, m)
     IN /\ Ev.op = "frame" /\ Same(r) /\ r.ack = Ev.ack /\ ns' = [ns EXCEPT ![Ev.n] = r.n] /\ UNCHANGED orc
 

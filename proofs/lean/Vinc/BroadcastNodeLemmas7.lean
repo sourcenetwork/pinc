@@ -175,7 +175,7 @@ theorem OnMsg_mapStep (p : Params) (N : Node) (now wall : Nat) (t : Frame) (b : 
   · rw [if_pos h6]; exact MapStep.refl now _
   rw [if_neg h6]
   by_cases hhub : p.isHub = true
-  · rw [if_pos hhub]
+  · rw [if_pos hhub, NoteStored_seen]
     exact HubStore_mapStep p {N with req := N.req.filter (fun x => x != m.mid)} now wall _ m
   · rw [if_neg hhub]
     exact Offer_mapStep p {N with req := N.req.filter (fun x => x != m.mid)} now m.ent

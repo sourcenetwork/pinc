@@ -175,7 +175,7 @@ theorem OnMsg_ev (p : Params) (N : Node) (now wall : Nat) (t : Frame) (b : Bool)
   · rw [if_pos h6]; exact .refl
   rw [if_neg h6]
   by_cases hhub : p.isHub = true
-  · rw [if_pos hhub]
+  · rw [if_pos hhub, NoteStored_seen]
     exact HubStore_ev p {N with req := N.req.filter (fun x => x != m.mid)} now wall _ m
   · rw [if_neg hhub]
     exact Offer_ev p {N with req := N.req.filter (fun x => x != m.mid)} now m.ent
@@ -404,7 +404,7 @@ theorem OnMsg_lg (p : Params) (N : Node) (now wall : Nat) (t : Frame) (b : Bool)
   · rw [if_pos h6]; exact Or.inl rfl
   rw [if_neg h6]
   by_cases hhub : p.isHub = true
-  · rw [if_pos hhub]
+  · rw [if_pos hhub, NoteStored_lg]
     exact HubStore_lg p {N with req := N.req.filter (fun x => x != m.mid)} now wall _ m
   · rw [if_neg hhub]
     exact Or.inl (Offer_spec p {N with req := N.req.filter (fun x => x != m.mid)} now m.ent).lg

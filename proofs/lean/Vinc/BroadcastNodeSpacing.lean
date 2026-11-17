@@ -27,8 +27,8 @@ structure GInv (p : Params) (s : Sys) : Prop where
 theorem ginv_init (p : Params) : GInv p (SInit p) :=
   ⟨fun m t h => by simp [SInit, NodeInit, SeenEmpty] at h, fun m _ => Or.inl (by simp [SInit])⟩
 
-theorem apply_ginv {p : Params} {s : Sys} {r : Res} {what : Last} {mid : Nat} (hs : GInv p s)
-    (M : MapStep s.now s.node.seen r.n.seen) : GInv p (Apply p s r what mid) := by
+theorem apply_ginv {p : Params} {s : Sys} {r : Res} {what : Last} {c : Msg} (hs : GInv p s)
+    (M : MapStep s.now s.node.seen r.n.seen) : GInv p (Apply p s r what c) := by
   refine ⟨fun m t h => ?_, fun m h => ?_⟩
   · change r.n.seen.map m = some t at h
     show 1 ≤ EpG p s.now s.node r.n s.ep m ∧ RecG s.node r.n s.recd m = t

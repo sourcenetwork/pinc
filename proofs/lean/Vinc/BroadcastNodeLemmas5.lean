@@ -154,6 +154,34 @@ theorem Post.ack {p : Params} {N : Node} {now : Nat} {r : Res} (h : Post p N now
     Post p N now {r with ack := a} :=
   ⟨h.inv, h.del, h.deny, h.resp, h.delta, h.nodup, h.acc, h.floor, h.phase⟩
 
+theorem NodeInv.withStore {p : Params} {N : Node} (h : NodeInv p N) (f : Nat → Option Content) :
+    NodeInv p {N with store := f} :=
+  ⟨h.seen, h.heldLen, h.fholdLen, h.checksLen, h.lgLen, h.acpLen, h.heldNodup, h.fholdNodup, h.checksNodup,
+   h.hubPhase, h.memberLg, h.gatherHeld, h.heldNotOld⟩
+
+/-- Noting the content of a stored message changes the store and nothing else of the result. -/
+theorem NoteStored_seen (m : Msg) (r : Res) : (NoteStored m r).n.seen = r.n.seen := by
+  unfold NoteStored; split <;> rfl
+
+theorem NoteStored_lg (m : Msg) (r : Res) : (NoteStored m r).n.lg = r.n.lg := by
+  unfold NoteStored; split <;> rfl
+
+theorem NoteStored_ack (m : Msg) (r : Res) : (NoteStored m r).ack = r.ack := by
+  unfold NoteStored; split <;> rfl
+
+theorem NoteStored_store (m : Msg) (r : Res) (h : r.outs.any IsStored = true) :
+    (NoteStored m r).n.store m.mid = some m.content := by
+  unfold NoteStored
+  rw [if_pos h]
+  simp
+
+theorem NoteStored_post {p : Params} {N : Node} {now : Nat} {r : Res} (m : Msg) (h : Post p N now r) :
+    Post p N now (NoteStored m r) := by
+  unfold NoteStored
+  split
+  · exact ⟨NodeInv.withStore h.inv _, h.del, h.deny, h.resp, h.delta, h.nodup, h.acc, h.floor, h.phase⟩
+  · exact h
+
 /-! ## `hub_store` -/
 
 theorem HubStore_post {p : Params} {N : Node} {now wall : Nat} {fanned : Bool} {m : Msg} (hcap : 0 < p.seenCap)
@@ -260,7 +288,7 @@ theorem OnMsg_post {p : Params} {N : Node} {now wall : Nat} {t : Frame} {b : Boo
     have hP := HubStore_post (p := p) (N := {N with req := N.req.filter (fun x => x != m.mid)}) (now := now)
       (wall := wall) (fanned := (decide (t = .fan) || decide (t = .fanp))) (m := m) hcap hhub (hI.withReq _) hd.1 hd.2
     have hP2 := Post_prefix hP _ ho 0
-    refine Post.congr hP2 ?_ ?_ ?_ ?_ <;> rfl
+    exact NoteStored_post m (Post.congr hP2 rfl rfl rfl rfl)
   · rw [if_neg hhub]
     have hhub' : p.isHub = false := by simpa using hhub
     apply Post.req (q := N.req.filter (fun x => x != m.mid))

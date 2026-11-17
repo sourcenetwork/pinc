@@ -31,17 +31,27 @@
 (* The configs ending in _heldDup, _heldFull, _ackEarly, _evict are the    *)
 (* witnesses that TLC finds the violations in the old behaviour.           *)
 (* TopicFull: the topic table has no room for this topic.                  *)
+(*                                                                         *)
+(* A message also has a body (an opaque value: the body hash and the flag  *)
+(* the signature covers). A hub keeps what the log holds for each id in    *)
+(* `store` (origin, timestamp, body), set when the message is stored; a    *)
+(* known id is acknowledged only for the same message (origin, timestamp   *)
+(* and body equal), another message under a held id is refused with        *)
+(* IdTaken, and an id only the dedupe set remembers is no acknowledgement. *)
+(* AckById is the old rule, which acknowledged any known id: the witness.  *)
+(* An id the log no longer holds has no meaningful entry; Tidy drops it.   *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC
 
 CONSTANTS TTL, SeenCap, LogRing, LogCap, LogWin, FholdMax, HeldMax, ChecksMax, AcpCap, AcpMax, FloorWait, OldSlack,
-          Mids, Origins, Me, IsHub, Revoked, HeldDedup, HeldFullKeepsUnseen, TopicFull, AckAfterStore, Gather, EvictGuard, LogTrack
+          Mids, Origins, Me, IsHub, Revoked, HeldDedup, HeldFullKeepsUnseen, TopicFull, AckAfterStore, Gather, EvictGuard, LogTrack, AckById
 
 LG == INSTANCE BroadcastLogOps WITH Ring <- LogRing, Cap <- LogCap, Window <- LogWin, Track <- LogTrack
 
 NoT == -1
 NoAcp == [none |-> TRUE]
 NoOf == [none |-> TRUE]
+NoM == [none |-> TRUE]
 Sub(a, b) == IF a >= b THEN a - b ELSE 0
 
 (* ---- table.rs Seen: the association of ids to the time they were recorded, in insertion order ---- *)
@@ -76,7 +86,7 @@ SInsertAll(S, ids, now) ==
 NodeInit(born) ==
     [seen |-> SeenEmpty, lg |-> LG!EmptyLog, sub |-> TRUE, req |-> {},
      phase |-> IF IsHub THEN "never" ELSE IF Gather THEN "gathering" ELSE "done", rfloor |-> NoT, ofloor |-> NoOf, nohist |-> FALSE,
-     fhold |-> <<>>, acp |-> [o \in Origins |-> NoAcp], checks |-> <<>>, nextCheck |-> 1, held |-> <<>>, born |-> born]
+     fhold |-> <<>>, acp |-> [o \in Origins |-> NoAcp], checks |-> <<>>, nextCheck |-> 1, held |-> <<>>, born |-> born, store |-> [x \in Mids |-> NoM]]
 
 Res(n, outs, dl, ack, acc) == [n |-> n, outs |-> outs, dl |-> dl, ack |-> ack, acc |-> acc]
 Plain(n, outs) == Res(n, outs, <<>>, 0, {})
@@ -158,6 +168,10 @@ HubStore(N, now, wall, fanned, m) ==
                THEN Bind(Plain(N1, st), LAMBDA x: Offer(x, now, m))
                ELSE Res([N1 EXCEPT !.seen = SInsert(N1.seen, m.mid, now, TRUE).s], st, <<>>, 0, {m.mid})
 
+\* what the log holds for the ids it holds; the entry of an id that left the log means nothing
+Tidy(N) == [N EXCEPT !.store = [x \in Mids |-> IF LG!Contains(N.lg, x) THEN N.store[x] ELSE NoM]]
+Content(m) == [origin |-> m.origin, ts |-> m.ts, body |-> m.body]
+
 (* ---- msg.rs on_msg ---- *)
 Allowed(t, fromBoot) == IF t \in {"PUB", "FAN", "FANP"} THEN IsHub ELSE IF t = "MSG" THEN fromBoot ELSE TRUE
 
@@ -166,7 +180,11 @@ OnMsg(N, now, wall, t, fromBoot, m) ==
     ELSE IF m.kind = "badhead" THEN Plain(N, <<Rejected(0, "BadHead")>>)
     ELSE IF m.kind = "big" THEN Plain(N, <<Rejected(m.mid, "BadHead")>>)
     ELSE LET ack == IF IsHub /\ t \in {"PUB", "FANP"} THEN 1 ELSE 0
-         IN IF IsDup(N, m.mid, now) THEN Res(N, <<Rejected(m.mid, "Duplicate")>>, <<>>, ack, {})
+             same == LG!Contains(N.lg, m.mid) /\ N.store[m.mid] = Content(m)
+         IN IF IsDup(N, m.mid, now)
+            THEN IF same \/ AckById THEN Res(N, <<Rejected(m.mid, "Duplicate")>>, <<>>, ack, {})
+                 ELSE IF LG!Contains(N.lg, m.mid) THEN Res(N, <<Rejected(m.mid, "IdTaken")>>, <<>>, 0, {})
+                 ELSE Res(N, <<Rejected(m.mid, "Duplicate")>>, <<>>, 0, {})
             ELSE IF m.origin \in Revoked THEN Plain(N, <<Rejected(m.mid, "Revoked")>>)
             ELSE IF m.kind = "badsig" THEN Plain(N, <<Rejected(m.mid, "BadSignature")>>)
             ELSE LET rep == m.mid \in N.req
@@ -177,7 +195,9 @@ OnMsg(N, now, wall, t, fromBoot, m) ==
                      stored(r) == \E i \in 1..Len(r.outs) : r.outs[i].k = "Stored"
                      late(r) == IF AckAfterStore /\ stored(r) THEN ack ELSE 0
                      rh == Bind(r0, LAMBDA x: HubStore(x, now, wall, t \in {"FAN", "FANP"}, m))
-                 IN IF IsHub THEN [rh EXCEPT !.ack = @ + late(rh)]
+                     fin == [rh EXCEPT !.ack = @ + late(rh)]
+                 IN IF IsHub
+                    THEN IF stored(rh) THEN [fin EXCEPT !.n.store = [@ EXCEPT ![m.mid] = Content(m)]] ELSE fin
                     ELSE Bind(r0, LAMBDA x: Offer(x, now, m))
 
 (* ---- gap.rs on_have: the ids this node lacks are asked for and remembered as requested ---- *)
