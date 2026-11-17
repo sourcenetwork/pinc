@@ -23,6 +23,7 @@ struct Burst {
     secs: f64,
     /// The time to each first byte, in microseconds, sorted.
     up: Vec<f64>,
+    /// The last dial error, else the first reason a client did not start; both when both happened.
     why: String,
 }
 
@@ -54,6 +55,16 @@ fn client_made() -> (Stats, bool) {
 fn keep_first(why: &mut String, e: &io::Error) {
     if why.is_empty() {
         *why = e.to_string();
+    }
+}
+
+/// The row's `last_error`: the last dial error, else the first reason a client did not start. When both happened the
+/// line keeps both, so a later dial error never hides that clients could not start.
+fn why_of(did_not_start: u32, start: &str, dial: &str) -> String {
+    match (start.is_empty(), dial.is_empty()) {
+        (false, false) => format!("{did_not_start} clients did not start: {start}; last dial error: {dial}"),
+        (false, true) => start.to_owned(),
+        _ => dial.to_owned(),
     }
 }
 
@@ -116,13 +127,13 @@ async fn many_one<L: Lib>(addr: &str, n: usize, each: u64, sink: impl FnOnce(Rec
     let s_base = server_base::<L>(&ctl).await.ok();
     let c_before = Stats::now();
     let mut eps = Vec::with_capacity(n);
-    let (mut no_endpoint, mut why) = (0u32, String::new());
+    let (mut no_endpoint, mut start, mut dial) = (0u32, String::new(), String::new());
     for _ in 0..n {
         match L::burst_client().await {
             Ok(e) => eps.push(e),
             Err(e) => {
                 no_endpoint += 1;
-                keep_first(&mut why, &e);
+                keep_first(&mut start, &e);
             }
         }
     }
@@ -152,7 +163,7 @@ async fn many_one<L: Lib>(addr: &str, n: usize, each: u64, sink: impl FnOnce(Rec
             }
             Err(e) => {
                 failed += 1;
-                why = e;
+                dial = e;
             }
         }
     }
@@ -167,7 +178,7 @@ async fn many_one<L: Lib>(addr: &str, n: usize, each: u64, sink: impl FnOnce(Rec
         failed,
         secs,
         up,
-        why,
+        why: why_of(no_endpoint, &start, &dial),
     };
     let readings = Readings {
         s_base,
@@ -218,7 +229,7 @@ async fn many_spread<L: Lib>(addr: &str, n: usize, each: u64, sink: impl FnOnce(
     let (done, mut results) = mpsc::unbounded::<Result<Duration, String>>();
     let (ended, mut ended_rx) = mpsc::unbounded::<()>();
     let (mut go, mut release) = (Vec::with_capacity(n), Vec::with_capacity(n));
-    let (mut refused, mut why) = (0usize, String::new());
+    let (mut refused, mut start, mut dial) = (0usize, String::new(), String::new());
     for i in 0..n {
         let (go_tx, go_rx) = oneshot::channel::<Instant>();
         let (release_tx, release_rx) = oneshot::channel::<()>();
@@ -270,7 +281,7 @@ async fn many_spread<L: Lib>(addr: &str, n: usize, each: u64, sink: impl FnOnce(
         });
         if let Err(e) = started {
             refused += 1;
-            keep_first(&mut why, &e);
+            keep_first(&mut start, &e);
         }
     }
     drop((made, done, ended));
@@ -280,8 +291,8 @@ async fn many_spread<L: Lib>(addr: &str, n: usize, each: u64, sink: impl FnOnce(
             Some(Ok(())) => {}
             Some(Err(e)) => {
                 no_endpoint += 1;
-                if why.is_empty() {
-                    why = e;
+                if start.is_empty() {
+                    start = e;
                 }
             }
             None => no_endpoint += 1,
@@ -301,7 +312,7 @@ async fn many_spread<L: Lib>(addr: &str, n: usize, each: u64, sink: impl FnOnce(
             }
             Some(Err(e)) => {
                 failed += 1;
-                why = e;
+                dial = e;
             }
             None => break,
         }
@@ -317,7 +328,7 @@ async fn many_spread<L: Lib>(addr: &str, n: usize, each: u64, sink: impl FnOnce(
         failed,
         secs,
         up,
-        why,
+        why: why_of(no_endpoint, &start, &dial),
     };
     let readings = Readings {
         s_base,
@@ -570,6 +581,17 @@ mod tests {
     }
 
     #[test]
+    fn a_dial_error_does_not_hide_that_clients_could_not_start() {
+        for spread in [false, true] {
+            let v = burst(spread, 6, NO_CONNECT, usize::MAX, 3);
+            assert!(
+                v.contains("\"last_error\":\"1 clients did not start: no endpoint; last dial error: no connection\""),
+                "spread {spread}: {v}"
+            );
+        }
+    }
+
+    #[test]
     fn a_control_endpoint_that_cannot_be_made_is_reported_not_dropped() {
         for spread in [false, true] {
             let v = burst(spread, 4, 0, usize::MAX, 0);
@@ -697,17 +719,17 @@ mod tests {
     #[test]
     fn a_cell_per_connection_divides_by_the_clients_that_connected_not_the_ones_asked_for() {
         let v = pure_line_of(
-            5,
+            4,
             stats(1000, 1000),
             stats(2000, 6000),
             stats(1500, 1500),
             stats(2500, 4500),
             true,
         );
-        assert_eq!(number(&v, "server_kib_per_conn"), 200.0);
-        assert_eq!(number(&v, "client_kib_per_conn"), 200.0);
-        assert_eq!(number(&v, "server_peak_kib_per_conn"), 1000.0);
-        assert_eq!(number(&v, "client_peak_kib_per_conn"), 600.0);
+        assert_eq!(number(&v, "server_kib_per_conn"), 250.0);
+        assert_eq!(number(&v, "client_kib_per_conn"), 250.0);
+        assert_eq!(number(&v, "server_peak_kib_per_conn"), 1250.0);
+        assert_eq!(number(&v, "client_peak_kib_per_conn"), 750.0);
     }
 
     #[test]
