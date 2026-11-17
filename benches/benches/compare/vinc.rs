@@ -276,16 +276,16 @@ impl Lib for Vinc1 {
         nuclei::spawn_local(f).detach();
     }
 
-    fn spawn_client<F: Future<Output = ()> + 'static>(i: usize, make: impl FnOnce() -> F + Send + 'static) {
+    fn spawn_client<F: Future<Output = ()> + 'static>(i: usize, make: impl FnOnce() -> F + Send + 'static) -> bool {
         let rt = nuclei::RuntimeHandle::current();
-        match rt.workers() {
-            0 => Self::spawn(make()),
-            _ if !super::per_core() => Self::spawn(make()),
-            n => match rt.spawn_local_on_worker(i % n, make) {
-                Ok(task) => task.detach(),
-                Err(e) => panic!("worker {} took no client: {e}", i % n),
-            },
+        let workers = rt.workers();
+        if workers == 0 || !super::per_core() {
+            Self::spawn(make());
+            return true;
         }
+        rt.spawn_local_on_worker(i % workers, make)
+            .map(nuclei::Task::detach)
+            .is_ok()
     }
 
     async fn sleep(d: Duration) {
@@ -338,5 +338,60 @@ impl Lib for Vinc1 {
 
     async fn shutdown(ep: Ep) {
         ep.close().await;
+    }
+}
+
+#[cfg(test)]
+#[allow(unused_imports)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::Ordering::Relaxed;
+
+    /// Run `f` on a runtime of two workers.
+    fn on_two_workers<T>(f: impl Future<Output = T>) -> T {
+        let rt = nuclei::Builder::new().worker_threads(2).build().unwrap();
+        rt.block_on(f)
+    }
+
+    /// The worker each of `n` clients started by [`Vinc1::spawn_client`] ran on, in client order.
+    async fn workers_of(n: usize) -> Vec<Option<usize>> {
+        let (tx, mut rx) = mpsc::unbounded::<(usize, Option<usize>)>();
+        for i in 0..n {
+            let tx = tx.clone();
+            let started = Vinc1::spawn_client(i, move || async move {
+                let _ = tx.unbounded_send((i, nuclei::runtime::worker_index()));
+            });
+            assert!(started, "client {i} was started");
+        }
+        drop(tx);
+        let mut at = vec![None; n];
+        let deadline = Box::pin(nuclei::time::sleep(Duration::from_secs(30)));
+        let all = Box::pin(async {
+            while let Some((i, w)) = rx.next().await {
+                at[i] = w;
+            }
+        });
+        let ended = futures::future::select(all, deadline).await;
+        let ran = matches!(ended, futures::future::Either::Left(_));
+        drop(ended);
+        assert!(ran, "every client ran");
+        at
+    }
+
+    #[test]
+    fn per_core_clients_run_on_worker_i_modulo_the_workers() {
+        super::super::PER_CORE.store(true, Relaxed);
+        let at = on_two_workers(workers_of(6));
+        assert_eq!(at, [Some(0), Some(1), Some(0), Some(1), Some(0), Some(1)]);
+    }
+
+    #[test]
+    fn without_per_core_a_client_runs_where_it_was_started() {
+        super::super::PER_CORE.store(false, Relaxed);
+        let at = on_two_workers(workers_of(4));
+        assert!(
+            at.iter().all(|w| w == &at[0]),
+            "one-endpoint clients all run on one thread: {at:?}"
+        );
     }
 }

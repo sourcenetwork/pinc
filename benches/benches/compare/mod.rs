@@ -12,15 +12,16 @@
 //! over them. Every result line of a per-core process says so (`endpoints`: `per-core`; a line without it ran on one endpoint); the
 //! default code path is untouched, and the other tests run on one endpoint either way.
 //!
-//! `--reading=driven|undriven` (or `VINC_BENCH_READING`; the default is `driven`) is how the `many` test reads memory:
-//! `driven` runs every client endpoint's own driver while the connections are open (VINC's `run()`; the other libraries
-//! always do) and settles 1.5 s before reading, `undriven` leaves VINC's client endpoints undriven and settles 500 ms,
-//! as the row was read before. Every `many` line says which (`reading`).
+//! `--reading=undriven|driven` (or `VINC_BENCH_READING`; the default is `undriven`) is how the `many` test reads memory:
+//! `undriven` leaves VINC's client endpoints undriven and settles 500 ms, as the row was always read; `driven` runs every
+//! client endpoint's own driver while the connections are open (VINC's `run()`; the other libraries always do) and
+//! settles 1.5 s before reading. Every `many` line says which (`reading`).
 //!
 //! The wire protocol is the same for every library: a bidirectional stream starts with a mode byte. `H` is answered
 //! with `k` (the first byte of a connection), `S` is a sink that answers the byte count, `E` echoes everything it reads
 //! until the end of the stream (the `requests` scenario opens one such stream per request), and `T` answers the server's own resource counters (resident memory, CPU time,
-//! allocations) so the client can read what the server paid for a phase. The scenarios are written once against the
+//! allocations) so the client can read what the server paid for a phase. `B` is `T` after the server has reset its
+//! peak resident memory, so a peak read later starts from that point (the peak is 0 when it could not be reset). The scenarios are written once against the
 //! [`Lib`] trait; each library's module (`vinc`, `iroh`, `libp2p`) only maps its own endpoint, connection and stream
 //! types onto it.
 //!
@@ -123,12 +124,23 @@ pub fn peak_kb() -> u64 {
     status_kb("VmHWM:")
 }
 
+/// Start this process's peak resident memory (`VmHWM`) afresh from its resident memory now; whether the system did it.
+pub fn reset_peak() -> bool {
+    reset_peak_at("/proc/self/clear_refs")
+}
+
+/// [`reset_peak`] through the file at `path` (writing `5` there resets the peak).
+fn reset_peak_at(path: &str) -> bool {
+    std::fs::write(path, "5").is_ok()
+}
+
 /// What one process has used so far.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Stats {
     /// Resident memory in KiB.
     pub rss_kb: u64,
-    /// The most resident memory the process has had, in KiB (`VmHWM`).
+    /// The most resident memory the process has had, in KiB (`VmHWM`); 0 when it was not read (or, in the answer to a
+    /// base request, could not be reset).
     pub peak_kb: u64,
     /// User plus system CPU time in clock ticks (the kernel counts 100 per second).
     pub cpu_ticks: u64,
@@ -273,12 +285,13 @@ pub trait Lib: Sized + 'static {
     fn run<T>(f: impl Future<Output = T>) -> T;
     /// Start `f` on the runtime.
     fn spawn(f: impl Future<Output = ()> + 'static);
-    /// Start the future `make` builds for client `i` of a crowd. A library that runs one endpoint on every worker
-    /// ([`per_core`]) starts it on worker `i` modulo the workers, where the client's endpoint is made; the default starts
-    /// it here, as [`spawn`](Self::spawn) does.
-    fn spawn_client<F: Future<Output = ()> + 'static>(i: usize, make: impl FnOnce() -> F + Send + 'static) {
+    /// Start the future `make` builds for client `i` of a crowd, and say whether it started. A library that runs one
+    /// endpoint on every worker ([`per_core`]) starts it on worker `i` modulo the workers, where the client's endpoint is
+    /// made; the default starts it here, as [`spawn`](Self::spawn) does.
+    fn spawn_client<F: Future<Output = ()> + 'static>(i: usize, make: impl FnOnce() -> F + Send + 'static) -> bool {
         let _ = i;
         Self::spawn(make());
+        true
     }
     /// A client endpoint of the many-connection test: [`client`](Self::client), driven by its own task when the reading is
     /// `driven` for a library whose endpoint needs one (the others always are).
@@ -337,6 +350,10 @@ pub async fn handle<T: Tx, R: Rx>(mut tx: T, mut rx: R) -> io::Result<()> {
             tx.write_all(&Stats::now().to_bytes()).await?;
             tx.finish().await
         }
+        b'B' => {
+            tx.write_all(&base_stats(reset_peak()).to_bytes()).await?;
+            tx.finish().await
+        }
         b'S' => {
             let mut buf = vec![0u8; CHUNK];
             let mut total = 0u64;
@@ -365,10 +382,29 @@ pub async fn handle<T: Tx, R: Rx>(mut tx: T, mut rx: R) -> io::Result<()> {
     }
 }
 
+/// The counters of a process whose peak was just reset (`reset`: whether it was): its peak is 0 when it was not, so
+/// no one reads an old peak as a new one.
+fn base_stats(reset: bool) -> Stats {
+    let mut s = Stats::now();
+    if !reset {
+        s.peak_kb = 0;
+    }
+    s
+}
+
 /// The server's counters, asked over the connection.
 async fn server_stats<L: Lib>(c: &L::Conn) -> io::Result<Stats> {
+    ask_stats::<L>(c, b'T').await
+}
+
+/// The server's counters after it reset its peak memory, asked over the connection.
+async fn server_base<L: Lib>(c: &L::Conn) -> io::Result<Stats> {
+    ask_stats::<L>(c, b'B').await
+}
+
+async fn ask_stats<L: Lib>(c: &L::Conn, mode: u8) -> io::Result<Stats> {
     let (mut tx, mut rx) = L::open(c).await?;
-    tx.write_all(b"T").await?;
+    tx.write_all(&[mode]).await?;
     let mut b = [0u8; 40];
     read_exact(&mut rx, &mut b).await?;
     Ok(Stats::from_bytes(&b))
@@ -716,9 +752,9 @@ async fn bulk_allocs<L: Lib>(addr: &str, total: u64) {
     L::shutdown(ep).await;
 }
 
-static DRIVEN: AtomicBool = AtomicBool::new(true);
+static DRIVEN: AtomicBool = AtomicBool::new(false);
 
-/// Whether the many-connection test reads memory from driven client endpoints (the default) rather than undriven ones.
+/// Whether the many-connection test reads memory from driven client endpoints rather than undriven ones (the default).
 pub fn driven() -> bool {
     DRIVEN.load(Relaxed)
 }
@@ -736,13 +772,13 @@ fn settle() -> Duration {
 /// Whether `v` (the option's text, if given) names the driven reading.
 fn parse_reading(v: Option<&str>) -> Result<bool, String> {
     match v {
-        None | Some("driven") => Ok(true),
-        Some("undriven") => Ok(false),
+        None | Some("undriven") => Ok(false),
+        Some("driven") => Ok(true),
         Some(other) => Err(format!("the reading is `driven` or `undriven`, not `{other}`")),
     }
 }
 
-/// Read the reading option: the `--reading=` argument (removed from `args`), else `VINC_BENCH_READING`, else `driven`.
+/// Read the reading option: the `--reading=` argument (removed from `args`), else `VINC_BENCH_READING`, else `undriven`.
 fn reading_option(args: &mut Vec<String>) -> Result<(), String> {
     let arg = args
         .iter()
@@ -858,7 +894,7 @@ pub fn run_args<L: Lib>(mut args: Vec<String>) {
         }
         _ => {
             eprintln!(
-                "usage: [--endpoints=1|per-core] [--reading=driven|undriven] server [--count-allocs] | client <addr> <setup|resume|throughput|latency|requests|allocs|many> [numbers]"
+                "usage: [--endpoints=1|per-core] [--reading=undriven|driven] server [--count-allocs] | client <addr> <setup|resume|throughput|latency|requests|allocs|many> [numbers]"
             );
             std::process::exit(2);
         }
@@ -867,7 +903,7 @@ pub fn run_args<L: Lib>(mut args: Vec<String>) {
 
 // The benches have no test harness; these run in the harness crate that includes this module.
 #[cfg(test)]
-#[allow(unused_imports)]
+#[allow(unused_imports, clippy::unwrap_used)]
 mod tests {
     use super::*;
 
@@ -881,21 +917,59 @@ mod tests {
     }
 
     #[test]
-    fn the_reading_is_driven_by_default_undriven_on_request_and_nothing_else() {
-        assert_eq!(parse_reading(None), Ok(true));
-        assert_eq!(parse_reading(Some("driven")), Ok(true));
+    fn the_reading_is_undriven_by_default_driven_on_request_and_nothing_else() {
+        assert_eq!(parse_reading(None), Ok(false));
         assert_eq!(parse_reading(Some("undriven")), Ok(false));
+        assert_eq!(parse_reading(Some("driven")), Ok(true));
         assert!(parse_reading(Some("idle")).is_err());
     }
 
     #[test]
     fn the_reading_argument_is_taken_out_of_the_arguments() {
-        let mut args = vec!["--reading=undriven".to_owned(), "server".to_owned()];
+        let mut args = vec!["--reading=driven".to_owned(), "server".to_owned()];
         assert_eq!(reading_option(&mut args), Ok(()));
         assert_eq!(args, ["server"]);
-        assert!(!driven());
-        DRIVEN.store(true, Relaxed);
+        assert!(driven());
+        DRIVEN.store(false, Relaxed);
         let mut bad = vec!["--reading=never".to_owned()];
         assert!(reading_option(&mut bad).is_err());
+    }
+
+    #[test]
+    fn the_peak_is_reset_by_writing_5_and_a_write_that_fails_says_so() {
+        let path = std::env::temp_dir().join(format!("clear_refs_{}", std::process::id()));
+        assert!(reset_peak_at(path.to_str().unwrap()));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "5");
+        std::fs::remove_file(&path).unwrap();
+        assert!(!reset_peak_at("/no/such/directory/clear_refs"));
+    }
+
+    #[test]
+    fn a_base_whose_peak_was_not_reset_carries_no_peak() {
+        assert_eq!(base_stats(false).peak_kb, 0);
+        assert!(base_stats(true).peak_kb > 0);
+    }
+
+    #[test]
+    fn per_core_is_taken_only_by_a_library_that_can_and_every_line_of_a_per_core_process_says_so() {
+        let line = || Rec::new("x", "many").0;
+        let mut args = vec!["--endpoints=per-core".to_owned(), "server".to_owned()];
+        assert_eq!(endpoints_option::<iroh::Iroh>(&mut args), Ok(()));
+        assert_eq!(args, ["server"]);
+        assert!(!per_core(), "a library that cannot run per-core runs on one endpoint");
+        assert!(!line().contains("endpoints"));
+        assert_eq!(
+            endpoints_option::<vinc::Vinc1>(&mut vec!["--endpoints=1".to_owned()]),
+            Ok(())
+        );
+        assert!(!per_core());
+        assert_eq!(
+            endpoints_option::<vinc::Vinc1>(&mut vec!["--endpoints=per-core".to_owned()]),
+            Ok(())
+        );
+        assert!(per_core());
+        assert!(line().contains("\"endpoints\":\"per-core\""), "{}", line());
+        PER_CORE.store(false, Relaxed);
+        assert!(endpoints_option::<vinc::Vinc1>(&mut vec!["--endpoints=two".to_owned()]).is_err());
     }
 }
