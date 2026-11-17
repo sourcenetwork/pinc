@@ -289,3 +289,42 @@ proptest! {
         prop_assert_eq!((st.dropped_oldest, st.expired, st.delivered), (dropped, expired, delivered));
     }
 }
+
+#[test]
+fn a_looked_at_message_stays_held_with_its_seq_until_it_is_removed() {
+    let mut m = M::new(100 * SEC, 1);
+    let to = nid(1);
+    for i in 0..3u8 {
+        m.push(0, &to, &nid(10), i, &[i; 20]);
+    }
+    let before = m.pending(&to);
+    let mut buf = [0u8; MAX_PACKET_LEN];
+    let a = m.look(0, &to, &mut buf, MAX_PACKET_LEN).unwrap();
+    let b = m.look(0, &to, &mut buf, MAX_PACKET_LEN).unwrap();
+    assert_eq!((a, &buf[..a.len]), (b, &[0u8; 20][..]), "a look removes nothing");
+    assert_eq!(m.pending(&to), before);
+    assert_eq!(m.stats().delivered, 0);
+    assert!(!m.remove(&to, a.seq + 1), "only the oldest can be removed");
+    assert!(m.remove(&to, a.seq));
+    assert!(!m.remove(&to, a.seq), "removed once");
+    assert_eq!(m.pending(&to), (2, 2 * (ENTRY_HEAD + 20)));
+    assert_eq!(m.stats().delivered, 1);
+    let c = m.look(0, &to, &mut buf, MAX_PACKET_LEN).unwrap();
+    assert_eq!(
+        (c.seq, c.flag),
+        (a.seq + 1, 1),
+        "the order and the seq of what stays are unchanged"
+    );
+    assert!(
+        m.look(0, &to, &mut buf, 19).is_none(),
+        "a body over the limit is not returned"
+    );
+    assert_eq!(m.pending(&to).0, 2);
+    // looking past the age expires, and the last removal frees the member
+    assert!(m.look(100 * SEC, &to, &mut buf, MAX_PACKET_LEN).is_none());
+    assert_eq!((m.pending(&to), m.members(), m.stats().expired), ((0, 0), 0, 2));
+    m.push(0, &to, &nid(10), 9, &[9; 5]);
+    let d = m.look(0, &to, &mut buf, MAX_PACKET_LEN).unwrap();
+    assert!(m.remove(&to, d.seq));
+    assert_eq!((m.pending(&to), m.members()), ((0, 0), 0));
+}

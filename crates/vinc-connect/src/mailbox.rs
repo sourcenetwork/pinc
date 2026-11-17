@@ -6,7 +6,8 @@
 //!
 //! Invariants:
 //! - The bytes held for one member never exceed `BYTES` (headers included), and the members never exceed `NODES`.
-//! - A message is delivered at most once: [`Mailbox::pop`] removes it before returning it.
+//! - A message is delivered at most once: [`Mailbox::pop`] removes it before returning it, and [`Mailbox::look`] then
+//!   [`Mailbox::remove`] is the same step in two halves for a caller that removes it only once it was handed over.
 //! - Overflow drops the oldest messages first, and age drops from the front; every drop is counted in [`Stats`], so
 //!   a loss is never silent.
 //! - Messages leave in the order they arrived.
@@ -283,6 +284,20 @@ impl<const NODES: usize, const BYTES: usize> Mailbox<NODES, BYTES> {
         buf: &mut [u8; MAX_PACKET_LEN],
         max_len: usize,
     ) -> Option<Delivered> {
+        let m = self.look(now, node, buf, max_len)?;
+        self.remove(node, m.seq);
+        Some(m)
+    }
+
+    /// The oldest live message of `node` if its body is at most `max_len` long: the body is copied into `buf` and
+    /// the message stays held, in front, until [`Mailbox::remove`] takes it out. Expired messages are dropped first.
+    pub fn look(
+        &mut self,
+        now: u64,
+        node: &NodeId,
+        buf: &mut [u8; MAX_PACKET_LEN],
+        max_len: usize,
+    ) -> Option<Delivered> {
         let Self {
             held,
             max_age_ns,
@@ -297,14 +312,28 @@ impl<const NODES: usize, const BYTES: usize> Mailbox<NODES, BYTES> {
             .and_then(|(src, flag, len, _, seq)| {
                 let dst = buf.get_mut(..len)?;
                 h.copy_out(h.head + ENTRY_HEAD, dst);
-                h.skip_front();
-                stats.delivered += 1;
                 Some(Delivered { src, flag, len, seq })
             });
         if h.count == 0 {
             held.remove(node);
         }
         out
+    }
+
+    /// Take the message numbered `seq` out of `node`'s mailbox and count it delivered, if it is the oldest one held
+    /// (the one [`Mailbox::look`] returned). Returns whether it was removed.
+    pub fn remove(&mut self, node: &NodeId, seq: u64) -> bool {
+        let Some(h) = self.held.get_mut(node) else {
+            return false;
+        };
+        let removed = h.front().is_some_and(|f| f.4 == seq) && h.skip_front() > 0;
+        if removed {
+            self.stats.delivered += 1;
+        }
+        if h.count == 0 {
+            self.held.remove(node);
+        }
+        removed
     }
 
     /// Drop expired messages of every member and free the empty ones.

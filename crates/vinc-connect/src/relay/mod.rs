@@ -243,7 +243,8 @@ pub enum Reject {
     NoRoute,
     /// The home relay of the destination has no authenticated session with this relay.
     NoPeerSession,
-    /// The packet cannot be tunnelled (too large for a datagram, or no fresh UDP session).
+    /// The packet cannot be tunnelled (too large for a datagram, or no fresh UDP session ready to send on). A held
+    /// message that hit it stays held.
     NoTunnel,
     /// The record store is full of live records.
     StoreFull,

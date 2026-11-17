@@ -203,7 +203,9 @@ impl<const C: usize, const R: usize, const MN: usize, const MB: usize> Relay<C, 
     }
 
     /// Hand the mailbox contents of `node` to it, oldest first, each at most once: on its carrier if one is open,
-    /// else down its fresh UDP session. Messages that cannot go anywhere stay held.
+    /// else down its fresh UDP session. A message leaves the mailbox only when it was handed over (or expires): the
+    /// pass stops at the first one that cannot go, which stays held in front and is counted once as
+    /// [`Reject::NoTunnel`].
     pub(crate) fn deliver_held<S: Sink>(&mut self, now: u64, node: &NodeId, sink: &mut S) {
         if self.mailbox.pending(node).0 == 0 {
             return;
@@ -223,7 +225,7 @@ impl<const C: usize, const R: usize, const MN: usize, const MB: usize> Relay<C, 
         } else {
             MAX_TUNNEL_DATAGRAM - 35
         };
-        while let Some(m) = self.mailbox.pop_fitting(now, node, &mut buf, fit) {
+        while let Some(m) = self.mailbox.look(now, node, &mut buf, fit) {
             let body = buf.get(..m.len).unwrap_or_default();
             let sent = if open {
                 self.deliver_client(
@@ -240,14 +242,15 @@ impl<const C: usize, const R: usize, const MN: usize, const MB: usize> Relay<C, 
             } else {
                 self.tunnel_down(now, node, &m.src, m.flag, body, sink)
             };
-            if sent {
-                sink.emit(Effect::Trace(Trace::MailboxDelivered {
-                    node: *node,
-                    seq: m.seq,
-                }));
-            } else {
+            if !sent {
                 self.reject(sink, Reject::NoTunnel, Some(*node));
+                return;
             }
+            self.mailbox.remove(node, m.seq);
+            sink.emit(Effect::Trace(Trace::MailboxDelivered {
+                node: *node,
+                seq: m.seq,
+            }));
         }
     }
 
