@@ -39,8 +39,10 @@
 (*    print of (the log or the dedupe map holds the id, and the content    *)
 (*    stored under it is the message's); RetryAcked: an exact retry is     *)
 (*    acknowledged after the log let the message go too; UndueDuplicate: a *)
-(*    copy due no acknowledgement is never compared. Ghosts record the     *)
-(*    last two (a step that broke one sets its ghost for good).            *)
+(*    copy due no acknowledgement is never compared; GraftTaken: a graft   *)
+(*    for an id the hub holds no print for (its own id the log refused) is *)
+(*    answered IdTaken and not acknowledged. Ghosts record the last three  *)
+(*    (a step that broke one sets its ghost for good).                     *)
 (*  - Every table stays within its capacity (Bounds).                      *)
 (*  - A timer leaves no expired id and no expired message (Swept).         *)
 (*                                                                         *)
@@ -49,12 +51,12 @@
 EXTENDS Integers, Sequences, FiniteSets, TLC
 
 CONSTANTS TTL, SeenCap, LogRing, LogCap, LogWin, FholdMax, HeldMax, ChecksMax, AcpCap, AcpMax, FloorWait, OldSlack,
-          Mids, Origins, Me, IsHub, Revoked, HeldDedup, HeldFullKeepsUnseen, TopicFull, AckAfterStore, Gather, EvictGuard, LogTrack, Stamps, Sizes, MaxNow, MaxLife, Paths, AckById, Bodies, KeepPrint, DueOnly
+          Mids, Origins, Me, IsHub, Revoked, HeldDedup, HeldFullKeepsUnseen, TopicFull, AckAfterStore, Gather, EvictGuard, LogTrack, Stamps, Sizes, MaxNow, MaxLife, Paths, AckById, Bodies, KeepPrint, DueOnly, GraftStored
 
 N == INSTANCE BroadcastNodeOps
 
-VARIABLES n, now, life, cnt, rec, capd, ep, acct, outs, dls, last, ackd, lm, retryLost, undueTaken
-vars == <<n, now, life, cnt, rec, capd, ep, acct, outs, dls, last, ackd, lm, retryLost, undueTaken>>
+VARIABLES n, now, life, cnt, rec, capd, ep, acct, outs, dls, last, ackd, lm, retryLost, undueTaken, graftLost
+vars == <<n, now, life, cnt, rec, capd, ep, acct, outs, dls, last, ackd, lm, retryLost, undueTaken, graftLost>>
 
 \* lm: the message of the last step when it was acknowledged; no message otherwise
 NoMsg == [none |-> TRUE]
@@ -63,7 +65,7 @@ Msgs == [mid : Mids, origin : Origins, ts : Stamps, kind : {"good", "badhead", "
 
 Init == /\ n = N!NodeInit(0) /\ now = 0 /\ life = 0 /\ cnt = [m \in Mids |-> 0] /\ rec = [m \in Mids |-> 0] /\ capd = [m \in Mids |-> FALSE] /\ ep = [m \in Mids |-> 0]
         /\ acct = {} /\ outs = <<>> /\ dls = <<>> /\ last = "init" /\ ackd = 0 /\ lm = NoMsg
-        /\ retryLost = FALSE /\ undueTaken = FALSE
+        /\ retryLost = FALSE /\ undueTaken = FALSE /\ graftLost = FALSE
 
 \* the ghosts: when an id was last recorded in the dedupe set, and whether the set dropped it early (while younger
 \* than TTL, to make room)
@@ -80,13 +82,13 @@ Ep(old, new) == [m \in Mids |-> IF NewRec(old, new, m) THEN ep[m] + 1 ELSE ep[m]
 Count(dl) == [m \in Mids |-> cnt[m] + Cardinality({i \in 1..Len(dl) : dl[i] = m})]
 
 \* the ghosts retryLost and undueTaken become TRUE (and stay) in a step that broke RetryAcked or UndueDuplicate
-ApplyG(r, what, msg, lost, taken) ==
+ApplyG(r, what, msg, lost, taken, gl) ==
     /\ n' = N!Tidy(r.n) /\ outs' = r.outs /\ dls' = r.dl /\ cnt' = Count(r.dl) /\ rec' = Rec(n, r.n) /\ capd' = Cap(n, r.n) /\ ep' = Ep(n, r.n)
     /\ acct' = acct \union r.acc /\ last' = what /\ ackd' = r.ack /\ lm' = IF r.ack > 0 THEN msg ELSE NoMsg
-    /\ retryLost' = (retryLost \/ lost) /\ undueTaken' = (undueTaken \/ taken)
+    /\ retryLost' = (retryLost \/ lost) /\ undueTaken' = (undueTaken \/ taken) /\ graftLost' = (graftLost \/ gl)
     /\ UNCHANGED <<now, life>>
 
-Apply(r, what, msg) == ApplyG(r, what, msg, FALSE, FALSE)
+Apply(r, what, msg) == ApplyG(r, what, msg, FALSE, FALSE, FALSE)
 
 \* a PUB or FANP at a hub is due an acknowledgement
 Due(t) == IsHub /\ t \in {"PUB", "FANP"}
@@ -96,7 +98,9 @@ TakenOut(r) == \E i \in 1..Len(r.outs) : r.outs[i].k = "Rejected" /\ r.outs[i].w
 Msg == \E t \in Paths, b \in BOOLEAN, m \in Msgs :
     LET r == N!OnMsg(n, now, now, t, b, m)
         retry == Due(t) /\ N!IsDup(n, m.mid, now) /\ N!Same(n, m)
-    IN ApplyG(r, IF m.kind = "good" THEN "msg" ELSE "garbage", m, retry /\ r.ack = 0, TakenOut(r) /\ ~Due(t))
+        noPrint == Due(t) /\ m.kind = "graft" /\ N!IsDup(n, m.mid, now) /\ n.store[m.mid] = N!NoM
+    IN ApplyG(r, IF m.kind = "good" THEN "msg" ELSE "garbage", m, retry /\ r.ack = 0, TakenOut(r) /\ ~Due(t),
+              noPrint /\ (r.ack > 0 \/ ~TakenOut(r)))
 
 Timer == Apply(N!OnTimer(n, now), "timer", 0)
 
@@ -112,14 +116,20 @@ Tick == /\ now < MaxNow
         /\ (N!PollTimeout(n) = N!NoT \/ now < N!PollTimeout(n))
         /\ now' = now + 1
         /\ outs' = <<>> /\ dls' = <<>> /\ last' = "tick" /\ ackd' = 0 /\ lm' = NoMsg
-        /\ UNCHANGED <<n, life, cnt, rec, capd, ep, acct, retryLost, undueTaken>>
+        /\ UNCHANGED <<n, life, cnt, rec, capd, ep, acct, retryLost, undueTaken, graftLost>>
 
 Restart == /\ life < MaxLife
            /\ n' = N!NodeInit(now) /\ life' = life + 1 /\ cnt' = [m \in Mids |-> 0] /\ rec' = [m \in Mids |-> 0] /\ capd' = [m \in Mids |-> FALSE] /\ ep' = [m \in Mids |-> 0]
-           /\ acct' = {} /\ outs' = <<>> /\ dls' = <<>> /\ last' = "restart" /\ ackd' = 0 /\ lm' = NoMsg /\ UNCHANGED <<now, retryLost, undueTaken>>
+           /\ acct' = {} /\ outs' = <<>> /\ dls' = <<>> /\ last' = "restart" /\ ackd' = 0 /\ lm' = NoMsg /\ UNCHANGED <<now, retryLost, undueTaken, graftLost>>
+
+\* the hub publishes a message of its own (publish.rs): the id is recorded, then the log stores the message or, when it
+\* is over the ring, refuses it, which leaves the id known with no print held
+Own == IsHub /\ \E m \in Msgs : m.kind = "good" /\ m.origin = Me /\ ~N!IsDup(n, m.mid, now) /\ Apply(N!Own(n, now, now, m), "own", m)
 
 Next == Msg \/ Timer \/ Answer \/ Floors \/ Tick \/ Restart
 Spec == Init /\ [][Next]_vars
+\* the hub also publishes its own messages (the configs ending in _graft and _graftOld)
+SpecOwn == Init /\ [][Next \/ Own]_vars
 
 (* ---------------------------- the checked properties ---------------------------- *)
 TypeOK == /\ n.phase \in {"never", "gathering", "done"} /\ life \in 0..MaxLife
@@ -184,4 +194,8 @@ RetryAcked == ~retryLost
 \* a copy due no acknowledgement is a plain duplicate: it is never refused as another message's, so no body is
 \* compared for it (DueOnly = FALSE is the witness)
 UndueDuplicate == ~undueTaken
+
+\* a graft due an acknowledgement for an id the hub is known to hold but holds no print for (its own id, which the
+\* log refused) is answered IdTaken and not acknowledged (GraftStored = FALSE is the witness)
+GraftTaken == ~graftLost
 =============================================================================

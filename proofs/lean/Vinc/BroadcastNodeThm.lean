@@ -20,7 +20,8 @@ projections, with the names of the TLA properties:
 * `ackOnlyStored`: a hub acknowledges only the very message it holds (same id, origin, timestamp and body; the id is
   in the log or the dedupe set, whose print carries the content; a different message under a known id is refused,
   `rival_refused`, and an exact retry is acknowledged after the log let it go, `retry_acked`; a graft of it, its id and signature
-  under another body, is acknowledged too, `graft_acked`, and stored never; a copy due no
+  under another body, is acknowledged too when the node holds a print for the id, `graft_acked`, and answered taken
+  when it holds none, `graft_taken`, and stored never; a copy due no
   acknowledgement compares nothing, `undue_duplicate`); `garbage_inert`: a frame that is not a good message
   changes nothing (`OnMsg_garbage`); `gather_ends`: the first timer past the wait ends the gathering.
 -/
@@ -160,7 +161,7 @@ theorem OnMsg_ack {p : Params} {N : Node} {now wall : Nat} {t : Frame} {b : Bool
         · left; exact (LContains_iff N.lg m.mid).1 h4
       · simp only [SameStored, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq] at hs
         show N.store m.mid = Print N m
-        rcases hs with ⟨hg, hst⟩ | hg
+        rcases hs with ⟨hg, hst⟩ | ⟨hg, _⟩
         · simp [Print, hg, hst]
         · simp [Print, hg]
     · have hs' : SameStored N m = false := by simpa using hs
@@ -236,13 +237,21 @@ theorem retry_acked {p : Params} {N : Node} {m : Msg} {ack : Nat} (hk : p.keepPr
   have hs : SameStored N m = true := by simp [SameStored, hg, hst]
   refine ⟨?_, ?_⟩ <;> simp [DupRes, hs, hk, hack]
 
-/-- A graft of the stored message (its id and signature, another body) due an acknowledgement is acknowledged like
-the message itself, after the log let it go as much as while it holds it; it is a duplicate, never stored (a known
-id changes no state, see `OnMsg_garbage`). -/
+/-- A graft of the stored message (its id and signature, another body) due an acknowledgement, for an id the node
+holds a print for, is acknowledged like the message itself, after the log let it go as much as while it holds it; it is
+a duplicate, never stored (a known id changes no state, see `OnMsg_garbage`). -/
 theorem graft_acked {p : Params} {N : Node} {m : Msg} {ack : Nat} (hk : p.keepPrint = true) (hack : 0 < ack)
-    (hg : m.kind = .graft) :
+    (hg : m.kind = .graft) (hst : (N.store m.mid).isSome = true) :
     (DupRes p N m ack).ack = ack ∧ (DupRes p N m ack).outs = [.rejected m.mid .duplicate] := by
-  have hs : SameStored N m = true := by simp [SameStored, hg]
+  have hs : SameStored N m = true := by simp [SameStored, hg, hst]
+  refine ⟨?_, ?_⟩ <;> simp [DupRes, hs, hk, hack]
+
+/-- A graft for a known id the node holds no print for (a hub's own id the log refused) is answered that the id is
+taken and is not acknowledged. -/
+theorem graft_taken {p : Params} {N : Node} {m : Msg} {ack : Nat} (hk : p.keepPrint = true) (hack : 0 < ack)
+    (hg : m.kind = .graft) (hn : N.store m.mid = none) :
+    (DupRes p N m ack).ack = 0 ∧ (DupRes p N m ack).outs = [.rejected m.mid .idTaken] := by
+  have hs : SameStored N m = false := by simp [SameStored, hg, hn]
   refine ⟨?_, ?_⟩ <;> simp [DupRes, hs, hk, hack]
 
 /-- A copy due no acknowledgement is a plain duplicate and compares nothing (`dueOnly`). -/
@@ -484,6 +493,7 @@ theorem AcpAnswer_cached {p : Params} {N : Node} {now id : Nat} {allow : Bool} {
 #audit_axioms Vinc.BroadcastNode.rival_refused
 #audit_axioms Vinc.BroadcastNode.retry_acked
 #audit_axioms Vinc.BroadcastNode.graft_acked
+#audit_axioms Vinc.BroadcastNode.graft_taken
 #audit_axioms Vinc.BroadcastNode.undue_duplicate
 #audit_axioms Vinc.BroadcastNode.garbage_inert
 #audit_axioms Vinc.BroadcastNode.gather_ends

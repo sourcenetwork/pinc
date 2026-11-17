@@ -397,10 +397,11 @@ def Print (N : Node) (m : Msg) : Option Content := if m.kind = .graft then N.sto
 
 /-- The print held for the id is the frame's: a message whose signature verifies, with the origin, timestamp and body
 the node stored under the id (the signature binds them, so another message has another print), or a graft of the
-stored message, whose signature is the stored one. A frame that fails the signature check otherwise never has the
-stored print. -/
+stored message, whose signature is the stored one (a graft for an id the node holds no print for is another message's:
+the code answers that the id is taken). A frame that fails the signature check otherwise never has the stored print. -/
 def SameStored (N : Node) (m : Msg) : Bool :=
-  (decide (m.kind = .good) && decide (N.store m.mid = some m.content)) || decide (m.kind = .graft)
+  (decide (m.kind = .good) && decide (N.store m.mid = some m.content)) ||
+    (decide (m.kind = .graft) && (N.store m.mid).isSome)
 
 /-- A known id: a copy due an acknowledgement (`0 < ack`) is compared with the print held for the id, while the log
 holds the id and, with `keepPrint`, after the log let it go. The same print is a duplicate that is acknowledged, a

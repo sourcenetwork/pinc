@@ -48,17 +48,20 @@
 (* IdTaken and no acknowledgement, after the log let the message go as     *)
 (* well as while it holds it. A copy due none is a plain duplicate and     *)
 (* compares nothing. A graft of the stored message carries the stored    *)
-(* print, so it is acknowledged like the message itself when due; it is   *)
-(* stored, forwarded and delivered never (its signature fails as a new     *)
-(* message). KeepPrint = FALSE (compare only while the id is logged),      *)
-(* DueOnly = FALSE (compare every copy) and AckById (acknowledge          *)
-(* any known id, the old rule) are the rules before the fix, kept as the   *)
-(* witnesses of BroadcastNode.                                             *)
+(* print, so it is acknowledged like the message itself when due; a graft  *)
+(* for an id the hub holds no print for (a hub's own id the log refused,   *)
+(* Own below) is answered IdTaken and not acknowledged; a graft is stored, *)
+(* forwarded and delivered never (its signature fails as a new message).   *)
+(* KeepPrint = FALSE (compare only while the id is logged), DueOnly =      *)
+(* FALSE (compare every copy), GraftStored = FALSE (a graft is            *)
+(* acknowledged whatever the hub holds) and AckById (acknowledge any known *)
+(* id, the old rule) are the rules before the fix, kept as the witnesses   *)
+(* of BroadcastNode.                                                       *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC
 
 CONSTANTS TTL, SeenCap, LogRing, LogCap, LogWin, FholdMax, HeldMax, ChecksMax, AcpCap, AcpMax, FloorWait, OldSlack,
-          Mids, Origins, Me, IsHub, Revoked, HeldDedup, HeldFullKeepsUnseen, TopicFull, AckAfterStore, Gather, EvictGuard, LogTrack, AckById, KeepPrint, DueOnly
+          Mids, Origins, Me, IsHub, Revoked, HeldDedup, HeldFullKeepsUnseen, TopicFull, AckAfterStore, Gather, EvictGuard, LogTrack, AckById, KeepPrint, DueOnly, GraftStored
 
 LG == INSTANCE BroadcastLogOps WITH Ring <- LogRing, Cap <- LogCap, Window <- LogWin, Track <- LogTrack
 
@@ -189,7 +192,16 @@ Content(m) == [origin |-> m.origin, ts |-> m.ts, body |-> m.body]
 \* another body) carries the print stored under its id; the other kinds carry none that is compared
 PrintOf(N, m) == IF m.kind = "graft" THEN N.store[m.mid] ELSE Content(m)
 \* the frame carries the print held for its id, and the signature it carries verifies against it
-Same(N, m) == (m.kind = "good" /\ N.store[m.mid] = Content(m)) \/ m.kind = "graft"
+\* (a graft for an id with no print held is another message's: GraftStored = FALSE is the rule before the fix)
+Same(N, m) == (m.kind = "good" /\ N.store[m.mid] = Content(m)) \/ (m.kind = "graft" /\ (~GraftStored \/ N.store[m.mid] # NoM))
+
+(* ---- publish.rs: the hub records its own message's id, then hub_store stores it or refuses it (a message over the
+   ring is LogFull), which leaves the id known with no print held ---- *)
+Own(N, now, wall, m) ==
+    LET r == HubStore([N EXCEPT !.seen = SInsert(N.seen, m.mid, now, TRUE).s], now, wall, FALSE, m)
+    IN IF \E i \in 1..Len(r.outs) : r.outs[i].k = "Stored"
+       THEN [r EXCEPT !.n.store = [@ EXCEPT ![m.mid] = Content(m)]]
+       ELSE r
 
 (* ---- msg.rs on_msg: a known id ---- *)
 \* a copy due an acknowledgement (ack = 1) is compared with the print held for the id, while the log holds the id and,
