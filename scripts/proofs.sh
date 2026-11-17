@@ -659,6 +659,10 @@ par run_tlc reply_path_one ReplyPath ReplyPath_one
 par witness_tlc reply_path_held ReplyPath ReplyPath_held ReplyTaken
 par witness_tlc reply_path_coalesced ReplyPath ReplyPath_coalesced Unique
 par witness_tlc reply_path_relay ReplyPath ReplyPath_relay RelayValid
+par run_tlc reply_path_moves ReplyPath ReplyPath_moves
+par witness_tlc reply_path_rank ReplyPath ReplyPath_rank RankRule
+par witness_tlc reply_path_escape ReplyPath ReplyPath_escape EscapeRule
+par witness_tlc reply_path_fall ReplyPath ReplyPath_fall FallRule
 par run_tlc timers Timers Timers
 par witness_tlc timers_close Timers Timers_close NoCloseSent
 par witness_tlc timers_nowake Timers Timers_nowake PollLeLife
