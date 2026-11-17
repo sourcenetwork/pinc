@@ -37,11 +37,13 @@ mod common;
 
 use std::collections::HashMap;
 
-use common::{Ev, Net, SEC, WALL0, ty};
+use common::{Ev, Net, SEC, WALL0, keypair, ty};
 use vinc_broadcast::consts::HELD_MAX;
 use vinc_broadcast::wire::{Head, MAX_HEAD};
-use vinc_broadcast::{Limits, Trace, topic_tag};
+use vinc_broadcast::{Limits, Trace, auth, topic_tag};
 use vinc_crypto::IdentityAlg;
+use vinc_crypto::identity::MAX_SIGNATURE_LEN;
+use vinc_wire::hlc::Hlc;
 
 /// Model time: units of 1/8 millisecond.
 fn units(ns: u64) -> u64 {
@@ -135,27 +137,31 @@ impl World {
                 continue;
             }
             let tl = usize::from(tl);
-            let (topic, rest) = (&b[6..6 + tl], &b[6 + tl..]);
-            let Ok((head, body)) = Head::parse(rest) else { continue };
-            let sig = self.id(K_SIG, head.sig);
-            if self.signed.iter().any(|(s, _)| *s == sig) {
-                continue;
-            }
-            let org = self.origin(head.origin);
-            assert_eq!(org, i, "only the origin signs");
-            self.signed.push((sig, org));
-            let (m, t, bd) = (
-                self.id(K_MID, &head.mid),
-                self.id(K_TOPIC, topic),
-                self.id(K_BODY, body),
-            );
-            let ts = head.ts.wall.saturating_sub(WALL0) * 8 + u64::from(head.ts.counter.min(7));
-            self.line(&format!(
-                "{{\"t\":\"bc\",\"op\":\"sign\",\"sig\":{sig},\"org\":{org},\"tid\":{t},\"mid\":{m},\"bid\":{bd},\
-             \"ts\":{ts},\"isb\":{}}}",
-                head.isb
-            ));
+            self.note_sign(i, &b[6..6 + tl], &b[6 + tl..]);
         }
+    }
+
+    /// Record the signing of the message `rest` of topic `topic` by node `i`, once.
+    fn note_sign(&mut self, i: usize, topic: &[u8], rest: &[u8]) {
+        let Ok((head, body)) = Head::parse(rest) else { return };
+        let sig = self.id(K_SIG, head.sig);
+        if self.signed.iter().any(|(s, _)| *s == sig) {
+            return;
+        }
+        let org = self.origin(head.origin);
+        assert_eq!(org, i, "only the origin signs");
+        self.signed.push((sig, org));
+        let (m, t, bd) = (
+            self.id(K_MID, &head.mid),
+            self.id(K_TOPIC, topic),
+            self.id(K_BODY, body),
+        );
+        let ts = head.ts.wall.saturating_sub(WALL0) * 8 + u64::from(head.ts.counter.min(7));
+        self.line(&format!(
+            "{{\"t\":\"bc\",\"op\":\"sign\",\"sig\":{sig},\"org\":{org},\"tid\":{t},\"mid\":{m},\"bid\":{bd},\
+             \"ts\":{ts},\"isb\":{}}}",
+            head.isb
+        ));
     }
 
     /// Hand a frame to node `to` and record what the machine did.
@@ -588,6 +594,56 @@ fn broadcast_trace() {
     w.run_until(2020 * SEC);
     w.frame(2, 1, ty::MEMBER_PUSH, &tp, &own1);
     w.run_until(2025 * SEC);
+    // A message the hub stored, a rival under its id, and a retry after the log let it go. The rival is another
+    // body signed by another origin under the same id: refused, no acknowledgement. The retry is the stored message
+    // again: acknowledged by the print kept in the dedupe set, though the log no longer holds it.
+    let (_, fresh) = w.capture(t, b"stored then evicted");
+    w.frame(0, 1, ty::PUB, &tp, &fresh);
+    assert!(
+        w.out.lines().last().unwrap().contains("\"ack\":1"),
+        "the stored message is acknowledged"
+    );
+    let (head, _) = Head::parse(&fresh).unwrap();
+    let ts = Hlc::new(head.ts.wall, head.ts.counter + 1);
+    let mut sig = [0u8; MAX_SIGNATURE_LEN];
+    let key = keypair(IdentityAlg::Ed25519, 3);
+    let n = auth::sign(&key, t, &head.mid, b"a rival body", ts, true, &mut sig).unwrap();
+    let id2 = key.node_id();
+    let mut rival = Vec::new();
+    Head {
+        mid: head.mid,
+        origin: &id2.bytes,
+        alg: IdentityAlg::Ed25519,
+        pk: &[],
+        sig: &sig[..n],
+        isb: true,
+        ts,
+    }
+    .write(12, &mut rival);
+    rival.extend_from_slice(b"a rival body");
+    w.note_sign(2, t, &rival);
+    w.frame(0, 2, ty::PUB, &tp, &rival);
+    assert!(
+        w.out.lines().last().unwrap().contains("\"ack\":0"),
+        "a rival under a taken id is not acknowledged"
+    );
+    let stored = w.net.nodes[0].t.log_len(t);
+    for k in 0..60u32 {
+        w.publish(1, t, format!("filler {k}").as_bytes());
+    }
+    // The 60 fillers did not all fit beside the stored message: the log let some go, the oldest first, and that
+    // message was the oldest.
+    let held = w.net.nodes[0].t.log_len(t);
+    assert!(
+        held < stored + 60,
+        "the log held {stored} before the fillers and holds {held} after: nothing was let go"
+    );
+    w.frame(0, 1, ty::PUB, &tp, &fresh);
+    assert!(
+        w.out.lines().last().unwrap().contains("\"ack\":1"),
+        "a retry after eviction is acknowledged"
+    );
+    w.run_until(2030 * SEC);
     assert!(w.out.lines().count() > 100);
     if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
         std::fs::create_dir_all(&dir).unwrap();
