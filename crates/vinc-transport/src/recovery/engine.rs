@@ -30,6 +30,8 @@ use super::{LONG_RTT, MAX_PACKET_NUMBER, MS, RecoveryError};
 
 /// The most paths one connection tracks.
 pub const MAX_PATHS: usize = 8;
+// The seen facts are the bits of a `u8`, one per slot.
+const _: () = assert!(MAX_PATHS <= u8::BITS as usize);
 /// The segment size of the window growth on every path but a fast direct one.
 const DEFAULT_SEGMENT: u64 = 1_200;
 /// A direct path whose minimum round trip is below this (2 ms) grows the window in units of its datagram size.
@@ -224,8 +226,8 @@ pub struct Recovery<const N: usize> {
     pub(super) path_rtt: [u64; MAX_PATHS],
     /// One bit per slot: a packet sent on the slot's path was acknowledged since the slot last changed hands.
     pub(super) path_seen: u8,
-    /// Per slot: when its path last left it, if one did; an acknowledgement of a packet sent then or before counts for
-    /// no path now in the slot.
+    /// Per slot: the packet number the next packet had when its path last left it, if one did; an acknowledgement of
+    /// a packet numbered below it counts for no path now in the slot.
     pub(super) path_left: [Option<u64>; MAX_PATHS],
     pub(super) active: u8,
     pub(super) flip_at: Option<u64>,
@@ -425,13 +427,14 @@ impl<const N: usize> Recovery<N> {
     /// any packet already sent on the slot for the path that takes it next. Does nothing for a slot out of range.
     pub fn forget_path(&mut self, path: u8) {
         let i = usize::from(path);
+        let boundary = self.next_pn();
         if let (Some(r), Some(left), Some(bit)) = (
             self.path_rtt.get_mut(i),
             self.path_left.get_mut(i),
             1u8.checked_shl(u32::from(path)),
         ) {
             *r = 0;
-            *left = Some(self.clock);
+            *left = Some(boundary);
             self.path_seen &= !bit;
         }
     }

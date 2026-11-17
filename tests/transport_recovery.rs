@@ -798,3 +798,19 @@ fn an_acknowledgement_of_packets_sent_before_the_path_left_its_slot_sets_neither
     assert!(rec.path_seen(2), "a packet sent on the new path did not mark the slot seen");
     assert!(rec.path_rtt(2).is_some());
 }
+
+#[test]
+fn a_packet_sent_on_the_new_path_at_the_instant_the_old_one_left_is_credited_to_the_slot() {
+    let mut rec = Rec::new(MSS);
+    for pn in 0..=3 {
+        rec.on_packet_sent(on_path(pn, pn * MS, 2)).unwrap();
+    }
+    rec.forget_path(2);
+    rec.on_packet_sent(on_path(4, 3 * MS, 2)).unwrap();
+    ack(&mut rec, 50 * MS, &[(4, 4)]);
+    assert!(
+        rec.path_seen(2),
+        "the new path's packet, sent at the instant of the change, was ignored"
+    );
+    assert_eq!(rec.path_rtt(2), Some(47 * MS));
+}

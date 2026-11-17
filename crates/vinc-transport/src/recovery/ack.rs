@@ -112,7 +112,7 @@ impl<const N: usize> Recovery<N> {
             let slot = usize::from(newest_path);
             let left = self.path_left.get(slot).copied().flatten();
             if let (Some(r), Some(bit)) = (self.path_rtt.get_mut(slot), 1u8.checked_shl(u32::from(newest_path)))
-                && left.is_none_or(|l| newest_time > l)
+                && left.is_none_or(|boundary| newest_pn >= boundary)
             {
                 *r = self.rtt.smoothed();
                 self.path_seen |= bit;
