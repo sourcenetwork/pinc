@@ -129,7 +129,7 @@ impl Gather {
             fhist: false,
             rfloor: None,
             ofloor: None,
-            fhold: Vec::new(),
+            fhold: Vec::with_capacity(FHOLD_MAX),
         }
     }
 
@@ -192,10 +192,13 @@ impl Topics {
         }
         self.floor_settle(h, now);
         if !self.gather.gathering() && !self.gather.fhold.is_empty() {
-            let held = core::mem::take(&mut self.gather.fhold);
-            for e in held {
+            // Held in the order they arrived; a settled gather holds no more, so the list does not change meanwhile.
+            let mut i = 0;
+            while let Some(e) = self.gather.fhold.get(i).copied() {
+                i += 1;
                 self.offer_held(h, now, e);
             }
+            self.gather.fhold.clear();
         }
     }
 
@@ -258,17 +261,17 @@ impl Topics {
         if self.gather.fhold.len() >= FHOLD_MAX || self.gather.fhold.iter().any(|x| x.mid == mid) {
             return;
         }
-        let mut data = self.take_buf();
-        if !Self::pack(&mut data, topic, head, body) {
-            self.give_buf(data);
+        // A message larger than a slot is not held, as when the set is full.
+        let Some((slot, len)) = self.holds.put(topic, head, body) else {
             return;
-        }
+        };
         self.gather.fhold.push(Held {
             mid,
             origin: *origin,
             hop: *hop,
             ts,
-            data,
+            slot,
+            len,
         });
         self.trace(|| Trace::Held {
             mid,

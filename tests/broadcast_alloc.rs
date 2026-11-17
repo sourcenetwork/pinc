@@ -290,3 +290,158 @@ fn an_envelope_is_built_in_one_allocation_and_verified_in_none() {
         assert_eq!(checked, 0, "{alg:?} verifying");
     }
 }
+
+/// The frames the hub pushes to the member for `n` messages the publisher signs.
+fn pushed_frames(alg: IdentityAlg, n: usize, keep_heads: bool) -> Vec<(u8, Vec<u8>, Vec<u8>)> {
+    let mut w = world(alg, keep_heads);
+    w.pub_h.keep_to = Some(w.hub_id);
+    for i in 0..n {
+        w.publisher.publish(&mut w.pub_h, w.now, T, &[i as u8; 100]).unwrap();
+    }
+    let sent: Vec<_> = w.pub_h.kept.iter().map(|f| parts(f)).collect();
+    w.hub_h.keep_to = Some(w.member_id);
+    for (ty_, topic, rest) in &sent {
+        w.hub.frame(&mut w.hub_h, w.now, &w.pub_id, *ty_, topic, rest);
+    }
+    w.hub_h.kept.iter().map(|f| parts(f)).collect()
+}
+
+/// Two messages wait for one access answer, which releases both: the allocations of that, after one earlier message
+/// went through the same steps so that the tables the check and its verdict use exist.
+fn access_hold(alg: IdentityAlg, keep_heads: bool) -> u64 {
+    let pushed = pushed_frames(alg, 3, keep_heads);
+    let mut w = world(alg, keep_heads);
+    let (t0, topic0, rest0) = &pushed[0];
+    w.member.frame(&mut w.member_h, w.now, &w.hub_id, *t0, topic0, rest0);
+    w.member.acp_answer(&mut w.member_h, w.now, 1, true);
+    assert_eq!(w.member_h.delivered, 1);
+    // The verdict lapsed: the next messages are held again.
+    let later = w.now + 31 * SEC;
+    let n = measure(|| {
+        for (ty_, topic, rest) in &pushed[1..] {
+            w.member.frame(&mut w.member_h, later, &w.hub_id, *ty_, topic, rest);
+        }
+        assert!(w.member.held_bytes() > 0, "both messages wait for the answer");
+        w.member.acp_answer(&mut w.member_h, later, 2, true);
+    })
+    .count();
+    assert_eq!(w.member_h.delivered, 3, "{alg:?} both held messages were delivered");
+    assert_eq!(w.member.held_bytes(), 0);
+    n
+}
+
+/// Two messages wait for the replay floors; the wait runs out and they are offered again, into the access hold: the
+/// allocations of holding and releasing them.
+fn floor_hold(alg: IdentityAlg, keep_heads: bool) -> u64 {
+    let pushed = pushed_frames(alg, 2, keep_heads);
+    let w = world(alg, keep_heads);
+    let cfg = Config {
+        me: w.member_id,
+        is_hub: false,
+        hubs: &[w.hub_id],
+        incarnation: 1 << 16,
+        trace: false,
+        limits: vinc_broadcast::Limits {
+            keep_heads,
+            ..vinc_broadcast::Limits::default()
+        },
+    };
+    let wall = 1_700_000_000_000;
+    let mut m = Topics::start(&cfg, Box::new(kp(alg, 2)), w.now, wall).unwrap();
+    let mut h = Sink {
+        wall,
+        ..Sink::default()
+    };
+    m.subscribe(&mut h, w.now, T).unwrap();
+    let n = measure(|| {
+        for (ty_, topic, rest) in &pushed {
+            m.frame(&mut h, w.now, &w.hub_id, *ty_, topic, rest);
+        }
+        assert!(m.held_bytes() > 0, "both messages wait for the floors");
+        m.on_timer(&mut h, w.now + 16 * SEC);
+    })
+    .count();
+    // The offered messages now wait for the access answer (its first verdict makes the table that holds it).
+    assert!(m.held_bytes() > 0);
+    m.acp_answer(&mut h, w.now + 16 * SEC, 1, true);
+    assert_eq!(h.delivered, 2, "{alg:?} both held messages were delivered");
+    assert_eq!(m.held_bytes(), 0);
+    n
+}
+
+#[test]
+fn a_held_and_released_message_allocates_nothing() {
+    for alg in [IdentityAlg::Ed25519, IdentityAlg::Hybrid] {
+        for keep_heads in [false, true] {
+            assert_eq!(
+                access_hold(alg, keep_heads),
+                0,
+                "{alg:?} heads {keep_heads}: the access hold"
+            );
+            assert_eq!(
+                floor_hold(alg, keep_heads),
+                0,
+                "{alg:?} heads {keep_heads}: the floor hold"
+            );
+        }
+    }
+}
+
+/// The bytes a node requests at start, and the resident memory it grows by.
+fn start_cost(limits: vinc_broadcast::Limits) -> (u64, i64) {
+    let key = kp(IdentityAlg::Ed25519, 1);
+    let cfg = Config {
+        me: key.node_id().bytes,
+        is_hub: false,
+        hubs: &[],
+        incarnation: 1 << 16,
+        trace: false,
+        limits,
+    };
+    let resident = || {
+        let s = std::fs::read_to_string("/proc/self/statm").unwrap();
+        s.split_whitespace().nth(1).unwrap().parse::<i64>().unwrap() * 4096
+    };
+    let r0 = resident();
+    let mut started = None;
+    let bytes = measure(|| started = Some(Topics::start(&cfg, Box::new(key), 0, 0).unwrap())).bytes;
+    let grown = resident() - r0;
+    drop(started);
+    (bytes, grown)
+}
+
+/// The hold slots are one block made at start and left unwritten: the bytes it asks for are the slots', and the
+/// resident memory does not grow by them.
+#[test]
+fn the_hold_slots_are_reserved_at_start_and_not_touched() {
+    use vinc_broadcast::consts::{FHOLD_MAX, HELD_MAX};
+    use vinc_broadcast::wire::MAX_HEAD;
+    for keep_heads in [false, true] {
+        let limits = |hold_bytes| vinc_broadcast::Limits {
+            keep_heads,
+            hold_bytes,
+            ..vinc_broadcast::Limits::default()
+        };
+        let (full, grown) = start_cost(limits(None));
+        let (empty, _) = start_cost(limits(Some(0)));
+        let slot = 1 + 255 + if keep_heads { MAX_HEAD } else { 0 } + 65_536;
+        // The slots and the stage that holds one entry while it is offered again.
+        let reserved = ((HELD_MAX + FHOLD_MAX + 1) * slot) as u64;
+        eprintln!("heads {keep_heads}: reserved {reserved} bytes, resident growth at start {grown}");
+        assert_eq!(full - empty, reserved, "heads {keep_heads}");
+        assert!(grown < 1 << 20, "heads {keep_heads}: the start touched {grown} bytes");
+    }
+    // The smallest configuration the limits allow: a body of one byte.
+    let tiny = vinc_broadcast::Limits {
+        max_body: 1,
+        log_bytes: MAX_HEAD + 1,
+        ..vinc_broadcast::Limits::default()
+    };
+    let (full, _) = start_cost(tiny);
+    let (empty, _) = start_cost(vinc_broadcast::Limits {
+        hold_bytes: Some(0),
+        ..tiny
+    });
+    eprintln!("smallest: reserved {} bytes", full - empty);
+    assert_eq!(full - empty, ((HELD_MAX + FHOLD_MAX + 1) * (1 + 255 + 1)) as u64);
+}

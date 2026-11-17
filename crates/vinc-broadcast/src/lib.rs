@@ -54,6 +54,8 @@ mod frames;
 #[cfg(feature = "alloc")]
 mod gap;
 #[cfg(feature = "alloc")]
+mod holds;
+#[cfg(feature = "alloc")]
 mod log;
 #[cfg(feature = "alloc")]
 mod msg;

@@ -144,3 +144,73 @@ fn an_answer_for_an_unknown_check_is_ignored() {
     answer(&mut net, 999, true);
     assert!(net.delivered(3).is_empty());
 }
+
+/// The slots of the hold are `hold_bytes / 320` bytes: a message whose entry (length byte, topic, body) is larger than
+/// that is not held. It takes the path of a full hold: the origin is still asked, the message is left unseen and the
+/// hub brings it again once there is a verdict, while a message that fits waits for the answer as usual.
+#[test]
+fn a_message_larger_than_a_slot_takes_the_full_path() {
+    use vinc_broadcast::consts::FHOLD_MAX;
+    use vinc_broadcast::{HoldWhy, Reject, Trace};
+    // A slot of 8 bytes: the topic's 3 bytes, their length byte and a body of 4.
+    let limits = vinc_broadcast::Limits {
+        hold_bytes: Some(8 * (HELD_MAX + FHOLD_MAX)),
+        ..vinc_broadcast::Limits::default()
+    };
+    let mut net = Net::with_limits(&[IdentityAlg::Ed25519; 4], 1, SEC, limits);
+    for i in 1..4 {
+        net.attach(i);
+    }
+    net.nodes[3].auto_acp = None;
+    net.subscribe(3, T);
+    let traces = |net: &mut Net| {
+        let mut v = Vec::new();
+        while let Some(t) = net.nodes[3].t.poll_trace() {
+            v.push(t);
+        }
+        v
+    };
+    traces(&mut net);
+
+    let small = net.publish(1, T, b"four");
+    let t = traces(&mut net);
+    assert!(
+        t.iter().any(|t| matches!(t, Trace::Held { why: HoldWhy::Acp, .. })),
+        "a message that fits is held"
+    );
+    assert!(!t.iter().any(|t| matches!(
+        t,
+        Trace::Rejected {
+            why: Reject::HeldFull,
+            ..
+        }
+    )));
+    let c = checks(&net);
+    answer(&mut net, c[0].0, true);
+    assert_eq!(net.delivered(3), vec![small]);
+
+    // The verdict lapses; a body of five bytes does not fit a slot.
+    net.run_until(net.now + 31 * SEC);
+    traces(&mut net);
+    let big = net.publish(1, T, b"fives");
+    let t = traces(&mut net);
+    assert!(
+        t.iter().any(|t| matches!(
+            t,
+            Trace::Rejected {
+                why: Reject::HeldFull,
+                ..
+            }
+        )),
+        "a message larger than a slot is refused as a full hold does: {t:?}"
+    );
+    assert!(!t.iter().any(|t| matches!(t, Trace::Held { .. })), "and is not held");
+    assert_eq!(checks(&net).len(), 2, "the origin is asked all the same");
+    assert!(!net.delivered(3).contains(&big));
+    let c = checks(&net);
+    answer(&mut net, c[1].0, true);
+    assert!(
+        net.delivered(3).contains(&big),
+        "the hub brings it again once the verdict is there"
+    );
+}

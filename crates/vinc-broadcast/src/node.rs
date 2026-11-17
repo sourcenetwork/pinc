@@ -17,8 +17,8 @@ use vinc_wire::hlc::Hlc;
 
 use crate::behind::Behind;
 use crate::consts::{
-    DEFAULT_LOG_BYTES, DEFAULT_MAX_BODY, DEFAULT_MAX_SUBSCRIBERS, DEFAULT_MAX_TOPICS, DEFAULT_REACH_BYTES, GAP_EVERY,
-    HAVE_MAX, MAX_TOPIC, QUEUE_CAP, SEEN_CAP,
+    CHECKS_MAX, DEFAULT_LOG_BYTES, DEFAULT_MAX_BODY, DEFAULT_MAX_SUBSCRIBERS, DEFAULT_MAX_TOPICS, DEFAULT_REACH_BYTES,
+    FHOLD_MAX, GAP_EVERY, HAVE_MAX, HELD_MAX, MAX_TOPIC, QUEUE_CAP, SEEN_CAP,
 };
 use crate::event::Trace;
 use crate::floors::{Gather, SentFloors};
@@ -51,6 +51,12 @@ pub struct Limits {
     /// application can keep a signed envelope. A message held for the replay floors or an access check then holds its
     /// head too. Off by default: nothing more is held or copied.
     pub keep_heads: bool,
+    /// The bytes reserved at start for the messages held for the replay floors or an access check, shared by the
+    /// slots of both holds ([`HELD_MAX`](crate::consts::HELD_MAX) plus [`FHOLD_MAX`](crate::consts::FHOLD_MAX) of
+    /// them): a slot is this divided by their sum. `None` makes every slot as large as the largest message
+    /// (`max_body`, and the head when heads are kept). A message whose entry is larger than a slot is not held: it
+    /// is refused as when the hold is full, and a repair brings it again.
+    pub hold_bytes: Option<usize>,
 }
 
 impl Default for Limits {
@@ -62,6 +68,7 @@ impl Default for Limits {
             max_subscribers: DEFAULT_MAX_SUBSCRIBERS,
             reach_bytes: DEFAULT_REACH_BYTES,
             keep_heads: false,
+            hold_bytes: None,
         }
     }
 }
@@ -70,6 +77,13 @@ impl Limits {
     /// The most bytes one frame can take: prefix, type, topic, head and body.
     pub(crate) const fn max_frame(&self) -> usize {
         4 + 2 + MAX_TOPIC + crate::wire::MAX_HEAD + self.max_body
+    }
+
+    /// The bytes of one hold slot.
+    fn hold_slot(&self) -> usize {
+        let largest = 1 + MAX_TOPIC + if self.keep_heads { crate::wire::MAX_HEAD } else { 0 } + self.max_body;
+        self.hold_bytes
+            .map_or(largest, |b| (b / (HELD_MAX + FHOLD_MAX)).min(largest))
     }
 
     fn valid(&self) -> bool {
@@ -288,19 +302,22 @@ pub(crate) struct Pending {
 }
 
 /// A message set aside until a decision arrives.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct Held {
     pub(crate) mid: [u8; 8],
     pub(crate) origin: NodeId,
     pub(crate) hop: NodeId,
     pub(crate) ts: Hlc,
-    /// `topic_len | topic | head | body`; the head is empty unless the node keeps heads.
-    pub(crate) data: Vec<u8>,
+    /// The slot of the hold table that has `topic_len | topic | head | body`; the head is empty unless the node
+    /// keeps heads.
+    pub(crate) slot: u16,
+    /// The bytes of that entry.
+    pub(crate) len: u32,
 }
 
 // A held message costs this much whether or not heads are kept: a new field here is paid by every node.
 #[cfg(target_pointer_width = "64")]
-const _: () = assert!(core::mem::size_of::<Held>() == 112);
+const _: () = assert!(core::mem::size_of::<Held>() == 96);
 
 /// The topic machine. See the module docs.
 // The `topics` table is the machine's namesake state.
@@ -331,6 +348,8 @@ pub struct Topics {
     pub(crate) checks: Vec<(u32, NodeId)>,
     pub(crate) next_check: u32,
     pub(crate) held: Vec<Held>,
+    /// The slots the bytes of `held` and of the floor hold live in.
+    pub(crate) holds: crate::holds::Holds,
     pub(crate) revoked: BTreeSet<NodeId>,
     pub(crate) sent: SentFloors,
     /// Hub: the subscribers that are behind in some topic (see [`Topic::behind`]).
@@ -428,9 +447,10 @@ impl Topics {
             unsent: 0,
             room_at: None,
             acp: BTreeMap::new(),
-            checks: Vec::new(),
+            checks: Vec::with_capacity(CHECKS_MAX),
             next_check: 1,
-            held: Vec::new(),
+            held: Vec::with_capacity(HELD_MAX),
+            holds: crate::holds::Holds::new(HELD_MAX + FHOLD_MAX, cfg.limits.hold_slot()),
             revoked: BTreeSet::new(),
             sent: SentFloors::default(),
             lagging: BTreeSet::new(),
@@ -584,21 +604,8 @@ impl Topics {
         self.topic(topic).is_some()
     }
 
-    /// Lay `topic_len | topic | head | body` into `out`, where `head` is empty unless the node keeps heads; false for a
-    /// topic over 255 bytes.
-    pub(crate) fn pack(out: &mut Vec<u8>, topic: &[u8], head: &[u8], body: &[u8]) -> bool {
-        let Ok(tl) = u8::try_from(topic.len()) else {
-            return false;
-        };
-        out.clear();
-        out.push(tl);
-        out.extend_from_slice(topic);
-        out.extend_from_slice(head);
-        out.extend_from_slice(body);
-        true
-    }
-
-    /// Split what [`Topics::pack`] laid out into the topic, the head and the body. The head is told from the body by
+    /// Split what [`Holds::put`](crate::holds::Holds::put) laid out (`topic_len | topic | head | body`) into the topic,
+    /// the head and the body. The head is told from the body by
     /// parsing it, which only a node that keeps heads has to do.
     pub(crate) fn unpack(keep_heads: bool, data: &[u8]) -> Option<(&[u8], &[u8], &[u8])> {
         let (&tl, rest) = data.split_first()?;
@@ -613,7 +620,7 @@ impl Topics {
 
     /// The bytes of the messages held for the replay floors or an access check, heads included.
     pub fn held_bytes(&self) -> usize {
-        self.held.iter().chain(&self.gather.fhold).map(|e| e.data.len()).sum()
+        self.held.iter().chain(&self.gather.fhold).map(|e| e.len as usize).sum()
     }
 
     /// A cleared buffer from the pool, or a new one.

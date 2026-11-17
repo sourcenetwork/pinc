@@ -23,6 +23,9 @@ use crate::log::HubLog;
 use crate::node::{Held, Topics};
 use crate::wire::{self, Head, ty};
 
+#[cfg(test)]
+mod tests;
+
 impl Topics {
     fn is_dup(&self, topic: &[u8], key: u64, now: Nanos) -> bool {
         self.topics
@@ -240,8 +243,9 @@ impl Topics {
         let verdict = self.acp.get(origin).copied().filter(|(_, exp)| *exp >= now);
         let holds = subscribed && !old && *origin != self.me && verdict.is_none();
         let already = self.held.iter().any(|e| e.mid == mid);
-        if holds && !already && self.held.len() >= HELD_MAX {
-            // No room to wait for the answer: ask, and leave the id unseen so the gap repair brings it again. The
+        let entry = 1 + topic.len() + head.len() + body.len();
+        if holds && !already && (self.held.len() >= HELD_MAX || !self.holds.fits(entry)) {
+            // No room (or no slot large enough) to wait for the answer: ask, and leave the id unseen so the gap repair brings it again. The
             // topic is noted, so the hub is asked for it as soon as there is room and not at the next periodic check.
             self.ask_check(h, origin, topic);
             self.note_reject(mid, Reject::HeldFull);
@@ -266,20 +270,16 @@ impl Topics {
             return;
         }
         // A copy that arrives after the dedupe set forgot the first, while the answer is still out, waits once.
-        if !already {
-            let mut data = self.take_buf();
-            if Self::pack(&mut data, topic, head, body) {
-                self.held.push(Held {
-                    mid,
-                    origin: *origin,
-                    hop: *hop,
-                    ts,
-                    data,
-                });
-                self.trace(|| Trace::Held { mid, why: HoldWhy::Acp });
-            } else {
-                self.give_buf(data);
-            }
+        if !already && let Some((slot, len)) = self.holds.put(topic, head, body) {
+            self.held.push(Held {
+                mid,
+                origin: *origin,
+                hop: *hop,
+                ts,
+                slot,
+                len,
+            });
+            self.trace(|| Trace::Held { mid, why: HoldWhy::Acp });
         }
         self.ask_check(h, origin, topic);
     }
@@ -297,14 +297,18 @@ impl Topics {
 
     /// Offer a message that was held for the floors, unless it arrived by another path meanwhile.
     pub(crate) fn offer_held<H: Host>(&mut self, h: &mut H, now: Nanos, e: Held) {
-        match Self::unpack(self.limits.keep_heads, &e.data) {
+        let Some(data) = self.holds.take_out(e.slot, e.len) else {
+            self.note_reject(e.mid, Reject::BadHead);
+            return;
+        };
+        match Self::unpack(self.limits.keep_heads, data.get(..e.len as usize).unwrap_or_default()) {
             Some((topic, head, body)) if !self.is_dup(topic, u64::from_le_bytes(e.mid), now) => {
                 self.offer(h, now, topic, e.mid, &e.origin, &e.hop, head, body, e.ts);
             }
             Some(_) => {}
             None => self.note_reject(e.mid, Reject::BadHead),
         }
-        self.give_buf(e.data);
+        self.holds.restage(data);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -350,13 +354,19 @@ impl Topics {
                 continue;
             }
             let e = self.held.remove(i);
-            if allow {
-                match Self::unpack(self.limits.keep_heads, &e.data) {
-                    Some((topic, head, body)) => self.deliver(h, topic, e.mid, &e.origin, &e.hop, head, body),
-                    None => self.note_reject(e.mid, Reject::BadHead),
-                }
+            if !allow {
+                self.holds.give(e.slot);
+                continue;
             }
-            self.give_buf(e.data);
+            let Some(data) = self.holds.take_out(e.slot, e.len) else {
+                self.note_reject(e.mid, Reject::BadHead);
+                continue;
+            };
+            match Self::unpack(self.limits.keep_heads, data.get(..e.len as usize).unwrap_or_default()) {
+                Some((topic, head, body)) => self.deliver(h, topic, e.mid, &e.origin, &e.hop, head, body),
+                None => self.note_reject(e.mid, Reject::BadHead),
+            }
+            self.holds.restage(data);
         }
         if self.held.len() < HELD_MAX {
             self.ask_refused(h);
