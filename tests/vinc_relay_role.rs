@@ -35,6 +35,8 @@ use vinc_common::{ECHO, eventually, serve_conn, within};
 const RELAY_ADDR: &str = "10.0.0.1:7000";
 const A_ADDR: &str = "10.0.0.2:7001";
 const B_ADDR: &str = "10.0.0.3:7002";
+/// Where B appears from after its NAT rebinds it.
+const B_MOVED: &str = "10.0.0.4:7002";
 
 fn addr(s: &str) -> SocketAddr {
     s.parse().unwrap()
@@ -44,6 +46,8 @@ fn addr(s: &str) -> SocketAddr {
 struct Net {
     inbox: RefCell<HashMap<SocketAddr, Sender<(Vec<u8>, SocketAddr)>>>,
     cut: RefCell<HashSet<(SocketAddr, SocketAddr)>>,
+    /// Addresses a NAT rebound: what the owner sends from `old` arrives from the new address.
+    moved: RefCell<HashMap<SocketAddr, SocketAddr>>,
     lost: Cell<usize>,
 }
 
@@ -52,6 +56,7 @@ impl Net {
         Rc::new(Self {
             inbox: RefCell::new(HashMap::new()),
             cut: RefCell::new(HashSet::new()),
+            moved: RefCell::new(HashMap::new()),
             lost: Cell::new(0),
         })
     }
@@ -66,11 +71,21 @@ impl Net {
         self.cut.borrow_mut().extend([(a, b), (b, a)]);
     }
 
+    /// The owner of `old` is rebound to `new`: it still receives on its socket, and the others see it at `new`.
+    fn rebind(&self, old: SocketAddr, new: SocketAddr) {
+        let tx = self.inbox.borrow().get(&old).cloned();
+        if let Some(tx) = tx {
+            self.inbox.borrow_mut().insert(new, tx);
+        }
+        self.moved.borrow_mut().insert(old, new);
+    }
+
     fn send(&self, from: SocketAddr, to: SocketAddr, pkt: &[u8]) {
         if self.cut.borrow().contains(&(from, to)) {
             self.lost.set(self.lost.get() + 1);
         } else if let Some(tx) = self.inbox.borrow().get(&to) {
-            let _ = tx.try_send((pkt.to_vec(), from));
+            let seen = self.moved.borrow().get(&from).copied().unwrap_or(from);
+            let _ = tx.try_send((pkt.to_vec(), seen));
         }
     }
 }
@@ -127,6 +142,18 @@ fn member(
     relay: Relay,
     to_relay: Sender<(Pipe, CarrierKind)>,
 ) -> Endpoint<impl Hosted> {
+    member_with(net, at, seed, relay, to_relay, Rc::new(Cell::new(true)))
+}
+
+/// As [`member`]; while `carrier_up` is false the member cannot open a carrier.
+fn member_with(
+    net: Rc<Net>,
+    at: SocketAddr,
+    seed: u8,
+    relay: Relay,
+    to_relay: Sender<(Pipe, CarrierKind)>,
+    carrier_up: Rc<Cell<bool>>,
+) -> Endpoint<impl Hosted> {
     let rx = net.attach(at);
     let n = net;
     vinc_common::builder()
@@ -137,6 +164,9 @@ fn member(
         .local_addr(at)
         .carriers(
             async move |_relay: &Relay, kind: CarrierKind| -> io::Result<Pipe> {
+                if !carrier_up.get() {
+                    return Err(broken());
+                }
                 let (mine, theirs) = Pipe::pair();
                 to_relay.send((theirs, kind)).await.map_err(|_| broken())?;
                 Ok(mine)
@@ -225,6 +255,7 @@ struct Rig<R: Hosted, A: Hosted, B: Hosted> {
     relay: Endpoint<R>,
     a: Endpoint<A>,
     b: Endpoint<B>,
+    b_carrier_up: Rc<Cell<bool>>,
 }
 
 fn drive<H: Hosted + 'static>(ep: &Endpoint<H>) {
@@ -247,7 +278,15 @@ fn rig(apart: bool) -> Rig<impl Hosted + 'static, impl Hosted + 'static, impl Ho
         .with_udp(addr(RELAY_ADDR))
         .with_tcp(addr(RELAY_ADDR));
     let a = member(Rc::clone(&net), addr(A_ADDR), 1, known, to_relay.clone());
-    let b = member(Rc::clone(&net), addr(B_ADDR), 2, known, to_relay);
+    let b_carrier_up = Rc::new(Cell::new(true));
+    let b = member_with(
+        Rc::clone(&net),
+        addr(B_ADDR),
+        2,
+        known,
+        to_relay,
+        Rc::clone(&b_carrier_up),
+    );
     drive(&relay);
     drive(&a);
     drive(&b);
@@ -258,7 +297,13 @@ fn rig(apart: bool) -> Rig<impl Hosted + 'static, impl Hosted + 'static, impl Ho
         }
     })
     .detach();
-    Rig { net, relay, a, b }
+    Rig {
+        net,
+        relay,
+        a,
+        b,
+        b_carrier_up,
+    }
 }
 
 /// The next message of `ep` within `ms`, skipping the other events.
@@ -437,6 +482,53 @@ async fn the_relay_reports_a_carrier_that_closes_and_ends_one_on_request() {
             up && down,
             "the relay's events name the carriers that came up and the one it ended"
         );
+    })
+    .await;
+}
+
+/// Wait up to `secs` for `f` to hold of the relay's counters; a miss prints them.
+async fn settle<R: Hosted + 'static>(relay: &Endpoint<R>, secs: u64, what: &str, f: fn(&vinc::relay::Stats) -> bool) {
+    let end = Instant::now() + Duration::from_secs(secs);
+    let mut wait = Duration::from_millis(1);
+    loop {
+        let s = relay.relay_stats().expect("the endpoint has the relay role");
+        if f(&s) {
+            return;
+        }
+        assert!(Instant::now() < end, "not reached in {secs} s: {what}: {s:?}");
+        nuclei::time::sleep(wait).await;
+        wait = (wait * 2).min(Duration::from_millis(100));
+    }
+}
+
+/// A message held for a sleeping member goes out when the member's route validates after its return.
+#[nuclei::test]
+async fn mail_held_for_a_member_that_returns_on_an_unvalidated_route_arrives_when_the_route_validates() {
+    let rig = rig(true);
+    within(120, async {
+        both_carriers_open(&rig).await;
+        // B holds a UDP session to the relay's hub, then suspends: the relay keeps its sleep notice
+        assert!(rig.b.join(b"relay/topic", &[]).await.unwrap());
+        settle(&rig.relay, 30, "the hub holds B's session", |s| s.hub_sessions >= 1).await;
+        rig.b_carrier_up.set(false);
+        rig.b.suspend().await;
+        settle(&rig.relay, 30, "B's carrier closed", |s| s.carriers == 1).await;
+        // the relay tunnels to a member it heard within the freshness bound (20 s): wait it out so the mail is held
+        nuclei::time::sleep(Duration::from_secs(21)).await;
+        // A dials B: its first packets are held at the relay
+        let (a, b_id) = (rig.a.clone(), rig.b.id());
+        nuclei::spawn_local(async move {
+            let _ = a.connect(b_id, ECHO).await;
+        })
+        .detach();
+        settle(&rig.relay, 30, "the relay holds mail for B", |s| s.mailbox_members == 1).await;
+        // B returns from a rebound address (an unvalidated route) and cannot open a carrier
+        rig.net.rebind(addr(B_ADDR), addr(B_MOVED));
+        rig.b.resume(false).await;
+        settle(&rig.relay, 60, "the held mail is handed over", |s| {
+            s.mailbox.delivered >= 1 && s.mailbox_members == 0
+        })
+        .await;
     })
     .await;
 }
