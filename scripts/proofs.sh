@@ -320,6 +320,8 @@ par run_tlc connect_relay ConnectRelay ConnectRelay
 par run_tlc connect_relay_sleep ConnectRelay ConnectRelay_sleep
 par run_tlc connect_relay_ready ConnectRelay ConnectRelay_ready
 par witness_tlc connect_relay_refused ConnectRelay ConnectRelay_refused NoRefusal
+par witness_tlc connect_relay_wheard ConnectRelay ConnectRelay_wheard HeardDelivers
+par witness_tlc connect_relay_wfirst ConnectRelay ConnectRelay_wfirst HeldFirst
 par run_tlc connect_records ConnectRecords ConnectRecords
 par run_tlc connect_records_own ConnectRecords ConnectRecords_own
 par witness_tlc connect_records_nocheck ConnectRecords ConnectRecords_nocheck OnlyGood
