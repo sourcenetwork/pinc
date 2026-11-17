@@ -56,8 +56,8 @@ structure CF where
   window : Nat := 1
   sessT : Nat := 1
   age : Nat := 1
-  /-- The rule before the release of held messages: nothing is released when a packet is heard and packets overtake
-  held messages (only the witnesses of the TLA+ model use it). -/
+  /-- The rule before the release of held messages: nothing is released when a packet is heard (only the witnesses of
+  the TLA+ model use it). -/
   old : Bool := false
 
 def mc (cf : CF) : ConnectMailbox.Cfg := ⟨52, cf.MB, cf.MN, cf.age, maxPkt⟩
@@ -212,19 +212,20 @@ def handOver (cf : CF) (r : RS) (now node : Nat) (op : Bool) (m : ConnectMailbox
   if op then deliverClient cf r now m.src node m.flag m.len false
   else (r, (tunnelDown r now node m.src m.flag m.len).1, (tunnelDown r now node m.src m.flag m.len).2)
 
-/-- `deliver_held`: look at the oldest message, hand it over, remove it only if it was handed over; the pass stops at the
-first message that cannot be handed over, which stays held and is counted once. -/
+/-- `deliver_held`: look for the oldest message that fits the route (a longer one is stepped over and stays held), hand
+it over, remove it only if it was handed over; the pass stops at the first hand-over the host refuses, which stays held
+with those behind it and is counted once. A message that does not fit is no refusal. -/
 def dhLoop (cf : CF) (now node : Nat) (op : Bool) (fit : Nat) : Nat → RS → Ef → RS × Ef
   | 0, r, acc => (r, acc)
   | fuel + 1, r, acc =>
-    let l := ConnectMailbox.look (mc cf) now r.mb node fit
+    let l := ConnectMailbox.lookFit (mc cf) now r.mb node fit
     let r1 := { r with mb := l.1 }
     match l.2 with
     | none => (r1, acc)
     | some m =>
       let sent := handOver cf r1 now node op m
       if sent.2.1 then
-        dhLoop cf now node op fit fuel { sent.1 with mb := ConnectMailbox.remove (mc cf) sent.1.mb node m.seq }
+        dhLoop cf now node op fit fuel { sent.1 with mb := ConnectMailbox.removeSeq (mc cf) sent.1.mb node m.seq }
           (acc ++ sent.2.2 ++ [[.s "t", .s "mdeliv", .n node, .n m.seq]])
       else (sent.1, acc ++ sent.2.2 ++ [rejE "notunnel" node])
 
@@ -239,34 +240,27 @@ def deliverHeld (cf : CF) (r : RS) (now node : Nat) : RS × Ef :=
     if !op && !fr then (r, [])
     else dhLoop cf now node op (if op then maxPkt else maxTun - 35) (cf.MB + 1) r []
 
-/-- `release_held`: a member that holds nothing returns at once; one whose session is not fresh or whose route the host
-reports not ready keeps its messages and nothing is emitted; otherwise the pass of `deliverHeld` runs. The flag says
-messages remain held (as pending, as the code counts them). With `cf.old` nothing is released. -/
-def releaseHeld (cf : CF) (r : RS) (now node : Nat) : RS × Ef × Bool :=
-  if cf.old || pendingCount r.mb node == 0 then (r, [], false)
-  else if !tunnelFresh r now node || !tunnelReady r node then (r, [], true)
-  else
-    ((deliverHeld cf r now node).1, (deliverHeld cf r now node).2,
-      pendingCount (deliverHeld cf r now node).1.mb node != 0)
+/-- `release_held`, called by `udp_heard`: a member that holds nothing returns at once; one whose session is not fresh
+or whose route the host reports not ready keeps its messages and nothing is emitted; otherwise the pass of `deliverHeld`
+runs. With `cf.old` nothing is released. -/
+def releaseHeld (cf : CF) (r : RS) (now node : Nat) : RS × Ef :=
+  if cf.old || pendingCount r.mb node == 0 then (r, [])
+  else if !tunnelFresh r now node || !tunnelReady r node then (r, [])
+  else deliverHeld cf r now node
 
 /-- The answer `o` behind the effects `ef` of an earlier step of the same call. -/
 def Out.after (ef : Ef) (o : Out) : Out := { o with ef := ef ++ o.ef }
 
-/-- After the carrier, a destination that holds messages is released first and the packet is held behind what remains,
-so nothing overtakes a held message. -/
+/-- Whatever the destination holds, a packet goes down its carrier, or down its UDP session, or is held while its sleep
+mark lasts, or is forwarded to its home (or refused); routing starts no release. -/
 def route (cf : CF) (r : RS) (now src dst flag len : Nat) (origin : Origin) : Out :=
   if dst == cf.me then okOut r (localEf src cf.me len)
   else if (deliverClient cf r now src dst flag len true).2.1 then
     okOut (deliverClient cf r now src dst flag len true).1 (deliverClient cf r now src dst flag len true).2.2
-  else if (releaseHeld cf r now dst).2.2 then
-    (hold cf (releaseHeld cf r now dst).1 now dst src flag len).after (releaseHeld cf r now dst).2.1
-  else if (tunnelDown (releaseHeld cf r now dst).1 now dst src flag len).1 then
-    okOut (releaseHeld cf r now dst).1
-      ((releaseHeld cf r now dst).2.1 ++ (tunnelDown (releaseHeld cf r now dst).1 now dst src flag len).2)
-  else if (aget (releaseHeld cf r now dst).1.sl dst).isSome then
-    (hold cf (releaseHeld cf r now dst).1 now dst src flag len).after (releaseHeld cf r now dst).2.1
-  else if origin == .peer then (fail (releaseHeld cf r now dst).1 "noroute" src).after (releaseHeld cf r now dst).2.1
-  else (forward cf (releaseHeld cf r now dst).1 now src dst flag len).after (releaseHeld cf r now dst).2.1
+  else if (tunnelDown r now dst src flag len).1 then okOut r (tunnelDown r now dst src flag len).2
+  else if (aget r.sl dst).isSome then hold cf r now dst src flag len
+  else if origin == .peer then fail r "noroute" src
+  else forward cf r now src dst flag len
 
 def carrierOpened (cf : CF) (r : RS) (now node : Nat) : Out :=
   let id := r.ns
@@ -388,7 +382,7 @@ messages are released. A full table is reported (`cf.old`: silently, with no rel
 def udpHeard (cf : CF) (r : RS) (now node : Nat) : Out :=
   if acan r.udp node cf.C then
     let rh := releaseHeld cf { r with udp := aput r.udp node now } now node
-    okOut rh.1 rh.2.1
+    okOut rh.1 rh.2
   else if cf.old then ⟨r, "full", []⟩ else fail r "full" node
 
 def udpGone (r : RS) (node : Nat) : RS := { r with udp := adel r.udp node }

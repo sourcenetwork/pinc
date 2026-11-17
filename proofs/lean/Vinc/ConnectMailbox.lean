@@ -261,6 +261,29 @@ def remove (c : Cfg) (mb : MB) (k seq : Nat) : MB :=
       else mb
     | [] => mb
 
+/-- The step of a pass that steps over a message too long for the route: the oldest live message whose body is at most
+`mx`, which may stand behind older longer ones. Nothing leaves but what expired (`ConnectRelayOps.tla` `LookFit`). -/
+def lookFit (c : Cfg) (now : Nat) (mb : MB) (k mx : Nat) : MB × Option Msg :=
+  match lookup k mb.held with
+  | none => (mb, none)
+  | some h =>
+    let e := expire c now h
+    ({ held := if e.1.count = 0 then del k mb.held else put k e.1 mb.held, seq := mb.seq,
+       st := { mb.st with expired := mb.st.expired + e.2 } }, e.1.q.find? (fun m => decide (m.len ≤ mx)))
+
+/-- The message numbered `seq` leaves wherever it stands in the member's queue, counted delivered; the ring offset is
+left as it is (`RemoveSeq`). -/
+def removeSeq (c : Cfg) (mb : MB) (k seq : Nat) : MB :=
+  match lookup k mb.held with
+  | none => mb
+  | some h =>
+    match h.q.find? (fun m => m.seq == seq) with
+    | none => mb
+    | some m =>
+      let h2 : Held := ⟨h.q.filter (fun x => x.seq != seq), h.head, h.used - (c.H + m.len), h.count - 1⟩
+      { held := if h2.count = 0 then del k mb.held else put k h2 mb.held, seq := mb.seq,
+        st := { mb.st with delivered := mb.st.delivered + 1 } }
+
 def sweepL (c : Cfg) (now : Nat) : List (Nat × Held) → List (Nat × Held) × Nat
   | [] => ([], 0)
   | (k, h) :: r =>

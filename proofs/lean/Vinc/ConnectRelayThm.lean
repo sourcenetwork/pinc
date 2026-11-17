@@ -14,9 +14,9 @@ for every state and every call.
 * The byte quota: `charge_ok` (an accepted frame leaves the window total at most the quota), `charge_reset` (the window
   restarts only after the configured length), `charge_drop` (a frame over the quota is not counted).
 * The release of held messages: `heard_idle` (a heard packet from a member that holds nothing emits nothing),
-  `heard_unready_quiet` (from a member the host reports not ready it emits nothing and keeps the mailbox), `held_first`
-  (a packet for a member that still holds messages after its release is held behind them: it is never tunnelled ahead
-  of them and never answered NoRoute).
+  `heard_unready_quiet` (from a member the host reports not ready it emits nothing and keeps the mailbox); routing
+  starts no release, so `forwarded` (a packet from a carrier or a UDP session for a member that is not asleep, has no
+  carrier and no ready route here and is homed at a peer relay is forwarded there, whatever its mailbox holds).
 * The hub tunnel: `tunnel_spec` (a datagram goes down a UDP session only if it was heard less than 20 s ago and
   `35 + len <= 1452 - 28`), `tunnel_ready_spec` (and only if the host reports a validated direct route for the member),
   `spu_member` (an uploaded packet is accepted only from a validated member),
@@ -75,77 +75,9 @@ private theorem noPeer_hold (cf : CF) (r : RS) (a b c d f : Nat) : ∀ e ∈ (ho
   intro e he; unfold hold at he
   split at he <;> grind [okOut, routedE, rejE]
 
-private theorem noPeer_handOver (cf : CF) (r : RS) (now node : Nat) (op : Bool) (m : ConnectMailbox.Msg) :
-    ∀ e ∈ (handOver cf r now node op m).2.2, e.head? ≠ some (V.s "peer") := by
-  unfold handOver
-  split
-  · exact noPeer_deliver cf r _ _ _ _ _ _
-  · exact noPeer_tunnel r _ _ _ _ _
-
-/-- No hand-over of a pass is a relay frame: induction on the fuel of the loop. -/
-private theorem noPeer_dhLoop (cf : CF) (now node : Nat) (op : Bool) (fit : Nat) :
-    ∀ (fuel : Nat) (r : RS) (acc : Ef), (∀ e ∈ acc, e.head? ≠ some (V.s "peer")) →
-      ∀ e ∈ (dhLoop cf now node op fit fuel r acc).2, e.head? ≠ some (V.s "peer") := by
-  intro fuel
-  induction fuel with
-  | zero => intro r acc h; simpa [dhLoop] using h
-  | succ n ih =>
-    intro r acc h
-    cases hg : (ConnectMailbox.look (mc cf) now r.mb node fit).2 with
-    | none => simpa [dhLoop, hg] using h
-    | some m =>
-      have hn := noPeer_handOver cf { r with mb := (ConnectMailbox.look (mc cf) now r.mb node fit).1 } now node op m
-      by_cases hs : (handOver cf { r with mb := (ConnectMailbox.look (mc cf) now r.mb node fit).1 } now node op m).2.1 = true
-      · simp only [dhLoop, hg, hs, if_true]
-        apply ih
-        intro e he
-        simp only [List.mem_append, List.mem_singleton] at he
-        rcases he with (he | he) | rfl
-        · exact h e he
-        · exact hn e he
-        · simp
-      · simp only [dhLoop, hg, hs, if_false]
-        intro e he
-        rcases List.mem_append.1 he with he | he
-        · rcases List.mem_append.1 he with he | he
-          · exact h e he
-          · exact hn e he
-        · simp [rejE] at he
-          subst he
-          simp
-
-private theorem noPeer_deliverHeld (cf : CF) (r : RS) (now node : Nat) :
-    ∀ e ∈ (deliverHeld cf r now node).2, e.head? ≠ some (V.s "peer") := by
-  unfold deliverHeld
-  dsimp only
-  split
-  · simp
-  · split
-    · simp
-    · exact noPeer_dhLoop cf now node _ _ _ r [] (by simp)
-
-private theorem noPeer_release (cf : CF) (r : RS) (now node : Nat) :
-    ∀ e ∈ (releaseHeld cf r now node).2.1, e.head? ≠ some (V.s "peer") := by
-  unfold releaseHeld
-  split
-  · simp
-  · split
-    · simp
-    · exact noPeer_deliverHeld cf r now node
-
-private theorem noPeer_after (ef : Ef) (o : Out) (h1 : ∀ e ∈ ef, e.head? ≠ some (V.s "peer"))
-    (h2 : ∀ e ∈ o.ef, e.head? ≠ some (V.s "peer")) : ∀ e ∈ (o.after ef).ef, e.head? ≠ some (V.s "peer") := by
-  intro e he
-  simp only [Out.after, List.mem_append] at he
-  rcases he with he | he
-  · exact h1 e he
-  · exact h2 e he
-
-/-- A packet that arrived from a peer relay is never sent to a relay again: its routing, with the release of the
-messages held for its destination, produces no relay frame. -/
+/-- A packet that arrived from a peer relay is never sent to a relay again: its routing produces no relay frame. -/
 theorem no_reforward (cf : CF) (r : RS) (now src dst flag len : Nat) :
     ∀ e ∈ (route cf r now src dst flag len .peer).ef, e.head? ≠ some (V.s "peer") := by
-  have hr := noPeer_release cf r now dst
   intro e he
   unfold route at he
   split at he
@@ -153,17 +85,12 @@ theorem no_reforward (cf : CF) (r : RS) (now src dst flag len : Nat) :
   · split at he
     · exact noPeer_deliver cf r _ _ _ _ _ _ e (by simpa [okOut] using he)
     · split at he
-      · exact noPeer_after _ _ hr (fun e he => noPeer_hold cf _ _ _ _ _ _ e he) e he
+      · exact noPeer_tunnel _ _ _ _ _ _ e (by simpa [okOut] using he)
       · split at he
-        · simp only [okOut, List.mem_append] at he
-          rcases he with he | he
-          · exact hr e he
-          · exact noPeer_tunnel _ _ _ _ _ _ e he
+        · exact noPeer_hold cf r _ _ _ _ _ e he
         · split at he
-          · exact noPeer_after _ _ hr (fun e he => noPeer_hold cf _ _ _ _ _ _ e he) e he
-          · split at he
-            · exact noPeer_after _ _ hr (fun e he => noPeer_fail _ _ _ e he) e he
-            · simp at *
+          · exact noPeer_fail r _ _ e he
+          · simp at *
 
 /-- The reply route is used within 30 s only, and never to this relay. -/
 theorem back_window (cf : CF) (r : RS) (now dst : Nat) (h : backOf cf r now dst ≠ 0) :
@@ -312,26 +239,17 @@ theorem heard_unready_quiet (cf : CF) (r : RS) (now node : Nat) (hn : cf.old = f
   · simp [udpHeard, releaseHeld, hn, hk, h0, okOut]
   · simp [udpHeard, releaseHeld, hn, hk, h0, tunnelReady, h', h'', okOut]
 
-private theorem hold_res (cf : CF) (r : RS) (now dst src flag len : Nat) :
-    (hold cf r now dst src flag len).res = "ok" ∨ (hold cf r now dst src flag len).res = "mbrefused" := by
-  unfold hold
-  rcases hp : ConnectMailbox.push (mc cf) now r.mb dst src flag len with ⟨mb, res⟩
-  cases res <;> simp [okOut]
-
-/-- Nothing overtakes a held message: a packet for a member that still holds messages after the release is held behind
-them (the release's effects, then the hold), so it is neither tunnelled ahead of them nor answered NoRoute. -/
-theorem held_first (cf : CF) (r : RS) (now src dst flag len : Nat) (origin : Origin) (hd : dst ≠ cf.me)
-    (hc : (deliverClient cf r now src dst flag len true).2.1 = false) (hm : (releaseHeld cf r now dst).2.2 = true) :
+/-- Routing starts no release, so a packet for a member that is not asleep here, has no carrier and no ready route here
+and is homed at a peer relay (and did not come from one) is forwarded to that relay, whatever its mailbox holds. -/
+theorem forwarded (cf : CF) (r : RS) (now src dst flag len : Nat) (origin : Origin) (hd : dst ≠ cf.me)
+    (hc : (deliverClient cf r now src dst flag len true).2.1 = false)
+    (ht : (tunnelDown r now dst src flag len).1 = false) (hs : (aget r.sl dst).isSome = false) (ho : origin ≠ .peer)
+    (h0 : homeOf cf r now dst ≠ 0) (hm : homeOf cf r now dst ≠ cf.me) (hp : isPeer r (homeOf cf r now dst) = true) :
     route cf r now src dst flag len origin =
-        (hold cf (releaseHeld cf r now dst).1 now dst src flag len).after (releaseHeld cf r now dst).2.1 ∧
-      ((route cf r now src dst flag len origin).res = "ok" ∨ (route cf r now src dst flag len origin).res = "mbrefused") := by
-  have e : route cf r now src dst flag len origin =
-      (hold cf (releaseHeld cf r now dst).1 now dst src flag len).after (releaseHeld cf r now dst).2.1 := by
-    unfold route
-    simp [hd, hc, hm]
-  refine ⟨e, ?_⟩
-  rw [e]
-  exact hold_res _ _ _ _ _ _ _
+      okOut r [[.s "peer", .n (homeOf cf r now dst), .s "fwd", .n src, .n dst, .n flag, .n len],
+        routedE src dst "peer" len] := by
+  unfold route
+  simp [hd, hc, ht, hs, ho, forward, h0, hm, hp, okOut]
 
 /-! ### The sleep notice -/
 
