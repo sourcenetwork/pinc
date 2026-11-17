@@ -8,11 +8,16 @@
 (* and writes the graph (-dump dot,actionlabels,constrained); an edge is   *)
 (* one call of the endpoint with what it decides, as the label TLC gives   *)
 (* it:                                                                     *)
-(*   CallFlood(t, kind, len, ok)  a first flight of message type kind and  *)
+(*   CallFlood(t, kind, len, dec) a first flight of message type kind and  *)
 (*                                length len from a source and a message   *)
 (*                                id the endpoint has not seen, at time t; *)
-(*                                ok is whether it is admitted (a session  *)
-(*                                is made and counted);                    *)
+(*                                dec is the endpoint's record of its      *)
+(*                                decision (trace.rs HalfOpen admitted):   *)
+(*                                1 a session is made and counted, 0       *)
+(*                                refused (under the floor of its type, or *)
+(*                                at the cap), 3 dropped by the screening  *)
+(*                                of a short Initial or a Hello (a forgery *)
+(*                                that does not parse);                    *)
 (*   CallTimer(t)                 handle_timeout at time t: every          *)
 (*                                unauthenticated session at or past its   *)
 (*                                end is freed.                            *)
@@ -36,8 +41,9 @@
 (* of HalfOpenOps are covered by the trace check and HalfOpen.tla. Every   *)
 (* flight here is a forgery from a new source, so none resumes and none    *)
 (* finds a session under its id; a forged short Initial or Hello is        *)
-(* rejected or dropped without a session, so only a full Initial of its    *)
-(* floor or more makes one.                                                *)
+(* dropped without a session once it meets the floor of its own type (the  *)
+(* short Initial's and the Hello's differ) and refused under it, so only a *)
+(* full Initial of its floor or more makes one.                            *)
 (*                                                                         *)
 (* A model length is scaled to the code's: the real length is the real     *)
 (* floor of the type plus len - Floor(kind) (40 + len for a type with no   *)
@@ -72,17 +78,22 @@ Sum(f, S) == IF S = {} THEN 0 ELSE LET x == CHOOSE y \in S : TRUE IN f[x + 1] + 
 
 Init == g = [i \in 1..(Max(HT) + 1) |-> 0] /\ count = 0
 
-\* a forgery of a short Initial or a Hello is only rejected or dropped by the endpoint: no session
-Res(kind, len) == First(kind) /\ ~Forged(kind) /\ Admit(count, kind, len, FALSE, MAX, FULL, SHORT, HELLO)
-CallFlood(t, kind, len, ok) ==
-    /\ ok = Res(kind, len)
-    /\ g' = IF ok THEN [g EXCEPT ![t + 1] = @ + 1] ELSE g
-    /\ count' = IF ok THEN count + 1 ELSE count
+\* what the endpoint records of a flight: a type that starts nothing is not decided on (0); under the floor of its own
+\* type it is refused (0); a forgery of a short Initial or a Hello at its floor or more is dropped by the screening (3),
+\* no session; a full Initial is admitted below the cap (1) and refused at it (0)
+Dec(kind, len) ==
+    IF ~First(kind) \/ len < Floor(kind, FULL, SHORT, HELLO) THEN 0
+    ELSE IF Forged(kind) THEN 3
+    ELSE IF Admit(count, kind, len, FALSE, MAX, FULL, SHORT, HELLO) THEN 1 ELSE 0
+CallFlood(t, kind, len, dec) ==
+    /\ dec = Dec(kind, len)
+    /\ g' = IF dec = 1 THEN [g EXCEPT ![t + 1] = @ + 1] ELSE g
+    /\ count' = IF dec = 1 THEN count + 1 ELSE count
 CallTimer(t) ==
     LET h == [i \in 1..Len(g) |-> IF Expired(Born(i - 1), t) THEN 0 ELSE g[i]]
     IN g' = h /\ count' = Sum(h, HT)
 
-Next == \/ \E t \in HT, kind \in KINDS, len \in LENS, ok \in BOOLEAN : CallFlood(t, kind, len, ok)
+Next == \/ \E t \in HT, kind \in KINDS, len \in LENS, dec \in 0..3 : CallFlood(t, kind, len, dec)
         \/ \E t \in CT : CallTimer(t)
 Spec == Init /\ [][Next]_vars
 
@@ -90,5 +101,5 @@ Bound == \A t \in HT \ {0} : g[t + 1] <= GMAX
 \* the count is the number of sessions, at most the cap; every call of a state in the graph has a result in the set
 \* Next ranges over
 Capped == count = Sum(g, HT) /\ count <= MAX
-Complete == Capped /\ \A kind \in KINDS, len \in LENS : Res(kind, len) \in BOOLEAN
+Complete == Capped /\ \A kind \in KINDS, len \in LENS : Dec(kind, len) \in 0..3
 =============================================================================

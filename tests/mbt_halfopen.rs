@@ -7,7 +7,8 @@
 //! `MbtHalfOpen.cfg` and `halfopen_back.ndjson` from `MbtHalfOpen_back.cfg`. This test runs each path on a fresh
 //! endpoint: a `CallFlood` hands it a forged first flight (a message id and a source it has not seen) of the type and
 //! length the call names, a `CallTimer` runs its timers. After every call the endpoint's own record of the decision
-//! (the admission its trace ring holds: admitted or not, and the count it used) must be the model's, the count of
+//! (the admission its trace ring holds: made, refused or dropped by the screening, told apart by the floor of the type,
+//! and the count it used) must be the model's, the count of
 //! half-open sessions must be the model's, and the sessions it holds, read through the `trace` view `half_open_slot`
 //! and grouped by their creation time, must be the model's: every one unauthenticated and counted, as many made at
 //! each time as the model says. It stops at the first difference and names the file, the case, the step and the calls
@@ -204,9 +205,10 @@ fn run(file: &str, case: &MbtCase, init: &Json, (full, short, hello): (u64, u64,
     for (i, st) in case.steps.iter().enumerate() {
         let a = &st.args;
         match (st.call.as_str(), a.as_slice()) {
-            ("CallFlood", [t, kind, len, ok]) => {
+            ("CallFlood", [t, kind, len, dec]) => {
                 let now = map.time(num(t));
-                let (kind, ok) = (num(kind), ok.bool().unwrap());
+                let (kind, dec) = (num(kind), num(dec));
+                let ok = dec == 1;
                 next += 1;
                 let mut d = craft(next, u8::try_from(kind).unwrap(), map.len(kind, num(len)));
                 let dropped0 = ep.node_stats().dropped_in;
@@ -221,21 +223,20 @@ fn run(file: &str, case: &MbtCase, init: &Json, (full, short, hello): (u64, u64,
                         ..
                     } = rec.event
                     {
-                        // 2: answered without a session or dropped, which a forged short Initial or Hello is
-                        decisions.push((u64::from(admitted == 1), half_open, resume));
+                        decisions.push((admitted, half_open, resume));
                     }
                 }
                 if matches!(kind, 1 | 2 | 6) {
                     assert_eq!(
                         decisions,
-                        [(u64::from(ok), count, 0)],
+                        [(dec, count, 0)],
                         "{who} step {i}: the endpoint's decisions (admitted, count, resume) differ from the model's: admitted \
-                         {ok} at the count {count}, no resumption; calls:{}",
+                         {dec} at the count {count}, no resumption; calls:{}",
                         calls(case, i)
                     );
                 } else {
                     assert!(
-                        decisions.is_empty() && !ok,
+                        decisions.is_empty() && dec == 0,
                         "{who} step {i}: a flight of a type that starts nothing was decided on; calls:{}",
                         calls(case, i)
                     );

@@ -79,23 +79,23 @@ Poll(sl, stalled) == IF stalled \/ Dls(sl) = {} THEN NoDl ELSE MinOf(Dls(sl))
 CountOf(sl) == Cardinality({j \in DOMAIN sl : sl[j].counted})
 
 \* handle_timeout: pop the earliest due deadline (the lower slot on a tie), at most k times, stopping when the event
-\* queue stalls (after cut pops); run_timer frees an expired session (expiry at now >= End; early: one tick sooner, at
-\* the limit itself, the rule the endpoint had before it asked the transport's),
+\* queue stalls (after cut pops); run_timer frees an expired session (expiry at now >= End + shift; shift -1: one tick
+\* sooner, at the limit itself, the rule the endpoint had before it asked the transport's; 1: one tick late),
 \* else the connection's own timer runs: d is its next deadline, Gone when the connection ended (settle frees it); a
 \* deadline not after now is moved to now + 1
 Gone == -2
 Due(sl, now) == {j \in DOMAIN sl : sl[j].dl # NoDl /\ sl[j].dl <= now}
 Pop(sl, now) == CHOOSE j \in Due(sl, now) :
                     \A x \in Due(sl, now) : sl[j].dl < sl[x].dl \/ (sl[j].dl = sl[x].dl /\ j <= x)
-ExpiredAt(s, now, early) == IF early THEN s.use /\ s.unauth /\ now >= End(s) - 1 ELSE Expired(s, now)
-RunTimer(e, j, now, d, early) ==
-    IF ExpiredAt(e.slots[j], now, early) \/ d = Gone THEN Release(e, j)
+ExpiredAt(s, now, shift) == s.use /\ s.unauth /\ now >= End(s) + shift
+RunTimer(e, j, now, d, shift) ==
+    IF ExpiredAt(e.slots[j], now, shift) \/ d = Gone THEN Release(e, j)
     ELSE LET e1 == Settle(e, j, d)
          IN IF e1.slots[j].dl <= now THEN [e1 EXCEPT !.slots[j].dl = now + 1] ELSE e1
 RECURSIVE Loop(_, _, _, _, _, _)
-Loop(e, now, ds, early, fuel, cut) ==
+Loop(e, now, ds, shift, fuel, cut) ==
     IF fuel = 0 \/ cut = 0 \/ Due(e.slots, now) = {} THEN e
     ELSE LET j == Pop(e.slots, now)
-         IN Loop(RunTimer([e EXCEPT !.slots[j].dl = NoDl], j, now, ds[j], early),
-                 now, ds, early, fuel - 1, cut - 1)
+         IN Loop(RunTimer([e EXCEPT !.slots[j].dl = NoDl], j, now, ds[j], shift),
+                 now, ds, shift, fuel - 1, cut - 1)
 =============================================================================

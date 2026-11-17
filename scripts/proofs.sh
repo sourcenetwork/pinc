@@ -558,13 +558,12 @@ par witness_tlc integration_codecs_nocap IntegrationCodecs IntegrationCodecs_w_n
 par run_tlc halfopen HalfOpen HalfOpen
 par run_tlc halfopen_held HalfOpen HalfOpen_held
 par run_tlc halfopen_answer HalfOpen HalfOpen_answer
-par run_tlc halfopen_30 HalfOpen HalfOpen_30
-par run_tlc halfopen_60 HalfOpen HalfOpen_60
 par witness_tlc halfopen_rej HalfOpen HalfOpen_rej RejectedRight
 par witness_tlc halfopen_rejfill HalfOpen HalfOpen_rejfill GenuineServed
 par witness_tlc halfopen_le HalfOpen HalfOpen_le Capped
 par witness_tlc halfopen_le_held HalfOpen HalfOpen_le_held HeldBound
 par witness_tlc halfopen_strict HalfOpen HalfOpen_strict LeftRight
+par witness_tlc halfopen_late HalfOpen HalfOpen_late TimerRight
 par witness_tlc halfopen_hold HalfOpen HalfOpen_hold DeadlineBound
 par witness_tlc halfopen_supersede HalfOpen HalfOpen_supersede HolderKept
 par witness_tlc halfopen_holders HalfOpen HalfOpen_holders NoFullId

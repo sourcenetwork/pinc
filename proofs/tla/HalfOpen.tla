@@ -66,15 +66,17 @@
 (* and HeldBound. A session lives LIFE and is gone one tick past it, as    *)
 (* the transport's own deadline is; BUG_GE frees it at LIFE itself, the    *)
 (* endpoint's rule before: the witness HalfOpen_strict breaks LeftRight.   *)
+(* BUG_LATE frees it one tick past its end: the witness HalfOpen_late      *)
+(* breaks TimerRight.                                                      *)
 (* BUG_REJ admits a first packet the responder would only reject, as the   *)
 (* endpoint did: the witness HalfOpen_rej breaks RejectedRight, and        *)
 (* HalfOpen_rejfill breaks GenuineServed (the cap reached by rejected      *)
 (* packets alone, a genuine first flight refused). The life is a           *)
-(* parameter, in units of 30 s: HalfOpen_30 (LIFE = 1, HOLD = 2, a node    *)
-(* that is not thin: 30 s, 60 s once it answered) and HalfOpen_60 (LIFE =  *)
-(* HOLD = 2, a thin node: 60 s). BUG_HOLD lets an answer hold the          *)
-(* session past HOLD: the witness HalfOpen_hold breaks DeadlineBound.      *)
-(* HalfOpen_answer has sessions answer and live HOLD > LIFE. SUPERSEDE is  *)
+(* parameter, in units of 30 s: HalfOpen.cfg is a thin node (LIFE = HOLD = *)
+(* 2: 60 s, answered or not) and HalfOpen_answer a node that is not thin   *)
+(* (LIFE = 1, HOLD = 2: 30 s, 60 s once it answered). BUG_HOLD lets an     *)
+(* answer hold the session past HOLD: the witness HalfOpen_hold breaks     *)
+(* DeadlineBound. SUPERSEDE is                                             *)
 (* the rule before #365: a first flight that the one holder of its id      *)
 (* refused as a first flight other than its own freed that holder and      *)
 (* went to the admission; the                                              *)
@@ -104,7 +106,7 @@
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
 CONSTANTS K, MAX, LIFE, HOLD, FULL, SHORT, HELLO, TMAX, LENS, IDS, MAXH, BUG_LE, BUG_GE, SUPERSEDE,
-          QCAP, BUG_ROOM, BUG_EST, BUG_GONE, BUG_SUB, BUG_HALF, BUG_HOLD, BUG_REJ
+          QCAP, BUG_ROOM, BUG_EST, BUG_GONE, BUG_SUB, BUG_HALF, BUG_HOLD, BUG_REJ, BUG_LATE
 VARIABLES e, ids, stalled, refused, left, timed, resumed, atcap, kept, ow, pend, q, gone, busy, heldok, roomref,
           halfok, resok, rejok, genok, rs
 \* the history flags of the half rule and of the rejected first packets, and the slots whose session a rejected packet
@@ -255,7 +257,7 @@ Stall == stalled' = ~stalled /\ UNCHANGED <<e, ids, refused, left, timed, resume
 \* a timer call at t: each due connection's next deadline (or its end), and after how many pops the queue stalls
 Timer == \E t \in 0..TMAX : \E ds \in [Slots -> {t, t + 2, Gone}], cut \in 0..(K + 1) :
     IF stalled THEN UNCHANGED vars
-    ELSE /\ e' = Loop(e, t, ds, BUG_GE, K, IF cut > K THEN K ELSE cut)
+    ELSE /\ e' = Loop(e, t, ds, IF BUG_GE THEN -1 ELSE IF BUG_LATE THEN 1 ELSE 0, K, IF cut > K THEN K ELSE cut)
          /\ ids' = [j \in Slots |-> IF e'.slots[j].use THEN ids[j] ELSE 0]
          /\ stalled' = (cut <= K)
          /\ timed' = (timed /\ (~stalled' => \A j \in Slots : ~Expired(e'.slots[j], t)))
