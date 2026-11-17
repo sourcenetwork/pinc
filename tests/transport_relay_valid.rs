@@ -194,6 +194,43 @@ fn the_fall_back_from_a_failed_direct_path_takes_the_measured_relay_path() {
 }
 
 #[test]
+fn a_session_that_loses_its_path_with_no_probe_timeout_falls_back_to_the_measured_relay_path() {
+    answered_elsewhere(relay(), Some(relay()), |net| {
+        with_direct_path(net);
+        // The later slot holds a relay path nothing was measured on, the earlier one the path the session left.
+        let now = net.now;
+        net.a
+            .with_env(now, |c, env| c.add_path(env, PathId(10), relay()))
+            .unwrap();
+        assert!(
+            net.a.conn.path_rtt(OTHER).is_some(),
+            "the relay path the session left has no round trip"
+        );
+        assert!(net.a.conn.path_rtt(PathId(10)).is_none());
+        // The direct path hears nothing for longer than its idle limit, with no probe timeout on it.
+        let t = net.now + 16 * SEC;
+        net.a.with_env(t, vinc_transport::conn::Connection::handle_timeout);
+        net.a.service(t);
+        assert!(
+            !net.a.conn.path_validated(PathId(3)),
+            "the quiet direct path is still validated"
+        );
+        assert_eq!(
+            net.a.conn.active_path(),
+            Some(OTHER),
+            "the fall-back took a relay path that was never measured"
+        );
+        net.a.with_env(t + MS, vinc_transport::conn::Connection::handle_timeout);
+        assert_eq!(
+            net.a.conn.active_path(),
+            Some(OTHER),
+            "the next timer step moved the session off the measured relay path"
+        );
+        assert!(net.a.conn.is_connected());
+    });
+}
+
+#[test]
 fn an_unmeasured_relay_path_failing_three_probe_timeouts_gives_way_to_a_measured_one() {
     answered_elsewhere(relay(), Some(relay()), |net| {
         net.a.conn.set_active(PathId(1)).unwrap();
