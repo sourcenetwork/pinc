@@ -17,6 +17,7 @@ use common::{ALGS, Net, SEC, keypair};
 use proptest::prelude::*;
 use vinc_broadcast::consts::DEFAULT_MAX_BODY;
 use vinc_broadcast::wire::{self, Head, build, ty};
+use vinc_broadcast::wire2::Head2;
 use vinc_broadcast::{auth, consts};
 use vinc_crypto::IdentityAlg;
 use vinc_crypto::identity::MAX_SIGNATURE_LEN;
@@ -155,6 +156,26 @@ proptest! {
     #[test]
     fn garbage_never_panics_a_head_parse(bytes in proptest::collection::vec(any::<u8>(), 0..6000)) {
         let _ = Head::parse(&bytes);
+    }
+
+    #[test]
+    fn garbage_never_panics_a_head2_parse(bytes in proptest::collection::vec(any::<u8>(), 0..6000)) {
+        let _ = Head2::parse(&bytes);
+        let _ = Head2::parse_prefix(&bytes);
+    }
+
+    /// Bytes that start like a version 2 head reach the parents, the key and the signature.
+    #[test]
+    fn garbage_behind_a_head2_start_never_panics(
+        alg in 1u8..=4,
+        flags in 0u8..4,
+        np in 0u8..12,
+        rest in proptest::collection::vec(any::<u8>(), 0..6000),
+    ) {
+        let mut bytes = vec![2, alg, flags, np];
+        bytes.extend(rest);
+        let _ = Head2::parse(&bytes);
+        let _ = Head2::parse_prefix(&bytes);
     }
 
     #[test]

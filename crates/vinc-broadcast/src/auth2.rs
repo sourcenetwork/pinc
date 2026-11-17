@@ -6,11 +6,11 @@
 //!
 //! Invariants: [`verify2`] returns an id only when the origin's key signed the statement of exactly this head, topic
 //! and body; the key must match the origin's node id (an Ed25519 id is the key itself, every other id is a hash of
-//! it).
+//! it). [`sign2`] writes nothing unless it signs.
 
-use vinc_crypto::identity::verify_node;
-use vinc_crypto::{IdentityAlg, Keypair, NodeId as CryptoId};
+use vinc_crypto::Keypair;
 
+use crate::auth::origin_signed;
 use crate::statement::{ContentId, Fields, STATEMENT_MAX, content_id, encode, signed_message};
 use crate::wire2::Head2;
 
@@ -21,27 +21,23 @@ fn id_of(fields: &Fields<'_>) -> Option<ContentId> {
     Some(content_id(buf.get(..n)?))
 }
 
-/// Sign the statement of `fields` with `key`, writing the signature to `out`; returns its length, or `None` if the
-/// fields do not make a statement or `out` is too short.
-pub fn sign2(key: &Keypair, fields: &Fields<'_>, out: &mut [u8]) -> Option<usize> {
-    key.sign(&signed_message(&id_of(fields)?), out).ok()
+/// Sign the statement of `fields` with `key`, writing the signature to `out`; returns its length and the content id,
+/// or `None` (and writes nothing) if the fields do not make a statement, the key's algorithm is not the fields'
+/// `origin_alg`, or `out` is too short.
+pub fn sign2(key: &Keypair, fields: &Fields<'_>, out: &mut [u8]) -> Option<(usize, ContentId)> {
+    if key.alg() != fields.origin_alg {
+        return None;
+    }
+    let id = id_of(fields)?;
+    let n = key.sign(&signed_message(&id), out).ok()?;
+    Some((n, id))
 }
 
 /// The content id of the message `head` with `topic` and `body` if its origin signed it, otherwise `None`.
 pub fn verify2(head: &Head2<'_>, topic: &[u8], body: &[u8]) -> Option<ContentId> {
     let hash = *blake3::hash(body).as_bytes();
     let id = id_of(&head.statement_fields(topic, &hash))?;
-    let node = CryptoId {
-        alg: head.alg,
-        bytes: *head.origin,
-    };
-    let pk: &[u8] = if head.alg == IdentityAlg::Ed25519 {
-        head.origin
-    } else {
-        head.pk
-    };
-    verify_node(&node, pk, &signed_message(&id), head.sig).ok()?;
-    Some(id)
+    origin_signed(head.alg, head.origin, head.pk, &signed_message(&id), head.sig).then_some(id)
 }
 
 #[cfg(test)]

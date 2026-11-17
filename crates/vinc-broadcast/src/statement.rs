@@ -9,6 +9,9 @@
 //! signature or the public key, so one message keeps one id however it is signed. The signature is made over
 //! [`signed_message`], the statement label followed by the id.
 //!
+//! The integer fields are full 64-bit unsigned values (the incarnation word is already above 2^53), so a reader
+//! limited to 53-bit or signed 64-bit integers must decode them with a wide integer type.
+//!
 //! Invariants: the encoding is canonical (one byte string per set of fields; the map's keys are in DAG-CBOR order
 //! and the parents strictly ascending); [`encode`] never panics, allocates nothing, and writes at most
 //! [`STATEMENT_MAX`] bytes.
@@ -93,6 +96,8 @@ pub enum StatementError {
     ReservedFlags,
     /// The topic is longer than the format allows.
     TopicTooLong,
+    /// The statement does not fit its buffer (the checks above bound every part, so this is not reachable).
+    BufferTooSmall,
 }
 
 impl core::fmt::Display for StatementError {
@@ -102,6 +107,7 @@ impl core::fmt::Display for StatementError {
             Self::ParentsNotAscending => "the parents must be in strictly ascending order",
             Self::ReservedFlags => "a reserved flag bit is set",
             Self::TopicTooLong => "the topic is longer than 255 bytes",
+            Self::BufferTooSmall => "the statement does not fit its buffer",
         })
     }
 }
@@ -124,6 +130,11 @@ fn link(prefix: [u8; 4], digest: &[u8; 32]) -> [u8; CID_LEN] {
     p.copy_from_slice(&prefix);
     d.copy_from_slice(digest);
     out
+}
+
+/// Whether `parents` are strictly ascending by their bytes (no duplicate), the one order a statement and a head accept.
+pub(crate) fn strictly_ascending(parents: &[ContentId]) -> bool {
+    parents.windows(2).all(|w| matches!(w, [a, b] if a < b))
 }
 
 /// The content id of an encoded statement.
@@ -152,15 +163,13 @@ pub fn encode(fields: &Fields<'_>, out: &mut [u8; STATEMENT_MAX]) -> Result<usiz
     if fields.parents.len() > MAX_PARENTS {
         return Err(StatementError::TooManyParents);
     }
-    if !fields.parents.windows(2).all(|w| matches!(w, [a, b] if a < b)) {
+    if !strictly_ascending(fields.parents) {
         return Err(StatementError::ParentsNotAscending);
     }
     if fields.flags & !FLAG_ISB != 0 {
         return Err(StatementError::ReservedFlags);
     }
-    // The checks above bound every part, so the buffer always holds the statement and this cannot fail; the topic
-    // is the one part that varies in size without a count, so it names the error.
-    write(fields, out).map_err(|_| StatementError::TopicTooLong)
+    write(fields, out).map_err(|_| StatementError::BufferTooSmall)
 }
 
 fn write(f: &Fields<'_>, out: &mut [u8]) -> Result<usize, vinc_wire::WireError> {

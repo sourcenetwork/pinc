@@ -118,12 +118,7 @@ impl<'a> Head<'a> {
         let mid = r.read_array::<MID_LEN>()?;
         let origin = <&NodeId>::try_from(r.read_bytes(32)?).map_err(|_| Malformed("origin"))?;
         let alg = IdentityAlg::from_tag(r.read_u8()?).ok_or(Malformed("algorithm"))?;
-        let pk = if alg == IdentityAlg::Ed25519 {
-            &[][..]
-        } else {
-            r.read_bytes(alg.public_key_len())?
-        };
-        let sig = r.read_bytes(alg.signature_len())?;
+        let (pk, sig) = read_key_sig(&mut r, alg)?;
         let isb = match r.read_u8()? {
             0 => false,
             1 => true,
@@ -172,6 +167,26 @@ impl<'a> Head<'a> {
         out.extend(self.ts.wall.to_be_bytes());
         out.extend(self.ts.counter.to_be_bytes());
     }
+}
+
+/// Read the public key (absent for Ed25519, whose node id is the key) and the signature of `alg` from `r`.
+pub(crate) fn read_key_sig<'a>(r: &mut Reader<'a>, alg: IdentityAlg) -> Result<(&'a [u8], &'a [u8]), Malformed> {
+    let pk = if alg == IdentityAlg::Ed25519 {
+        &[][..]
+    } else {
+        r.read_bytes(alg.public_key_len())?
+    };
+    Ok((pk, r.read_bytes(alg.signature_len())?))
+}
+
+/// Whether `pk` and `sig` have the lengths a head of `alg` carries: [`read_key_sig`]'s shape.
+pub(crate) fn key_sig_fit(alg: IdentityAlg, pk: &[u8], sig: &[u8]) -> bool {
+    let pk_len = if alg == IdentityAlg::Ed25519 {
+        0
+    } else {
+        alg.public_key_len()
+    };
+    pk.len() == pk_len && sig.len() == alg.signature_len()
 }
 
 /// Encode the timestamp the way the head and the floors carry it.

@@ -100,14 +100,13 @@ pub fn verify(head: &Head<'_>, topic: &[u8], body: &[u8]) -> bool {
     let mut buf = [0u8; SIGNED_MAX];
     let n = statement(topic, head.mid, body, head.ts, head.isb, &mut buf);
     let Some(msg) = buf.get(..n) else { return false };
-    let id = CryptoId {
-        alg: head.alg,
-        bytes: *head.origin,
-    };
-    let pk: &[u8] = if head.alg == IdentityAlg::Ed25519 {
-        head.origin
-    } else {
-        head.pk
-    };
-    verify_node(&id, pk, msg, head.sig).is_ok()
+    origin_signed(head.alg, head.origin, head.pk, msg, head.sig)
+}
+
+/// Whether `sig` is a signature of `msg` by the key `pk` (the origin itself for Ed25519) that `origin` names under
+/// `alg`: the key must match the node id.
+pub(crate) fn origin_signed(alg: IdentityAlg, origin: &[u8; 32], pk: &[u8], msg: &[u8], sig: &[u8]) -> bool {
+    let id = CryptoId { alg, bytes: *origin };
+    let pk: &[u8] = if alg == IdentityAlg::Ed25519 { origin } else { pk };
+    verify_node(&id, pk, msg, sig).is_ok()
 }

@@ -48,7 +48,7 @@ fn parents() -> [ContentId; 8] {
 fn head(alg: IdentityAlg, ps: &[ContentId]) -> Head2<'_> {
     Head2 {
         alg,
-        isb: true,
+        flags: 1,
         origin: &ORIGIN,
         incarnation: 9,
         seq: 77,
@@ -184,12 +184,62 @@ fn the_longest_head_is_the_maximum() {
 }
 
 #[test]
-fn nine_parents_are_not_written() {
+fn a_head_parse_would_refuse_is_not_written() {
+    let ps = parents();
+    let good = head(IdentityAlg::EcdsaP256, &ps[..2]);
     let nine: [ContentId; 9] = core::array::from_fn(|i| [u8::try_from(i).unwrap(); 32]);
-    let h = head(IdentityAlg::Ed25519, &nine);
-    let mut b = Buf::new();
-    assert_eq!(h.write(0, &mut b), Err(TooLong));
-    assert_eq!(b.n, 0);
+    let desc = [ps[1], ps[0]];
+    let dup = [ps[0], ps[0]];
+    let ed_with_key = Head2 {
+        pk: &KEY[..32],
+        ..head(IdentityAlg::Ed25519, &[])
+    };
+    let table = [
+        ("nine parents", Head2 { parents: &nine, ..good }, "parents"),
+        ("descending", Head2 { parents: &desc, ..good }, "parents"),
+        ("duplicate", Head2 { parents: &dup, ..good }, "parents"),
+        ("reserved flags", Head2 { flags: 3, ..good }, "flags"),
+        ("short key", Head2 { pk: &KEY[..32], ..good }, "key or signature"),
+        ("no key", Head2 { pk: &[], ..good }, "key or signature"),
+        (
+            "long signature",
+            Head2 {
+                sig: &SIG[..65],
+                ..good
+            },
+            "key or signature",
+        ),
+        (
+            "short signature",
+            Head2 {
+                sig: &SIG[..63],
+                ..good
+            },
+            "key or signature",
+        ),
+        ("ed25519 with a key", ed_with_key, "key or signature"),
+    ];
+    for (name, h, why) in table {
+        let mut b = Buf::new();
+        assert_eq!(h.write(0, &mut b), Err(Malformed(why)), "{name}");
+        assert_eq!(b.n, 0, "{name}");
+    }
+    assert!(good.write(0, &mut Buf::new()).is_ok());
+}
+
+#[test]
+fn the_prefix_parse_states_the_body_length_and_ignores_the_rest() {
+    let ps = parents();
+    let h = head(IdentityAlg::Ed25519, &ps[..1]);
+    let b = written(&h, b"abcde");
+    for cut in [h.len(), h.len() + 2, b.n] {
+        let (got, len, blen) = Head2::parse_prefix(&b.bytes()[..cut]).unwrap();
+        assert_eq!((got, len, blen), (h, h.len(), 5), "cut at {cut}");
+    }
+    assert_eq!(
+        Head2::parse(&b.bytes()[..h.len() + 2]).map(|_| ()),
+        Err(Malformed("body length"))
+    );
 }
 
 #[test]
@@ -202,13 +252,22 @@ fn the_id_is_the_version_1_function() {
 #[test]
 fn the_statement_fields_are_the_heads() {
     let ps = parents();
-    let h = head(IdentityAlg::Ed25519, &ps[..2]);
     let hash = [5u8; 32];
-    let f = h.statement_fields(b"t/1", &hash);
-    assert_eq!((f.origin_alg, f.origin), (IdentityAlg::Ed25519, &ORIGIN));
-    assert_eq!((f.incarnation, f.seq, f.flags), (9, 77, 1));
-    assert_eq!(
-        (f.topic, f.time, f.parents, f.body),
-        (&b"t/1"[..], h.ts, &ps[..2], &hash)
-    );
+    for alg in ALGS {
+        let h = head(alg, &ps[..2]);
+        let f = h.statement_fields(b"t/1", &hash);
+        assert_eq!((f.origin_alg, f.origin), (alg, &ORIGIN), "{alg:?}");
+        assert_eq!((f.incarnation, f.seq, f.flags), (9, 77, 1));
+        assert_eq!(
+            (f.topic, f.time, f.parents, f.body),
+            (&b"t/1"[..], h.ts, &ps[..2], &hash)
+        );
+    }
+    let h = Head2 {
+        flags: 0,
+        ..head(IdentityAlg::Ed25519, &[])
+    };
+    assert!(!h.isb());
+    assert_eq!(h.statement_fields(b"t", &hash).flags, 0);
+    assert!(head(IdentityAlg::Ed25519, &[]).isb());
 }

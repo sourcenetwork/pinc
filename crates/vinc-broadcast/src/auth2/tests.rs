@@ -1,10 +1,9 @@
 #![allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "tests assert")]
 
 use super::*;
+use vinc_crypto::IdentityAlg;
 use vinc_crypto::identity::{MAX_PUBLIC_KEY_LEN, MAX_SIGNATURE_LEN, verify};
 use vinc_wire::hlc::Hlc;
-
-use crate::statement::FLAG_ISB;
 
 const ALGS: [IdentityAlg; 4] = [
     IdentityAlg::Ed25519,
@@ -23,25 +22,32 @@ struct Signed {
     id: ContentId,
 }
 
-fn signed(alg: IdentityAlg) -> Signed {
-    let key = Keypair::from_seed(alg, &[7u8; 64][..alg.seed_len()]).unwrap();
-    let origin = key.node_id().bytes;
+fn key_of(alg: IdentityAlg, n: u8) -> Keypair {
+    Keypair::from_seed(alg, &[n; 64][..alg.seed_len()]).unwrap()
+}
+
+/// `signer` signs the statement of the fixed message that names `origin_key`'s node id as its author.
+fn sign_as(alg: IdentityAlg, origin_key: &Keypair, signer: &Keypair) -> Signed {
+    let origin = origin_key.node_id().bytes;
     let mut pk = [0u8; MAX_PUBLIC_KEY_LEN];
-    key.public_key(&mut pk).unwrap();
+    signer.public_key(&mut pk).unwrap();
     let mut sig = [0u8; MAX_SIGNATURE_LEN];
     let unsigned = head_of(alg, &origin, &pk, &[]);
     let hash = *blake3::hash(BODY).as_bytes();
-    let fields = unsigned.statement_fields(TOPIC, &hash);
-    let n = sign2(&key, &fields, &mut sig).unwrap();
+    let (n, id) = sign2(signer, &unsigned.statement_fields(TOPIC, &hash), &mut sig).unwrap();
     assert_eq!(n, alg.signature_len());
-    let id = id_of(&fields).unwrap();
     Signed { origin, pk, sig, id }
+}
+
+fn signed(alg: IdentityAlg) -> Signed {
+    let key = key_of(alg, 7);
+    sign_as(alg, &key, &key)
 }
 
 fn head_of<'a>(alg: IdentityAlg, origin: &'a [u8; 32], pk: &'a [u8], sig: &'a [u8]) -> Head2<'a> {
     Head2 {
         alg,
-        isb: true,
+        flags: 1,
         origin,
         incarnation: 4,
         seq: 11,
@@ -126,7 +132,8 @@ fn any_change_breaks_the_signature() {
                 TOPIC,
                 BODY,
             ),
-            ("flags", Head2 { isb: false, ..h }, TOPIC, BODY),
+            ("flags", Head2 { flags: 0, ..h }, TOPIC, BODY),
+            ("reserved flags", Head2 { flags: 3, ..h }, TOPIC, BODY),
             ("parent", Head2 { parents: &parents, ..h }, TOPIC, BODY),
             (
                 "fewer parents",
@@ -152,40 +159,84 @@ fn any_change_breaks_the_signature() {
         for (name, x, topic, body) in table {
             assert_eq!(verify2(&x, topic, body), None, "{alg:?}: {name}");
         }
-        assert_eq!(FLAG_ISB, 1);
+    }
+}
+
+/// Key B signs a statement that names A's node id and the head carries B's key: only the check that the key is the
+/// origin's refuses it, so the same head with A's own key and signature is the control.
+#[test]
+fn a_key_that_is_not_the_origins_is_refused() {
+    for alg in [IdentityAlg::EcdsaP256, IdentityAlg::MlDsa65, IdentityAlg::Hybrid] {
+        let (a, b) = (key_of(alg, 1), key_of(alg, 2));
+        let forged = sign_as(alg, &a, &b);
+        let h = head(alg, &forged);
+        assert_eq!(h.origin, &a.node_id().bytes);
+        assert_eq!(verify2(&h, TOPIC, BODY), None, "{alg:?}");
+        let honest = sign_as(alg, &a, &a);
+        assert_eq!(verify2(&head(alg, &honest), TOPIC, BODY), Some(honest.id), "{alg:?}");
     }
 }
 
 #[test]
-fn a_key_that_is_not_the_origins_is_refused() {
-    let s = signed(IdentityAlg::Hybrid);
-    let t = signed(IdentityAlg::MlDsa65);
-    let h = head(IdentityAlg::Hybrid, &s);
-    let mut other_pk = s.pk;
-    other_pk[40] ^= 1;
-    assert_eq!(
-        verify2(
-            &Head2 {
-                pk: &other_pk[..h.pk.len()],
-                ..h
-            },
-            TOPIC,
-            BODY
-        ),
-        None
-    );
-    assert_eq!(verify2(&Head2 { origin: &t.origin, ..h }, TOPIC, BODY), None);
+fn sign2_returns_the_content_id_of_its_statement() {
+    let key = key_of(IdentityAlg::Ed25519, 7);
+    let origin = key.node_id().bytes;
+    let hash = *blake3::hash(BODY).as_bytes();
+    let h = head_of(IdentityAlg::Ed25519, &origin, &[], &[]);
+    let f = h.statement_fields(TOPIC, &hash);
+    let mut out = [0u8; 64];
+    let (n, id) = sign2(&key, &f, &mut out).unwrap();
+    let mut buf = [0u8; STATEMENT_MAX];
+    let len = encode(&f, &mut buf).unwrap();
+    assert_eq!((n, id), (64, content_id(&buf[..len])));
+}
+
+/// A failed `sign2` writes nothing: an unmade statement, a key of another algorithm, a buffer one byte short.
+#[test]
+fn a_failed_sign_leaves_the_buffer_untouched() {
+    let hash = [0u8; 32];
+    let long = [b't'; 256];
+    let unsorted = [[2u8; 32], [1u8; 32]];
+    for alg in ALGS {
+        let key = key_of(alg, 7);
+        let origin = key.node_id().bytes;
+        let h = head_of(alg, &origin, &[0u8; MAX_PUBLIC_KEY_LEN], &[]);
+        let other = ALGS.iter().copied().find(|a| *a != alg).unwrap();
+        let wrong_key = key_of(other, 7);
+        let fields = h.statement_fields(TOPIC, &hash);
+        let short = alg.signature_len() - 1;
+        let cases = [
+            (
+                "long topic",
+                &key,
+                h.statement_fields(&long, &hash),
+                alg.signature_len(),
+            ),
+            (
+                "unsorted parents",
+                &key,
+                Fields {
+                    parents: &unsorted,
+                    ..fields
+                },
+                alg.signature_len(),
+            ),
+            ("another algorithm", &wrong_key, fields, MAX_SIGNATURE_LEN),
+            ("short buffer", &key, fields, short),
+        ];
+        for (name, k, f, room) in cases {
+            let mut out = [0xaa_u8; MAX_SIGNATURE_LEN];
+            assert_eq!(sign2(k, &f, &mut out[..room]), None, "{alg:?}: {name}");
+            assert!(out.iter().all(|b| *b == 0xaa), "{alg:?}: {name} wrote");
+        }
+    }
 }
 
 #[test]
-fn fields_that_make_no_statement_do_not_sign() {
-    let key = Keypair::from_seed(IdentityAlg::Ed25519, &[7u8; 32]).unwrap();
-    let origin = key.node_id().bytes;
-    let h = head_of(IdentityAlg::Ed25519, &origin, &[], &[]);
-    let hash = [0u8; 32];
+fn fields_that_make_no_statement_do_not_verify() {
+    let s = signed(IdentityAlg::Ed25519);
+    let h = head(IdentityAlg::Ed25519, &s);
     let long = [b't'; 256];
-    let mut sig = [0u8; 64];
-    assert_eq!(sign2(&key, &h.statement_fields(&long, &hash), &mut sig), None);
-    assert_eq!(sign2(&key, &h.statement_fields(TOPIC, &hash), &mut sig[..10]), None);
+    assert_eq!(verify2(&h, TOPIC, BODY), Some(s.id));
     assert_eq!(verify2(&h, &long, BODY), None);
 }
