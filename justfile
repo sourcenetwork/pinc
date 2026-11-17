@@ -16,6 +16,8 @@ dist := "--manifest-path distributed/Cargo.toml --target-dir " + harness_target
 # build directory, so the gate's builds are not rebuilt.
 native := "-C target-cpu=native"
 measure_target := target + "-measure"
+# The checkout of the relay binary's source that `just relay-node` builds against this tree.
+relay_src := env_var_or_default("VINC_RELAY_SRC", justfile_directory() / "relay-node-src")
 
 # List the recipes.
 default:
@@ -167,6 +169,61 @@ e2e:
 # measurement wants an otherwise idle machine. Results go to distributed/results/.
 distributed *args:
     RUSTFLAGS="{{native}}" cargo run -q --release --manifest-path distributed/Cargo.toml --target-dir {{measure_target}} -- {{args}}
+
+# The relay binary (sourcenetwork/vinc_relay, a node that carries the relay role) built against THIS tree, its own tests
+# and the three relay scenarios of the distributed harness (vinc#649). It covers the relay role, the hub role, records,
+# lookup, the mailbox, sleep, carriers and the wire, as a deployed node uses them: run it on every change to one of
+# those. VINC_RELAY_SRC is a checkout of the binary's source (default relay-node-src); it is copied, never modified.
+# The scenarios need Docker and passwordless sudo, as `just e2e` does (without them that step fails and says what is
+# missing) and a quiet host: VINC_RELAY_QUIET passes the harness's --quiet-* thresholds on a host that is never idle.
+relay-node:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    src="{{relay_src}}"; lib="{{justfile_directory()}}"; work="{{target}}/relay-node"
+    [ -f "$src/Cargo.toml" ] || { echo "relay-node: no relay binary source at $src; set VINC_RELAY_SRC" >&2; exit 1; }
+    # Outside the tree: a copy under it would be taken for a member of the library's workspace.
+    copy=$(mktemp -d); trap 'rm -rf "$copy"' EXIT
+    mkdir -p "$work"; export CARGO_TARGET_DIR="$work/target"
+    git_url="ssh://git@github.com/sourcenetwork/vinc.git"
+    mode=patch; failed=0
+    versions() { awk '/^name = /{n=$3} /^version = /{print n, $3}' "$1"; }
+    rcargo() { if [ "$mode" = patch ]; then cargo "$1" --config "patch.\"$git_url\".vinc.path=\"$lib/crates/vinc\"" "${@:2}"; else cargo "$@"; fi; }
+    build() {
+        (cd "$src" && tar --exclude=./target --exclude=./.git -cf - .) | tar -xf - -C "$copy" || return 1
+        cd "$copy" && cp Cargo.lock "$work/Cargo.lock.orig" || return 1
+        export GIT_SSH_COMMAND='ssh -o BatchMode=yes' CARGO_NET_GIT_FETCH_WITH_CLI=true
+        rcargo build 2>&1 | tee "$work/build.log"; rc=${PIPESTATUS[0]}
+        if [ "$rc" -ne 0 ] && ! grep -qE 'could not compile|error\[E' "$work/build.log"; then
+            echo "relay-node: cargo still has to fetch the git source; building a copy whose vinc dependency is the path $lib/crates/vinc"
+            mode=path; cp "$work/Cargo.lock.orig" Cargo.lock
+            sed -i -E '/^vinc[[:space:]]*=/{s#git = "[^"]*"#path = "'"$lib"'/crates/vinc"#;s#,[[:space:]]*rev = "[^"]*"##;s#rev = "[^"]*",[[:space:]]*##}' Cargo.toml
+            rcargo build; rc=$?
+        fi
+        cp Cargo.lock "$work/Cargo.lock" 2>/dev/null
+        echo "relay-node: dependency versions moved from the binary's Cargo.lock (< before, > after):"
+        diff <(versions "$work/Cargo.lock.orig") <(versions "$work/Cargo.lock") | grep '^[<>]' || true
+        return "$rc"
+    }
+    tests() { cd "$copy" && rcargo test --no-fail-fast; }
+    scenarios() {
+        cd "$lib"
+        command -v docker >/dev/null && docker info >/dev/null 2>&1 || { echo "relay-node: Docker is not usable here (the container backend needs it)" >&2; return 1; }
+        sudo -n true 2>/dev/null || { echo "relay-node: passwordless sudo is missing (the harness starts its network helper through it)" >&2; return 1; }
+        export VINC_RELAY_BIN="$work/target/debug/vinc-relay"
+        rc=0
+        for s in relay-server-hub relay-server-no-punch relay-server-punch; do
+            out="$work/results/$s"; rm -rf "$out"
+            if cargo run -q --release {{dist}} -- run "distributed/scenarios/$s.toml" --results "$out" ${VINC_RELAY_QUIET:-} \
+                && cat "$out"/*/summary.md; then echo "relay-node: scenario $s: ok"
+            else echo "relay-node: scenario $s: FAILED"; rc=1; fi
+        done
+        return "$rc"
+    }
+    step() { local n=$1 t=$SECONDS; shift; if "$@"; then r=ok; else r=FAILED; failed=1; fi; echo "relay-node: $n: $r ($((SECONDS - t)) s)"; [ "$r" = ok ]; }
+    step build build || { echo "relay-node: test, scenarios: not run (no binary)"; exit 1; }
+    step test tests
+    step scenarios scenarios
+    exit "$failed"
 
 # Every test without the hwenc feature, for machines without `swtpm`.
 test-default *args:
