@@ -52,13 +52,15 @@ pub struct IdKey(SeedableState<'static>);
 
 impl IdKey {
     /// The key of `seed` and `secrets`. A weak key costs only speed: every bound of the tables holds under any
-    /// placement. The one key refused is a zero first secret: the keyed multiply then gives every id the same product,
-    /// so every id would start its walk at one slot (the hasher reads only that secret of the seven for an id).
+    /// placement. The keys refused are a first secret of zero or of all ones: the keyed multiply then gives every id
+    /// but one the same product, so they would start their walks at one slot (the hasher reads only that secret of the
+    /// seven for an id). Other patterned values cost speed for a share of the ids and are not refused: draw the key at
+    /// random.
     ///
     /// # Errors
-    /// [`StartError::InvalidKey`] when the first secret is zero.
+    /// [`StartError::InvalidKey`] when the first secret is zero or all ones.
     pub fn new(seed: u64, secrets: &'static [u64; 7]) -> Result<Self, StartError> {
-        if secrets[0] == 0 {
+        if secrets[0] == 0 || secrets[0] == u64::MAX {
             return Err(StartError::InvalidKey);
         }
         Ok(Self(SeedableState::custom(seed, secrets)))

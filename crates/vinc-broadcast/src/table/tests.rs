@@ -118,10 +118,14 @@ fn ids_are_placed_by_the_two_step_hash_of_the_endpoints_map_keys() {
 }
 
 #[test]
-fn a_zero_first_secret_is_refused_and_any_other_is_taken() {
+fn a_zero_or_all_ones_first_secret_is_refused_and_any_other_is_taken() {
     static ZERO_FIRST: [u64; 7] = [0, 2, 3, 4, 5, 6, 7];
+    static ONES_FIRST: [u64; 7] = [u64::MAX, 2, 3, 4, 5, 6, 7];
+    static PATTERNED: [u64; 7] = [0x5555_5555_5555_5555, 2, 3, 4, 5, 6, 7];
     static ZERO_OTHER: [u64; 7] = [1, 0, 0, 0, 0, 0, 0];
     assert_eq!(IdKey::new(5, &ZERO_FIRST), Err(StartError::InvalidKey));
+    assert_eq!(IdKey::new(5, &ONES_FIRST), Err(StartError::InvalidKey));
+    assert!(IdKey::new(5, &PATTERNED).is_ok());
     assert!(IdKey::new(5, &ZERO_OTHER).is_ok());
     assert!(IdKey::new(0, &TEST_SECRETS).is_ok());
 }

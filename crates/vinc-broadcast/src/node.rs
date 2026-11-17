@@ -109,7 +109,8 @@ pub enum StartError {
     KeyMismatch,
     /// The limits are unusable: a body (with its head) larger than the log ring, or a zero table.
     InvalidLimits,
-    /// The map keys are unusable: the first secret is zero, so every message id would start at one slot.
+    /// The map keys are unusable: the first secret is zero or all ones, so every message id but one would start at one
+    /// slot.
     InvalidKey,
 }
 
@@ -121,7 +122,7 @@ impl core::fmt::Display for StartError {
             Self::InvalidLimits => {
                 "the limits are unusable: the log must hold a full message and no table may be empty"
             }
-            Self::InvalidKey => "the map keys are unusable: the first secret must not be zero",
+            Self::InvalidKey => "the map keys are unusable: the first secret must not be zero or all ones",
         })
     }
 }
