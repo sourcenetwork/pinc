@@ -12,10 +12,10 @@
 //! their address), and the clients of the `many` test are spread over the workers, each endpoint made, driven and
 //! dropped on its worker. Every other test's client runs on the thread that drives it.
 //!
-//! Limits of the per-core server, stated: a peer's datagrams reach the endpoint its address hashes to. A peer that moves
-//! to another address (a new socket, a changed port or address) may land on an endpoint that holds neither its session
-//! nor the tickets it was given; its session then ends at its timeouts and it dials again, as a stranger (a full
-//! handshake, not a resumption). A resumption from the same socket reaches the same endpoint and resumes. Each
+//! Limits of the per-core server, stated: a peer's datagrams reach the endpoint its address hashes to. A peer that
+//! moves to another address (a new socket, a changed port or address) may land on an endpoint that holds neither its
+//! session nor the tickets it was given; its session then ends at its timeouts and it dials again, as a stranger (a
+//! full handshake, not a resumption). A resumption from the same socket reaches the same endpoint and resumes. Each
 //! endpoint also limits its own sessions and half-open dials.
 #![allow(
     missing_docs,
@@ -57,20 +57,6 @@ use vinc_keystore::{KeyStore, SoftwareStore};
 const ALPN: &[u8] = b"bench/1";
 /// What the socket's send and receive buffers are asked to hold.
 const SOCKET_BUFFER: u32 = 8 << 20;
-
-/// Give the executor one turn: this task is polled again after the tasks that were ready.
-async fn yield_once() {
-    let mut yielded = false;
-    std::future::poll_fn(|cx| {
-        if yielded {
-            return std::task::Poll::Ready(());
-        }
-        yielded = true;
-        cx.waker().wake_by_ref();
-        std::task::Poll::Pending
-    })
-    .await;
-}
 
 /// The first polls of endpoint drivers, so a test can see that one ran.
 #[cfg(test)]
@@ -356,9 +342,9 @@ impl Lib for Vinc1 {
             driven,
         )?;
         if driven {
-            // The driver has had its first poll when the endpoint is returned, as the other libraries' drivers have
-            // when their endpoint is made, so what it allocates there is not read as the connection's.
-            yield_once().await;
+            // The driver has had its first poll when the endpoint is returned, as the other libraries' drivers
+            // start when their endpoint is made, so what it allocates there is not read as the connection's.
+            nuclei::task::yield_now().await;
         }
         Ok(ep)
     }
@@ -420,15 +406,11 @@ mod tests {
 
     /// Run `f` with the process-wide switches `per_core` and `driven` set, then put back what was found.
     fn with_switches<T>(per_core: bool, driven: bool, f: impl FnOnce() -> T) -> T {
-        use super::super::{DRIVEN, PER_CORE, SWITCHES};
-        let _one = SWITCHES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let found = (PER_CORE.load(Relaxed), DRIVEN.load(Relaxed));
+        use super::super::{DRIVEN, PER_CORE, SwitchGuard};
+        let _switches = SwitchGuard::hold();
         PER_CORE.store(per_core, Relaxed);
         DRIVEN.store(driven, Relaxed);
-        let out = f();
-        PER_CORE.store(found.0, Relaxed);
-        DRIVEN.store(found.1, Relaxed);
-        out
+        f()
     }
 
     #[test]
@@ -462,6 +444,28 @@ mod tests {
         };
         assert_eq!(polled(true), 1, "the driver ran before burst_client returned");
         assert_eq!(polled(false), 0, "an undriven endpoint has no driver");
+    }
+
+    #[test]
+    fn a_driven_client_started_on_a_worker_has_had_its_drivers_first_poll_when_it_is_returned() {
+        let polls = with_switches(true, true, || {
+            on_two_workers(async {
+                let (tx, mut rx) = mpsc::unbounded::<usize>();
+                let started = Vinc1::spawn_client(1, move || async move {
+                    let before = DRIVER_POLLS.load(Relaxed);
+                    let ep = Vinc1::burst_client().await.unwrap();
+                    let _ = tx.unbounded_send(DRIVER_POLLS.load(Relaxed) - before);
+                    drop(ep);
+                });
+                assert!(started.is_ok(), "the client was started");
+                let limit = Box::pin(nuclei::time::sleep(Duration::from_secs(30)));
+                match futures::future::select(Box::pin(rx.next()), limit).await {
+                    futures::future::Either::Left((Some(n), _)) => n,
+                    _ => panic!("the client did not report in 30 s"),
+                }
+            })
+        });
+        assert_eq!(polls, 1, "the driver ran before burst_client returned on a worker");
     }
 
     #[test]

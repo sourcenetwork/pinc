@@ -83,7 +83,7 @@ SCENARIOS = {
         "rtt200-loss5-reorder": (["latency", "1024", "300"], 3, 900, []),
     },
     # `many` leaves VINC's client endpoints undriven and reads after 500 ms; `many_driven` drives every client endpoint
-    # and reads after 1.5 s. Each names its reading, so no environment setting changes either.
+    # and reads after 1.5 s. Each names its reading, so no environment setting changes either reading.
     "many": {"loopback": (["many", "1000", "65536", "--reading=undriven"], 3, 900, [])},
     "many_driven": {"loopback": (["many", "1000", "65536", "--reading=driven"], 3, 900, [])},
     "allocs_latency_64b": {"loopback": (["allocs", "20000", str(64 * MIB)], 3, 900, ["--count-allocs"])},
@@ -408,8 +408,14 @@ def write_md(out, info, libs, profiles, scen, results, a):
     md.append("Versions: " + ", ".join(f"{k} {v}" for k, v in info["versions"].items()) + ". Every library compiled with `RUSTFLAGS=" + (info.get("rustflags") or "") + "`.")
     md.append("Every cell is the median over the repetitions with the range [min..max]; a single value is one run. The client and the server are two processes on loopback.")
     if "endpoints" in info:
-        md.append(f"VINC runs `{info['endpoints']}` endpoints (`VINC_BENCH_ENDPOINTS`) on every scenario's server; the default is one.")
-        md.append("In the many test the clients spread over one endpoint per core too, and each endpoint has its own admission limits and socket buffers, so part of any gain at many connections is that added capacity.")
+        md.append(
+            f"VINC runs `{info['endpoints']}` endpoints (`VINC_BENCH_ENDPOINTS`) on every scenario's server; "
+            "the default is one."
+        )
+        md.append(
+            "In the many test the clients spread over one endpoint per core too, and each endpoint has its own "
+            "admission limits and socket buffers, so part of any gain at many connections is that added capacity."
+        )
     if a.scale != 1.0 or a.reps:
         md.append(f"\n**This is a reduced run (scale {a.scale}, reps {a.reps}); do not quote it.**")
     for prof in profiles:
@@ -424,8 +430,14 @@ def write_md(out, info, libs, profiles, scen, results, a):
             md.append(f"### {s} ({' '.join(args)}; {reps} runs)\n")
             if s.startswith("many"):
                 md.append("`many` reads memory 500 ms after the burst with VINC's client endpoints left undriven.")
-                md.append("`many_driven` drives every client endpoint, as the other libraries always do, and reads after 1.5 s.")
-                md.append("The peak columns are the process's highest resident memory over the burst minus its memory before it, per connection that moved its bytes.\n")
+                md.append(
+                    "`many_driven` drives every client endpoint, as the other libraries always do, "
+                    "and reads after 1.5 s."
+                )
+                md.append(
+                    "The peak columns are the process's highest resident memory over the burst minus its memory "
+                    "before it, per connection that moved its bytes.\n"
+                )
             rows = []
             extra_cols = ALLOC_BULK if s == "allocs_latency_64b" else []
             head = ["library"] + [c[1] for c in cols] + [c[1] for c in extra_cols] + ["note"]

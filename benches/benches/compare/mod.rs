@@ -210,7 +210,8 @@ impl Rec {
     /// Start a line for `lib` and `scenario`.
     pub fn new(lib: &str, scenario: &str) -> Self {
         let rec = format!("{{\"lib\":\"{lib}\",\"scenario\":\"{scenario}\"");
-        // A line of the default carries nothing new; one of a per-core process says so, so it is never read as the other.
+        // A line of the default carries nothing new; one of a per-core process says so, so it is never read as the
+        // other.
         Self(if per_core() {
             format!("{rec},\"endpoints\":\"per-core\"")
         } else {
@@ -761,6 +762,33 @@ static DRIVEN: AtomicBool = AtomicBool::new(false);
 #[cfg(test)]
 pub(crate) static SWITCHES: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+/// The lock on the switches and what they held when it was taken; dropping it puts them back, even after a failed
+/// assert.
+#[cfg(test)]
+pub(crate) struct SwitchGuard {
+    found: (bool, bool),
+    _one: std::sync::MutexGuard<'static, ()>,
+}
+
+#[cfg(test)]
+impl SwitchGuard {
+    pub(crate) fn hold() -> Self {
+        let one = SWITCHES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        Self {
+            found: (PER_CORE.load(Relaxed), DRIVEN.load(Relaxed)),
+            _one: one,
+        }
+    }
+}
+
+#[cfg(test)]
+impl Drop for SwitchGuard {
+    fn drop(&mut self) {
+        PER_CORE.store(self.found.0, Relaxed);
+        DRIVEN.store(self.found.1, Relaxed);
+    }
+}
+
 /// Whether the many-connection test reads memory from driven client endpoints rather than undriven ones (the default).
 pub fn driven() -> bool {
     DRIVEN.load(Relaxed)
@@ -933,15 +961,13 @@ mod tests {
 
     #[test]
     fn the_reading_argument_is_taken_out_of_the_arguments() {
-        let _one = SWITCHES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let found = driven();
+        let _switches = SwitchGuard::hold();
         let mut args = vec!["--reading=driven".to_owned(), "server".to_owned()];
         assert_eq!(reading_option(&mut args), Ok(()));
         assert_eq!(args, ["server"]);
         assert!(driven());
         let mut bad = vec!["--reading=never".to_owned()];
         assert!(reading_option(&mut bad).is_err());
-        DRIVEN.store(found, Relaxed);
     }
 
     #[test]
@@ -961,8 +987,7 @@ mod tests {
 
     #[test]
     fn per_core_is_taken_only_by_a_library_that_can_and_every_line_of_a_per_core_process_says_so() {
-        let _one = SWITCHES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let found = per_core();
+        let _switches = SwitchGuard::hold();
         let line = || Rec::new("x", "many").0;
         let mut args = vec!["--endpoints=per-core".to_owned(), "server".to_owned()];
         assert_eq!(endpoints_option::<iroh::Iroh>(&mut args), Ok(()));
@@ -981,6 +1006,5 @@ mod tests {
         assert!(per_core());
         assert!(line().contains("\"endpoints\":\"per-core\""), "{}", line());
         assert!(endpoints_option::<vinc::Vinc1>(&mut vec!["--endpoints=two".to_owned()]).is_err());
-        PER_CORE.store(found, Relaxed);
     }
 }
