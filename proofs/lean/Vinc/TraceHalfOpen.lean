@@ -7,9 +7,13 @@ import Vinc.CoreHalfOpen
 The Lean half of the trace validation of the endpoint's half-open cap and the lifetime of an unauthenticated session
 (`vinc-core` `rx.rs`, `events.rs`, `endpoint.rs`, `timers.rs`), the port of `proofs/tla/TraceHalfOpen.tla`. It reads
 the `coho` events written by the Rust test `trace_halfopen` and replays every call: each decision the endpoint
-recorded (an admission with the count and the ticket's verdict it used, a session made, established, expired or
-freed) must be the one `Vinc.CoreHalfOpen` makes, in that order, and the slots and the count the model computes must
-be the recorded ones; the deadlines a session's connection asks for are the endpoint's own. An admission happens only
+recorded (an admission with the count, the room the host left and the sessions owed, and the ticket's verdict it used,
+a session made, established, expired or freed) must be the one `Vinc.CoreHalfOpen` makes, in that order, and the slots
+and the count the model computes must be the recorded ones; the deadlines a session's connection asks for are the
+endpoint's own. The cap a first flight meets is the smaller of the code's and half the room, rounded up, and none starts
+a session while the owed sessions fill the room. A first packet the responder would only reject or not answer is
+recorded as decided without a session (admitted 2): a short Initial or a Hello of its floor's size or more, no
+resumption, that finds room to be decided on. An admission happens only
 while the id has fewer holders than `holders` (`room`), and a datagram whose first flight went to the admission frees
 no session that was in use before it (only one it made itself): an arrival never frees the session that holds its id.
 After every call the count is at most the cap and the number of counted sessions, every slot is good (`good`),
@@ -25,7 +29,7 @@ def isTag (t : String) : Bool := t == "coho"
 
 structure W where
   e : E := {}
-  p : P := { max := 0, life := 0, hold := 0, full := 0, short := 0, holders := 0 }
+  p : P := { max := 0, life := 0, hold := 0, full := 0, short := 0, hello := 0, holders := 0 }
 
 /-- A recorded slot: `[slot, in use, created, unauthenticated, counted, has a deadline, the deadline, its life]`. -/
 def slotOf (r : List Nat) : Except String (Nat × Option Sl) :=
@@ -49,7 +53,7 @@ def bare : Option Sl → Option Sl
 
 /-- `good` as a test. -/
 def goodB (p : P) : Option Sl → Bool
-  | some s => (!s.counted || s.unauth) && (!s.unauth || s.dl.any (· ≤ s.created + s.life))
+  | some s => (!s.counted || s.unauth) && (!s.unauth || s.dl.any (· ≤ s.created + s.life + 1))
               && (s.life == p.life || s.life == p.hold)
   | none => true
 
@@ -57,37 +61,44 @@ structure St where
   e : E
   adm : Option (Bool × Bool)
 
-/-- One decision of a call: `[0, admitted, count, resume]` an admission, `[1, slot, dial, 0]` a session made,
-`[2, slot, 0, 0]` established, `[3, slot, 0, 0]` expired (the next decision frees it), `[4, slot, 0, 0]` freed; `n`
-is how many sessions held the datagram's id. -/
+/-- One decision of a call: `[0, admitted, count, resume, room, owed]` an admission (admitted 1 made a session, 0 was
+refused, 2 was answered without a session or dropped), `[1, slot, dial, 0, 0, 0]` a session made, `[2, slot, 0, 0, 0,
+0]` established, `[3, slot, 0, 0, 0, 0]` expired (the next decision frees it), `[4, slot, 0, 0, 0, 0]` freed; `n` is
+how many sessions held the datagram's id. -/
 def stepOf (p : P) (op : String) (now kind len n : Nat) (st : St) (s : List Nat) (next : Option (List Nat)) :
     Except String St := do
   match s with
-  | [0, a, c, r] =>
+  | [0, a, c, r, rm, ow] =>
     check (op == "dgram") "an admission outside a datagram"
     check (isFirst kind) "an admission of a type that starts nothing"
     check (room p n) s!"a first flight went to the admission for an id that {n} sessions hold"
     check (c == st.e.count) s!"the admission used the count {c}, the model holds {st.e.count}"
     check (r == 0 || kind == 6) "a resumption that is no Hello"
-    check ((a == 1) == admits p st.e.count kind len (r == 1)) "the admission differs from the rule"
+    check (a ≤ 2) "an admission that is neither made, refused nor answered without a session"
+    if a == 2 then
+      check (r == 0 && forged kind && decide (ow < rm) && decide (floor p kind ≤ len))
+        "a first packet answered without a session that is not a short Initial or a Hello of its floor's size, or no room"
+    else
+      check ((a == 1) == (decide (ow < rm) && admits { p with max := halfCap p.max rm } st.e.count kind len (r == 1)))
+        "the admission differs from the rule"
     pure { st with adm := some (a == 1, r == 1) }
-  | [1, j, 1, _] =>
+  | [1, j, 1, _, _, _] =>
     check (j < st.e.slots.length && at? st.e.slots j == none) "a dial took a slot in use"
     pure { st with e := dial st.e j now p.life }
-  | [1, j, _, _] =>
+  | [1, j, _, _, _, _] =>
     check (j < st.e.slots.length && at? st.e.slots j == none) "a session took a slot in use"
     match st.adm with
     | some (true, r) => pure { e := make st.e j now r p.life, adm := none }
     | _ => throw "a session made without an admission"
-  | [2, j, _, _] =>
+  | [2, j, _, _, _, _] =>
     check (at? st.e.slots j).isSome "a free slot was established"
     pure { st with e := establish st.e j }
-  | [3, j, _, _] =>
+  | [3, j, _, _, _, _] =>
     check (op == "timer") "an expiry outside a timer call"
     check (expired p now (at? st.e.slots j)) "a session expired before its end"
-    check (next == some [4, j, 0, 0]) "an expired session was not freed"
+    check (next == some [4, j, 0, 0, 0, 0]) "an expired session was not freed"
     pure st
-  | [4, j, _, _] => pure { st with e := release st.e j }
+  | [4, j, _, _, _, _] => pure { st with e := release st.e j }
   | _ => throw s!"unknown decision {s}"
 
 def foldSteps (p : P) (op : String) (now kind len n : Nat) : St → List (List Nat) → Except String St
@@ -100,8 +111,8 @@ def foldSteps (p : P) (op : String) (now kind len n : Nat) : St → List (List N
 (`made`). -/
 def freesOnlyMade (before : List (Option Sl)) : List Nat → List (List Nat) → Bool
   | _, [] => true
-  | made, [1, j, _, _] :: rest => freesOnlyMade before (j :: made) rest
-  | made, [4, j, _, _] :: rest => ((at? before j).isNone || made.contains j) && freesOnlyMade before made rest
+  | made, [1, j, _, _, _, _] :: rest => freesOnlyMade before (j :: made) rest
+  | made, [4, j, _, _, _, _] :: rest => ((at? before j).isNone || made.contains j) && freesOnlyMade before made rest
   | made, _ :: rest => freesOnlyMade before made rest
 
 def replayEvent (j : J) (w : W) : Except String W := do
@@ -109,7 +120,8 @@ def replayEvent (j : J) (w : W) : Except String W := do
   | "init" =>
     let k ← natF j "k"
     pure { e := init k, p := { max := ← natF j "max", life := ← natF j "life", hold := ← natF j "hold",
-                               full := ← natF j "full", short := ← natF j "short", holders := ← natF j "holders" } }
+                               full := ← natF j "full", short := ← natF j "short", hello := ← natF j "hello",
+                               holders := ← natF j "holders" } }
   | op =>
     check (op == "dgram" || op == "timer" || op == "other") s!"unknown half-open op {op}"
     let p := w.p
@@ -122,6 +134,7 @@ def replayEvent (j : J) (w : W) : Except String W := do
     let count ← natF j "count"
     let dropped ← natF j "dropped"
     let stalledIn ← natF j "stalledIn"
+    let otherwise ← natF j "otherwise"
     let steps ← (← listOf j "steps").mapM natList
     let diff ← (← (← listOf j "diff").mapM natList).mapM slotOf
     let timeout : Option Nat := match ← natList (← field j "timeout") with
@@ -155,7 +168,7 @@ def replayEvent (j : J) (w : W) : Except String W := do
         "a type that starts no session decided"
       check (stalled0 || !isFirst kind || decided) "a first message type was not decided"
       check (made || diff.isEmpty) "a first flight that made no session changed a slot"
-      check (!decided || made || dropped == 1) "a refused first flight was not counted as dropped"
+      check (!decided || made || dropped + otherwise == 1) "a first flight that made no session was not counted once"
     pure { w with e := e' }
 
 end Vinc.TraceHalfOpen

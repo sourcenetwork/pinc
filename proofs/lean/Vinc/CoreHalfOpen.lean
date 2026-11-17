@@ -30,14 +30,16 @@ structure E where
   count : Nat := 0
   deriving BEq, DecidableEq, Repr
 
-/-- The constants: the cap, the life of an unauthenticated session, its hold once it answered, the floors of a full and
-a short Initial, and the most sessions that may hold one id (`rx.rs` `MAX_CANDIDATES`). -/
+/-- The constants: the cap, the life of an unauthenticated session (30 s, or 60 s on a thin node: a parameter), its hold
+once it answered, the floors of a full Initial, a short Initial and a resumption Hello, and the most sessions that may
+hold one id (`rx.rs` `MAX_CANDIDATES`). -/
 structure P where
   max : Nat
   life : Nat
   hold : Nat
   full : Nat
   short : Nat
+  hello : Nat
   holders : Nat
   deriving Repr
 
@@ -72,8 +74,18 @@ def countOf : List (Option Sl) → Nat
 /-- A message type that starts a session: 1 a full Initial, 2 a short Initial, 6 a resumption Hello. -/
 def isFirst (kind : Nat) : Bool := kind == 1 || kind == 2 || kind == 6
 
-/-- The size floor of a first message type. -/
-def floor (p : P) (kind : Nat) : Nat := if kind = 1 then p.full else if kind = 2 then p.short else 0
+/-- A short Initial or a Hello a forger sends is one the responder would only reject or not answer (a prekey this node
+does not hold, a ticket that does not open, a message that does not parse): it gets no session. -/
+def forged (kind : Nat) : Bool := kind == 2 || kind == 6
+
+/-- The cap the counted sessions meet when the host left `room` places to accept sessions: the code's, or half of the
+room, rounded up, when that is less (`rx.rs` `unrouted`). -/
+def halfCap (max room : Nat) : Nat := min max (room / 2 + room % 2)
+
+/-- The size floor of a first message type: the least a first packet of the type is (a Hello has no padding of its
+own: the length of the shortest Hello there is). -/
+def floor (p : P) (kind : Nat) : Nat :=
+  if kind = 1 then p.full else if kind = 2 then p.short else if kind = 6 then p.hello else 0
 
 /-- The datagram meets the floor, and fewer than `max` sessions are counted unless the Hello's ticket opens (`resume`:
 the Hello is whole in its first packet, names a registered protocol and an unused ticket of this node that opens for
@@ -116,16 +128,18 @@ def release (e : E) (j : Nat) : E :=
   | some s => { slots := put e.slots j none, count := if s.counted then e.count - 1 else e.count }
   | none => e
 
-/-- `run_timer`'s test: an unauthenticated session at or past the end of its own life. -/
+/-- `run_timer`'s test: an unauthenticated session at or past the end of its own life, the first instant past it
+(`created + life + 1`): it is still there at `created + life`, as the transport's own handshake deadline
+(`handshake_end`) has it. -/
 def expired (_p : P) (now : Nat) : Option Sl → Bool
-  | some s => s.unauth && decide (s.created + s.life ≤ now)
+  | some s => s.unauth && decide (s.created + s.life + 1 ≤ now)
   | none => false
 
 /-- `settle`: the session's deadline is the earliest of its own `d` and, while it is unauthenticated, the end of its
-life. -/
+life (`created + life + 1`). -/
 def settle (p : P) (e : E) (j d : Nat) : E :=
   match at? e.slots j with
-  | some s => { e with slots := put e.slots j (some { s with dl := some (if s.unauth then min d (s.created + s.life)
+  | some s => { e with slots := put e.slots j (some { s with dl := some (if s.unauth then min d (s.created + s.life + 1)
                                                                           else d) }) }
   | none => e
 
@@ -155,6 +169,7 @@ inductive Out where
   | stalled
   | notFirst
   | crowded
+  | rejected
   | refused
   | failed
   | made (j : Nat)
@@ -162,15 +177,18 @@ inductive Out where
 
 /-- `unrouted` and `accept`, through `offer` for an id that `held` sessions hold (each refused the flight as a first
 flight other than its own; a holder that takes it is another call): with the event queue stalled nothing starts; a
-type that is no first message starts nothing; an id with `holders` holders takes no more; the admission decides; an
-admitted first flight takes `take`, the slot the free list gives (`none` when no protocol is registered, no slot is
+type that is no first message starts nothing; an id with `holders` holders takes no more; a first packet the responder
+would only reject, or not answer (`rej`: a short Initial or a Hello that is not a resumption, whose prekey this node
+does not hold or whose ticket does not open or whose message does not parse), is answered without a session and takes
+none; the admission decides; an admitted first flight takes `take`, the slot the free list gives (`none` when no protocol is registered, no slot is
 free, the construction fails or the id table is full), and the session's own deadline after the first flight is `d`.
 No session is freed: the new one is made beside the holders. -/
-def arrive (p : P) (e : E) (stalled : Bool) (held kind len now : Nat) (resume : Bool) (take : Option Nat) (d : Nat) :
-    Out × E :=
+def arrive (p : P) (e : E) (stalled : Bool) (held kind len now : Nat) (resume rej : Bool) (take : Option Nat)
+    (d : Nat) : Out × E :=
   if stalled then (.stalled, e)
   else if !isFirst kind then (.notFirst, e)
   else if !room p held then (.crowded, e)
+  else if rej then (.rejected, e)
   else if !admits p e.count kind len resume then (.refused, e)
   else match take with
     | some j => if j < e.slots.length ∧ at? e.slots j = none then (.made j, settle p (make e j now resume p.life) j d)

@@ -35,24 +35,28 @@
 (* full slot table are other calls; Establish, Release and the resume flag *)
 (* of HalfOpenOps are covered by the trace check and HalfOpen.tla. Every   *)
 (* flight here is a forgery from a new source, so none resumes and none    *)
-(* finds a session under its id.                                           *)
+(* finds a session under its id; a forged short Initial or Hello is        *)
+(* rejected or dropped without a session, so only a full Initial of its    *)
+(* floor or more makes one.                                                *)
 (*                                                                         *)
 (* A model length is scaled to the code's: the real length is the real     *)
 (* floor of the type plus len - Floor(kind) (40 + len for a type with no   *)
 (* floor), so a flight is below, at or above its floor as in the model.    *)
+(* A session is there at the end of its life and gone one tick past it.    *)
 (* Model time t is an origin plus t * (30 s / LIFE). A flood at time 0 may *)
 (* fill the table to the cap; the flights at later times are bounded by    *)
 (* GMAX per time, which keeps the graph small, and the flights of later    *)
 (* times are what the timer expires first. Two configs:                    *)
 (*  - MbtHalfOpen.cfg: flights at 0 and 1, timers at 0, 1 and 2, up to 3   *)
-(*    sessions made at time 1: a timer at 1 frees the sessions of time 0   *)
-(*    (the end, included) and spares those of time 1;                      *)
+(*    sessions made at time 1: a timer at 1 spares the sessions of time 0  *)
+(*    (the limit itself) and a timer at 2 frees them, sparing those of     *)
+(*    time 1;                                                              *)
 (*  - MbtHalfOpen_back.cfg: flights at 0, 1 and 2, timers at 0 to 3, one   *)
 (*    session per later time: sessions made out of order, and a timer at   *)
 (*    a time before a session's creation (a clock that stepped back).      *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
-CONSTANTS MAX, LIFE, FULL, SHORT, HT, CT, KINDS, LENS, GMAX
+CONSTANTS MAX, LIFE, FULL, SHORT, HELLO, HT, CT, KINDS, LENS, GMAX
 VARIABLES g, count
 vars == <<g, count>>
 
@@ -68,7 +72,8 @@ Sum(f, S) == IF S = {} THEN 0 ELSE LET x == CHOOSE y \in S : TRUE IN f[x + 1] + 
 
 Init == g = [i \in 1..(Max(HT) + 1) |-> 0] /\ count = 0
 
-Res(kind, len) == First(kind) /\ Admit(count, kind, len, FALSE, MAX, FULL, SHORT)
+\* a forgery of a short Initial or a Hello is only rejected or dropped by the endpoint: no session
+Res(kind, len) == First(kind) /\ ~Forged(kind) /\ Admit(count, kind, len, FALSE, MAX, FULL, SHORT, HELLO)
 CallFlood(t, kind, len, ok) ==
     /\ ok = Res(kind, len)
     /\ g' = IF ok THEN [g EXCEPT ![t + 1] = @ + 1] ELSE g

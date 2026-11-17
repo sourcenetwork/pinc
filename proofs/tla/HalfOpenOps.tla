@@ -27,13 +27,20 @@ Table0(k) == [j \in 0..(k - 1) |-> Free]
 Min2(a, b) == IF a <= b THEN a ELSE b
 MinOf(S) == CHOOSE x \in S : \A y \in S : x <= y
 
-\* unrouted: the size floor of each first message type; any other type starts nothing
+\* unrouted: the size floor of each first message type (a Hello has the length of the shortest one there is); any
+\* other type starts nothing
 First(kind) == kind \in {1, 2, 6}
-Floor(kind, full, short) == CASE kind = 1 -> full [] kind = 2 -> short [] OTHER -> 0
+Floor(kind, full, short, hello) == CASE kind = 1 -> full [] kind = 2 -> short [] kind = 6 -> hello [] OTHER -> 0
+\* a forgery of this type is one the responder would only reject, or not answer at all (a short Initial of a prekey
+\* this node does not hold, a Hello whose ticket does not open or whose message does not parse): the endpoint answers
+\* it without a session, and it takes no half-open slot
+Forged(kind) == kind \in {2, 6}
 \* admitted: the datagram meets the floor, and fewer than max sessions are counted unless the Hello's ticket opens
 \* (resume: the Hello is whole in its first packet, names a registered protocol and an unused ticket that opens)
-Admit(count, kind, len, resume, max, full, short) ==
-    len >= Floor(kind, full, short) /\ (resume \/ count < max)
+Admit(count, kind, len, resume, max, full, short, hello) ==
+    len >= Floor(kind, full, short, hello) /\ (resume \/ count < max)
+\* half of r, rounded up (without the sum r + 1, which a room of 2^31 - 1 would overflow)
+Half(r) == (r \div 2) + (r % 2)
 \* offer: a first flight for an id that held sessions hold, each of which refused it as a first flight other than its
 \* own, goes to the admission above only while the id has fewer than maxh holders (MAX_CANDIDATES); else it is dropped
 \* and counted (holders_refused). Nothing an arrival does frees a session: the flight gets a session beside the holders.
@@ -59,8 +66,9 @@ Release(e, j) ==
     [slots |-> [e.slots EXCEPT ![j] = Free],
      count |-> IF e.slots[j].counted THEN e.count - 1 ELSE e.count]
 
-\* the end of an unauthenticated session's life (its own: the base or the hold), and run_timer's test for it
-End(s) == s.created + s.life
+\* the end of an unauthenticated session's life (its own: the base or the hold): the first instant at which it has run
+\* out, one past created + life, and run_timer's test for it
+End(s) == s.created + s.life + 1
 Expired(s, now) == s.use /\ s.unauth /\ now >= End(s)
 \* settle: the session's deadline is the earliest of its own d and, while it is unauthenticated, the end of its life
 Settle(e, j, d) ==
@@ -71,22 +79,23 @@ Poll(sl, stalled) == IF stalled \/ Dls(sl) = {} THEN NoDl ELSE MinOf(Dls(sl))
 CountOf(sl) == Cardinality({j \in DOMAIN sl : sl[j].counted})
 
 \* handle_timeout: pop the earliest due deadline (the lower slot on a tie), at most k times, stopping when the event
-\* queue stalls (after cut pops); run_timer frees an expired session (expiry at now >= End, or past it when strict),
+\* queue stalls (after cut pops); run_timer frees an expired session (expiry at now >= End; early: one tick sooner, at
+\* the limit itself, the rule the endpoint had before it asked the transport's),
 \* else the connection's own timer runs: d is its next deadline, Gone when the connection ended (settle frees it); a
 \* deadline not after now is moved to now + 1
 Gone == -2
 Due(sl, now) == {j \in DOMAIN sl : sl[j].dl # NoDl /\ sl[j].dl <= now}
 Pop(sl, now) == CHOOSE j \in Due(sl, now) :
                     \A x \in Due(sl, now) : sl[j].dl < sl[x].dl \/ (sl[j].dl = sl[x].dl /\ j <= x)
-ExpiredAt(s, now, strict) == IF strict THEN s.use /\ s.unauth /\ now > End(s) ELSE Expired(s, now)
-RunTimer(e, j, now, d, strict) ==
-    IF ExpiredAt(e.slots[j], now, strict) \/ d = Gone THEN Release(e, j)
+ExpiredAt(s, now, early) == IF early THEN s.use /\ s.unauth /\ now >= End(s) - 1 ELSE Expired(s, now)
+RunTimer(e, j, now, d, early) ==
+    IF ExpiredAt(e.slots[j], now, early) \/ d = Gone THEN Release(e, j)
     ELSE LET e1 == Settle(e, j, d)
          IN IF e1.slots[j].dl <= now THEN [e1 EXCEPT !.slots[j].dl = now + 1] ELSE e1
 RECURSIVE Loop(_, _, _, _, _, _)
-Loop(e, now, ds, strict, fuel, cut) ==
+Loop(e, now, ds, early, fuel, cut) ==
     IF fuel = 0 \/ cut = 0 \/ Due(e.slots, now) = {} THEN e
     ELSE LET j == Pop(e.slots, now)
-         IN Loop(RunTimer([e EXCEPT !.slots[j].dl = NoDl], j, now, ds[j], strict),
-                 now, ds, strict, fuel - 1, cut - 1)
+         IN Loop(RunTimer([e EXCEPT !.slots[j].dl = NoDl], j, now, ds[j], early),
+                 now, ds, early, fuel - 1, cut - 1)
 =============================================================================

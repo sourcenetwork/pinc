@@ -12,15 +12,22 @@
 (* ends of the sessions, the clock stepping back too. One line per call:   *)
 (* the inputs the decisions used (the message type and length read off the *)
 (* datagram, how many sessions held its id, the stall), the decisions the  *)
-(* endpoint recorded in its own trace ring (admissions with the count and  *)
-(* the ticket's verdict they used, sessions made, established, expired and *)
+(* endpoint recorded in its own trace ring (admissions with the count, the *)
+(* room the host left to accept sessions and the sessions owed, and the    *)
+(* ticket's verdict they used, sessions made, established, expired and     *)
 (* freed), and the slots whose bookkeeping changed, with the count, the    *)
 (* stall and poll_timeout after the call. Every decision must be the one   *)
 (* the operators of HalfOpenOps.tla make, in that order, and the slots and *)
 (* the count they compute must be the recorded ones; the deadlines a       *)
 (* session's connection asks for are the endpoint's own, and must keep an  *)
 (* unauthenticated session within its own life, which is the base life or *)
-(* the hold once it answered, never shorter than before. A first flight    *)
+(* the hold once it answered, never shorter than before. The cap a first   *)
+(* flight meets is the smaller of the code's and half the room, rounded    *)
+(* up, and no flight starts a session while the owed sessions fill the     *)
+(* room. A first packet the responder would only reject, or not answer at  *)
+(* all, is recorded as decided without a session (admitted 2): the         *)
+(* endpoint answers it without one, a short Initial or a Hello of the      *)
+(* floor's size or more, and it takes no slot. A first flight              *)
 (* goes to the                                                            *)
 (* admission only while its id has fewer holders than the endpoint allows  *)
 (* (Room), and a datagram whose first flight went to the admission frees   *)
@@ -50,11 +57,14 @@ After(sl, diff) == [j \in DOMAIN sl |->
                       THEN SlotOf(diff[CHOOSE k \in DOMAIN diff : diff[k][1] = j]) ELSE sl[j]]
 \* the deadline and the life are the endpoint's own (the life rises to the hold when the session answers)
 Bare(s) == [s EXCEPT !.dl = NoDl, !.life = 0]
+\* the cap the counted sessions meet: the code's, or half the room the host left, rounded up, when that is less
+HalfCapOf(max, room) == IF Half(room) < max THEN Half(room) ELSE max
 
 \* the decisions of one call, in the order the endpoint recorded them, from the state before it: st = [e, ok, adm],
-\* adm the last admission <<admitted, resume>> (<<>> once a session took it); a step is <<code, a, b, c>>: 0 an
-\* admission <<0, admitted, count, resume>> (Ev.n sessions held the datagram's id), 1 a session made in slot a (b = 1
-\* for a dial), 2 established, 3 expired, 4 freed
+\* adm the last admission <<admitted, resume>> (<<>> once a session took it); a step is <<code, a, b, c, d, f>>: 0 an
+\* admission <<0, admitted, count, resume, room, owed>> (admitted 1 made a session, 0 was refused, 2 was answered
+\* without a session or dropped; Ev.n sessions held the datagram's id), 1 a session made in slot a (b = 1 for a
+\* dial), 2 established, 3 expired, 4 freed
 RECURSIVE Fold(_, _, _)
 Fold(st, steps, k) ==
     IF k > Len(steps) THEN st
@@ -66,7 +76,14 @@ Fold(st, steps, k) ==
                            ok |-> /\ st.ok /\ Ev.op = "dgram" /\ First(Ev.kind) /\ s[3] = x.count
                                   /\ Room(Ev.n, p.holders)
                                   /\ (s[4] = 1 => Ev.kind = 6)
-                                  /\ (s[2] = 1) = Admit(x.count, Ev.kind, Ev.len, s[4] = 1, p.max, p.full, p.short)]
+                                  /\ s[2] \in 0..2
+                                  \* a first packet answered without a session is a short Initial or a Hello of the
+                                  \* floor's size or more that finds room to be decided on, and no resumption
+                                  /\ (s[2] = 2 => /\ Forged(Ev.kind) /\ s[4] = 0 /\ s[6] < s[5]
+                                                  /\ Ev.len >= Floor(Ev.kind, p.full, p.short, p.hello))
+                                  /\ (s[2] # 2 => (s[2] = 1) = (s[6] < s[5]
+                                          /\ Admit(x.count, Ev.kind, Ev.len, s[4] = 1, HalfCapOf(p.max, s[5]),
+                                                   p.full, p.short, p.hello)))]
                       [] s[1] = 1 /\ s[3] = 1 ->
                           [e |-> Dial(x, j, Ev.now, p.life), adm |-> st.adm,
                            ok |-> st.ok /\ j \in DOMAIN x.slots /\ ~x.slots[j].use]
@@ -80,7 +97,7 @@ Fold(st, steps, k) ==
                           [e |-> x, adm |-> st.adm,
                            ok |-> /\ st.ok /\ Ev.op = "timer" /\ j \in DOMAIN x.slots
                                   /\ Expired(x.slots[j], Ev.now)
-                                  /\ k < Len(steps) /\ steps[k + 1] = <<4, j, 0, 0>>]
+                                  /\ k < Len(steps) /\ steps[k + 1] = <<4, j, 0, 0, 0, 0>>]
                       [] s[1] = 4 ->
                           [e |-> Release(x, j), adm |-> st.adm, ok |-> st.ok /\ j \in DOMAIN x.slots]
                       [] OTHER -> [st EXCEPT !.ok = FALSE]
@@ -88,7 +105,7 @@ Fold(st, steps, k) ==
 
 InitEv == /\ Ev.op = "init"
           /\ p' = [k |-> Ev.k, max |-> Ev.max, life |-> Ev.life, hold |-> Ev.hold, full |-> Ev.full,
-                   short |-> Ev.short, holders |-> Ev.holders]
+                   short |-> Ev.short, hello |-> Ev.hello, holders |-> Ev.holders]
           /\ e' = [slots |-> Table0(Ev.k), count |-> 0]
 
 CallEv ==
@@ -127,11 +144,13 @@ CallEv ==
             /\ Ev.stalled0 = 0 /\ ~First(Ev.kind) => Ev.steps = <<>> /\ (Ev.kind # 0 => Ev.dropped = 1)
             /\ Ev.stalled0 = 0 /\ First(Ev.kind) => decided
             /\ ~made => Ev.diff = <<>>
-            /\ decided /\ ~made => Ev.dropped = 1
+            \* what decides and makes no session is counted once: dropped, or (otherwise) answered with a reject, held back by
+            \* the ledger, or refused for want of room
+            /\ decided /\ ~made => Ev.dropped + Ev.otherwise = 1
        /\ UNCHANGED p
 
 Init == /\ i = 1 /\ e = [slots |-> Table0(1), count |-> 0]
-        /\ p = [k |-> 1, max |-> 0, life |-> 0, hold |-> 0, full |-> 0, short |-> 0, holders |-> 0]
+        /\ p = [k |-> 1, max |-> 0, life |-> 0, hold |-> 0, full |-> 0, short |-> 0, hello |-> 0, holders |-> 0]
 Step == /\ i <= Len(Trace) /\ Ev.t = "coho" /\ (InitEv \/ CallEv) /\ i' = i + 1
 Finished == i > Len(Trace) /\ UNCHANGED vars
 TNext == Step \/ Finished

@@ -558,9 +558,13 @@ par witness_tlc integration_codecs_nocap IntegrationCodecs IntegrationCodecs_w_n
 par run_tlc halfopen HalfOpen HalfOpen
 par run_tlc halfopen_held HalfOpen HalfOpen_held
 par run_tlc halfopen_answer HalfOpen HalfOpen_answer
+par run_tlc halfopen_30 HalfOpen HalfOpen_30
+par run_tlc halfopen_60 HalfOpen HalfOpen_60
+par witness_tlc halfopen_rej HalfOpen HalfOpen_rej RejectedRight
+par witness_tlc halfopen_rejfill HalfOpen HalfOpen_rejfill GenuineServed
 par witness_tlc halfopen_le HalfOpen HalfOpen_le Capped
 par witness_tlc halfopen_le_held HalfOpen HalfOpen_le_held HeldBound
-par witness_tlc halfopen_strict HalfOpen HalfOpen_strict TimerRight
+par witness_tlc halfopen_strict HalfOpen HalfOpen_strict LeftRight
 par witness_tlc halfopen_hold HalfOpen HalfOpen_hold DeadlineBound
 par witness_tlc halfopen_supersede HalfOpen HalfOpen_supersede HolderKept
 par witness_tlc halfopen_holders HalfOpen HalfOpen_holders NoFullId
@@ -765,6 +769,7 @@ par witness_tlc handshake_confirm_nobound HandshakeConfirm HandshakeConfirm_nobo
 par run_tlc responder_limit ResponderLimit ResponderLimit
 par witness_tlc responder_limit_nocap ResponderLimit ResponderLimit_nocap HalfOpenBounded
 par witness_tlc responder_limit_nohold ResponderLimit ResponderLimit_nohold SlowFinishHolds
+par witness_tlc responder_limit_rejhold ResponderLimit ResponderLimit_rejhold RejectedKeepsBase
 par witness_tlc dial_report_floor DialReport DialReport_floor FloorOnLimit
 par witness_tlc dial_report_answeratreport DialReport DialReport_answeratreport AnsweredOnlyHeard
 par witness_tlc dial_report_noanswer DialReport DialReport_noanswer AnsweredWhenDone

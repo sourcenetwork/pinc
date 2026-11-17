@@ -14,7 +14,11 @@
 (* later (a key host that takes its time), or never. The Finish reaches it *)
 (* after one path round trip, two, two plus a retransmission timeout as    *)
 (* long as the base limit, or never (a dialer that only holds the session  *)
-(* open). A responder that has answered holds the session Hold ticks from  *)
+(* open). A responder may instead only reject the first message (a Hello   *)
+(* whose ticket does not open, a short Initial of a prekey it does not     *)
+(* hold) at once, a little later, or never; a reject is not an answer to   *)
+(* the handshake and starts no hold. A responder that has answered holds   *)
+(* the session Hold ticks from                                             *)
 (* its creation, longer than the base limit; one that never answered keeps *)
 (* the base limit. The hold is one fixed constant: nothing the peer sends  *)
 (* moves it, so a stranger can make a half-open session cost at most Hold, *)
@@ -26,7 +30,9 @@
 (*  SlowFinishHolds - a responder that answered drops a Finish that        *)
 (*  arrives within Hold;                                                   *)
 (*  UnansweredKeepsBase - a responder that never answered holds the        *)
-(*  session past the base limit.                                           *)
+(*  session past the base limit;                                           *)
+(*  RejectedKeepsBase - a responder that only rejected holds the session   *)
+(*  past the base limit.                                                   *)
 (*                                                                         *)
 (* Guards, each switched off by one RED configuration:                     *)
 (*  Fixed - the hold counts from the session's creation and nothing moves  *)
@@ -35,26 +41,30 @@
 (*  session past Hold, HalfOpenBounded fails);                             *)
 (*  Held - a responder that answered holds Hold, not the base              *)
 (*  (ResponderLimit_nohold: the base limit expires before a slow dialer's  *)
-(*  Finish delayed by one retransmission timeout, SlowFinishHolds fails).  *)
+(*  Finish delayed by one retransmission timeout, SlowFinishHolds fails);  *)
+(*  RejectFree - a reject does not start the hold (ResponderLimit_rejhold: *)
+(*  the reject counts as an answer, the responder that only rejected holds *)
+(*  the session Hold ticks, RejectedKeepsBase fails).                      *)
 (***************************************************************************)
 EXTENDS Integers
 
 \* Base: the connect limit (CONNECT_TIMEOUT, HALF_OPEN_LIFE); Hold: RESPONDER_HOLD, HALF_OPEN_HOLD; Resend: the
 \* responder's resend period; MaxRtt: the largest path round trip; MaxT: the last tick checked; Fixed, Held: the
-\* guards (TRUE in the code).
-CONSTANTS Base, Hold, Resend, MaxRtt, MaxT, Fixed, Held
+\* guards (TRUE in the code); RejectFree: a reject starts no hold (TRUE in the code).
+CONSTANTS Base, Hold, Resend, MaxRtt, MaxT, Fixed, Held, RejectFree
 
-\* t: the clock; rtt: the path round trip; answerAt: when the responder's flight first goes out; finishAt: when the
+\* t: the clock; rtt: the path round trip; answerAt: when the responder's flight first goes out; rejectAt: when it sends a
+\* reject instead of a flight (a first message it only rejects); finishAt: when the
 \* Finish arrives; armed: the instant the hold counts from; r: the responder ("open", "done" holding the session,
 \* "gone" its handshake ran out).
-VARIABLES t, rtt, answerAt, finishAt, armed, r
-vars == <<t, rtt, answerAt, finishAt, armed, r>>
+VARIABLES t, rtt, answerAt, rejectAt, finishAt, armed, r
+vars == <<t, rtt, answerAt, rejectAt, finishAt, armed, r>>
 
 \* Never: an instant past every run.
 Never == MaxT + 1
 
-\* The responder has answered by now.
-Answered == answerAt <= t
+\* The responder has answered by now: its flight went out (a reject is no flight; without RejectFree it counts as one).
+Answered == answerAt <= t \/ (~RejectFree /\ rejectAt <= t)
 
 \* The responder's limit (Timing::connect_timeout, Slot::half_open_life): the base until it answered, then the hold
 \* counted from creation (armed stays 0); without Held, the base throughout.
@@ -64,6 +74,8 @@ Init == /\ t = 0 /\ r = "open" /\ armed = 0
         /\ rtt \in 1..MaxRtt
         \* the flight goes out at once, a tick later (a slow key host), or never
         /\ answerAt \in {0, 1, Never}
+        \* or only a reject goes out, at once, a tick later, or never
+        /\ rejectAt \in {0, 1, Never}
         \* the Finish after one round trip, two, two plus a retransmission timeout as long as the base, or never
         /\ finishAt \in {rtt, 2 * rtt, Base + 2 * rtt, Never}
 
@@ -75,25 +87,25 @@ Tick == /\ t < MaxT
         /\ t' = t + 1
         /\ armed' = IF ~Fixed /\ Answered /\ r = "open" /\ t > answerAt /\ (t - answerAt) % Resend = 0
                     THEN t ELSE armed
-        /\ UNCHANGED <<rtt, answerAt, finishAt, r>>
+        /\ UNCHANGED <<rtt, answerAt, rejectAt, finishAt, r>>
 
 \* The Finish arrives while the handshake waits, after the responder answered: it holds the session.
 Finish == /\ r = "open" /\ t = finishAt /\ Answered /\ t <= Limit
-          /\ r' = "done" /\ UNCHANGED <<t, rtt, answerAt, finishAt, armed>>
+          /\ r' = "done" /\ UNCHANGED <<t, rtt, answerAt, rejectAt, finishAt, armed>>
 
 \* The handshake runs out past its limit (the limit is exceeded, not reached).
 Expire == /\ r = "open" /\ t > Limit
-          /\ r' = "gone" /\ UNCHANGED <<t, rtt, answerAt, finishAt, armed>>
+          /\ r' = "gone" /\ UNCHANGED <<t, rtt, answerAt, rejectAt, finishAt, armed>>
 
 \* A Finish that comes before the responder answered is not one (the dialer cannot finish what it was never sent).
 Ignore == /\ r = "open" /\ t = finishAt /\ ~Answered /\ t <= Limit /\ t < MaxT
-          /\ t' = t + 1 /\ UNCHANGED <<rtt, answerAt, finishAt, armed, r>>
+          /\ t' = t + 1 /\ UNCHANGED <<rtt, answerAt, rejectAt, finishAt, armed, r>>
 
 Next == Tick \/ Finish \/ Expire \/ Ignore
 Spec == Init /\ [][Next]_vars
 
 \* Every variable holds what it should.
-TypeOK == /\ t \in 0..MaxT /\ rtt \in 1..MaxRtt /\ answerAt \in {0, 1, Never} /\ armed \in 0..MaxT
+TypeOK == /\ t \in 0..MaxT /\ rtt \in 1..MaxRtt /\ answerAt \in {0, 1, Never} /\ rejectAt \in {0, 1, Never} /\ armed \in 0..MaxT
           /\ r \in {"open", "done", "gone"}
 
 \* A half-open session never outlives the hold, the tick that passes it included.
@@ -104,4 +116,7 @@ SlowFinishHolds == (answerAt <= finishAt /\ finishAt <= Hold) => r # "gone"
 
 \* A responder that never answered is not held past the base limit.
 UnansweredKeepsBase == (answerAt = Never /\ r = "open") => t <= Base + 1
+
+\* A responder that only rejected is not held past the base limit.
+RejectedKeepsBase == (answerAt = Never /\ rejectAt # Never /\ r = "open") => t <= Base + 1
 =============================================================================

@@ -32,13 +32,19 @@
 (*    never later than the end of any unauthenticated session, and none    *)
 (*    while the event queue is stalled (PollBound);                        *)
 (*  - a first flight that makes no session (a stalled queue, no room left  *)
-(*    to accept, a type that starts nothing, the floor or the cap, no      *)
-(*    protocol, no free slot, a failed construction) changes nothing       *)
-(*    (RefusedRight);                                                      *)
+(*    to accept, a type that starts nothing, the floor or the cap, a first *)
+(*    packet the responder would only reject, no protocol, no free slot, a *)
+(*    failed construction) changes nothing (RefusedRight);                 *)
+(*  - a first packet the responder would only reject (a Hello whose ticket *)
+(*    does not open, a short Initial of a prekey this node does not hold)  *)
+(*    or not answer at all is answered by the endpoint without a session   *)
+(*    and takes no slot (RejectedRight), so the cap is never reached by    *)
+(*    such packets and a genuine first flight is never refused for the     *)
+(*    sessions they made (GenuineServed);                                  *)
 (*  - a session enters the count only when an admitted first flight that   *)
 (*    does not resume makes it, and leaves it only when it is established, *)
-(*    when its connection ends, or at a timer call at or after its end     *)
-(*    (LeftRight);                                                         *)
+(*    when its connection ends, or at a timer call at or after its end,    *)
+(*    the first instant past its life (LeftRight);                         *)
 (*  - a timer call that the event queue did not stop leaves no             *)
 (*    unauthenticated session at or past its end (TimerRight);             *)
 (*  - a session made by a resumption is not counted and one made by        *)
@@ -57,8 +63,16 @@
 (*    the queue full and is closed as busy (NoBusy).                       *)
 (* BUG_LE admits while count <= MAX and while the id has at most MAXH      *)
 (* holders: the witnesses HalfOpen_le and HalfOpen_le_held break Capped    *)
-(* and HeldBound. STRICT expires only past the end: the witness            *)
-(* HalfOpen_strict breaks TimerRight. BUG_HOLD lets an answer hold the     *)
+(* and HeldBound. A session lives LIFE and is gone one tick past it, as    *)
+(* the transport's own deadline is; BUG_GE frees it at LIFE itself, the    *)
+(* endpoint's rule before: the witness HalfOpen_strict breaks LeftRight.   *)
+(* BUG_REJ admits a first packet the responder would only reject, as the   *)
+(* endpoint did: the witness HalfOpen_rej breaks RejectedRight, and        *)
+(* HalfOpen_rejfill breaks GenuineServed (the cap reached by rejected      *)
+(* packets alone, a genuine first flight refused). The life is a           *)
+(* parameter, in units of 30 s: HalfOpen_30 (LIFE = 1, HOLD = 2, a node    *)
+(* that is not thin: 30 s, 60 s once it answered) and HalfOpen_60 (LIFE =  *)
+(* HOLD = 2, a thin node: 60 s). BUG_HOLD lets an answer hold the          *)
 (* session past HOLD: the witness HalfOpen_hold breaks DeadlineBound.      *)
 (* HalfOpen_answer has sessions answer and live HOLD > LIFE. SUPERSEDE is  *)
 (* the rule before #365: a first flight that the one holder of its id      *)
@@ -88,16 +102,17 @@
 (* Lean counterpart: proofs/lean/Vinc/CoreHalfOpen*.lean, and              *)
 (* proofs/lean/Vinc/CoreBacklog*.lean for the room.                        *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, FiniteSets, TLC
-CONSTANTS K, MAX, LIFE, HOLD, FULL, SHORT, TMAX, LENS, IDS, MAXH, BUG_LE, STRICT, SUPERSEDE,
-          QCAP, BUG_ROOM, BUG_EST, BUG_GONE, BUG_SUB, BUG_HALF, BUG_HOLD
+EXTENDS Integers, Sequences, FiniteSets
+CONSTANTS K, MAX, LIFE, HOLD, FULL, SHORT, HELLO, TMAX, LENS, IDS, MAXH, BUG_LE, BUG_GE, SUPERSEDE,
+          QCAP, BUG_ROOM, BUG_EST, BUG_GONE, BUG_SUB, BUG_HALF, BUG_HOLD, BUG_REJ
 VARIABLES e, ids, stalled, refused, left, timed, resumed, atcap, kept, ow, pend, q, gone, busy, heldok, roomref,
-          halfok, resok
-\* the two history flags of the half rule: only Arrive changes them
-hk == <<halfok, resok>>
-bk == <<ow, pend, q, gone, busy, heldok, roomref, halfok, resok>>
+          halfok, resok, rejok, genok, rs
+\* the history flags of the half rule and of the rejected first packets, and the slots whose session a rejected packet
+\* made: only Arrive changes them
+hk == <<halfok, resok, rejok, genok, rs>>
+bk == <<ow, pend, q, gone, busy, heldok, roomref, halfok, resok, rejok, genok, rs>>
 vars == <<e, ids, stalled, refused, left, timed, resumed, atcap, kept, ow, pend, q, gone, busy, heldok, roomref,
-          halfok, resok>>
+          halfok, resok, rejok, genok, rs>>
 
 INSTANCE HalfOpenOps
 
@@ -112,16 +127,14 @@ Limited == QCAP > 0
 Init == /\ e = [slots |-> Table0(K), count |-> 0] /\ ids = [j \in Slots |-> 0] /\ stalled = FALSE
         /\ refused = TRUE /\ left = TRUE /\ timed = TRUE /\ resumed = TRUE /\ atcap = FALSE /\ kept = TRUE
         /\ ow = {} /\ pend = {} /\ q = 0 /\ gone = 0 /\ busy = FALSE /\ heldok = TRUE /\ roomref = FALSE
-        /\ halfok = TRUE /\ resok = TRUE
+        /\ halfok = TRUE /\ resok = TRUE /\ rejok = TRUE /\ genok = TRUE /\ rs = {}
 
-\* half of r, rounded up
-Half(r) == (r + 1) \div 2
 \* rx.rs unrouted: the counted sessions may hold at most half of the room, rounded up, and never more than MAX (under
 \* BUG_HALF, the rule before, the whole room: MAX alone bounds them)
 HalfCap == IF Limited /\ ~BUG_HALF /\ Half(QCAP - q) < MAX THEN Half(QCAP - q) ELSE MAX
 AdmitM(count, kind, len, resume) ==
-    IF BUG_LE THEN len >= Floor(kind, FULL, SHORT) /\ (resume \/ count <= MAX)
-    ELSE Admit(count, kind, len, resume, HalfCap, FULL, SHORT)
+    IF BUG_LE THEN len >= Floor(kind, FULL, SHORT, HELLO) /\ (resume \/ count <= MAX)
+    ELSE Admit(count, kind, len, resume, HalfCap, FULL, SHORT, HELLO)
 RoomM(held) == IF BUG_LE THEN held <= MAXH ELSE Room(held, MAXH)
 \* rx.rs unrouted: a first flight may start a session only while the owed sessions leave room (owed < room)
 Open == ~Limited \/ BUG_ROOM \/ Cardinality(ow) < QCAP - q
@@ -146,16 +159,20 @@ EndOwed(x, R) == /\ ow' = ow \ R /\ pend' = pend \ R
 \* fail: the construction or the id table fails; d: the new session's own deadline after the first flight. Under
 \* SUPERSEDE (the rule before #365) the one holder of x is freed first and the flight goes to the admission as for an id
 \* no session holds; an id held by more than one session took no first flight. With no room left to accept (Open) the
-\* flight is refused before the admission, after its type and floor are read
+\* flight is refused before the admission, after its type and floor are read. rej: the responder would only reject the
+\* flight or not answer it (a short Initial or a Hello, not a resumption): the endpoint answers it without a session
+\* and it never reaches the admission; under BUG_REJ it does, as the endpoint's admission did before
 Arrive == \E t \in 0..TMAX, kind \in {1, 2, 6, 4}, len \in LENS, resume \in BOOLEAN, alpn \in BOOLEAN,
-             fail \in BOOLEAN, x \in IDS : \E d \in {t + 1, t + LIFE + 1} :
+             fail \in BOOLEAN, rej \in BOOLEAN, x \in IDS : \E d \in {t + 1, t + LIFE + 1} :
     /\ resume => (kind = 6 /\ alpn)
+    /\ rej => (Forged(kind) /\ ~resume)
     /\ LET gone0 == IF SUPERSEDE /\ ~stalled /\ First(kind) /\ Cardinality(Holders(x)) = 1 THEN Holders(x) ELSE {}
            e0 == IF gone0 = {} THEN e ELSE Release(e, MinOf(gone0))
            ids0 == [k \in Slots |-> IF k \in gone0 THEN 0 ELSE ids[k]]
            held == Cardinality(Holders(x) \ gone0)
            room == ~stalled /\ First(kind) /\ Open
            adm == /\ room
+                  /\ BUG_REJ \/ ~rej
                   /\ IF SUPERSEDE THEN held = 0 ELSE RoomM(held)
                   /\ AdmitM(e0.count, kind, len, resume)
            free == {k \in Slots : ~e0.slots[k].use}
@@ -176,8 +193,14 @@ Arrive == \E t \in 0..TMAX, kind \in {1, 2, 6, 4}, len \in LENS, resume \in BOOL
           /\ halfok' = (halfok /\ (Limited /\ made /\ ~resume => e0.count < Half(QCAP - q)))
           /\ resok' = (resok /\ ((Limited /\ QCAP >= 2 /\ q = 0 /\ ~stalled /\ resume /\ ~fail /\ free # {}
                                     /\ (IF SUPERSEDE THEN held = 0 ELSE RoomM(held))
+                                    /\ len >= Floor(kind, FULL, SHORT, HELLO)
                                     /\ ow \subseteq {k \in Slots : e0.slots[k].counted})
                                    => made))
+          /\ rejok' = (rejok /\ (rej => ~made))
+          /\ rs' = IF made THEN (IF rej THEN rs \cup {j} ELSE rs \ {j}) ELSE rs
+          /\ genok' = (genok /\ ~(/\ ~rej /\ room /\ RoomM(held) /\ ~resume /\ e0.count > 0 /\ e0.count >= HalfCap
+                                  /\ len >= Floor(kind, FULL, SHORT, HELLO)
+                                  /\ \A k \in Slots : e0.slots[k].counted => k \in rs))
     /\ UNCHANGED <<stalled, timed, q, gone, busy>>
 
 \* the handshake of an unauthenticated session completes; under BUG_EST it is owed no more (the host has not read its
@@ -232,7 +255,7 @@ Stall == stalled' = ~stalled /\ UNCHANGED <<e, ids, refused, left, timed, resume
 \* a timer call at t: each due connection's next deadline (or its end), and after how many pops the queue stalls
 Timer == \E t \in 0..TMAX : \E ds \in [Slots -> {t, t + 2, Gone}], cut \in 0..(K + 1) :
     IF stalled THEN UNCHANGED vars
-    ELSE /\ e' = Loop(e, t, ds, STRICT, K, IF cut > K THEN K ELSE cut)
+    ELSE /\ e' = Loop(e, t, ds, BUG_GE, K, IF cut > K THEN K ELSE cut)
          /\ ids' = [j \in Slots |-> IF e'.slots[j].use THEN ids[j] ELSE 0]
          /\ stalled' = (cut <= K)
          /\ timed' = (timed /\ (~stalled' => \A j \in Slots : ~Expired(e'.slots[j], t)))
@@ -300,8 +323,11 @@ NoBusy == ~busy
 HalfRight == halfok
 HalfRoom == ~Limited \/ BUG_LE \/ e.count <= Half(QCAP)
 ResumeOpen == resok
+RejectedRight == rejok
+GenuineServed == genok
 Inv == Capped /\ Exact /\ Shape /\ DeadlineBound /\ PollBound /\ RefusedRight /\ LeftRight /\ TimerRight /\ ResumeRight
        /\ HolderKept /\ HeldBound /\ HeldRight /\ Placed /\ OwedExact /\ NoBusy /\ HalfRight /\ HalfRoom /\ ResumeOpen
+       /\ RejectedRight /\ GenuineServed
 
 \* reachability witnesses: a resumption is admitted while the count is at the cap; an id gets MAXH holders; a first
 \* flight is refused for want of room

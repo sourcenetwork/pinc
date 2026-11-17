@@ -15,7 +15,8 @@ any times (a clock that steps back included):
 - so `poll_timeout` is never later than the end of any unauthenticated session, and gives nothing while the event
   queue is stalled (`poll_le`, `poll_stalled`);
 - a first flight that makes no session (a stalled queue, a type that starts nothing, an id that has `holders`
-  holders, the floor or the cap, no slot or a failed construction) leaves the table and the count as they were
+  holders, a first packet the responder only rejects (`arrive_rej_no_session`), the floor or the cap, no slot or a
+  failed construction) leaves the table and the count as they were
   (`arrive_unchanged`); one that makes a session was admitted, under an id with fewer than `holders` holders
   (`arrive_room`), took a free slot, and made it unauthenticated, counted unless it resumes, with its deadline at most
   its life away, and changed no other slot (`arrive_made`); only a resumption is admitted at the cap (`arrive_cap`);
@@ -25,7 +26,7 @@ any times (a clock that steps back included):
 - a session leaves the count only when it is established (`establish_slot`, `establish_count`), freed
   (`release_slot`, `release_count`), or at a timer call at or after its end or when its connection ended at its timer
   (`loop_left`); no call but an admitted first flight that does not resume adds to the count (`arrive_made`,
-  `loop_won`, and the slot lemmas);
+  `loop_won`, and the slot lemmas); a session is there at `created + life` and gone one tick past it (`expired`);
 - a timer call that the event queue does not stop (as many pops as there are due deadlines, at most the table's size)
   leaves no unauthenticated session at or past its end (`loop_frees`).
 -/
@@ -93,7 +94,7 @@ theorem countOf_replicate : ∀ k, countOf (List.replicate k none) = 0
 most its life after its creation. -/
 def good (p : P) : Option Sl → Prop
   | some s => (s.counted = true → s.unauth = true) ∧
-              (s.unauth = true → ∃ d, s.dl = some d ∧ d ≤ s.created + s.life)
+              (s.unauth = true → ∃ d, s.dl = some d ∧ d ≤ s.created + s.life + 1)
   | none => True
 
 /-- What holds of the table between calls. -/
@@ -113,7 +114,7 @@ theorem Inv.counted_unauth {p : P} {e : E} (hI : Inv p e) {j : Nat} {s : Sl} (h 
   exact this.1 hc
 
 theorem Inv.deadline {p : P} {e : E} (hI : Inv p e) {j : Nat} {s : Sl} (h : at? e.slots j = some s)
-    (hu : s.unauth = true) : ∃ d, s.dl = some d ∧ d ≤ s.created + s.life := by
+    (hu : s.unauth = true) : ∃ d, s.dl = some d ∧ d ≤ s.created + s.life + 1 := by
   have := hI.good j
   rw [h] at this
   exact this.2 hu
@@ -147,7 +148,7 @@ theorem cnt_le_count {p : P} {e : E} (hI : Inv p e) {j : Nat} {s : Sl} (h : at? 
 /-! ## The steps -/
 
 theorem settle_eq (p : P) (e : E) (j d : Nat) (s : Sl) (h : at? e.slots j = some s) :
-    settle p e j d = { slots := put e.slots j (some { s with dl := some (if s.unauth then min d (s.created + s.life)
+    settle p e j d = { slots := put e.slots j (some { s with dl := some (if s.unauth then min d (s.created + s.life + 1)
                                                                        else d) }), count := e.count } := by
   simp [settle, h]
 
@@ -210,7 +211,7 @@ theorem dial_inv {p : P} {e : E} (hI : Inv p e) {j : Nat} (hj : j < e.slots.leng
 /-- An answer, then the deadline its connection asks for: the session lives `h`, its deadline at most that away. -/
 theorem answer_settle_eq (p : P) (e : E) (j h d : Nat) (s : Sl) (hs : at? e.slots j = some s) :
     settle p (answer e j h) j d =
-      { slots := put e.slots j (some { s with life := h, dl := some (if s.unauth then min d (s.created + h) else d) })
+      { slots := put e.slots j (some { s with life := h, dl := some (if s.unauth then min d (s.created + h + 1) else d) })
         count := e.count } := by
   have hlt := at?_lt _ _ _ hs
   have ha : at? (answer e j h).slots j = some { s with life := h } := by
@@ -301,37 +302,40 @@ theorem admits_iff (p : P) (count kind len : Nat) (resume : Bool) :
     admits p count kind len resume = true ↔ floor p kind ≤ len ∧ (resume = true ∨ count < p.max) := by
   simp [admits]
 
-/-- A first flight that makes no session changes nothing. -/
-theorem arrive_unchanged (p : P) (e : E) (stalled : Bool) (held kind len now : Nat) (resume : Bool)
-    (take : Option Nat) (d : Nat) (h : ∀ j, (arrive p e stalled held kind len now resume take d).1 ≠ .made j) :
-    (arrive p e stalled held kind len now resume take d).2 = e := by
+/-- A first flight that makes no session changes nothing (a first packet the responder only rejects included). -/
+theorem arrive_unchanged (p : P) (e : E) (stalled : Bool) (held kind len now : Nat) (resume rej : Bool)
+    (take : Option Nat) (d : Nat) (h : ∀ j, (arrive p e stalled held kind len now resume rej take d).1 ≠ .made j) :
+    (arrive p e stalled held kind len now resume rej take d).2 = e := by
   unfold arrive at h ⊢
   cases stalled
   · cases hk : isFirst kind
     · simp
     · cases hr : room p held
       · simp
-      · cases ha : admits p e.count kind len resume
+      · cases hj : rej
+        · cases ha : admits p e.count kind len resume
+          · simp
+          · cases take with
+            | none => simp
+            | some k =>
+              by_cases hf : k < e.slots.length ∧ at? e.slots k = none
+              · exact absurd (by simp [hk, hr, hj, ha, hf]) (h k)
+              · simp [hf]
         · simp
-        · cases take with
-          | none => simp
-          | some k =>
-            by_cases hf : k < e.slots.length ∧ at? e.slots k = none
-            · exact absurd (by simp [hk, hr, ha, hf]) (h k)
-            · simp [hf]
   · simp
 
 /-- What a first flight that makes a session did: it was admitted (the queue not stalled, a first message type, an id
-with fewer than `holders` holders, the floor met and the count under the cap unless it resumes) and took a free slot,
+with fewer than `holders` holders, a packet the responder does not only reject, the floor met and the count under the
+cap unless it resumes) and took a free slot,
 which now holds an unauthenticated session made `now`, counted unless it resumes, with its deadline at most its life
 away; the count rose by one exactly when it does not resume. -/
-theorem arrive_made_eq (p : P) (e : E) (stalled : Bool) (held kind len now : Nat) (resume : Bool)
-    (take : Option Nat) (d j : Nat) (h : (arrive p e stalled held kind len now resume take d).1 = .made j) :
+theorem arrive_made_eq (p : P) (e : E) (stalled : Bool) (held kind len now : Nat) (resume rej : Bool)
+    (take : Option Nat) (d j : Nat) (h : (arrive p e stalled held kind len now resume rej take d).1 = .made j) :
     stalled = false ∧ isFirst kind = true ∧ room p held = true ∧ admits p e.count kind len resume = true ∧
     j < e.slots.length ∧ at? e.slots j = none ∧
-    (arrive p e stalled held kind len now resume take d).2 =
+    (arrive p e stalled held kind len now resume rej take d).2 =
       { slots := put e.slots j (some { created := now, unauth := true, counted := !resume, life := p.life,
-                                       dl := some (min d (now + p.life)) })
+                                       dl := some (min d (now + p.life + 1)) })
         count := if resume then e.count else e.count + 1 } := by
   unfold arrive at h ⊢
   cases stalled
@@ -339,71 +343,81 @@ theorem arrive_made_eq (p : P) (e : E) (stalled : Bool) (held kind len now : Nat
     · simp [hk] at h
     · cases hr : room p held
       · simp [hk, hr] at h
-      · cases ha : admits p e.count kind len resume
-        · simp [hk, hr, ha] at h
-        · cases take with
-          | none => simp [hk, hr, ha] at h
-          | some k =>
-            by_cases hf : k < e.slots.length ∧ at? e.slots k = none
-            · simp [hk, hr, ha, hf] at h
-              subst h
-              refine ⟨rfl, rfl, rfl, rfl, hf.1, hf.2, ?_⟩
-              simp only [hf, and_self, ite_true]
-              have hm : at? (make e k now resume p.life).slots k =
-                  some { created := now, unauth := true, counted := !resume, life := p.life, dl := none } := at?_put_eq _ _ _ hf.1
-              rw [settle_eq p _ k d _ hm]
-              simp [make, put_put]
-            · simp [hk, hr, ha, hf] at h
+      · cases hj : rej
+        · cases ha : admits p e.count kind len resume
+          · simp [hk, hr, hj, ha] at h
+          · cases take with
+            | none => simp [hk, hr, hj, ha] at h
+            | some k =>
+              by_cases hf : k < e.slots.length ∧ at? e.slots k = none
+              · simp [hk, hr, hj, ha, hf] at h
+                subst h
+                refine ⟨rfl, rfl, rfl, rfl, hf.1, hf.2, ?_⟩
+                simp only [hf, and_self, ite_true]
+                have hm : at? (make e k now resume p.life).slots k =
+                    some { created := now, unauth := true, counted := !resume, life := p.life, dl := none } := at?_put_eq _ _ _ hf.1
+                rw [settle_eq p _ k d _ hm]
+                simp [make, put_put]
+              · simp [hk, hr, hj, ha, hf] at h
+        · simp [hk, hr, hj] at h
   · simp at h
 
+/-- A first packet the responder would only reject, or not answer, takes no slot: whatever the table, the count or the
+cap, the answer is no session. -/
+theorem arrive_rej_no_session (p : P) (e : E) (stalled : Bool) (held kind len now : Nat) (resume : Bool)
+    (take : Option Nat) (d j : Nat) :
+    (arrive p e stalled held kind len now resume true take d).1 ≠ .made j := by
+  unfold arrive
+  cases stalled <;> cases hk : isFirst kind <;> cases hr : room p held <;> simp [hk, hr]
+
 /-- The slot a first flight made, and the others, which it left alone. -/
-theorem arrive_made (p : P) (e : E) (stalled : Bool) (held kind len now : Nat) (resume : Bool) (take : Option Nat)
-    (d j : Nat) (h : (arrive p e stalled held kind len now resume take d).1 = .made j) :
-    at? (arrive p e stalled held kind len now resume take d).2.slots j =
-      some { created := now, unauth := true, counted := !resume, life := p.life, dl := some (min d (now + p.life)) } ∧
-    ∀ i, i ≠ j → at? (arrive p e stalled held kind len now resume take d).2.slots i = at? e.slots i := by
-  obtain ⟨_, _, _, _, hlt, _, heq⟩ := arrive_made_eq p e stalled held kind len now resume take d j h
+theorem arrive_made (p : P) (e : E) (stalled : Bool) (held kind len now : Nat) (resume rej : Bool) (take : Option Nat)
+    (d j : Nat) (h : (arrive p e stalled held kind len now resume rej take d).1 = .made j) :
+    at? (arrive p e stalled held kind len now resume rej take d).2.slots j =
+      some { created := now, unauth := true, counted := !resume, life := p.life, dl := some (min d (now + p.life + 1)) } ∧
+    ∀ i, i ≠ j → at? (arrive p e stalled held kind len now resume rej take d).2.slots i = at? e.slots i := by
+  obtain ⟨_, _, _, _, hlt, _, heq⟩ := arrive_made_eq p e stalled held kind len now resume rej take d j h
   rw [heq]
   exact ⟨at?_put_eq _ _ _ hlt, fun i hi => at?_put_ne _ _ _ _ hi⟩
 
 /-- Only a resumption is admitted at the cap. -/
-theorem arrive_cap (p : P) (e : E) (stalled : Bool) (held kind len now : Nat) (resume : Bool) (take : Option Nat)
-    (d j : Nat) (h : (arrive p e stalled held kind len now resume take d).1 = .made j) (hc : p.max ≤ e.count) :
+theorem arrive_cap (p : P) (e : E) (stalled : Bool) (held kind len now : Nat) (resume rej : Bool) (take : Option Nat)
+    (d j : Nat) (h : (arrive p e stalled held kind len now resume rej take d).1 = .made j) (hc : p.max ≤ e.count) :
     resume = true := by
-  have := (arrive_made_eq p e stalled held kind len now resume take d j h).2.2.2.1
+  have := (arrive_made_eq p e stalled held kind len now resume rej take d j h).2.2.2.1
   rw [admits_iff] at this
   rcases this.2 with h | h
   · exact h
   · omega
 
 /-- A first flight makes a session only while its id has fewer than `holders` holders. -/
-theorem arrive_room (p : P) (e : E) (stalled : Bool) (held kind len now : Nat) (resume : Bool) (take : Option Nat)
-    (d j : Nat) (h : (arrive p e stalled held kind len now resume take d).1 = .made j) : held < p.holders := by
-  have := (arrive_made_eq p e stalled held kind len now resume take d j h).2.2.1
+theorem arrive_room (p : P) (e : E) (stalled : Bool) (held kind len now : Nat) (resume rej : Bool) (take : Option Nat)
+    (d j : Nat) (h : (arrive p e stalled held kind len now resume rej take d).1 = .made j) : held < p.holders := by
+  have := (arrive_made_eq p e stalled held kind len now resume rej take d j h).2.2.1
   simpa [room] using this
 
 /-- No arrival frees or changes a session, whatever it brings and whoever holds its id: every slot in use holds what
 it held, deadline included. -/
-theorem arrive_keeps (p : P) (e : E) (stalled : Bool) (held kind len now : Nat) (resume : Bool) (take : Option Nat)
+theorem arrive_keeps (p : P) (e : E) (stalled : Bool) (held kind len now : Nat) (resume rej : Bool) (take : Option Nat)
     (d i : Nat) (s : Sl) (h : at? e.slots i = some s) :
-    at? (arrive p e stalled held kind len now resume take d).2.slots i = some s := by
-  by_cases hm : ∃ j, (arrive p e stalled held kind len now resume take d).1 = .made j
+    at? (arrive p e stalled held kind len now resume rej take d).2.slots i = some s := by
+  by_cases hm : ∃ j, (arrive p e stalled held kind len now resume rej take d).1 = .made j
   · obtain ⟨j, hj⟩ := hm
-    obtain ⟨_, _, _, _, _, hfree, _⟩ := arrive_made_eq p e stalled held kind len now resume take d j hj
+    obtain ⟨_, _, _, _, _, hfree, _⟩ := arrive_made_eq p e stalled held kind len now resume rej take d j hj
     have hij : i ≠ j := by
       intro hij
       rw [hij, hfree] at h
       simp at h
-    rw [(arrive_made p e stalled held kind len now resume take d j hj).2 i hij]
+    rw [(arrive_made p e stalled held kind len now resume rej take d j hj).2 i hij]
     exact h
-  · rw [arrive_unchanged p e stalled held kind len now resume take d (fun j hj => hm ⟨j, hj⟩)]
+  · rw [arrive_unchanged p e stalled held kind len now resume rej take d (fun j hj => hm ⟨j, hj⟩)]
     exact h
 
-theorem arrive_inv {p : P} {e : E} (hI : Inv p e) (stalled : Bool) (held kind len now : Nat) (resume : Bool)
-    (take : Option Nat) (d : Nat) : Inv p (arrive p e stalled held kind len now resume take d).2 := by
-  by_cases hm : ∃ j, (arrive p e stalled held kind len now resume take d).1 = .made j
+theorem arrive_inv {p : P} {e : E} (hI : Inv p e) (stalled : Bool) (held kind len now : Nat) (resume rej : Bool)
+    (take : Option Nat) (d : Nat) : Inv p (arrive p e stalled held kind len now resume rej take d).2 := by
+  by_cases hm : ∃ j, (arrive p e stalled held kind len now resume rej take d).1 = .made j
   · obtain ⟨j, hj⟩ := hm
-    obtain ⟨_, _, _, ha, hlt, hfree, heq⟩ := arrive_made_eq p e stalled held kind len now resume take d j hj
+    obtain ⟨_, _, _, ha, hlt, hfree, heq⟩ := arrive_made_eq p e stalled held kind len now resume rej take d j hj
     rw [heq]
     rw [admits_iff] at ha
     refine inv_put hI hlt ?_ _ ?_ ?_
@@ -416,7 +430,7 @@ theorem arrive_inv {p : P} {e : E} (hI : Inv p e) (stalled : Bool) (held kind le
         simp only [Bool.false_eq_true, ite_false]
         omega
       · simpa using this
-  · have hu := arrive_unchanged p e stalled held kind len now resume take d (fun j hj => hm ⟨j, hj⟩)
+  · have hu := arrive_unchanged p e stalled held kind len now resume rej take d (fun j hj => hm ⟨j, hj⟩)
     rw [hu]
     exact hI
 
@@ -442,7 +456,7 @@ theorem earliest_le : ∀ (l : List (Option Sl)) (j : Nat) (s : Sl) (d : Nat), a
 
 /-- `poll_timeout` is never later than the end of any unauthenticated session. -/
 theorem poll_le {p : P} {e : E} (hI : Inv p e) {j : Nat} {s : Sl} (h : at? e.slots j = some s)
-    (hu : s.unauth = true) : ∃ t, poll e.slots false = some t ∧ t ≤ s.created + s.life := by
+    (hu : s.unauth = true) : ∃ t, poll e.slots false = some t ∧ t ≤ s.created + s.life + 1 := by
   obtain ⟨d, hd, hle⟩ := hI.deadline h hu
   obtain ⟨t, ht, htd⟩ := earliest_le e.slots j s d h hd
   exact ⟨t, ht, Nat.le_trans htd hle⟩
@@ -603,7 +617,7 @@ theorem runTimer_spec (p : P) (now : Nat) (d : Option Nat) (e : E) (j : Nat) (s 
     | some d =>
       dsimp only
       -- the deadline the connection asks for, kept within the session's life, then moved past now
-      let v := if s.unauth then min d (s.created + s.life) else d
+      let v := if s.unauth then min d (s.created + s.life + 1) else d
       let w := if v ≤ now then now + 1 else v
       have hset : settle p (clearDl e j) j d =
           { slots := put e.slots j (some { s with dl := some v }), count := e.count } := by
@@ -622,7 +636,7 @@ theorem runTimer_spec (p : P) (now : Nat) (d : Option Nat) (e : E) (j : Nat) (s 
         · simp only [hv, ite_false, w]
           exact hset
       rw [hb]
-      have hnot : ¬ (s.unauth = true ∧ s.created + s.life ≤ now) := by
+      have hnot : ¬ (s.unauth = true ∧ s.created + s.life + 1 ≤ now) := by
         intro hh
         apply hx
         simp [expired, hh.1, hh.2]
@@ -634,12 +648,12 @@ theorem runTimer_spec (p : P) (now : Nat) (d : Option Nat) (e : E) (j : Nat) (s 
       · intro hcu
         refine ⟨hcu, fun hu => ⟨w, rfl, ?_⟩⟩
         have hu' : s.unauth = true := hu
-        have hv : v ≤ s.created + s.life := by
+        have hv : v ≤ s.created + s.life + 1 := by
           simp only [v, hu', ite_true]
           exact Nat.min_le_right _ _
         by_cases hvn : v ≤ now
         · simp only [w, hvn, ite_true]
-          have : ¬ s.created + s.life ≤ now := fun hh => hnot ⟨hu, hh⟩
+          have : ¬ s.created + s.life + 1 ≤ now := fun hh => hnot ⟨hu, hh⟩
           omega
         · simp only [w, hvn, ite_false]
           exact hv
@@ -788,7 +802,7 @@ or for one that `held` sessions hold, each of which refused it as a first flight
 a session completing (then its deadline `d`), a session freed (its connection ended, a close finished), another input
 moving a session's deadline, a dial of this node, and a timer call. -/
 inductive Op where
-  | arrive (stalled : Bool) (held kind len now : Nat) (resume : Bool) (take : Option Nat) (d : Nat)
+  | arrive (stalled : Bool) (held kind len now : Nat) (resume rej : Bool) (take : Option Nat) (d : Nat)
   | est (j d : Nat)
   | close (j : Nat)
   | touch (j d : Nat)
@@ -797,7 +811,7 @@ inductive Op where
   | timer (now : Nat) (ds : Nat → Option Nat) (fuel : Nat)
 
 def step (p : P) (e : E) : Op → E
-  | .arrive st held kind len now r take d => (arrive p e st held kind len now r take d).2
+  | .arrive st held kind len now r rej take d => (arrive p e st held kind len now r rej take d).2
   | .est j d => settle p (establish e j) j d
   | .close j => release e j
   | .touch j d => settle p e j d
@@ -806,7 +820,7 @@ def step (p : P) (e : E) : Op → E
   | .timer now ds fuel => loop p now ds fuel e
 
 theorem step_inv {p : P} {e : E} (hI : Inv p e) : ∀ op, Inv p (step p e op)
-  | .arrive st held kind len now r take d => arrive_inv hI st held kind len now r take d
+  | .arrive st held kind len now r rej take d => arrive_inv hI st held kind len now r rej take d
   | .est j d => settle_inv (establish_inv hI j) j d
   | .close j => release_inv hI j
   | .touch j d => settle_inv hI j d
@@ -876,8 +890,8 @@ theorem step_left {p : P} {e : E} (hI : Inv p e) (op : Op) {i : Nat} {s : Sl} (h
     (∃ t, at? (step p e op).slots i = some t ∧ t.created = s.created) ∨ op = .close i ∨
     ∃ now ds fuel, op = .timer now ds fuel ∧ (expired p now (some s) = true ∨ ds i = none) := by
   cases op with
-  | arrive st held kind len now r take d =>
-    exact Or.inl ⟨s, arrive_keeps p e st held kind len now r take d i s h, rfl⟩
+  | arrive st held kind len now r rej take d =>
+    exact Or.inl ⟨s, arrive_keeps p e st held kind len now r rej take d i s h, rfl⟩
   | est j d =>
     left
     simp only [step]
@@ -937,7 +951,7 @@ theorem run_arrive_keeps (p : P) : ∀ (ops : List Op) (e : E) (i : Nat) (s : Sl
     simp only [List.foldl_cons]
     apply run_arrive_keeps p ops _ i s (fun o ho => ha o (List.mem_cons_of_mem _ ho))
     cases op
-    case arrive st held kind len now r take d => exact arrive_keeps p e st held kind len now r take d i s h
+    case arrive st held kind len now r rej take d => exact arrive_keeps p e st held kind len now r rej take d i s h
     all_goals exact absurd (ha _ List.mem_cons_self) (by simp [Op.isArrive])
 
 end Vinc.CoreHalfOpen
@@ -948,6 +962,7 @@ end Vinc.CoreHalfOpen
 #audit_axioms Vinc.CoreHalfOpen.arrive_made_eq
 #audit_axioms Vinc.CoreHalfOpen.arrive_cap
 #audit_axioms Vinc.CoreHalfOpen.arrive_room
+#audit_axioms Vinc.CoreHalfOpen.arrive_rej_no_session
 #audit_axioms Vinc.CoreHalfOpen.arrive_keeps
 #audit_axioms Vinc.CoreHalfOpen.establish_inv
 #audit_axioms Vinc.CoreHalfOpen.establish_count
