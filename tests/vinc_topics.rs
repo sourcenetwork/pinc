@@ -120,6 +120,30 @@ async fn a_raw_request_and_its_response_cross_two_topics_through_a_hub() {
     .await;
 }
 
+/// A join with the hint of a peer and no hub at all: the peer is a neighbour once its session is up, as the join's
+/// documentation says.
+#[nuclei::test]
+async fn a_join_with_a_hint_and_no_hub_list_has_the_hinted_peer_as_a_neighbour() {
+    const T: &[u8] = b"hinted";
+    let a = lo_endpoint!(vinc_common::builder().seed(&[1; 32]).unwrap());
+    let b = lo_endpoint!(vinc_common::builder().seed(&[2; 32]).unwrap());
+    run(&a);
+    run(&b);
+    within(60, async {
+        a.join(T, &[b.addr()]).await.unwrap();
+        let mut seen = a.neighbors(T);
+        for _ in 0..200 {
+            if !seen.is_empty() {
+                break;
+            }
+            nuclei::time::sleep(Duration::from_millis(50)).await;
+            seen = a.neighbors(T);
+        }
+        assert_eq!(seen, [b.id()], "the hinted peer is not a neighbour");
+    })
+    .await;
+}
+
 #[nuclei::test]
 async fn a_publish_that_waits_for_a_neighbour_times_out_when_none_joins() {
     let a = lo_endpoint!(vinc_common::builder().seed(&[1; 32]).unwrap());

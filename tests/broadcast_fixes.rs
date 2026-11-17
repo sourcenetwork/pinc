@@ -64,6 +64,28 @@ fn a_message_that_found_the_held_set_full_is_repaired_not_lost() {
     assert_eq!(net.delivered(2).len(), total);
 }
 
+/// The ask the node makes once its held set has room carries the version of the subscriber list it holds: a hub whose
+/// list is that version sends no list again.
+#[test]
+fn an_ask_after_the_held_set_drains_sends_no_list_to_a_member_that_holds_the_current_one() {
+    let mut net = Net::new(IdentityAlg::Ed25519, 1, 2, SEC);
+    net.nodes[2].auto_acp = None;
+    net.subscribe(2, T);
+    for i in 0..HELD_MAX + 6 {
+        net.publish(1, T, &u32::try_from(i).unwrap().to_be_bytes());
+    }
+    let ids = checks(&net, 2);
+    let lists = |net: &Net| {
+        net.log
+            .iter()
+            .filter(|(_, _, to, t, _)| *to == 2 && *t == ty::SUBS)
+            .count()
+    };
+    let before = lists(&net);
+    answer(&mut net, 2, ids[0], true);
+    assert_eq!(lists(&net), before, "the hub sent the list again");
+}
+
 #[test]
 fn a_full_held_set_is_reported_as_a_rejection() {
     let mut net = Net::new(IdentityAlg::Ed25519, 1, 2, SEC);
