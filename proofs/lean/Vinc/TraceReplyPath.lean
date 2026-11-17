@@ -8,8 +8,11 @@ The Lean half of the trace validation of the path a dialing side's handshake rep
 (`conn/recv.rs`, `conn/drive.rs` `follow_reply`, `conn/path.rs`), the port of `proofs/tla/TraceReplyPath.tla`. It
 reads the `rp` events written by the Rust test `trace_reply_path` and replays every call through the functions of
 `Vinc.TransportPath`: the table recorded after it (the held paths in slot order and the active one), whether the
-session is established, whether the round trip has a sample and the dropped count must be the model's, and so must
-whether `add_path` took the path and what `remove_path` answered.
+session is established, whether the round trip has a sample, whether the active path failed its probe timeouts and
+the dropped count must be the model's (and, per held path, whether it has a round trip), and so must whether
+`add_path` took the path and what `remove_path` answered. The endpoint's naming of a path's kind (`info`) and a timer
+step (`timer`) are replayed through `setInfo` and `timer`; the relay penalty is the model's, one more than the largest
+round trip it holds (`penalty`).
 -/
 
 namespace Vinc.TraceReplyPath
@@ -22,21 +25,26 @@ structure W where
   np : Nat := 4
   c : C := dial 1
 
-/-- What the recorder shows of a connection: the held paths (id, validated, relay) in slot order, the active path's id
-(0 for none), established, the round trip has a sample, the dropped count. -/
-abbrev View := List (Nat × Bool × Bool) × Nat × Bool × Bool × Nat
+/-- The relay penalty of the replay: the traces hold round trips of 1 at most, so a relay path costs 2 more. -/
+def penalty : Nat := 2
+
+/-- What the recorder shows of a connection: the held paths (id, validated, relay, has a round trip) in slot order, the
+active path's id (0 for none), established, the round trip has a sample, the active path failed its probe timeouts, the
+dropped count. -/
+abbrev View := List (Nat × Bool × Bool × Bool) × Nat × Bool × Bool × Bool × Nat
 
 def view (np : Nat) (c : C) : View :=
-  ((List.range np).filterMap (fun j => (c.t j).map (fun p => (p.id, p.v, p.r))), ((c.t c.act).map P.id).getD 0,
-    decide (c.hs = .done), c.smp, c.hd)
+  ((List.range np).filterMap (fun j => (c.t j).map (fun p => (p.id, p.v, p.r, decide (p.rt ≠ 0)))),
+    ((c.t c.act).map P.id).getD 0, decide (c.hs = .done), c.smp, c.f, c.hd)
 
-def pathsOf (j : J) : Except String (List (Nat × Bool × Bool)) := do
+def pathsOf (j : J) : Except String (List (Nat × Bool × Bool × Bool)) := do
   match j.arr? with
-  | some a => a.toList.mapM fun e => do pure (← natF e "id", ← boolF e "v", (← strF e "kind") == "relay")
+  | some a =>
+    a.toList.mapM fun e => do pure (← natF e "id", ← boolF e "v", (← strF e "kind") == "relay", ← boolF e "m")
   | none => throw "paths: expected an array"
 
 def viewOf (v : J) : Except String View := do
-  pure (← pathsOf (← field v "paths"), ← natF v "act", ← boolF v "est", ← boolF v "smp", ← natF v "hd")
+  pure (← pathsOf (← field v "paths"), ← natF v "act", ← boolF v "est", ← boolF v "smp", ← boolF v "f", ← natF v "hd")
 
 def kindOf : String → Except String Kind
   | "none" => pure .none
@@ -78,6 +86,8 @@ def replayEvent (j : J) (w : W) : Except String W := do
     upd w.np c2 "rm"
   | "rx" => upd w.np (rx false w.np w.c (← natF j "id") (← kindOf (← strF j "k")) (← boolF j "coal") smp) "rx"
   | "key" => upd w.np (key w.np w.c (← keyOf (← strF j "r")) smp) "key"
+  | "info" => upd w.np (setInfo w.np penalty w.c (← natF j "id") ((← strF j "kind") == "relay")) "info"
+  | "timer" => upd w.np (timer w.np penalty w.c) "timer"
   | op => throw s!"unknown reply path op {op}"
 
 end Vinc.TraceReplyPath
