@@ -158,10 +158,13 @@ fn tell_members<H: Host>(
             rem.as_flattened(),
         ];
         let built = wire::build(scratch, ty::SUBS, topic, &parts).is_ok();
-        let live = st.subs.iter().filter(|(_, l)| **l).map(|(p, _)| p);
+        let subs = st.subs.keys();
         let others = st.pubs.iter().filter(|p| !st.subs.contains_key(*p));
         let mut refused = Vec::new();
-        for p in live.chain(others).filter(|p| !st.stale.contains(*p)) {
+        for p in subs
+            .chain(others)
+            .filter(|p| is_recipient(st, p) && !st.stale.contains(*p))
+        {
             if !built || !h.send(p, Lane::Reply, scratch) {
                 refused.push(*p);
             }
@@ -228,7 +231,7 @@ impl Topic {
     /// Forget the hints a hub's list names: the list covers them, and no node is in both.
     fn drop_covered_hints(&mut self) {
         let peers = &self.peers;
-        self.hints.retain(|n| !peers.contains(n));
+        self.hints.retain(|n| peers.binary_search(n).is_err());
     }
 
     /// The version of this topic's list a member holds from `hub`, if it holds one. Read from the topic itself, since
@@ -500,8 +503,6 @@ impl Topics {
                 }
                 Some(SubsDrop::OtherHub)
             }
-            // A removal from a list cut below the hub's brings an id the member never saw into the hub's cut: only the
-            // whole list tells which.
             // Not newer than the version held: a late frame of an old session, nothing to apply or to ask for.
             _ if st
                 .peers_ver
@@ -509,8 +510,11 @@ impl Topics {
             {
                 Some(SubsDrop::Old)
             }
+            // A removal of an id the member holds, from a list cut below the hub's, brings an id the member never saw
+            // into the hub's cut: only the whole list tells which. (An id past the cut changes nothing here.)
             (_, Some(rem))
-                if st.peers_ver == Some((ver.0, ver.1.wrapping_sub(1))) && (!st.peers_cut || rem.is_empty()) =>
+                if st.peers_ver == Some((ver.0, ver.1.wrapping_sub(1)))
+                    && !(st.peers_cut && rem.iter().any(|r| st.peers.binary_search(r).is_ok())) =>
             {
                 st.peers_cut |= apply(&mut st.peers, ids, rem, max);
                 st.peers_ver = Some(ver);

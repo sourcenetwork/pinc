@@ -449,8 +449,18 @@ fn a_held_subscriber_that_also_published_is_not_a_recipient_of_the_list() {
     let hub = &mut net.nodes[0];
     hub.t.hold(&mut hub.h, &one);
     net.pump();
+    let lists_to_one = |net: &Net| {
+        net.log
+            .iter()
+            .filter(|(_, _, to, t, _)| *to == 1 && *t == ty::SUBS)
+            .count()
+    };
     net.subscribe(2, T);
+    let before = lists_to_one(&net);
     assert_eq!(inject(&mut net, 1, 0, &[2]), [SubsDrop::NotRecipient]);
+    // Neither the ask nor the flush of a stale recipient brings the held node a list.
+    net.pump();
+    assert_eq!(lists_to_one(&net), before, "a held subscriber was sent a list");
 }
 
 /// A change older than the version the member holds (from an old session, after a newer whole list) is ignored: the
@@ -512,4 +522,41 @@ fn a_lagging_member_that_subscribes_again_is_sent_the_list_once() {
     resubscribe(&mut net, 1);
     let lists = sent(&net) - before;
     assert_eq!(lists, 1, "the member was sent the list {lists} times");
+}
+
+/// A removal of an id the member never held (past its cut) changes nothing and asks for nothing.
+#[test]
+fn a_removal_past_the_cut_of_a_member_with_a_lower_limit_asks_for_nothing() {
+    let small = vinc_broadcast::Limits {
+        max_subscribers: 2,
+        ..vinc_broadcast::Limits::default()
+    };
+    let mut net = Net::with_limits(&[IdentityAlg::Ed25519; 5], 1, SEC, small);
+    for i in 1..=4 {
+        net.attach(i);
+    }
+    net.limits = vinc_broadcast::Limits::default();
+    let at = net.now;
+    net.restart(0, at);
+    let mut order: Vec<usize> = (1..=4).collect();
+    order.sort_by_key(|i| net.id(*i));
+    let (member, past) = (order[3], order[2]);
+    for i in 1..=4 {
+        net.subscribe(i, T);
+    }
+    let asks = |net: &Net| {
+        net.log
+            .iter()
+            .filter(|(_, from, to, t, _)| (*from, *to, *t) == (member, 0, ty::SUBS))
+            .count()
+    };
+    let before = asks(&net);
+    let held = net.nodes[member].t.known_subscribers(T).to_vec();
+    unsubscribe(&mut net, past);
+    assert_eq!(
+        asks(&net),
+        before,
+        "the member asked for a list over a removal past its cut"
+    );
+    assert_eq!(net.nodes[member].t.known_subscribers(T), held.as_slice());
 }

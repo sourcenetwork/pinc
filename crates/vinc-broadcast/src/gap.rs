@@ -409,7 +409,9 @@ impl Topics {
         // of an earlier life of this hub).
         // A list the stream's room just sent is the current one; the SUB, sent before it arrived, does not ask again.
         let fresh = (!listed && (changed || their_ver != Some(self.cur_ver(topic)))).then_some(from);
-        self.announce_topic(h, topic, changed, fresh);
+        if changed || fresh.is_some() {
+            self.announce_topic(h, topic, changed, fresh);
+        }
     }
 
     /// An UNSUB at a hub.
