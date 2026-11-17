@@ -360,7 +360,7 @@ mod tests {
 
     #[test]
     fn a_ring_that_never_holds_many_packets_writes_few_records_and_a_cleared_ring_starts_small() {
-        let mut r = SentRing::<8192>::new();
+        let mut r = SentRing::<256>::new();
         for pn in 0..20 {
             assert!(r.push(sent(pn)));
         }
