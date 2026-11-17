@@ -10,7 +10,7 @@
 //! others (the id is a position hash, not a content hash), or that anyone received it. A kind 1 statement carries no
 //! label of its own (it begins with the topic's bytes), so a kind 1 proof also holds for a raw signature by the same key
 //! over bytes of that shape: an application that signs bytes a peer chose with `Endpoint::sign` can be made to produce
-//! one.
+//! one (its guard refuses the reserved label prefixes, which an unlabelled topic statement does not carry).
 //!
 //! Invariants: [`Envelope::decode`] validates the whole structure at this boundary (version, kind, the topic bound,
 //! the head, the body length, no trailing byte) and never panics or reads outside its input; [`Envelope::verify`]
