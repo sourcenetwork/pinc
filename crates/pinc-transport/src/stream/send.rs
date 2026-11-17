@@ -128,9 +128,9 @@ impl<S: StreamSource, const C: usize> Send<S, C> {
         self.acked.clear(pool);
     }
 
-    /// How many of the lost and acknowledged range sets hold a pool chunk.
-    pub(super) fn spilled(&self) -> u64 {
-        u64::from(self.lost.is_spilled()) + u64::from(self.acked.is_spilled())
+    /// The times the lost and acknowledged ranges spilled into a pool chunk since the last call.
+    pub(super) fn take_spills(&mut self) -> u64 {
+        self.lost.take_spills() + self.acked.take_spills()
     }
 
     /// Whether the send half is closed or its end and every byte are acknowledged, and the state of its reset

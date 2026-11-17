@@ -4,7 +4,9 @@
 //! Invariants: the intervals are sorted, disjoint and non-adjacent (adjacent ones merge), at most `N` are held inline
 //! and at most [`SPILL`] once spilled, and a failed insert or remove leaves the set unchanged. A set that does not fit
 //! its inline array takes one pool chunk and moves into it (spills); the chunk is charged to the pool's budget like any
-//! other, and it is returned by [`RangeSet::clear`], which every owner calls when its stream ends. With no chunk left
+//! other, and it is returned as soon as the set holds at most half of what fits inline (the half is the hysteresis:
+//! a set at the boundary does not move on every edit), and by [`RangeSet::clear`], which every owner calls when its
+//! stream ends. A set that holds nothing holds no chunk. With no chunk left
 //! the operation fails as it would at `N`, so the set's owner falls back to what it did before the spill existed. While
 //! spilled, the first inline entry mirrors the lowest interval, so [`RangeSet::first`] needs no pool. It tracks the
 //! received ranges of a stream, the acknowledged ranges of a send buffer and the lost ranges waiting to be sent again.
@@ -208,6 +210,8 @@ pub(super) struct RangeSet<const N: usize> {
     items: [Interval; N],
     len: usize,
     spill: Option<Chunk>,
+    /// Spills since the owner last read the count.
+    spills: u32,
 }
 
 impl<const N: usize> RangeSet<N> {
@@ -215,6 +219,7 @@ impl<const N: usize> RangeSet<N> {
         items: [(0, 0); N],
         len: 0,
         spill: None,
+        spills: 0,
     };
 
     fn view<'a>(&'a self, pool: &'a BufferPool<'_>) -> View<'a> {
@@ -236,8 +241,14 @@ impl<const N: usize> RangeSet<N> {
     }
 
     /// Whether the set holds a pool chunk.
+    #[cfg(any(test, feature = "trace"))]
     pub(super) const fn is_spilled(&self) -> bool {
         self.spill.is_some()
+    }
+
+    /// The spills since the last call, which the owner adds to its counter.
+    pub(super) fn take_spills(&mut self) -> u64 {
+        u64::from(core::mem::take(&mut self.spills))
     }
 
     /// Empty the set and give its spill chunk back to the pool.
@@ -277,6 +288,7 @@ impl<const N: usize> RangeSet<N> {
                 b.put(i, self.items.at(i));
             }
             self.spill = Some(chunk);
+            self.spills = self.spills.saturating_add(1);
         }
         let Some(chunk) = &self.spill else {
             return Err(RangeFull);
@@ -285,10 +297,23 @@ impl<const N: usize> RangeSet<N> {
         let (len, r) = op(&mut b, self.len, SPILL)?;
         let head = (len > 0).then(|| b.at(0));
         self.len = len;
-        if let (Some(h), Some(slot)) = (head, self.items.first_mut()) {
+        if len <= N / 2 {
+            self.unspill(pool);
+        } else if let (Some(h), Some(slot)) = (head, self.items.first_mut()) {
             *slot = h;
         }
         Ok(r)
+    }
+
+    /// Move the intervals back into the inline array and return the chunk to the pool; they fit, as the caller holds
+    /// at most `N / 2` of them.
+    fn unspill(&mut self, pool: &mut BufferPool<'_>) {
+        let Some(chunk) = self.spill.take() else { return };
+        let b = Bytes(pool.bytes(&chunk));
+        for (i, slot) in self.items.iter_mut().enumerate().take(self.len) {
+            *slot = b.at(i);
+        }
+        pool.free_chunk(chunk);
     }
 
     /// The pool chunks merging `range` in would take: 1 when it needs a new interval the inline array has no room for.
@@ -423,3 +448,12 @@ impl Iterator for Gaps<'_> {
         None
     }
 }
+
+#[cfg(all(test, feature = "alloc"))]
+#[allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::cast_possible_truncation,
+    reason = "tests assert"
+)]
+mod tests;
