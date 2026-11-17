@@ -12,6 +12,10 @@ lengths are those of `vinc-crypto` (`IdentityAlg`): tags 1 to 4; the public key 
 is the key) and present, with the algorithm's length, for the others. `parse` returns the head and the body that
 follows and requires the body length to equal `blen`.
 
+The signed envelope of `envelope.rs` is `version | kind | topic_len2 | topic | head | body` over this head codec:
+`encEnv` and `decEnv`, with `env_roundtrip`, `env_canonical`, `env_trailing`, `env_cut`, `env_version`, `env_kind`
+(kind 1 the only accepted case) and `env_topic_bound`.
+
 Over every input: `parse_write` (round trip), `parse_canonical` (a parse determines its input), the rejections
 `parse_short`, `parse_unknown_alg`, `parse_bad_flag`, `parse_blen_mismatch`, `parse_trunc`, the length law
 `head_len`, and the frame codec `frame_roundtrip` and `frame_canonical`.
@@ -378,6 +382,160 @@ theorem frame_canonical {b : List Nat} {ty : Nat} {topic rest : List Nat} (hv : 
   simp only [hif, and_self, ↓reduceIte]
   rw [n4, hlen, beBytes_beVal _ _ n1 vlb, r1, r2, r3, r4]
   simp
+
+/-! ## The signed envelope -/
+
+/-- `Envelope::encode_into` of a topic message (kind 1): `version 1 | kind 1 | topic_len2 | topic | head | body`, the
+head being `write` with the body's length. -/
+def encEnv (topic : List Nat) (h : Head) (body : List Nat) : List Nat :=
+  [1, 1] ++ beBytes 2 topic.length ++ topic ++ write h body.length ++ body
+
+/-- `Envelope::decode`: the version, the kind (a dispatch whose only accepted case is kind 1), the topic bound
+(`MAX_TOPIC`, 255), the head and a body of exactly the length the head names. -/
+def decEnv (b : List Nat) : Option (List Nat × Head × List Nat) :=
+  match rd1 b with
+  | none => none
+  | some (v, l) =>
+    if v ≠ 1 then none else
+    match rd1 l with
+    | none => none
+    | some (k, l) =>
+      if k ≠ 1 then none else
+      match rd 2 l with
+      | none => none
+      | some (tb, l) =>
+        if 255 < beVal tb then none else
+        match rd (beVal tb) l with
+        | none => none
+        | some (topic, l) =>
+          match parse l with
+          | none => none
+          | some (h, body) => some (topic, h, body)
+
+theorem rd1_eq {l r : List Nat} {x : Nat} (h : rd1 l = some (x, r)) : l = x :: r := by
+  cases l with
+  | nil => simp [rd1] at h
+  | cons y ys =>
+    simp only [rd1, Option.some.injEq, Prod.mk.injEq] at h
+    obtain ⟨rfl, rfl⟩ := h
+    rfl
+
+/-- Decoding an encoding followed by a tail: the message when the tail is empty, a refusal for any trailing byte. -/
+theorem env_dec_enc (topic : List Nat) (h : Head) (hw : h.WF) (body tail : List Nat) (ht : topic.length ≤ 255)
+    (hb : body.length < 2 ^ 32) :
+    decEnv (encEnv topic h body ++ tail) = if tail = [] then some (topic, h, body) else none := by
+  have e2 : beVal (beBytes 2 topic.length) = topic.length :=
+    beVal_of_lt (n := 2) (x := topic.length) (by show topic.length < 65536; omega)
+  unfold decEnv encEnv
+  simp only [List.append_assoc, List.cons_append, List.nil_append, rd1, ne_eq, not_true_eq_false, if_false]
+  rw [rd_append _ (length_beBytes 2 topic.length)]
+  simp only [e2, Nat.not_lt.mpr ht, if_false]
+  rw [rd_append _ rfl, parse_write_gen h hw _ hb]
+  cases tail with
+  | nil => simp
+  | cons x xs =>
+    have hne : ¬ (body ++ x :: xs).length = body.length := by
+      simp only [List.length_append, List.length_cons]; omega
+    simp [hne]
+
+/-- Round trip: what `encode_into` writes `decode` reads back. -/
+theorem env_roundtrip (topic : List Nat) (h : Head) (hw : h.WF) (body : List Nat) (ht : topic.length ≤ 255)
+    (hb : body.length < 2 ^ 32) : decEnv (encEnv topic h body) = some (topic, h, body) := by
+  have := env_dec_enc topic h hw body [] ht hb
+  simpa using this
+
+/-- A trailing byte is refused. -/
+theorem env_trailing (topic : List Nat) (h : Head) (hw : h.WF) (body tail : List Nat) (ht : topic.length ≤ 255)
+    (hb : body.length < 2 ^ 32) (hne : tail ≠ []) : decEnv (encEnv topic h body ++ tail) = none := by
+  rw [env_dec_enc topic h hw body tail ht hb]; simp [hne]
+
+/-- Canonical form: whatever decodes is exactly what `encode_into` writes for its parts, within the bounds. -/
+theorem env_canonical {b : List Nat} {topic : List Nat} {h : Head} {body : List Nat} (hv : ValidBytes b)
+    (hd : decEnv b = some (topic, h, body)) :
+    topic.length ≤ 255 ∧ h.WF ∧ body.length < 2 ^ 32 ∧ encEnv topic h body = b := by
+  unfold decEnv at hd
+  rcases e1 : rd1 b with _ | ⟨v, l1⟩
+  · rw [e1] at hd; simp at hd
+  rw [e1] at hd
+  dsimp only at hd
+  by_cases hv1 : v ≠ 1
+  · simp [hv1] at hd
+  rw [if_neg hv1] at hd
+  rcases e2 : rd1 l1 with _ | ⟨k, l2⟩
+  · rw [e2] at hd; simp at hd
+  rw [e2] at hd
+  dsimp only at hd
+  by_cases hk : k ≠ 1
+  · simp [hk] at hd
+  rw [if_neg hk] at hd
+  rcases e3 : rd 2 l2 with _ | ⟨tb, l3⟩
+  · rw [e3] at hd; simp at hd
+  rw [e3] at hd
+  dsimp only at hd
+  by_cases ht : 255 < beVal tb
+  · simp [ht] at hd
+  rw [if_neg ht] at hd
+  rcases e4 : rd (beVal tb) l3 with _ | ⟨tp, l4⟩
+  · rw [e4] at hd; simp at hd
+  rw [e4] at hd
+  dsimp only at hd
+  rcases e5 : parse l4 with _ | ⟨h', body'⟩
+  · rw [e5] at hd; simp at hd
+  rw [e5] at hd
+  dsimp only at hd
+  simp only [Option.some.injEq, Prod.mk.injEq] at hd
+  obtain ⟨htp, hh, hbody⟩ := hd
+  have hv1' : v = 1 := by simpa using hv1
+  have hk' : k = 1 := by simpa using hk
+  obtain ⟨c3, n3⟩ := rd_eq e3
+  obtain ⟨c4, n4⟩ := rd_eq e4
+  have r1 := rd1_eq e1
+  have r2 := rd1_eq e2
+  have hb : b = v :: k :: (tb ++ (tp ++ l4)) := by rw [r1, r2, c3, c4]
+  have vtb : ValidBytes tb := fun x hx => hv x (by rw [hb]; simp [hx])
+  have vl4 : ValidBytes l4 := fun x hx => hv x (by rw [hb]; simp [hx])
+  obtain ⟨hwf, hlt, hw⟩ := parse_canonical vl4 e5
+  rw [← htp, ← hh, ← hbody]
+  refine ⟨by omega, hwf, hlt, ?_⟩
+  unfold encEnv
+  rw [n4, beBytes_beVal 2 tb n3 vtb, hb, ← hw]
+  simp [hv1', hk']
+
+/-- A version other than 1 is refused. -/
+theorem env_version (v : Nat) (rest : List Nat) (hv : v ≠ 1) : decEnv (v :: rest) = none := by
+  simp [decEnv, rd1, hv]
+
+/-- A kind other than 1 is refused: the dispatch has one accepted case. -/
+theorem env_kind (k : Nat) (rest : List Nat) (hk : k ≠ 1) : decEnv (1 :: k :: rest) = none := by
+  simp [decEnv, rd1, hk]
+
+/-- A topic length over 255 is refused. -/
+theorem env_topic_bound (tl : Nat) (rest : List Nat) (h1 : 255 < tl) (h2 : tl < 65536) :
+    decEnv ([1, 1] ++ beBytes 2 tl ++ rest) = none := by
+  have e2 : beVal (beBytes 2 tl) = tl := beVal_of_lt (n := 2) (x := tl) (by show tl < 65536; exact h2)
+  unfold decEnv
+  simp only [List.append_assoc, List.cons_append, List.nil_append, rd1, ne_eq, not_true_eq_false, if_false]
+  rw [rd_append _ (length_beBytes 2 tl)]
+  simp [e2, h1]
+
+/-- A cut is refused: no proper prefix of an encoding decodes. -/
+theorem env_cut (topic : List Nat) (h : Head) (hw : h.WF) (body : List Nat) (ht : topic.length ≤ 255)
+    (hb : body.length < 2 ^ 32) (hv : ValidBytes (encEnv topic h body)) (n : Nat)
+    (hn : n < (encEnv topic h body).length) : decEnv ((encEnv topic h body).take n) = none := by
+  cases hd : decEnv ((encEnv topic h body).take n) with
+  | none => rfl
+  | some X =>
+    obtain ⟨tp, h', body'⟩ := X
+    have vt : ValidBytes ((encEnv topic h body).take n) := fun x hx => hv x (List.mem_of_mem_take hx)
+    obtain ⟨ht', hw', hb', he⟩ := env_canonical vt hd
+    have hne : (encEnv topic h body).drop n ≠ [] := by
+      intro hz
+      have := congrArg List.length hz
+      simp at this
+      omega
+    have key := env_trailing tp h' hw' body' _ ht' hb' hne
+    rw [he, List.take_append_drop, env_roundtrip topic h hw body ht hb] at key
+    simp at key
 
 /-! ## Concrete checks of the real constants -/
 
