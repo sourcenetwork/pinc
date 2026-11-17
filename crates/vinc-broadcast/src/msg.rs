@@ -98,7 +98,10 @@ impl Topics {
                 self.send_pack(h, from, mid);
             }
         } else {
-            let head_bytes = rest.get(..head.len()).unwrap_or_default();
+            let Some(head_bytes) = rest.get(..head.len()) else {
+                self.note_reject(mid, Reject::BadHead);
+                return;
+            };
             self.offer(h, now, topic, mid, head.origin, from, head_bytes, body, head.ts);
         }
     }
@@ -128,13 +131,16 @@ impl Topics {
             self.note_reject(head.mid, Reject::TopicsFull);
             return false;
         }
+        let Some(head_bytes) = rest.get(..head.len()) else {
+            self.note_reject(head.mid, Reject::BadHead);
+            return false;
+        };
         let log_bytes = self.limits.log_bytes;
         let Some(st) = self.topics.get_mut(topic) else {
             return false;
         };
         let (log, seen, behind) = (&mut st.log, &mut st.seen, &mut st.behind);
         let log = log.get_or_insert_with(|| HubLog::new(log_bytes));
-        let head_bytes = rest.get(..head.len()).unwrap_or_default();
         // A message still owed to a subscriber that is behind is not evicted: the new one is refused, so it is not
         // acknowledged and its publisher retries it.
         if !Self::room_to_store(behind, log, head_bytes.len() + body.len(), now, wall) {
@@ -291,10 +297,12 @@ impl Topics {
 
     /// Offer a message that was held for the floors, unless it arrived by another path meanwhile.
     pub(crate) fn offer_held<H: Host>(&mut self, h: &mut H, now: Nanos, e: Held) {
-        if let Some((topic, head, body)) = Self::unpack(self.limits.keep_heads, &e.data)
-            && !self.is_dup(topic, u64::from_le_bytes(e.mid), now)
-        {
-            self.offer(h, now, topic, e.mid, &e.origin, &e.hop, head, body, e.ts);
+        match Self::unpack(self.limits.keep_heads, &e.data) {
+            Some((topic, head, body)) if !self.is_dup(topic, u64::from_le_bytes(e.mid), now) => {
+                self.offer(h, now, topic, e.mid, &e.origin, &e.hop, head, body, e.ts);
+            }
+            Some(_) => {}
+            None => self.note_reject(e.mid, Reject::BadHead),
         }
         self.give_buf(e.data);
     }
@@ -342,8 +350,11 @@ impl Topics {
                 continue;
             }
             let e = self.held.remove(i);
-            if allow && let Some((topic, head, body)) = Self::unpack(self.limits.keep_heads, &e.data) {
-                self.deliver(h, topic, e.mid, &e.origin, &e.hop, head, body);
+            if allow {
+                match Self::unpack(self.limits.keep_heads, &e.data) {
+                    Some((topic, head, body)) => self.deliver(h, topic, e.mid, &e.origin, &e.hop, head, body),
+                    None => self.note_reject(e.mid, Reject::BadHead),
+                }
             }
             self.give_buf(e.data);
         }
