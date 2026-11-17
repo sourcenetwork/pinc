@@ -105,7 +105,6 @@ pub fn frame_json(f: &Frame<'_>) -> String {
 fn route_json(r: &Route) -> String {
     match r {
         Route::Session | Route::Reply => "\"r\":\"s\",\"via\":0".to_owned(),
-        Route::Direct => "\"r\":\"d\",\"via\":0".to_owned(),
         Route::Via(x) => format!("\"r\":\"v\",\"via\":{}", nid(x)),
     }
 }
@@ -204,7 +203,7 @@ fn trace_json(t: &Trace) -> String {
         Trace::NoIndependentPath { member } => {
             format!("{{\"k\":\"no_independent_path\",\"member\":{}}}", nid(member))
         }
-        Trace::Confirmed { member } => format!("{{\"k\":\"confirmed\",\"member\":{}}}", nid(member)),
+        Trace::Confirmed { member, .. } => format!("{{\"k\":\"confirmed\",\"member\":{}}}", nid(member)),
         Trace::LeaveSeen { member } => format!("{{\"k\":\"leave_seen\",\"member\":{}}}", nid(member)),
         Trace::DownSent { member } => format!("{{\"k\":\"down_sent\",\"member\":{}}}", nid(member)),
         Trace::DownAccepted { member } => format!("{{\"k\":\"down_accepted\",\"member\":{}}}", nid(member)),
@@ -284,15 +283,17 @@ fn env_json(e: &EnvSnap) -> String {
         })
         .collect();
     let acc: Vec<String> = e.acc.iter().map(|p| nid(p).to_string()).collect();
+    let rv: Vec<String> = e.rv.iter().map(|p| nid(p).to_string()).collect();
     let gu: Vec<String> =
         e.gu.iter()
             .map(|(p, v)| format!("[{},{}]", nid(p), limbs(*v)))
             .collect();
     format!(
-        "{{\"ev\":[{}],\"car\":[{}],\"acc\":[{}],\"gu\":[{}],\"ver\":{},\"tk\":{},\"refl\":{},\"pers\":{},\"sealed\":{},\"failseal\":{},\"failunseal\":{},\"floor\":9}}",
+        "{{\"ev\":[{}],\"car\":[{}],\"acc\":[{}],\"rv\":[{}],\"gu\":[{}],\"ver\":{},\"tk\":{},\"refl\":{},\"pers\":{},\"sealed\":{},\"failseal\":{},\"failunseal\":{},\"floor\":9}}",
         ev.join(","),
         car.join(","),
         acc.join(","),
+        rv.join(","),
         gu.join(","),
         e.ver,
         e.tk,

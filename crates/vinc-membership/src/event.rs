@@ -162,6 +162,10 @@ pub enum Trace {
     Confirmed {
         /// The member.
         member: NodeId,
+        /// The path of the first probe.
+        first: Path,
+        /// The path of the second probe.
+        second: Option<Path>,
     },
     /// A hub saw a member leave.
     LeaveSeen {

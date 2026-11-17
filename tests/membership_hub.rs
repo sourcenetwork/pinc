@@ -175,7 +175,8 @@ fn a_dropped_carrier_is_confirmed_at_the_drop_plus_one_second_on_two_paths() {
         .filter(|s| s.1 == 0 && s.2 == 2 && s.3 == ty::PROBE)
         .collect();
     assert_eq!(probes.len(), 2, "one probe on the session, one on the independent path");
-    assert!(probes.iter().any(|p| p.4 == Route::Reply) && probes.iter().any(|p| p.4 == Route::Direct));
+    // The session runs on the direct path, so the second probe takes the other hub's relay, never the same path.
+    assert!(probes.iter().any(|p| p.4 == Route::Reply) && probes.iter().any(|p| p.4 == Route::Via(id(1))));
     // A suspicion is not an event: from the drop to the confirmation the hub reports nothing about the member. The
     // confirmation itself is the lease ending above and the trace below; the members hear it as a delta.
     let reported: Vec<Event> = w.events[0]
@@ -827,14 +828,18 @@ fn a_returning_carrier_never_grows_a_full_roster_past_its_bound() {
     use vinc_membership::consts::MAX_TABLE;
     use vinc_membership::{Config, Membership};
     let me = [255u8; 32];
+    let other = [254u8; 32];
     let mut h = Scripted::default();
     let cfg = Config {
         me,
         is_hub: true,
-        hubs: &[],
+        hubs: &[me, other],
         trace: false,
     };
     let mut hub = Membership::start(&cfg, &mut h, START, 1_000_000, 0).unwrap();
+    // The other hub is up: its relay carries the second probe.
+    hub.session_up(&mut h, START, &other, false);
+    hub.on_frame(&mut h, START, &other, &Frame::Ack);
     let hello = |k: u16| {
         Frame::Hello(Hello {
             rec: Record {
@@ -853,7 +858,8 @@ fn a_returning_carrier_never_grows_a_full_roster_past_its_bound() {
         hub.on_frame(&mut h, now, &wide(k), &hello(k));
     }
     assert_eq!(hub.roster_len(), MAX_TABLE);
-    // Member 1 drops its carrier and is confirmed down on its direct path: the roster has a free slot.
+    // Member 1 drops its carrier and is confirmed down on two paths, the other hub's relay the second: the roster has a
+    // free slot.
     let x = wide(1);
     now += 5 * SEC;
     h.carriers.insert(
@@ -863,6 +869,7 @@ fn a_returning_carrier_never_grows_a_full_roster_past_its_bound() {
             sleep: None,
         },
     );
+    hub.on_frame(&mut h, now, &other, &Frame::Ack);
     hub.carrier_gone(&mut h, now, &x);
     now += 2 * SEC;
     hub.on_timeout(&mut h, now);

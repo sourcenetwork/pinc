@@ -112,7 +112,7 @@ fn check_confirmations(w: &World, seed: u64) -> usize {
     for (hub, _) in &w.hubs {
         let traces = &w.sim.node(*hub).traces;
         for (t, item) in traces {
-            let Body::Membership(T::Confirmed { member }) = &item.body else {
+            let Body::Membership(T::Confirmed { member, .. }) = &item.body else {
                 continue;
             };
             checked += 1;
@@ -215,7 +215,7 @@ fn a_snapshot_after_a_heal_removes_nobody() {
                 _ => None,
             };
             let confirmed_of: fn(&vinc_membership::Trace) -> Option<[u8; 32]> = |x| match x {
-                vinc_membership::Trace::Confirmed { member } => Some(*member),
+                vinc_membership::Trace::Confirmed { member, .. } => Some(*member),
                 _ => None,
             };
             let accepted_of: fn(&vinc_membership::Trace) -> Option<[u8; 32]> = |x| match x {
@@ -250,7 +250,8 @@ fn a_snapshot_after_a_heal_removes_nobody() {
             for h in &hubs {
                 for (_, it) in &w.sim.node(*h).traces {
                     if let Body::Membership(
-                        vinc_membership::Trace::Confirmed { member } | vinc_membership::Trace::DownAccepted { member },
+                        vinc_membership::Trace::Confirmed { member, .. }
+                        | vinc_membership::Trace::DownAccepted { member },
                     ) = &it.body
                     {
                         assert!(

@@ -24,7 +24,7 @@ pub struct Evidence {
     pub pto: u32,
     /// Bytes in flight; large values mean bulk traffic is queued behind the sample.
     pub inflight: u32,
-    /// A validated direct UDP path to the peer exists.
+    /// The session runs on a validated direct UDP path to the peer.
     pub direct: bool,
 }
 
@@ -53,8 +53,6 @@ pub enum Route {
     /// The session as the transport routes it, for an answer or a push: with no session up the frame is dropped and
     /// nothing is queued or dialed.
     Reply,
-    /// The validated direct UDP path.
-    Direct,
     /// Through the relay of the named hub.
     Via(NodeId),
 }

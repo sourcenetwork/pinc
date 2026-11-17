@@ -2,12 +2,12 @@
 //!
 //! Every frame first renews the sender (a hub's lease on a member, this node's hearing of a hub) and, from a hub,
 //! samples the round trip. Then membership frames go to the roster or the view, and anything else goes to the
-//! broadcast layer untouched.
+//! broadcast layer untouched. A hub that is told by another hub's DELTA that a member left drops the member as left.
 //!
 //! Invariants: a frame from a revoked peer is dropped unread; a frame a node has no use for (a HELLO to a member, a
 //! DELTA from a non-hub) is ignored, never an error; at most [`MAX_FRAMES_PER_CALL`] frames are parsed per call.
 
-use crate::codec::{Frame, FrameError, NodeId};
+use crate::codec::{Alive, Frame, FrameError, NodeId};
 use crate::consts::{HYST_ABS, RENEW, RTT_SAMPLE_MAX};
 use crate::event::{QuietCause, Trace};
 use crate::node::Membership;
@@ -134,6 +134,9 @@ impl Membership {
             }
             Frame::Delta(e) => {
                 if from_hub {
+                    if self.is_hub && e.alive == Alive::Left {
+                        self.on_left(h, now, e);
+                    }
                     self.apply_delta(h, now, peer, e);
                 }
             }

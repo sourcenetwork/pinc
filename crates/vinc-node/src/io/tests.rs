@@ -284,3 +284,30 @@ fn a_full_queue_of_command_replies_drops_a_recoverable_event_first_and_reports_t
     );
     assert_eq!(io.out.pop(), Some(NodeEvent::Lost { count: 3 }), "the drop is reported");
 }
+
+fn host(io: &mut Io<Stub, ()>) -> crate::hosts::MemHost<'_, Stub, ()> {
+    crate::hosts::MemHost { io, topics: None }
+}
+
+#[test]
+fn a_relayed_probe_for_a_member_without_a_session_is_refused() {
+    use vinc_membership::session::{Route, Session};
+    let mut io = io();
+    assert!(!host(&mut io).send(&PEER, Route::Via([9; 32]), b"probe"));
+    assert!(io.probes.is_empty());
+}
+
+#[test]
+fn a_relayed_probe_the_full_queue_cannot_take_is_refused_and_the_queue_stays_bounded() {
+    use vinc_membership::session::{Route, Session};
+    let mut io = io();
+    with_stream(&mut io);
+    let mut taken = 0;
+    while host(&mut io).send(&PEER, Route::Via([9; 32]), b"probe") {
+        taken += 1;
+        assert!(taken < 10_000, "the queue never fills");
+    }
+    assert_eq!(io.probes.len(), taken);
+    assert!(!host(&mut io).send(&PEER, Route::Via([9; 32]), b"probe"));
+    assert_eq!(io.probes.len(), taken, "a refused probe is not queued");
+}

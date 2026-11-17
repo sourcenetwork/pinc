@@ -268,12 +268,17 @@ fn lost_probe(c: &mut Ctx) {
     w.set_carrier_gone(0, 3);
     assert!(w.run_until(10 * SEC, |w| w.nodes[0].m.lease_of(&id(3)).is_none()));
     assert_eq!(
-        traces(&w, 0, |t| matches!(t, Trace::Confirmed { member } if *member == id(3))),
+        traces(
+            &w,
+            0,
+            |t| matches!(t, Trace::Confirmed { member, .. } if *member == id(3))
+        ),
         1
     );
 }
 
-/// A confirmation on a direct path, on a relay path, and the lone hub that has no independent path.
+/// A confirmation with the session on a direct path, with none, and the lone hub that has no independent path: the
+/// second probe takes another hub's relay in every case.
 fn probe_paths(c: &mut Ctx) {
     for (hubs, direct) in [(2, true), (2, false), (1, false)] {
         let mut w = c.started(hubs, 1);
@@ -842,6 +847,64 @@ fn leaving(c: &mut Ctx) {
     w.revoke(1, 0);
 }
 
+/// A hub told by another hub that a member left: the notices it refuses (an open carrier, another life of the member,
+/// a member's word) and the one it takes, then a member that leaves with its close to one hub lost.
+fn leave_notice(c: &mut Ctx) {
+    let mut w = c.started(3, 2);
+    w.run(10 * SEC);
+    let m = id(3);
+    let inc = w.nodes[3].m.incarnation();
+    let notice = |inc| {
+        Frame::Delta(Entry {
+            member: &m,
+            rec: Record {
+                inc,
+                ver: 1,
+                thash: [3; 8],
+            },
+            alive: Alive::Left,
+        })
+    };
+    w.nodes[0].h.carriers.insert(m, Carrier::Open);
+    w.inject(0, 1, &notice(inc));
+    assert!(
+        w.nodes[0].m.lease_of(&m).is_some(),
+        "an open carrier refuses the notice"
+    );
+    w.nodes[0].h.carriers.insert(m, Carrier::Unknown);
+    w.inject(0, 1, &notice(inc + (1 << 16)));
+    assert!(w.nodes[0].m.lease_of(&m).is_some(), "another life is not this one");
+    w.inject(0, 4, &notice(inc));
+    assert!(w.nodes[0].m.lease_of(&m).is_some(), "a member's notice is not a hub's");
+    w.inject(0, 1, &notice(inc));
+    assert!(
+        w.nodes[0].m.lease_of(&m).is_none(),
+        "the same life, no carrier: dropped as left"
+    );
+    // The member leaves and the close to hub 2 is lost: the hubs that saw it tell hub 2.
+    w.leave(4);
+    w.close_session(4, 0, LEAVE);
+    w.close_session(4, 1, LEAVE);
+    w.crash(4);
+    w.run(10 * SEC);
+    assert!(w.nodes[2].m.lease_of(&id(4)).is_none(), "hub 2 was told");
+    for i in 0..3 {
+        assert!(!w.has(i, 4), "hub {i} dropped the leaver");
+    }
+    assert_eq!(
+        w.count_events(2, |e| matches!(e, Event::MemberLeft { member } if *member == id(4))),
+        1
+    );
+    w.run(100 * SEC);
+    assert_eq!(
+        w.count_events(
+            2,
+            |e| matches!(e, Event::MemberConfirmedDown { member } if *member == id(4))
+        ),
+        0
+    );
+}
+
 /// The transport's give-up bound decides what a heal is: a hub heard again after longer than the bound.
 fn give_up_bound(c: &mut Ctx) {
     let mut w = c.started(2, 2);
@@ -937,6 +1000,7 @@ pub fn run(tw: &mut TraceWriter) {
     revoke_full(&mut c);
     give_up_bound(&mut c);
     leave_and_resend(&mut c);
+    leave_notice(&mut c);
     wide_frames(&mut c);
     for line in sink.borrow().iter() {
         tw.line(FILE, line);

@@ -4,11 +4,13 @@
 //! needs sessions, the view and the clock. Both borrow the same [`Io`], one at a time, and reach the other layer
 //! through a borrow of its machine, so a frame that membership does not own goes straight to broadcast.
 //!
-//! Route semantics. A frame sent on [`Route::Session`] or [`Route::Direct`] goes down the hub stream, which the
-//! transport carries on its active path (the validated direct path if there is one). A probe on [`Route::Via`] is a
-//! path challenge to the member through the named hub's relay: the member's answer is transport evidence, not a frame.
+//! Route semantics. A frame sent on [`Route::Session`] goes down the hub stream, which the transport carries on its
+//! active path (the validated direct path if there is one). A probe on [`Route::Via`] is a path challenge to the
+//! member through the named hub's relay: the member's answer is transport evidence, not a frame. There is no way to
+//! send one frame on a named path of the session, so the probe on a path of its own is always the relayed one.
 //!
-//! Invariants: no method blocks; a frame that no session took reports `false`.
+//! Invariants: no method blocks; a frame that no session took reports `false`, and so does a relayed probe for a
+//! member with no session or with the probe queue full.
 
 use vinc_broadcast::{Event as BcEvent, Host as BcHost, Lane, Topics};
 use vinc_membership::session::{Broadcast, Carrier, CloseReason, Evidence, Local, Nanos, Route, Session, StoreError};
@@ -43,10 +45,10 @@ impl<E: Ep, St: Store> MemHost<'_, E, St> {
 impl<E: Ep, St: Store> Session for MemHost<'_, E, St> {
     fn send(&mut self, peer: &NodeId, route: Route, frame: &[u8]) -> bool {
         match route {
-            Route::Session | Route::Direct => self.io.send_membership(peer, Lane::Main, frame),
+            Route::Session => self.io.send_membership(peer, Lane::Main, frame),
             Route::Reply => self.io.send_membership(peer, Lane::Reply, frame),
             Route::Via(hub) => {
-                if self.io.probes.len() >= PROBES_MAX {
+                if self.io.probes.len() >= PROBES_MAX || self.io.links.get(peer).and_then(|l| l.conn).is_none() {
                     return false;
                 }
                 self.io.probes.push((hub, *peer));

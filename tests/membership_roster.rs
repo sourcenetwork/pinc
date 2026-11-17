@@ -14,8 +14,8 @@
 #[path = "membership_world.rs"]
 mod world;
 
-use vinc_membership::codec::{Path, ty};
-use vinc_membership::{Event, Route, Trace};
+use vinc_membership::codec::{Alive, Entry, Frame, Path, Record, ty};
+use vinc_membership::{Carrier, Event, Route, Trace};
 use world::{LEAVE, SEC, World, id};
 
 vinc_tests::install_counting_allocator!();
@@ -90,10 +90,24 @@ fn a_member_unreachable_on_every_path_is_confirmed_down_on_two_different_paths()
     w.cut.insert((1, 2));
     w.set_carrier_gone(0, 2);
     assert!(w.run_until(5 * SEC, |w| w.nodes[0].m.lease_of(&id(2)).is_none()));
-    assert_eq!(traces(&w, 0, |t| matches!(t, Trace::Confirmed { .. })), 1);
+    assert_eq!(
+        traces(&w, 0, |t| matches!(
+            t,
+            Trace::Confirmed {
+                first: Path::Session,
+                second: Some(Path::Relay),
+                ..
+            }
+        )),
+        1,
+        "the confirmation names the path of each probe"
+    );
     let routes = probes_to(&w, 0, 2);
     assert_eq!(routes.len(), 2, "{routes:?}");
-    assert!(routes.contains(&Route::Reply) && routes.contains(&Route::Via(id(1))), "{routes:?}");
+    assert!(
+        routes.contains(&Route::Reply) && routes.contains(&Route::Via(id(1))),
+        "{routes:?}"
+    );
     assert_eq!(probe_paths(&w, 0, 2), [Path::Session, Path::Relay]);
     assert_eq!(downs(&w, 0, 1), 1, "the other hub is told");
 }
@@ -113,7 +127,11 @@ fn a_second_probe_the_host_refused_is_not_counted_as_sent() {
     );
     assert_eq!(downs(&w, 0, 1), 0);
     assert_eq!(traces(&w, 0, |t| matches!(t, Trace::NoIndependentPath { .. })), 1);
-    assert_eq!(probe_paths(&w, 0, 2), [Path::Session], "only the session probe is recorded");
+    assert_eq!(
+        probe_paths(&w, 0, 2),
+        [Path::Session],
+        "only the session probe is recorded"
+    );
     assert_eq!(w.nodes[0].m.roster_len(), 2, "the lease decides");
 }
 
@@ -160,7 +178,10 @@ fn a_member_that_leaves_while_one_hubs_close_is_lost_is_reported_as_left_everywh
     w.run(10 * SEC);
     for i in [4, 5, 6] {
         let at = w.first_event_time(i, |e| matches!(e, Event::MemberLeft { member } if *member == id(3)));
-        assert!(at.is_some_and(|at| at - t < 10 * SEC), "member {i} saw the leave within the push delay: {at:?}");
+        assert!(
+            at.is_some_and(|at| at - t < 10 * SEC),
+            "member {i} saw the leave within the push delay: {at:?}"
+        );
     }
     w.run(120 * SEC);
     for i in [4, 5, 6] {
@@ -170,11 +191,75 @@ fn a_member_that_leaves_while_one_hubs_close_is_lost_is_reported_as_left_everywh
             "member {i}"
         );
         assert_eq!(
-            w.count_events(i, |e| matches!(e, Event::MemberConfirmedDown { member } if *member == id(3))),
+            w.count_events(
+                i,
+                |e| matches!(e, Event::MemberConfirmedDown { member } if *member == id(3))
+            ),
             0,
             "member {i} saw no confirmation after the lease"
         );
         assert!(!w.has(i, 3));
     }
     assert!(w.nodes[2].m.lease_of(&id(3)).is_none(), "hub 2 dropped the lease");
+}
+
+/// A DELTA from hub 1 to hub 0 that says `member` left, with `inc` as the member's incarnation.
+fn left_notice(w: &mut World, member: usize, inc: u64) {
+    let m = id(member);
+    let rec = Record {
+        inc,
+        ver: 1,
+        thash: [u8::try_from(member).unwrap(); 8],
+    };
+    w.inject(
+        0,
+        1,
+        &Frame::Delta(Entry {
+            member: &m,
+            rec,
+            alive: Alive::Left,
+        }),
+    );
+}
+
+#[test]
+fn a_hub_told_that_a_member_left_keeps_it_when_the_notice_cannot_be_right() {
+    let mut w = started(2, 1);
+    w.run(10 * SEC);
+    let inc = w.nodes[2].m.incarnation();
+    // The member holds a carrier to this hub: it is here.
+    w.nodes[0].h.carriers.insert(id(2), Carrier::Open);
+    left_notice(&mut w, 2, inc);
+    assert!(
+        w.nodes[0].m.lease_of(&id(2)).is_some(),
+        "an open carrier refuses the notice"
+    );
+    w.nodes[0].h.carriers.insert(id(2), Carrier::Unknown);
+    // A notice about another life of the member.
+    left_notice(&mut w, 2, inc + (1 << 16));
+    assert!(w.nodes[0].m.lease_of(&id(2)).is_some(), "another life is not this one");
+    // A notice from a member is not a hub's word.
+    let m = id(2);
+    let rec = Record {
+        inc,
+        ver: 1,
+        thash: [2; 8],
+    };
+    w.inject(
+        0,
+        2,
+        &Frame::Delta(Entry {
+            member: &m,
+            rec,
+            alive: Alive::Left,
+        }),
+    );
+    assert!(w.nodes[0].m.lease_of(&id(2)).is_some(), "only a hub's notice counts");
+    assert_eq!(w.count_events(0, |e| matches!(e, Event::MemberLeft { .. })), 0);
+    left_notice(&mut w, 2, inc);
+    assert!(
+        w.nodes[0].m.lease_of(&id(2)).is_none(),
+        "the same life, no carrier: dropped as left"
+    );
+    assert_eq!(w.count_events(0, |e| matches!(e, Event::MemberLeft { .. })), 1);
 }

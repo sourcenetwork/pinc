@@ -36,6 +36,7 @@ pub struct EnvSnap {
     pub ev: Vec<(NodeId, Evidence)>,
     pub car: Vec<(NodeId, Carrier)>,
     pub acc: Vec<NodeId>,
+    pub rv: Vec<NodeId>,
     pub ver: u16,
     pub tk: u8,
     pub refl: bool,
@@ -266,7 +267,6 @@ impl World {
                     session || self.any_alt(a, b)
                 }
             }
-            Route::Direct => self.direct.contains(&key(a, b)) && self.net_ok(a, b),
             Route::Via(x) => {
                 let x = self.idx(x);
                 self.net_ok(a, x) && self.net_ok(x, b)
@@ -474,6 +474,7 @@ impl World {
                 .map(|(k, v)| (*k, *v))
                 .collect(),
             acc: h.sessions.iter().copied().collect(),
+            rv: h.refuse_via.iter().copied().collect(),
             ver: h.version,
             tk: h.ticket,
             refl: h.reflexive,

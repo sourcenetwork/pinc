@@ -7,14 +7,21 @@
 //!
 //! When a member's relay carrier closes and the member stays silent, the hub probes it. The hub confirms the member
 //! down only when the confirm deadline has passed, nothing has been heard since the drop (no frame, no transport
-//! packet), and a second probe on an independent path also went unanswered: the member's validated direct path if
-//! there is one, otherwise another hub's relay. With no independent path the hub waits for the lease. A confirmed
-//! member is pushed as a down delta, reported to the other hubs as a DOWN with proof, held (its subscriptions are
-//! kept for the lease) and remembered in `downed`.
+//! packet), and a second probe on an independent path also went unanswered. The first probe takes the session, on
+//! whatever path the transport runs it; the second never takes that path: it goes through another hub's relay, the
+//! first live hub whose relay the host took it for. A probe the host refused is not a sent probe. With no second
+//! probe sent the hub waits for the lease. A confirmed member is pushed as a down delta, reported to the other hubs
+//! as a DOWN with proof, held (its subscriptions are kept for the lease) and remembered in `downed`.
 //!
 //! A hub accepts another hub's DOWN only when the proof lists two paths, the member holds no carrier to this hub,
 //! and this hub's own lease is stale: not renewed, by frame or by transport evidence, within the longer of the
 //! proof's probes and [`RENEW`].
+//!
+//! A member that leaves is dropped as left, and pushed as a left delta to every attached hub like any roster change. A
+//! hub that is told by such a delta that a member it holds left drops it as left at once, as long as the member holds
+//! no carrier to this hub and the delta is about the same life of the member. The leave itself is a close code of the
+//! member's own session, which another hub cannot verify; the notice is as trusted as the hub that sends it, and a
+//! member that was dropped wrongly attaches again with its next HELLO.
 //!
 //! A HELLO that announces an older incarnation than the roster holds does not regress the roster; the hub answers
 //! with a delta about the node itself, and the node moves above it.
@@ -27,7 +34,7 @@ use crate::codec::{ENTRY_LEN, Frame, Snap, entry_bytes};
 use crate::consts::{CONFIRM, FLOOR_MAX, LEASE, MAX_TABLE, PROBE_WAIT_MIN, RENEW, SLEEP_WIN};
 use crate::event::{Refusal, Trace};
 use crate::node::{Lease, Membership, Susp, next_in, next_key};
-use crate::session::{Carrier, Evidence, Host, Nanos, Route};
+use crate::session::{Carrier, Host, Nanos, Route};
 
 /// Why a hub drops a member from its roster.
 #[derive(Clone, Copy)]
@@ -231,7 +238,12 @@ impl Membership {
             self.downed.insert(*member, (lease, now));
         }
         if let Cause::Confirmed(proof) = cause {
-            self.trace(Trace::Confirmed { member: *member });
+            let mut paths = proof.probes().iter().map(|p| p.path);
+            self.trace(Trace::Confirmed {
+                member: *member,
+                first: paths.next().unwrap_or(Path::Session),
+                second: paths.next(),
+            });
             for idx in 0..self.boot.len() {
                 let Some(hub) = self.boot.get(idx).copied() else {
                     continue;
@@ -283,6 +295,20 @@ impl Membership {
         }
         self.trace(Trace::DownAccepted { member: m });
         self.hub_down(h, now, &m, Cause::Remote);
+    }
+
+    /// Another hub's delta says `e.member` left. A member held for the same life that has no carrier to this hub is
+    /// dropped as left at once, as the member's own close would have dropped it.
+    pub(crate) fn on_left<H: Host>(&mut self, h: &mut H, now: Nanos, e: &crate::codec::Entry<'_>) {
+        let m = *e.member;
+        if self.is_boot(&m) || h.carrier(&m) == Carrier::Open {
+            return;
+        }
+        if self.roster.get(&m).is_none_or(|l| l.rec.inc >> 16 != e.rec.inc >> 16) {
+            return;
+        }
+        self.trace(Trace::LeaveSeen { member: m });
+        self.hub_down(h, now, &m, Cause::Left);
     }
 
     /// The once-a-tick hub work: expire leases, refresh them from transport evidence, watch dropped carriers,
@@ -373,15 +399,22 @@ impl Membership {
         }
     }
 
-    /// The path for the independent probe: the direct path if validated, otherwise another hub's relay.
-    fn independent_route(&self, now: Nanos, m: &NodeId, ev: Option<Evidence>) -> Option<(Route, Path)> {
-        if ev.is_some_and(|e| e.direct) {
-            return Some((Route::Direct, Path::Direct));
+    /// Send the second probe of a suspicion through the relay of the first live hub (not this one, not the member)
+    /// whose relay the host took it for. Returns the path it took, or `None` when no probe left.
+    fn probe_second<H: Host>(&mut self, h: &mut H, now: Nanos, m: &NodeId) -> Option<Path> {
+        for i in 0..self.boot.len() {
+            let Some(x) = self.boot.get(i).copied() else {
+                continue;
+            };
+            if x != self.me && x != *m && self.hub_up(now, &x) && self.tx(h, m, Route::Via(x), &Frame::Probe) {
+                self.trace(Trace::ProbeSent {
+                    member: *m,
+                    path: Path::Relay,
+                });
+                return Some(Path::Relay);
+            }
         }
-        self.boot
-            .iter()
-            .find(|x| **x != self.me && **x != *m && self.hub_up(now, x))
-            .map(|x| (Route::Via(*x), Path::Relay))
+        None
     }
 
     fn schedule_confirm(&mut self, now: Nanos, at: Nanos) {
@@ -417,10 +450,8 @@ impl Membership {
                     self.schedule_confirm(now, at);
                 }
                 if sp.probe_b.is_none()
-                    && let Some((route, path)) = self.independent_route(now, m, ev)
+                    && let Some(path) = self.probe_second(h, now, m)
                 {
-                    self.tx(h, m, route, &Frame::Probe);
-                    self.trace(Trace::ProbeSent { member: *m, path });
                     sp.probe_b = Some((now, path));
                     self.susp.insert(*m, sp);
                 }
@@ -443,11 +474,7 @@ impl Membership {
                     member: *m,
                     path: Path::Session,
                 });
-                let probe_b = self.independent_route(now, m, ev).map(|(route, path)| {
-                    self.tx(h, m, route, &Frame::Probe);
-                    self.trace(Trace::ProbeSent { member: *m, path });
-                    (now, path)
-                });
+                let probe_b = self.probe_second(h, now, m).map(|path| (now, path));
                 let sp = Susp {
                     since,
                     probe_a: now,

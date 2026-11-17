@@ -25,7 +25,8 @@
 //! - **Heal detection.** A hub heard again after longer than the transport's give-up bound at the last round trip
 //!   means a partition healed ([`bound::give_up`]); membership then opens its quiet window.
 //! - **Independent probes.** A probe on [`Route::Via`](vinc_membership::session::Route) is a path challenge through
-//!   the named hub's relay; the member's answer is evidence from the transport.
+//!   the named hub's relay; the member's answer is evidence from the transport. A relayed probe for a member with no
+//!   session, or with the probe queue full, is refused, so membership does not count it as sent.
 //! - **Urgency.** A hub session's write stream goes first (1), the broadcast fan stream of a gossip session next (2,
 //!   and its writes do not keep the session awake), then reconcile (2), the endpoint default (3) and the value
 //!   requests (4).
