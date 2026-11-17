@@ -479,7 +479,8 @@ impl Core {
             map_keys: IdKey::new(
                 id_table_seed(self.shared.world.seed, self.idx, self.incarnation),
                 &MAP_SECRETS,
-            ),
+            )
+            .map_err(|e| e.to_string())?,
             wall_ms: self.wall_ms(),
             local,
             trace: self.shared.is_watched(self.idx),

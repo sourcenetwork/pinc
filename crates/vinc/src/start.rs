@@ -73,7 +73,7 @@ fn node_config<S: KeyStore, A: Admit>(
             max_subscribers: DEFAULT_MAX_SUBSCRIBERS,
             ..BroadcastLimits::default()
         },
-        map_keys: IdKey::new(seed, secrets),
+        map_keys: IdKey::new(seed, secrets).map_err(|_| Error::config("the endpoint's map keys are not usable"))?,
         wall_ms: wall_ms(),
         local,
         trace: false,
@@ -242,7 +242,7 @@ mod tests {
         let c = cfg(1);
         let (node_cfg, _) = node_config(&c, 0).unwrap();
         let (seed, secrets) = c.map_keys.parts();
-        assert_eq!(node_cfg.map_keys, IdKey::new(seed, secrets));
+        assert_eq!(node_cfg.map_keys, IdKey::new(seed, secrets).unwrap());
         let other = CoreConfig {
             map_keys: crate::maps::Keys::for_tests(4),
             ..cfg(1)

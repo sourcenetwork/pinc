@@ -112,7 +112,7 @@ impl Rig {
                 incarnation: 1 << 16,
                 trace: false,
                 limits: vinc_broadcast::Limits::default(),
-                map_keys: IdKey::new(0x5eed, &MAP_SECRETS),
+                map_keys: IdKey::new(0x5eed, &MAP_SECRETS).unwrap(),
             };
             Topics::start(&cfg, Box::new(it.next().unwrap()), 1_000_000_000, WALL).unwrap()
         };

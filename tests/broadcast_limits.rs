@@ -15,7 +15,7 @@ mod common;
 
 use common::{Net, SEC, keypair};
 use vinc_broadcast::wire::MAX_HEAD;
-use vinc_broadcast::{Config, Limits, Refused, StartError, Topics};
+use vinc_broadcast::{Config, IdKey, Limits, Refused, StartError, Topics};
 use vinc_crypto::IdentityAlg;
 
 const T: &[u8] = b"lim";
@@ -153,6 +153,19 @@ fn an_invalid_config_is_refused_at_start() {
         start(Limits { reach_bytes: 0, ..ok }).err(),
         Some(StartError::InvalidLimits)
     );
+}
+
+/// A key whose first secret is zero would start every id's walk at one slot: it is refused where it is made, so no
+/// application that drives the node directly can start with it. Any other key is taken.
+#[test]
+fn a_map_key_that_places_every_id_on_one_slot_is_refused_at_start() {
+    static ZERO_FIRST: [u64; 7] = [0, 2, 3, 4, 5, 6, 7];
+    assert_eq!(IdKey::new(0x5eed, &ZERO_FIRST), Err(StartError::InvalidKey));
+    assert_eq!(
+        StartError::InvalidKey.to_string(),
+        "the map keys are unusable: the first secret must not be zero"
+    );
+    assert!(IdKey::new(0x5eed, &[1, 0, 0, 0, 0, 0, 0]).is_ok());
 }
 
 #[test]

@@ -6,7 +6,7 @@
 use super::*;
 
 fn key(seed: u64) -> IdKey {
-    IdKey::new(seed, &TEST_SECRETS)
+    IdKey::new(seed, &TEST_SECRETS).unwrap()
 }
 
 /// Ids that all share their low bits, which under a placement by those bits all start at one slot.
@@ -51,7 +51,7 @@ fn ids_in_a_row_are_spread_under_a_key_that_lines_them_up_in_one_step() {
         0xff51_afd7_ed55_8ccd,
         0xc4ce_b9fe_1a85_ec53,
     ];
-    let mut m = MidMap::with_capacity(8192, IdKey::new(0, &LINED_UP));
+    let mut m = MidMap::with_capacity(8192, IdKey::new(0, &LINED_UP).unwrap());
     for id in 1..=4096u64 {
         assert!(m.insert(id, id), "id {id}");
     }
@@ -88,6 +88,15 @@ fn ids_are_placed_by_the_two_step_hash_of_the_endpoints_map_keys() {
         let want = usize::try_from(two_step.hash_one(id) & (m.keys.len() as u64 - 1)).unwrap();
         assert_eq!(m.home(id), want, "id {id:#x}");
     }
+}
+
+#[test]
+fn a_zero_first_secret_is_refused_and_any_other_is_taken() {
+    static ZERO_FIRST: [u64; 7] = [0, 2, 3, 4, 5, 6, 7];
+    static ZERO_OTHER: [u64; 7] = [1, 0, 0, 0, 0, 0, 0];
+    assert_eq!(IdKey::new(5, &ZERO_FIRST), Err(StartError::InvalidKey));
+    assert!(IdKey::new(5, &ZERO_OTHER).is_ok());
+    assert!(IdKey::new(0, &TEST_SECRETS).is_ok());
 }
 
 #[test]

@@ -26,6 +26,7 @@ use rapidhash::quality::SeedableState;
 use vinc_membership::Nanos;
 
 use crate::consts::SEEN_TTL;
+use crate::node::StartError;
 
 /// The secrets of the unit tests, full width as the key store draws them.
 #[cfg(test)]
@@ -51,9 +52,16 @@ pub struct IdKey(SeedableState<'static>);
 
 impl IdKey {
     /// The key of `seed` and `secrets`. A weak key costs only speed: every bound of the tables holds under any
-    /// placement.
-    pub fn new(seed: u64, secrets: &'static [u64; 7]) -> Self {
-        Self(SeedableState::custom(seed, secrets))
+    /// placement. The one key refused is a zero first secret: the keyed multiply then gives every id the same product,
+    /// so every id would start its walk at one slot (the hasher reads only that secret of the seven for an id).
+    ///
+    /// # Errors
+    /// [`StartError::InvalidKey`] when the first secret is zero.
+    pub fn new(seed: u64, secrets: &'static [u64; 7]) -> Result<Self, StartError> {
+        if secrets[0] == 0 {
+            return Err(StartError::InvalidKey);
+        }
+        Ok(Self(SeedableState::custom(seed, secrets)))
     }
 
     fn hash(&self, id: u64) -> u64 {

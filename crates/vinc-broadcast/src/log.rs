@@ -276,7 +276,7 @@ mod tests {
     use super::*;
 
     fn key() -> IdKey {
-        IdKey::new(7, &crate::table::TEST_SECRETS)
+        IdKey::new(7, &crate::table::TEST_SECRETS).unwrap()
     }
 
     /// `evicts` names exactly the messages `push` then evicts, across wraps, padding and the entry cap.
