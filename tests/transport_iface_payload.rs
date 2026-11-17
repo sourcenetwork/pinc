@@ -44,3 +44,10 @@ fn a_probe_of_1452_bytes_is_sent_only_when_the_interface_carries_it_on_the_path(
     );
     assert_eq!(probe_due(1500, true), Some(PROBE_MTU));
 }
+
+#[test]
+fn an_interface_of_1472_bytes_never_sends_a_probe_of_1452_bytes() {
+    // 1472 carries 1444 bytes over IPv4 and 1424 over IPv6: a 1452-byte probe is a datagram the interface drops.
+    assert_eq!(probe_due(1472, false), None);
+    assert_eq!(probe_due(1472, true), None);
+}

@@ -52,7 +52,9 @@ struct Link {
     /// Bits per second from the listener to the dialer when it differs.
     reverse_bps: Option<u64>,
     mtu: u16,
-    /// The endpoints send a first flight whole when it fits, as the facade builds them.
+    /// The endpoints send a first flight whole when it fits, as the facade builds them. Only the Bluetooth class has it
+    /// on: the low-orbit transfer is slower with it on, but that link's time swings with the loss draw until #565 is
+    /// fixed, so it is rerun with it on after that.
     whole_flights: bool,
     /// Bytes the dialer sends in the transfer.
     bytes: usize,
