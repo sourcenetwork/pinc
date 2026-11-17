@@ -782,3 +782,19 @@ fn the_hot_paths_do_not_allocate() {
     assert_eq!(stats.count(), 0, "receive tracking allocated");
     assert!(count > 0);
 }
+
+#[test]
+fn an_acknowledgement_of_packets_sent_before_the_path_left_its_slot_sets_neither_the_round_trip_nor_the_seen_fact() {
+    let mut rec = Rec::new(MSS);
+    for pn in 0..=3 {
+        rec.on_packet_sent(on_path(pn, pn * MS, 2)).unwrap();
+    }
+    rec.forget_path(2);
+    ack(&mut rec, 80 * MS, &[(0, 3)]);
+    assert_eq!(rec.path_rtt(2), None, "the old path's packets gave the slot a round trip");
+    assert!(!rec.path_seen(2), "the old path's packets marked the slot seen");
+    rec.on_packet_sent(on_path(4, 100 * MS, 2)).unwrap();
+    ack(&mut rec, 150 * MS, &[(4, 4)]);
+    assert!(rec.path_seen(2), "a packet sent on the new path did not mark the slot seen");
+    assert!(rec.path_rtt(2).is_some());
+}
