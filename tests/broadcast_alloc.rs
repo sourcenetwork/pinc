@@ -8,7 +8,8 @@
     clippy::cast_possible_truncation
 )]
 
-use vinc_broadcast::wire::ty;
+use vinc_broadcast::envelope::EnvelopeRef;
+use vinc_broadcast::wire::{Head, ty};
 use vinc_broadcast::{Config, Event, Host, Lane, Topics};
 use vinc_crypto::{IdentityAlg, Keypair};
 use vinc_membership::{Frame, NodeId};
@@ -263,4 +264,29 @@ fn the_steady_path_allocates_nothing_with_the_post_quantum_algorithms() {
 fn the_steady_path_allocates_nothing_with_heads_kept() {
     assert_eq!(steady(IdentityAlg::Ed25519, 16, 64, true), [0, 0, 0]);
     assert_eq!(steady(IdentityAlg::EcdsaP256, 16, 64, true), [0, 0, 0]);
+}
+
+#[test]
+fn an_envelope_is_built_in_one_allocation_and_verified_in_none() {
+    for alg in [
+        IdentityAlg::Ed25519,
+        IdentityAlg::EcdsaP256,
+        IdentityAlg::MlDsa65,
+        IdentityAlg::Hybrid,
+    ] {
+        let mut w = world(alg, true);
+        w.pub_h.keep_to = Some(w.hub_id);
+        w.publisher.publish(&mut w.pub_h, w.now, T, &[7u8; 100]).unwrap();
+        let (_, topic, rest) = parts(&w.pub_h.kept[0]);
+        let (_, body) = Head::parse(&rest).unwrap();
+        let head = &rest[..rest.len() - body.len()];
+        let mut owned = None;
+        let built = measure(|| owned = Some(EnvelopeRef::topic(&topic, head, body).into_owned())).count();
+        assert_eq!(built, 1, "{alg:?} building");
+        let owned = owned.unwrap();
+        let mut verified = false;
+        let checked = measure(|| verified = std::hint::black_box(&owned).verify().is_ok()).count();
+        assert!(verified, "{alg:?} the envelope verifies");
+        assert_eq!(checked, 0, "{alg:?} verifying");
+    }
 }

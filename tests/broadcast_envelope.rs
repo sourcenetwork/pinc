@@ -21,7 +21,7 @@ use common::{ALGS, Ev, Net, SEC, ty};
 use proptest::prelude::*;
 use proptest::strategy::ValueTree;
 use vinc_broadcast::Limits;
-use vinc_broadcast::envelope::{Envelope, verify_bytes};
+use vinc_broadcast::envelope::{EnvelopeRef, verify_bytes};
 use vinc_broadcast::wire::Head;
 use vinc_crypto::IdentityAlg;
 use vinc_wire::hlc::Hlc;
@@ -76,7 +76,7 @@ fn check(net: &Net, alg: IdentityAlg) {
     let (topic, head, body) = &got[0];
     assert!(!head.is_empty(), "{alg:?}");
     let mut bytes = Vec::new();
-    Envelope::topic(topic, head, body).encode_into(&mut bytes);
+    EnvelopeRef::topic(topic, head, body).encode_into(&mut bytes);
     let v = verify_bytes(&bytes).unwrap();
     assert_eq!(
         (v.origin, v.topic, v.payload, v.alg),
@@ -131,7 +131,7 @@ fn a_message_held_for_the_floors_keeps_its_head() {
     assert_eq!(got.len(), 1);
     let (topic, head, body) = &got[0];
     let mut bytes = Vec::new();
-    Envelope::topic(topic, head, body).encode_into(&mut bytes);
+    EnvelopeRef::topic(topic, head, body).encode_into(&mut bytes);
     let v = verify_bytes(&bytes).unwrap();
     assert_eq!((v.origin, v.topic, v.payload), (&net.id(2), T, &b"hello"[..]));
 }
@@ -183,7 +183,7 @@ fn a_hub_that_subscribes_delivers_the_wire_head_it_stored() {
         assert!(!wire_head.borrow().is_empty(), "{alg:?}: the frame to the hub was seen");
         assert_eq!(got[0].1, *wire_head.borrow(), "{alg:?}");
         let mut bytes = Vec::new();
-        Envelope::topic(&got[0].0, &got[0].1, &got[0].2).encode_into(&mut bytes);
+        EnvelopeRef::topic(&got[0].0, &got[0].1, &got[0].2).encode_into(&mut bytes);
         assert_eq!(verify_bytes(&bytes).unwrap().origin, &net.id(1), "{alg:?}");
     }
 }
@@ -220,7 +220,7 @@ fn structured() -> impl Strategy<Value = Vec<u8>> {
             }
             .write(u32::try_from(body.len()).unwrap(), &mut head);
             let mut out = Vec::new();
-            Envelope::topic(&topic, &head, &body).encode_into(&mut out);
+            EnvelopeRef::topic(&topic, &head, &body).encode_into(&mut out);
             out
         })
 }
@@ -230,7 +230,7 @@ proptest! {
 
     #[test]
     fn arbitrary_bytes_never_panic_decode_or_verify(b in prop::collection::vec(any::<u8>(), 0..400)) {
-        let _ = Envelope::decode(&b);
+        let _ = EnvelopeRef::decode(&b);
         let _ = verify_bytes(&b);
     }
 
@@ -252,7 +252,7 @@ proptest! {
                 }
             }
         }
-        if let Ok(e) = Envelope::decode(&b) {
+        if let Ok(e) = EnvelopeRef::decode(&b) {
             let mut again = Vec::new();
             e.encode_into(&mut again);
             prop_assert_eq!(again, b);
@@ -267,7 +267,7 @@ fn the_structured_envelopes_decode() {
     let mut ok = 0;
     for _ in 0..64 {
         let b = structured().new_tree(&mut runner).unwrap().current();
-        ok += usize::from(Envelope::decode(&b).is_ok());
+        ok += usize::from(EnvelopeRef::decode(&b).is_ok());
     }
     assert!(ok > 40, "{ok} of 64 decoded");
 }

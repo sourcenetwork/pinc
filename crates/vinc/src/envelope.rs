@@ -28,7 +28,7 @@ pub struct Envelope(Box<[u8]>);
 impl Envelope {
     /// The envelope of a message from its parts; one allocation.
     pub(crate) fn new(topic: &[u8], head: &[u8], body: &[u8]) -> Self {
-        let parts = vinc_broadcast::envelope::Envelope::topic(topic, head, body);
+        let parts = vinc_broadcast::envelope::EnvelopeRef::topic(topic, head, body);
         let mut bytes = Vec::with_capacity(parts.encoded_len());
         parts.encode_into(&mut bytes);
         Self(bytes.into_boxed_slice())

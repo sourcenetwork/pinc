@@ -385,12 +385,12 @@ theorem frame_canonical {b : List Nat} {ty : Nat} {topic rest : List Nat} (hv : 
 
 /-! ## The signed envelope -/
 
-/-- `Envelope::encode_into` of a topic message (kind 1): `version 1 | kind 1 | topic_len2 | topic | head | body`, the
+/-- `EnvelopeRef::encode_into` of a topic message (kind 1): `version 1 | kind 1 | topic_len2 | topic | head | body`, the
 head being `write` with the body's length. -/
 def encEnv (topic : List Nat) (h : Head) (body : List Nat) : List Nat :=
   [1, 1] ++ beBytes 2 topic.length ++ topic ++ write h body.length ++ body
 
-/-- `Envelope::decode`: the version, the kind (a dispatch whose only accepted case is kind 1), the topic bound
+/-- `EnvelopeRef::decode`: the version, the kind (a dispatch whose only accepted case is kind 1), the topic bound
 (`MAX_TOPIC`, 255), the head and a body of exactly the length the head names. -/
 def decEnv (b : List Nat) : Option (List Nat × Head × List Nat) :=
   match rd1 b with

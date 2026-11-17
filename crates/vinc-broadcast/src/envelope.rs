@@ -12,10 +12,10 @@
 //! over bytes of that shape: an application that signs bytes a peer chose with `Endpoint::sign` can be made to produce
 //! one (its guard refuses the reserved label prefixes, which an unlabelled topic statement does not carry).
 //!
-//! Invariants: [`Envelope::decode`] validates the whole structure at this boundary (version, kind, the topic bound,
-//! the head, the body length, no trailing byte) and never panics or reads outside its input; [`Envelope::verify`]
+//! Invariants: [`EnvelopeRef::decode`] validates the whole structure at this boundary (version, kind, the topic bound,
+//! the head, the body length, no trailing byte) and never panics or reads outside its input; [`EnvelopeRef::verify`]
 //! re-checks the parts it is given, so an envelope built by hand cannot verify unless it is well formed; neither
-//! allocates.
+//! allocates. An owned [`Envelope`] is built only by [`EnvelopeRef::into_owned`], in one allocation.
 
 use vinc_crypto::{IdentityAlg, NodeId as AuthorId};
 use vinc_membership::NodeId;
@@ -24,6 +24,11 @@ use vinc_wire::Reader;
 use crate::auth;
 use crate::consts::MAX_TOPIC;
 use crate::wire::{Head, Malformed};
+
+#[cfg(feature = "alloc")]
+mod owned;
+#[cfg(feature = "alloc")]
+pub use owned::Envelope;
 
 /// The version of the canonical encoding.
 pub const VERSION: u8 = 1;
@@ -106,7 +111,7 @@ impl Verified<'_> {
 
 /// The parts of a signed message, borrowed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Envelope<'a> {
+pub struct EnvelopeRef<'a> {
     /// The kind of statement: [`KIND_TOPIC_V1`] is the only one.
     pub kind: u8,
     /// The topic.
@@ -117,7 +122,7 @@ pub struct Envelope<'a> {
     pub body: &'a [u8],
 }
 
-impl<'a> Envelope<'a> {
+impl<'a> EnvelopeRef<'a> {
     /// The parts of a topic message.
     pub const fn topic(topic: &'a [u8], head: &'a [u8], body: &'a [u8]) -> Self {
         Self {
@@ -134,7 +139,7 @@ impl<'a> Envelope<'a> {
     }
 
     /// Append the canonical encoding to `out`. A topic over 65535 bytes has a length that does not fit its field, and
-    /// the encoding is then refused by [`Envelope::decode`] like any topic over the layer's bound.
+    /// the encoding is then refused by [`EnvelopeRef::decode`] like any topic over the layer's bound.
     pub fn encode_into(&self, out: &mut impl Extend<u8>) {
         out.extend([VERSION, self.kind]);
         out.extend(u16::try_from(self.topic.len()).unwrap_or(u16::MAX).to_be_bytes());
@@ -217,9 +222,9 @@ impl<'a> Envelope<'a> {
 /// Decode canonical bytes and verify them: the offline check of a stored envelope.
 ///
 /// # Errors
-/// Any [`EnvelopeError`] of [`Envelope::decode`] and [`Envelope::verify`].
+/// Any [`EnvelopeError`] of [`EnvelopeRef::decode`] and [`EnvelopeRef::verify`].
 pub fn verify_bytes(bytes: &[u8]) -> Result<Verified<'_>, EnvelopeError> {
-    Envelope::decode(bytes)?.verify()
+    EnvelopeRef::decode(bytes)?.verify()
 }
 
 #[cfg(test)]
@@ -282,7 +287,7 @@ mod tests {
     }
 
     fn encoded(topic: &[u8], head: &[u8], body: &[u8]) -> Vec<u8> {
-        let e = Envelope::topic(topic, head, body);
+        let e = EnvelopeRef::topic(topic, head, body);
         let mut out = Vec::new();
         e.encode_into(&mut out);
         assert_eq!(out.len(), e.encoded_len());
@@ -297,7 +302,7 @@ mod tests {
                 let body = vec![0xAB; blen];
                 let head = signed(alg, 9, topic, &body);
                 let bytes = encoded(topic, &head, &body);
-                let e = Envelope::decode(&bytes).unwrap();
+                let e = EnvelopeRef::decode(&bytes).unwrap();
                 assert_eq!(
                     (e.kind, e.topic, e.head, e.body),
                     (KIND_TOPIC_V1, topic, &head[..], &body[..]),
@@ -381,9 +386,9 @@ mod tests {
                 };
                 assert_eq!(verify_bytes(&b).map(drop), want, "{alg:?} kind {k}");
             }
-            let e = Envelope {
+            let e = EnvelopeRef {
                 kind: 2,
-                ..Envelope::topic(b"news", &head, b"hello")
+                ..EnvelopeRef::topic(b"news", &head, b"hello")
             };
             assert_eq!(e.verify(), Err(EnvelopeError::BadKind));
         }
@@ -396,7 +401,7 @@ mod tests {
         let bytes = encoded(&topic, &head, b"x");
         assert!(matches!(verify_bytes(&bytes), Err(EnvelopeError::Malformed(_))));
         assert!(matches!(
-            Envelope::topic(&topic, &head, b"x").verify(),
+            EnvelopeRef::topic(&topic, &head, b"x").verify(),
             Err(EnvelopeError::Malformed(_))
         ));
     }
@@ -404,13 +409,13 @@ mod tests {
     #[test]
     fn parts_that_do_not_match_do_not_verify() {
         let head = signed(IdentityAlg::Ed25519, 9, b"news", b"hello");
-        let ok = |topic: &'static [u8], body: &'static [u8]| Envelope::topic(topic, &head, body).verify();
+        let ok = |topic: &'static [u8], body: &'static [u8]| EnvelopeRef::topic(topic, &head, body).verify();
         assert!(ok(b"news", b"hello").is_ok());
         assert!(matches!(ok(b"news", b"hell"), Err(EnvelopeError::Malformed(_))));
         assert_eq!(ok(b"news", b"jello"), Err(EnvelopeError::BadSignature));
         assert_eq!(ok(b"other", b"hello"), Err(EnvelopeError::BadSignature));
         assert!(matches!(
-            Envelope::topic(b"news", &head[..MID_LEN], b"hello").verify(),
+            EnvelopeRef::topic(b"news", &head[..MID_LEN], b"hello").verify(),
             Err(EnvelopeError::Malformed(_))
         ));
     }
@@ -425,20 +430,40 @@ mod tests {
             // B's id and B's key, A's signature.
             let head = head_of(alg, &idb, &pk_of(alg, &b), &a, b"news", b"hello");
             assert_eq!(
-                Envelope::topic(b"news", &head, b"hello").verify(),
+                EnvelopeRef::topic(b"news", &head, b"hello").verify(),
                 Err(EnvelopeError::BadSignature),
                 "{alg:?} origin B, signature A"
             );
             // B's id with A's key, A's signature: the key does not belong to the id.
             let head = head_of(alg, &idb, &pk_of(alg, &a), &a, b"news", b"hello");
             assert_eq!(
-                Envelope::topic(b"news", &head, b"hello").verify(),
+                EnvelopeRef::topic(b"news", &head, b"hello").verify(),
                 Err(EnvelopeError::BadSignature),
                 "{alg:?} origin B, key A"
             );
             // The control: A's id, A's key, A's signature.
             let head = head_of(alg, &ida, &pk_of(alg, &a), &a, b"news", b"hello");
-            assert!(Envelope::topic(b"news", &head, b"hello").verify().is_ok(), "{alg:?}");
+            assert!(EnvelopeRef::topic(b"news", &head, b"hello").verify().is_ok(), "{alg:?}");
+        }
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn an_owned_envelope_reads_its_parts_in_place() {
+        for alg in ALGS {
+            for topic in [vec![], vec![b'a'], vec![b't'; MAX_TOPIC]] {
+                for blen in [0, 70_000] {
+                    let body = vec![0xCD; blen];
+                    let head = signed(alg, 9, &topic, &body);
+                    let want = encoded(&topic, &head, &body);
+                    let e = EnvelopeRef::topic(&topic, &head, &body).into_owned();
+                    assert_eq!(e.topic(), &topic[..], "{alg:?} {blen}");
+                    assert_eq!(e.payload(), &body[..], "{alg:?} {blen}");
+                    assert_eq!(e.as_bytes(), &want[..], "{alg:?} {blen}");
+                    assert_eq!(e.verify(), verify_bytes(&want), "{alg:?} {blen}");
+                    assert_eq!(e.into_bytes(), want, "{alg:?} {blen}");
+                }
+            }
         }
     }
 }

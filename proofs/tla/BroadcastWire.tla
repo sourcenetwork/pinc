@@ -18,7 +18,7 @@
 (* FrameRoundTrip and FrameCanonical for `build`: len | type | topic_len | *)
 (* topic | rest, with the topic within its limit.                          *)
 (*                                                                         *)
-(* The signed envelope, envelope.rs `Envelope::{encode_into, decode}`:     *)
+(* The signed envelope, envelope.rs `EnvelopeRef::{encode_into, decode}`:  *)
 (* version | kind | topic_len | topic | head | body, the head and body     *)
 (* being the codec above. EnvRoundTrip (an ASSUME) and EnvCanonical: what  *)
 (* decodes is exactly what `encode_into` writes, so no byte string has two *)
