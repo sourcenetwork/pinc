@@ -7,7 +7,7 @@ use std::net::SocketAddr;
 use vinc_core::{Answer, Command, CommandError, Event, HalfOpenSlot, Query, Reply, SessionId, TraceEvent};
 use vinc_crypto::identity::MAX_SIGNATURE_LEN;
 use vinc_crypto::{Drbg, IdentityAlg, Keypair, Software};
-use vinc_security::message::{FULL_INITIAL_MIN, SHORT_INITIAL_MIN};
+use vinc_security::message::{FULL_INITIAL_MIN, RESUME_HELLO_MIN, SHORT_INITIAL_MIN};
 use vinc_security::{Env, KeyHandle, KeyResponse, SoftKeys, SoftPrekeys};
 use vinc_tests::*;
 use vinc_transport::stream::NoSource;
@@ -29,7 +29,9 @@ pub struct Seen {
     pub not_first: u32,
     pub expired: u32,
     pub expired_at_end: u32,
-    pub spared_before_end: u32,
+    pub spared_at_limit: u32,
+    pub rejected: u32,
+    pub refused_half: u32,
     pub left_by_est: u32,
     pub left_uncounted_by_est: u32,
     pub left_by_free: u32,
@@ -96,7 +98,7 @@ impl<const K: usize, const D: usize> Rec<K, D> {
         for (unit, out) in [(MS_NS, &mut r.ms), (1, &mut r.ns)] {
             let _ = writeln!(
                 out,
-                r#"{{"t":"coho","run":{run},"op":"init","k":{K},"max":{MAX},"life":{},"hold":{},"full":{FULL_INITIAL_MIN},"short":{SHORT_INITIAL_MIN},"holders":{HOLDERS}}}"#,
+                r#"{{"t":"coho","run":{run},"op":"init","k":{K},"max":{MAX},"life":{},"hold":{},"full":{FULL_INITIAL_MIN},"short":{SHORT_INITIAL_MIN},"hello":{RESUME_HELLO_MIN},"holders":{HOLDERS}}}"#,
                 LIFE / unit,
                 HOLD / unit
             );
@@ -118,7 +120,7 @@ impl<const K: usize, const D: usize> Rec<K, D> {
         let ns0 = self.ep.node_stats();
         let r = f(&mut self.ep);
         assert_eq!(self.ep.trace_dropped(), 0, "the trace ring overflowed");
-        let mut steps: Vec<[u64; 4]> = Vec::new();
+        let mut steps: Vec<[u64; 6]> = Vec::new();
         let mut n = None;
         while let Some(rec) = self.ep.poll_trace() {
             match rec.event {
@@ -127,11 +129,13 @@ impl<const K: usize, const D: usize> Rec<K, D> {
                     admitted,
                     half_open,
                     resume,
-                } => steps.push([0, admitted, half_open, resume]),
-                TraceEvent::Session { slot, step: 0, dialer } => steps.push([1, slot, dialer, 0]),
-                TraceEvent::Session { slot, step: 1, .. } => steps.push([2, slot, 0, 0]),
-                TraceEvent::Session { slot, .. } => steps.push([4, slot, 0, 0]),
-                TraceEvent::HalfOpenExpired { slot } => steps.push([3, slot, 0, 0]),
+                    room,
+                    owed,
+                } => steps.push([0, admitted, half_open, resume, room, owed]),
+                TraceEvent::Session { slot, step: 0, dialer } => steps.push([1, slot, dialer, 0, 0, 0]),
+                TraceEvent::Session { slot, step: 1, .. } => steps.push([2, slot, 0, 0, 0, 0]),
+                TraceEvent::Session { slot, .. } => steps.push([4, slot, 0, 0, 0, 0]),
+                TraceEvent::HalfOpenExpired { slot } => steps.push([3, slot, 0, 0, 0, 0]),
                 _ => {}
             }
         }
@@ -141,6 +145,8 @@ impl<const K: usize, const D: usize> Rec<K, D> {
         let timeout = self.ep.poll_timeout();
         let diff: Vec<usize> = (0..K).filter(|i| self.prev[*i] != after[*i]).collect();
         let dropped = ns1.dropped_in - ns0.dropped_in;
+        let otherwise = (ns1.stateless_rejects + ns1.stateless_refused + ns1.backlog_refused)
+            - (ns0.stateless_rejects + ns0.stateless_refused + ns0.backlog_refused);
         let stalled_in = ns1.stalled_in - ns0.stalled_in;
         self.check(
             now,
@@ -154,6 +160,7 @@ impl<const K: usize, const D: usize> Rec<K, D> {
             stalled1,
             timeout,
             dropped,
+            otherwise,
             stalled_in,
         );
         let write =
@@ -167,7 +174,7 @@ impl<const K: usize, const D: usize> Rec<K, D> {
             };
             let steps_s: Vec<String> = steps
                 .iter()
-                .map(|s| format!("[{},{},{},{}]", s[0], s[1], s[2], s[3]))
+                .map(|s| format!("[{},{},{},{},{},{}]", s[0], s[1], s[2], s[3], s[4], s[5]))
                 .collect();
             for (unit, out) in [(MS_NS, &mut self.ms), (1, &mut self.ns)] {
                 let narrow = |x: u64| {
@@ -197,7 +204,7 @@ impl<const K: usize, const D: usize> Rec<K, D> {
                 let to = timeout.map_or(String::new(), |t| up(t).to_string());
                 let _ = writeln!(
                     out,
-                    r#"{{"t":"coho","run":{},"op":"{opn}","now":{},"kind":{kind},"len":{len},"n":{},"stalled0":{},"steps":[{}],"diff":[{}],"count":{},"stalled":{},"timeout":[{to}],"dropped":{dropped},"stalledIn":{stalled_in}}}"#,
+                    r#"{{"t":"coho","run":{},"op":"{opn}","now":{},"kind":{kind},"len":{len},"n":{},"stalled0":{},"steps":[{}],"diff":[{}],"count":{},"stalled":{},"timeout":[{to}],"dropped":{dropped},"otherwise":{otherwise},"stalledIn":{stalled_in}}}"#,
                     self.run,
                     exact(now),
                     n.unwrap_or(255).min(255),
@@ -220,13 +227,14 @@ impl<const K: usize, const D: usize> Rec<K, D> {
         op: &Op,
         n: Option<u64>,
         stalled0: bool,
-        steps: &[[u64; 4]],
+        steps: &[[u64; 6]],
         after: &[Option<HalfOpenSlot>],
         count0: usize,
         count: usize,
         stalled: bool,
         timeout: Option<u64>,
         dropped: u64,
+        otherwise: u64,
         stalled_in: u64,
     ) {
         let before = self.prev.clone();
@@ -239,7 +247,7 @@ impl<const K: usize, const D: usize> Rec<K, D> {
             assert!(!s.counted || s.unauth, "a counted session is authenticated");
             if s.unauth {
                 assert!(
-                    s.deadline.is_some_and(|d| d <= s.created + s.life) && (s.life == LIFE || s.life == HOLD),
+                    s.deadline.is_some_and(|d| d <= s.created + s.life + 1) && (s.life == LIFE || s.life == HOLD),
                     "an unauthenticated session's deadline is past its end: {s:?}"
                 );
             }
@@ -276,12 +284,9 @@ impl<const K: usize, const D: usize> Rec<K, D> {
         for s in steps.iter().filter(|s| s[0] == 3) {
             let b = before[s[1] as usize].unwrap();
             assert!(matches!(op, Op::Timer), "an expiry outside a timer call");
-            assert!(
-                b.unauth && now >= b.created + b.life,
-                "a session expired before its end"
-            );
+            assert!(b.unauth && now > b.created + b.life, "a session expired before its end");
             self.seen.expired += 1;
-            self.seen.expired_at_end += u32::from(now == b.created + b.life);
+            self.seen.expired_at_end += u32::from(now == b.created + b.life + MS_NS);
         }
         if let Op::Timer = op {
             if stalled0 {
@@ -291,10 +296,10 @@ impl<const K: usize, const D: usize> Rec<K, D> {
             if !stalled {
                 for s in after.iter().flatten() {
                     assert!(
-                        !s.unauth || now < s.created + s.life,
+                        !s.unauth || now <= s.created + s.life,
                         "a session outlived its end past a timer call"
                     );
-                    self.seen.spared_before_end += u32::from(s.unauth && now + MS_NS == s.created + s.life);
+                    self.seen.spared_at_limit += u32::from(s.unauth && now == s.created + s.life);
                 }
             }
         }
@@ -338,25 +343,44 @@ impl<const K: usize, const D: usize> Rec<K, D> {
             self.seen.not_first += 1;
             return;
         };
-        let [code, admitted, c, resume] = steps[0];
+        let [code, admitted, c, resume, room, owed] = steps[0];
         assert_eq!((code, c as usize), (0, count0), "the decision did not use the count");
         assert!(resume == 0 || kind == 6, "a resumption that is no Hello");
         if let Some(e) = self.expect_resume.take() {
             assert_eq!(resume == 1, e, "the ticket did not decide as expected");
         }
-        let want = len >= f && (resume == 1 || count0 < MAX);
+        // the cap is the code's, or half the room the host left, rounded up, when that is less; no flight is decided
+        // on while the owed sessions fill the room
+        let cap = MAX.min((room as usize).div_ceil(2));
+        let open = owed < room;
+        if admitted == 2 {
+            // answered without a session or dropped: a short Initial or a Hello at its floor or more, no resumption
+            assert!(
+                matches!(kind, 2 | 6) && resume == 0 && len >= f && open,
+                "a first packet was answered without a session that the responder would not only reject"
+            );
+            assert!(
+                steps.len() == 1 && !changed,
+                "an answered first packet changed the table"
+            );
+            assert_eq!(dropped + otherwise, 1, "an answered first packet was not counted once");
+            self.seen.rejected += 1;
+            return;
+        }
+        let want = len >= f && open && (resume == 1 || count0 < cap);
         assert_eq!(admitted == 1, want, "the admission differs from the rule");
         if admitted == 0 {
             assert!(steps.len() == 1 && !changed, "a refused first flight changed the table");
-            assert_eq!(dropped, 1);
+            assert_eq!(dropped + otherwise, 1);
             self.seen.refused_floor += u32::from(len < f);
-            self.seen.refused_cap += u32::from(len >= f && count0 == MAX);
-            self.seen.hello_refused_at_cap += u32::from(len >= f && count0 == MAX && kind == 6);
+            self.seen.refused_cap += u32::from(len >= f && open && count0 == MAX);
+            self.seen.refused_half += u32::from(len >= f && open && count0 >= cap && cap < MAX);
+            self.seen.hello_refused_at_cap += u32::from(len >= f && open && count0 == MAX && kind == 6);
             return;
         }
         self.seen.admitted_at_floor += u32::from(len == f);
         self.seen.resume_at_cap += u32::from(resume == 1 && count0 == MAX);
-        if let Some([1, i, 0, _]) = steps.get(1) {
+        if let Some([1, i, 0, ..]) = steps.get(1) {
             let i = *i as usize;
             assert!(before[i].is_none());
             if let Some(s) = after[i].filter(|_| !has(4, i)) {
@@ -490,7 +514,9 @@ pub fn add(a: &mut Seen, b: &Seen) {
     a.not_first += b.not_first;
     a.expired += b.expired;
     a.expired_at_end += b.expired_at_end;
-    a.spared_before_end += b.spared_before_end;
+    a.spared_at_limit += b.spared_at_limit;
+    a.rejected += b.rejected;
+    a.refused_half += b.refused_half;
     a.left_by_est += b.left_by_est;
     a.left_uncounted_by_est += b.left_uncounted_by_est;
     a.left_by_free += b.left_by_free;

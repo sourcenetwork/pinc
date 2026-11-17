@@ -2,7 +2,7 @@
 
 use vinc_wire::Writer;
 
-use super::{ConnId, LongHeader, PacketError, short_dcid};
+use super::{ConnId, LongHeader, LongType, PacketError, short_dcid};
 
 /// The header of a packet found in a datagram.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -101,4 +101,31 @@ pub fn pad_to(w: &mut Writer<'_>, min_len: usize) -> Result<(), PacketError> {
         left -= n;
     }
     Ok(())
+}
+
+/// Write a long Handshake packet at the start of `window` that carries `bytes`, the part at offset `off` of a message
+/// of `total` bytes, and return its length; `None` if it does not fit. The one framing of a handshake fragment: a
+/// connection's flight and an endpoint's answer without a session are both written by it.
+pub fn handshake_packet(
+    window: &mut [u8],
+    dcid: ConnId,
+    scid: ConnId,
+    total: usize,
+    off: usize,
+    bytes: &[u8],
+) -> Option<usize> {
+    let body_len =
+        vinc_wire::varint::encoded_len(total as u64) + vinc_wire::varint::encoded_len(off as u64) + bytes.len();
+    let header = LongHeader {
+        ty: LongType::Handshake,
+        dcid,
+        scid,
+        body_len,
+    };
+    let mut w = Writer::new(window);
+    header.write(&mut w, 0).ok()?;
+    w.put_varint(total as u64).ok()?;
+    w.put_varint(off as u64).ok()?;
+    w.put_slice(bytes).ok()?;
+    Some(w.written().len())
 }

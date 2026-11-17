@@ -9,7 +9,9 @@
 
 use vinc_crypto::{NodeId, Provider};
 use vinc_security::{Alpn, ConnId};
-use vinc_transport::conn::{Connection, PathId, Resources, handshake_limit};
+#[cfg(feature = "trace")]
+use vinc_transport::conn::handshake_limit;
+use vinc_transport::conn::{Connection, PathId, Resources, handshake_end};
 use vinc_transport::stream::StreamSource;
 
 use crate::api::{Event, SessionId};
@@ -426,9 +428,21 @@ impl<'a, P: Provider, S: StreamSource, const N: usize, const C: usize, const F: 
 
     /// How long the session lives while its peer is not authenticated: the node's connect limit (30 s, 60 s on a thin
     /// node), and at least [`HALF_OPEN_HOLD`](crate::HALF_OPEN_HOLD) once it answered as a responder (its flight went
-    /// out). The transport's own deadline asks the same function.
+    /// out, a reject is not one).
+    #[cfg(feature = "trace")]
     pub(crate) fn half_open_life(&self, thin: bool) -> u64 {
         handshake_limit(thin, self.conn.as_ref().is_some_and(Connection::answered))
+    }
+
+    /// The first instant at which the session, still unauthenticated, has outlived its life: it is there at
+    /// `created + life` and gone one tick past it, the transport's own rule (`handshake_end`), which the connection's
+    /// deadline asks too.
+    pub(crate) fn half_open_end(&self, thin: bool) -> u64 {
+        handshake_end(
+            self.m.created,
+            thin,
+            self.conn.as_ref().is_some_and(Connection::answered),
+        )
     }
 }
 

@@ -610,7 +610,10 @@ fn a_responder_that_only_rejected_is_not_held_60_s() {
             let b = w.server(&mut sb);
             let mut net = Net::new(a, b, Link::new(57, Params::new(10 * MS)), &mut w.stores);
             let t0 = net.now;
-            assert!(net.run(t0 + SEC, |n| !n.b.tx_log.is_empty()), "short {short}: no reject");
+            assert!(
+                net.run(t0 + SEC, |n| !n.b.tx_log.is_empty()),
+                "short {short}: no reject"
+            );
             net.link.route(PathId(1)).up = false;
             net.run(t0 + 29_900 * MS, |_| false);
             assert_eq!(net.b.closed(), None, "short {short}: ended before the connect limit");

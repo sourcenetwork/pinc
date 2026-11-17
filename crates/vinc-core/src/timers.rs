@@ -127,7 +127,7 @@ ep_impl! {
             note(slot.m.acp_recheck);
         }
         if slot.m.unauth {
-            note(Some(slot.m.created.saturating_add(slot.half_open_life(self.rtt.thin_node()))));
+            note(Some(slot.half_open_end(self.rtt.thin_node())));
         }
         self.heap.set(i, deadline);
         self.sync_cids(i, false);
@@ -169,7 +169,7 @@ ep_impl! {
         if !slot.m.in_use {
             return;
         }
-        if slot.m.unauth && now >= slot.m.created.saturating_add(slot.half_open_life(thin)) {
+        if slot.m.unauth && now >= slot.half_open_end(thin) {
             trace!(self, now, HalfOpenExpired { slot: i as u64 });
             self.free_slot(i, now);
             return;

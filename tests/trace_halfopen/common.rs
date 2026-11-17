@@ -5,7 +5,7 @@ use std::net::SocketAddr;
 
 use vinc_core::{Endpoint, EndpointConfig, HALF_OPEN_HOLD, HALF_OPEN_LIFE, MAX_HALF_OPEN, Slot};
 use vinc_crypto::{Drbg, IdentityAlg, Keypair, Software};
-use vinc_security::message::{FULL_INITIAL_MIN, SHORT_INITIAL_MIN};
+use vinc_security::message::{FULL_INITIAL_MIN, RESUME_HELLO_MIN, SHORT_INITIAL_MIN};
 use vinc_security::{ConnId, KeyHandle, LocalIdentity};
 use vinc_tests::*;
 use vinc_transport::conn::{Resources, Tables};
@@ -113,7 +113,7 @@ pub const fn floor(kind: u8) -> Option<usize> {
     match kind {
         1 => Some(FULL_INITIAL_MIN),
         2 => Some(SHORT_INITIAL_MIN),
-        6 => Some(0),
+        6 => Some(RESUME_HELLO_MIN),
         _ => None,
     }
 }

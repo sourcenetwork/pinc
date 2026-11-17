@@ -48,6 +48,11 @@ use crate::tickets::TicketBatch;
 pub const FULL_INITIAL_MIN: usize = 1200;
 /// The short Initial is padded to at least this many bytes: 464 x 3 covers the Reply of a 32-byte identity.
 pub const SHORT_INITIAL_MIN: usize = 464;
+/// The length of a resumption Hello that carries the shortest ids and ALPN: the least a well-formed one is. The
+/// message has no padding rule of its own.
+pub const RESUME_HELLO_MIN: usize = 1 + 1 + 1 + 1 + (1 + 1) + 1 + 16 + 32 + 32 + CREDIT_RECORD_LEN;
+/// The length of a reject: its type and the 16-byte echo.
+pub const REJECT_LEN: usize = 1 + 16;
 /// The datagram size the padding rule assumes when it counts the datagrams of a Reply: the transport cuts a flight to
 /// this size while the path is not probed.
 pub const MIN_DATAGRAM: usize = 1200;

@@ -50,14 +50,19 @@ pub enum TraceEvent {
         /// Bytes charged to the address.
         tx: u64,
     },
-    /// A new unauthenticated session: `admitted` 1 or refused 0, with `half_open` sessions open after.
+    /// A decision on a first message: `admitted` 1, refused 0, or 2 for one answered without a session or dropped;
+    /// `half_open` sessions were open.
     HalfOpen {
-        /// 1 if admitted.
+        /// 1 if admitted, 0 if refused, 2 if answered without a session or dropped.
         admitted: u64,
-        /// Unauthenticated sessions after the decision.
+        /// Unauthenticated sessions at the decision.
         half_open: u64,
         /// 1 if a ticket resume (exempt from the cap).
         resume: u64,
+        /// The room the host has left to accept sessions, at most `i32::MAX`.
+        room: u64,
+        /// Server sessions owed to the host.
+        owed: u64,
     },
     /// An unauthenticated session lived its life (30 s, 60 s on a thin node) and was dropped.
     HalfOpenExpired {
@@ -146,43 +151,60 @@ impl TraceEvent {
     }
 
     /// The named fields, in order, and how many there are.
-    pub const fn fields(&self) -> ([(&'static str, u64); 4], usize) {
+    pub const fn fields(&self) -> ([(&'static str, u64); 5], usize) {
         const NONE: (&str, u64) = ("", 0);
         match *self {
-            Self::Demux { slot, candidates } => ([("slot", slot), ("candidates", candidates), NONE, NONE], 2),
-            Self::Trial { slot, ok } => ([("slot", slot), ("ok", ok), NONE, NONE], 2),
-            Self::LedgerRx { addr, rx } => ([("addr", addr), ("rx", rx), NONE, NONE], 2),
+            Self::Demux { slot, candidates } => ([("slot", slot), ("candidates", candidates), NONE, NONE, NONE], 2),
+            Self::Trial { slot, ok } => ([("slot", slot), ("ok", ok), NONE, NONE, NONE], 2),
+            Self::LedgerRx { addr, rx } => ([("addr", addr), ("rx", rx), NONE, NONE, NONE], 2),
             Self::LedgerTx { addr, allowed, rx, tx } => {
-                ([("addr", addr), ("allowed", allowed), ("rx", rx), ("tx", tx)], 4)
+                ([("addr", addr), ("allowed", allowed), ("rx", rx), ("tx", tx), NONE], 4)
             }
             Self::HalfOpen {
                 admitted,
                 half_open,
                 resume,
+                room,
+                owed,
             } => (
                 [
                     ("admitted", admitted),
                     ("half_open", half_open),
                     ("resume", resume),
-                    NONE,
+                    ("room", room),
+                    ("owed", owed),
                 ],
-                3,
+                5,
             ),
-            Self::HalfOpenExpired { slot } => ([("slot", slot), NONE, NONE, NONE], 1),
-            Self::Acp { slot, step } => ([("slot", slot), ("step", step), NONE, NONE], 2),
-            Self::Gate { slot, release, held } => ([("slot", slot), ("release", release), ("held", held), NONE], 3),
-            Self::Early { slot, rule } => ([("slot", slot), ("rule", rule), NONE, NONE], 2),
-            Self::Sub { step, parent, child } => ([("step", step), ("parent", parent), ("child", child), NONE], 3),
+            Self::HalfOpenExpired { slot } => ([("slot", slot), NONE, NONE, NONE, NONE], 1),
+            Self::Acp { slot, step } => ([("slot", slot), ("step", step), NONE, NONE, NONE], 2),
+            Self::Gate { slot, release, held } => {
+                ([("slot", slot), ("release", release), ("held", held), NONE, NONE], 3)
+            }
+            Self::Early { slot, rule } => ([("slot", slot), ("rule", rule), NONE, NONE, NONE], 2),
+            Self::Sub { step, parent, child } => {
+                ([("step", step), ("parent", parent), ("child", child), NONE, NONE], 3)
+            }
             Self::Keepalive {
                 slot,
                 ping_at,
                 review_at,
             } => (
-                [("slot", slot), ("ping_at", ping_at), ("review_at", review_at), NONE],
+                [
+                    ("slot", slot),
+                    ("ping_at", ping_at),
+                    ("review_at", review_at),
+                    NONE,
+                    NONE,
+                ],
                 3,
             ),
-            Self::Rtt { lrtt, tgr, hs_floor } => ([("lrtt", lrtt), ("tgr", tgr), ("hs_floor", hs_floor), NONE], 3),
-            Self::Session { slot, step, dialer } => ([("slot", slot), ("step", step), ("dialer", dialer), NONE], 3),
+            Self::Rtt { lrtt, tgr, hs_floor } => {
+                ([("lrtt", lrtt), ("tgr", tgr), ("hs_floor", hs_floor), NONE, NONE], 3)
+            }
+            Self::Session { slot, step, dialer } => {
+                ([("slot", slot), ("step", step), ("dialer", dialer), NONE, NONE], 3)
+            }
         }
     }
 }

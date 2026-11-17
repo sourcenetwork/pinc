@@ -28,7 +28,9 @@ use super::ctl::{EXT_BODY_MAX, K_EXT, K_READY, K_REKEY, K_STREAM_CTL, K_TICKETS}
 use super::event::Ev;
 use super::{Connection, Phase};
 use crate::frame::{Frame, MAX_ACK_RANGES, ack_len, stream_overhead, ty, write_ack};
-use crate::packet::{ConnId, LongHeader, LongType, PN_LEN_BASE, PnLayout, ShortHeader, encode_pn, seal};
+use crate::packet::{
+    ConnId, LongHeader, LongType, PN_LEN_BASE, PnLayout, ShortHeader, encode_pn, handshake_packet, seal,
+};
 use crate::recovery::{FrameRef, FrameRefs, MAX_FRAME_REFS, PathKind, REPAIR_FRAME_BYTES, Sent};
 use crate::stream::{ControlFrame, StreamSource};
 
@@ -332,14 +334,7 @@ conn_impl! {
         // Leave a short packet's worth of room behind the flight only when the flight is short.
         let room = window.len().saturating_sub(fixed + 2 + self.hs.fragment_overhead());
         let Some((total, off, bytes)) = self.hs.next_fragment(&self.pool, room) else { return 0 };
-        let body_len = vinc_wire::varint::encoded_len(total as u64) + vinc_wire::varint::encoded_len(off as u64) + bytes.len();
-        let header = LongHeader { ty: LongType::Handshake, dcid, scid, body_len };
-        let mut w = Writer::new(window);
-        let ok = header.write(&mut w, 0).is_ok()
-            && w.put_varint(total as u64).is_ok()
-            && w.put_varint(off as u64).is_ok()
-            && w.put_slice(bytes).is_ok();
-        if ok { w.written().len() } else { 0 }
+        handshake_packet(window, dcid, scid, total, off, bytes).unwrap_or(0)
     }
 
     /// The destination id of a long header: the peer's id once known, else the one the client invented.

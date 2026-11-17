@@ -28,8 +28,8 @@
 //!   node each wait after the first is at least `min(20 s, 2 x max(srtt, node RTTs))`. The Finish and each resend go
 //!   on the path the reply came on, not on the other paths the first flight was copied to.
 //! - A handshake still not established more than 30 s after it began (60 s on a thin node) ends; the connection then
-//!   closes. A responder that has sent its flight holds it at least 60 s ([`RESPONDER_HOLD`]), so a slow dialer's
-//!   Finish delayed by a retransmission timeout still finds it.
+//!   closes. A responder that has sent its flight (a reject is not one) holds it at least 60 s
+//!   ([`RESPONDER_HOLD`]), so a slow dialer's Finish delayed by a retransmission timeout still finds it.
 //! - A dialing side that established but has heard no 1-RTT packet from the peer more than the same 30 s (60 s) after
 //!   it established ends unconfirmed ([`CloseReason::Unconfirmed`](super::CloseReason::Unconfirmed)): the peer does
 //!   not hold the session (its handshake ran out before the Finish arrived, or the path is gone), so the layer above
@@ -58,7 +58,7 @@
 use vinc_crypto::provider::KEM_CIPHERTEXT_LEN;
 use vinc_crypto::{IdentityAlg, Provider};
 use vinc_security::initiator::REJECT_GAP;
-use vinc_security::message::MAX_MESSAGE_LEN;
+use vinc_security::message::{MAX_MESSAGE_LEN, MessageType};
 use vinc_security::{
     Env, Event as SecEvent, Failure, Initiator, KeyHandle, KeyRequest, Output, Responder, ResponderStores,
 };
@@ -157,15 +157,9 @@ impl Timing {
         }
     }
 
-    /// How long an unestablished handshake lasts: the connect limit, and at least [`RESPONDER_HOLD`] for a responder that
-    /// has sent its flight.
-    fn connect_timeout(&self) -> u64 {
-        handshake_limit(self.is_thin(), self.hold)
-    }
-
     /// The first instant at which a handshake begun at `created` has run out: the limit is exceeded, not reached.
     fn connect_deadline(&self, created: u64) -> u64 {
-        created.saturating_add(self.connect_timeout()).saturating_add(1)
+        handshake_end(created, self.is_thin(), self.hold)
     }
 }
 
@@ -178,8 +172,7 @@ pub const fn connect_limit(thin: bool) -> u64 {
 }
 
 /// How long an unestablished handshake lasts for a node that is thin or not and a responder that has answered or not:
-/// the connect limit, and at least [`RESPONDER_HOLD`] once the responder's flight went out. Nothing exceeds 60 s. The
-/// transport and the endpoint's half-open sweep both ask this, so they cannot disagree.
+/// the connect limit, and at least [`RESPONDER_HOLD`] once the responder's flight went out. Nothing exceeds 60 s.
 #[must_use]
 pub const fn handshake_limit(thin: bool, answered: bool) -> u64 {
     let base = connect_limit(thin);
@@ -188,6 +181,16 @@ pub const fn handshake_limit(thin: bool, answered: bool) -> u64 {
     } else {
         base
     }
+}
+
+/// The first instant at which an unestablished handshake begun at `created` has run out: the limit is exceeded, not
+/// reached, so a session is still there at `created + limit` and gone one tick past it. The transport's own deadline
+/// and the endpoint's half-open sweep both ask this, so they cannot disagree.
+#[must_use]
+pub const fn handshake_end(created: u64, thin: bool, answered: bool) -> u64 {
+    created
+        .saturating_add(handshake_limit(thin, answered))
+        .saturating_add(1)
 }
 
 /// One of the two state machines.
@@ -484,6 +487,11 @@ impl Handshake {
                         .as_ref()
                         .filter(|_| self.tx_live)
                         .and_then(|c| pool.bytes_mut(c).get_mut(..data.len()));
+                    // A reject is not an answer to the handshake: only a flight holds it.
+                    let reject = matches!(
+                        MessageType::of(data),
+                        Ok(MessageType::PrekeyReject | MessageType::ResumeReject)
+                    );
                     if let Some(dst) = dst {
                         // The same flight again, after part of it never went out (the amplification limit stopped
                         // it): start at the first byte never sent, then wrap to the start.
@@ -513,7 +521,9 @@ impl Handshake {
                         // A responder's resend schedule starts when its flight first goes out.
                         if !self.client && self.stage == Stage::Open && self.retx_at.is_none() {
                             self.retx_at = Some(self.clock.saturating_add(SERVER_FIRST));
-                            // It has answered: it holds the handshake for a slow dialer's Finish.
+                        }
+                        // It has answered: it holds the handshake for a slow dialer's Finish.
+                        if !self.client && self.stage == Stage::Open && !reject && !self.timing.hold {
                             self.timing.hold = true;
                             if self.connect_at.is_some() {
                                 self.connect_at = Some(self.timing.connect_deadline(self.created));

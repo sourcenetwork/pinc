@@ -132,6 +132,9 @@ pub(crate) struct Counters {
     pub(crate) stalled_in: u64,
     pub(crate) backlog_refused: u64,
     pub(crate) holders_refused: u64,
+    pub(crate) first_too_short: u64,
+    pub(crate) stateless_rejects: u64,
+    pub(crate) stateless_refused: u64,
     pub(crate) retired: u64,
 }
 
@@ -209,6 +212,8 @@ pub struct Endpoint<
     pub(crate) capture: Option<Events>,
     pub(crate) scratch: [u8; MAX_DATAGRAM],
     pub(crate) orphans: crate::orphan::Orphans,
+    /// The rejects the endpoint answers first messages with, without a session, that wait to be sent.
+    pub(crate) rejects: crate::stateless::Rejects,
     pub(crate) stash: [u8; MAX_DATAGRAM],
     pub(crate) stash_meta: Option<StashMeta>,
     pub(crate) udp_heard: Option<u64>,
@@ -471,6 +476,7 @@ ep_impl! {
             capture: None,
             scratch: [0; MAX_DATAGRAM],
             orphans: crate::orphan::Orphans::new(),
+            rejects: crate::stateless::Rejects::new(),
             stash: [0; MAX_DATAGRAM],
             stash_meta: None,
             udp_heard: None,
@@ -602,6 +608,9 @@ ep_impl! {
             stalled_in: self.counters.stalled_in,
             backlog_refused: self.counters.backlog_refused,
             holders_refused: self.counters.holders_refused,
+            first_too_short: self.counters.first_too_short,
+            stateless_rejects: self.counters.stateless_rejects,
+            stateless_refused: self.counters.stateless_refused,
             events_queued: self.events.len(),
             events_dropped: self.events.dropped,
             events_lost: self.events.lost,

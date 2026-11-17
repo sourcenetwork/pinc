@@ -22,6 +22,7 @@ use core::mem;
 use vinc_crypto::identity::{MAX_SIGNATURE_LEN, verify};
 use vinc_crypto::provider::{KEM_CIPHERTEXT_LEN, KEM_ENCAPS_KEY_LEN};
 use vinc_crypto::{Aead, NodeId, Provider, Secret, Transcript, ct_eq};
+use vinc_wire::Writer;
 use zeroize::Zeroize;
 
 use crate::cache::{DEFAULT_KEY_CACHE, PrekeyCache};
@@ -30,7 +31,9 @@ use crate::error::Failure;
 use crate::ids::{AeadSet, Alpn, AlpnList, ConnId, LocalIdentity, VERSION};
 use crate::keys::{KeyRequest, KeyResponse, SoftKeys};
 use crate::labels;
-use crate::message::{Finish, IdSig, Initial, MessageType, PrekeyField, Reject, Reply, ResumeHello, ResumeReply};
+use crate::message::{
+    Finish, IdSig, Initial, MessageType, PrekeyField, REJECT_LEN, Reject, Reply, ResumeHello, ResumeReply,
+};
 use crate::outbox::{Outbox, Pending};
 use crate::schedule::{
     HelloFields, InitialFields, absorb_credit, absorb_identity, absorb_reply, absorb_resume_reply, application_secrets,
@@ -293,16 +296,7 @@ impl Responder {
     ) -> Result<(), Failure> {
         let initial = Initial::parse(input).map_err(Failure::Malformed)?;
         let hash = initial.prekey_hash();
-        let th = initial_transcript(&InitialFields {
-            version: initial.version,
-            dcid: &initial.dcid,
-            scid: &initial.scid,
-            alpn: initial.alpn,
-            offer: initial.aead_offer,
-            e: &initial.e,
-            prekey_hash: &hash,
-            credit: &initial.credit,
-        });
+        let th = initial_th(&initial);
         let th0 = th.snapshot();
         match &mut self.state {
             State::Idle => {}
@@ -333,15 +327,8 @@ impl Responder {
             State::Finish(_) => return Err(Failure::DifferentFirst),
             _ => return Err(Failure::UnexpectedMessage),
         }
-        if initial.version != VERSION {
-            return Err(Failure::UnsupportedVersion);
-        }
-        let alpn = self.cfg.alpns.find(initial.alpn).ok_or(Failure::UnknownAlpn)?;
         let p = env.provider;
-        let aead = initial
-            .aead_offer
-            .choose(AeadSet::offer(p.capabilities()))
-            .ok_or(Failure::NoCommonAead)?;
+        let (alpn, aead) = initial_terms(&self.cfg.alpns, AeadSet::offer(p.capabilities()), &initial)?;
         let (ek_bytes, fresh) = match initial.prekey {
             PrekeyField::Full(k) => (*k, true),
             PrekeyField::Hash(h) => match stores.prekeys.get(h) {
@@ -534,12 +521,16 @@ impl Responder {
         let alpn = self.cfg.alpns.find(hello.alpn).ok_or(Failure::UnknownAlpn)?;
         let mut th = hello_transcript(&hello_fields(&hello));
         let th_hello = th.snapshot();
-        let (found, usable) = find_ticket(&stores.tickets, env.now, alpn, &hello, &th_hello);
-        let Some(slot) = found.filter(|_| usable).and_then(|i| stores.tickets.remove(i)) else {
-            // Unknown, expired or not matching: tell the initiator to start a full handshake.
-            if let Some(i) = found.filter(|i| stores.tickets.get(*i).is_some_and(|s| s.expiry < env.now)) {
+        let found = match find_ticket(&stores.tickets, env.now, alpn, &hello, &th_hello) {
+            Ticket::Opens(i) => stores.tickets.remove(i),
+            Ticket::Expired(i) => {
                 stores.tickets.remove(i);
+                None
             }
+            Ticket::Missing | Ticket::Mismatch | Ticket::Binder => None,
+        };
+        let Some(slot) = found else {
+            // Unknown, expired or not matching: tell the initiator to start a full handshake.
             return self.reject(&th_hello, MessageType::ResumeReject);
         };
         let p = env.provider;
@@ -614,41 +605,140 @@ fn hello_fields<'a>(h: &'a ResumeHello<'a>) -> HelloFields<'a> {
     }
 }
 
-/// The store index of the ticket a Hello names, and whether that ticket opens for it: unexpired, for the same
-/// protocol and cipher, and the binder verifies. Nothing is removed.
+/// What a Hello's ticket id names in the store.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Ticket {
+    /// No stored ticket has the id.
+    Missing,
+    /// The ticket at the index is past its expiry.
+    Expired(usize),
+    /// The ticket is for another protocol or cipher than the Hello's.
+    Mismatch,
+    /// The ticket is live and fits, and the binder does not verify.
+    Binder,
+    /// The ticket at the index is live, fits, and the binder verifies.
+    Opens(usize),
+}
+
+/// The ticket a Hello names and whether it opens for it: unexpired, for the same protocol and cipher, and the binder
+/// verifies. Nothing is removed.
 fn find_ticket<const N: usize>(
     tickets: &ServerTickets<N>,
     now: u64,
     alpn: Alpn,
     hello: &ResumeHello<'_>,
     th_hello: &[u8; 32],
-) -> (Option<usize>, bool) {
-    let found = tickets.find(&hello.tid);
-    let usable = found.and_then(|i| tickets.get(i)).is_some_and(|s| {
-        s.expiry >= now && s.alpn == alpn && s.aead == hello.aead && ct_eq(&binder(&s.psk, th_hello), &hello.binder)
-    });
-    (found, usable)
+) -> Ticket {
+    let Some((i, s)) = tickets.find(&hello.tid).and_then(|i| Some((i, tickets.get(i)?))) else {
+        return Ticket::Missing;
+    };
+    if s.expiry < now {
+        Ticket::Expired(i)
+    } else if s.alpn != alpn || s.aead != hello.aead {
+        Ticket::Mismatch
+    } else if ct_eq(&binder(&s.psk, th_hello), &hello.binder) {
+        Ticket::Opens(i)
+    } else {
+        Ticket::Binder
+    }
 }
 
-/// Whether `message`, a complete resumption Hello, names an unused ticket of `tickets` that opens for it at `now`:
-/// the check [`Responder`] makes before it answers, without taking the ticket. False for anything else, a message
-/// that does not parse included. A server uses it to tell a genuine resumption from a forgery before it holds any
-/// state for the sender.
-pub fn hello_opens_ticket<const N: usize>(
-    tickets: &ServerTickets<N>,
-    alpns: &AlpnList,
-    now: u64,
-    message: &[u8],
-) -> bool {
-    let Ok(hello) = ResumeHello::parse(message) else {
-        return false;
-    };
-    if hello.version != VERSION {
-        return false;
+/// The transcript of an Initial: what the reject of a missing prekey echoes.
+fn initial_th(initial: &Initial<'_>) -> Transcript {
+    initial_transcript(&InitialFields {
+        version: initial.version,
+        dcid: &initial.dcid,
+        scid: &initial.scid,
+        alpn: initial.alpn,
+        offer: initial.aead_offer,
+        e: &initial.e,
+        prekey_hash: &initial.prekey_hash(),
+        credit: &initial.credit,
+    })
+}
+
+/// What an Initial must satisfy before the responder looks at its prekey: the version, a protocol this node serves and
+/// a cipher both sides have. The responder and [`screen_first`] both ask this.
+fn initial_terms(alpns: &AlpnList, own: AeadSet, initial: &Initial<'_>) -> Result<(Alpn, Aead), Failure> {
+    if initial.version != VERSION {
+        return Err(Failure::UnsupportedVersion);
     }
-    let Some(alpn) = alpns.find(hello.alpn) else {
-        return false;
-    };
-    let th_hello = hello_transcript(&hello_fields(&hello)).snapshot();
-    find_ticket(tickets, now, alpn, &hello, &th_hello).1
+    let alpn = alpns.find(initial.alpn).ok_or(Failure::UnknownAlpn)?;
+    let aead = initial.aead_offer.choose(own).ok_or(Failure::NoCommonAead)?;
+    Ok((alpn, aead))
+}
+
+/// What the endpoint does with a first handshake message before it keeps anything for the sender.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Screen {
+    /// A session answers it; `resume` when its ticket opens, which the cap on unauthenticated sessions exempts.
+    Admit {
+        /// Whether the message is a Hello whose ticket opens.
+        resume: bool,
+    },
+    /// The responder would only answer with this reject (its message bytes) and keep nothing: send it without a
+    /// session.
+    Reject([u8; REJECT_LEN]),
+    /// The responder would not answer at all: a message that does not parse, one it would refuse, or a Hello whose
+    /// ticket opens but whose binder does not verify.
+    Drop,
+}
+
+/// Decide what to do with `message`, the whole first handshake message of type `kind`, as the [`Responder`] would on
+/// its first message, without taking a ticket or keeping any state (a ticket past its expiry is let go, as the
+/// responder does). A full Initial is always admitted: only a session can judge it. `own` is the set of ciphers this
+/// node offers.
+pub fn screen_first<const PK: usize, const TK: usize>(
+    stores: &mut ResponderStores<PK, TK>,
+    alpns: &AlpnList,
+    own: AeadSet,
+    now: u64,
+    kind: MessageType,
+    message: &[u8],
+) -> Screen {
+    match kind {
+        MessageType::ShortInitial => {
+            let Ok(initial) = Initial::parse(message) else {
+                return Screen::Drop;
+            };
+            if initial_terms(alpns, own, &initial).is_err() {
+                return Screen::Drop;
+            }
+            match initial.prekey {
+                PrekeyField::Hash(h) if stores.prekeys.get(h).is_none() => {
+                    reject_bytes(&initial_th(&initial).snapshot(), MessageType::PrekeyReject)
+                }
+                _ => Screen::Admit { resume: false },
+            }
+        }
+        MessageType::ResumeHello => {
+            let Ok(hello) = ResumeHello::parse(message) else {
+                return Screen::Drop;
+            };
+            let Some(alpn) = alpns.find(hello.alpn).filter(|_| hello.version == VERSION) else {
+                return Screen::Drop;
+            };
+            let th_hello = hello_transcript(&hello_fields(&hello)).snapshot();
+            match find_ticket(&stores.tickets, now, alpn, &hello, &th_hello) {
+                Ticket::Opens(_) => Screen::Admit { resume: true },
+                Ticket::Binder => Screen::Drop,
+                Ticket::Expired(i) => {
+                    stores.tickets.remove(i);
+                    reject_bytes(&th_hello, MessageType::ResumeReject)
+                }
+                Ticket::Missing | Ticket::Mismatch => reject_bytes(&th_hello, MessageType::ResumeReject),
+            }
+        }
+        _ => Screen::Admit { resume: false },
+    }
+}
+
+/// The reject of type `ty` for the message with transcript `th`, as its message bytes.
+fn reject_bytes(th: &[u8; 32], ty: MessageType) -> Screen {
+    let mut buf = [0u8; REJECT_LEN];
+    let mut w = Writer::new(&mut buf);
+    match (Reject { echo: echo(th) }).write(&mut w, ty) {
+        Ok(()) => Screen::Reject(buf),
+        Err(_) => Screen::Drop,
+    }
 }

@@ -2,10 +2,10 @@
 //! lifetime) and the small one (a full slot table, no protocol, a stalled queue, a clock that steps back).
 
 use vinc_core::{Command, CommandError, MAX_DATAGRAM, Role};
-use vinc_security::message::{FULL_INITIAL_MIN, SHORT_INITIAL_MIN};
+use vinc_security::message::{FULL_INITIAL_MIN, RESUME_HELLO_MIN, SHORT_INITIAL_MIN};
 use vinc_tests::*;
 
-use crate::common::{HOLD, MAX, SK, craft, floor, kind_of, source};
+use crate::common::{BK, HOLD, MAX, SK, craft, floor, kind_of, source};
 use crate::duo::{Duo, pick_time};
 use crate::rec::{Rec, Seen};
 
@@ -26,7 +26,8 @@ pub fn big_run(run: u32, seed: u64) -> (String, String, Seen) {
         (2, SHORT_INITIAL_MIN - 1),
         (2, SHORT_INITIAL_MIN),
         (2, SHORT_INITIAL_MIN + 1),
-        (6, 40),
+        (6, RESUME_HELLO_MIN - 1),
+        (6, RESUME_HELLO_MIN),
         (6, 300),
         (3, 1300),
         (4, 1300),
@@ -189,7 +190,7 @@ pub fn small_run(run: u32, seed: u64) -> (String, String, Seen) {
     let t = r
         .unauth()
         .iter()
-        .map(|(_, s)| s.created + s.life)
+        .map(|(_, s)| s.created + s.life + MS_NS)
         .max()
         .unwrap_or(now)
         .max(now);
@@ -197,4 +198,37 @@ pub fn small_run(run: u32, seed: u64) -> (String, String, Seen) {
     assert!(r.unauth().is_empty(), "sessions outlived the run");
     let Rec { ms, ns, seen, .. } = r;
     (ms, ns, seen)
+}
+
+/// The big endpoint with a room smaller than twice the cap: the counted sessions hold at most half of it, so the cap the
+/// flood meets is the room's half and not the code's 256, and the forged short Initials and Hellos among it take
+/// nothing.
+pub fn room_run(run: u32, seed: u64) -> (String, String, Seen) {
+    let mut rng = SplitMix64::new(seed);
+    let now = 100 * SEC_NS + (rng.next_u64() % 1000) * MS_NS;
+    let mut r: Rec<BK, { BK * 10 }> = Rec::new(now, run);
+    let room = 20 + (rng.next_u64() % 200) as usize;
+    r.ep.set_backlog_room(room);
+    let mut id = u64::from(run) << 32;
+    let mut now = now;
+    for _ in 0..(room + 40) {
+        id += 1;
+        let kind = [1u8, 1, 2, 6][(rng.next_u64() % 4) as usize];
+        let len = floor(kind).unwrap().max(40) + (rng.next_u64() % 3) as usize;
+        r.dgram(now, source(id), craft(id, kind, len, 0, id as u8), None);
+        now += MS_NS * (rng.next_u64() % 40);
+    }
+    let mut rounds = 0;
+    while !r.unauth().is_empty() && rounds < 400 {
+        rounds += 1;
+        now = pick_time_after(&r, &mut rng, now);
+        r.timer(now);
+    }
+    assert!(r.unauth().is_empty(), "sessions outlived the run");
+    let Rec { ms, ns, seen, .. } = r;
+    (ms, ns, seen)
+}
+
+fn pick_time_after<const K: usize, const D: usize>(r: &Rec<K, D>, rng: &mut SplitMix64, now: u64) -> u64 {
+    crate::duo::pick_time(r, rng, now).max(now)
 }

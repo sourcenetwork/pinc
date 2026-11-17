@@ -780,6 +780,14 @@ pub struct NodeStats {
     /// First flights dropped because the id they name already has four half-open sessions (also counted in
     /// `dropped_in`).
     pub holders_refused: u64,
+    /// First handshake messages dropped before admission because their datagram was shorter than the least a first
+    /// packet of their type is (also counted in `dropped_in`).
+    pub first_too_short: u64,
+    /// Rejects sent without a session to a first message the responder would only have rejected: a resumption Hello
+    /// whose ticket does not open, a short Initial whose prekey this node does not hold.
+    pub stateless_rejects: u64,
+    /// Rejects held back because the ledger would not let this node answer that address yet.
+    pub stateless_refused: u64,
     /// Events waiting for the host now.
     pub events_queued: usize,
     /// Events dropped because the event queue was full.

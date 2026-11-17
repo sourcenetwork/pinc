@@ -9,6 +9,9 @@
 //! to the same destination of the same size follow in the same buffer, ending with a shorter one; a datagram for another
 //! destination is kept for the next call. The session just served moves to the back of its queue, so each gets a turn.
 //!
+//! The endpoint's own answers, the rejects it sends to a first message without a session (see `stateless`), go first,
+//! each already charged to the ledger.
+//!
 //! Invariants: one call returns one destination and a run of equal-size segments (the last may be shorter); no
 //! datagram leaves without passing the ledger; the buffer never holds more than the configured number of segments;
 //! the kept datagram is the only extra buffer and is sent first on the next call.
@@ -40,6 +43,9 @@ ep_impl! {
         if let Some(m) = self.stash_meta.take()
             && let Some(t) = self.send_stash(now, out, &m)
         {
+            return Some(t);
+        }
+        if let Some(t) = self.send_reject(out) {
             return Some(t);
         }
         loop {
@@ -79,7 +85,7 @@ ep_impl! {
     /// Whether [`poll_transmit`](Self::poll_transmit) has anything to write or to do: a datagram kept from the last
     /// call, or a session that may have something to send. When it says no, a call returns `None` and changes nothing.
     pub fn transmit_waiting(&self) -> bool {
-        self.stash_meta.is_some() || self.dirty_front().is_some()
+        self.stash_meta.is_some() || !self.rejects.is_empty() || self.dirty_front().is_some()
     }
 
     /// Record that session `i` produced a datagram on `path`.

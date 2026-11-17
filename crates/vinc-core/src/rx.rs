@@ -10,10 +10,12 @@
 //! half-open session of its own under the same id, up to four holders, so a forged flight never displaces the first.
 //! The candidate list can name the same slot twice, which only costs a second trial. An id no session holds can only
 //! start a session if the datagram is a first handshake message that meets its size floor
-//! (1200 bytes for a full Initial, 464 for a short one) and fewer than 256 sessions are unauthenticated; a ticket
-//! resumption Hello is exempt from the count only when its ticket opens under this node's ticket store and is unused
-//! (single use), checked before any state is held, because that binder proves a past session. Every other Hello, a
-//! forged or replayed one included, counts like a full Initial. Every server session a first flight makes is owed to
+//! (1200 bytes for a full Initial, 464 for a short one, 93 for a Hello) and fewer than 256 sessions are
+//! unauthenticated; a ticket resumption Hello is exempt from the count only when its ticket opens under this node's
+//! ticket store and is unused (single use), checked before any state is held, because that binder proves a past
+//! session. A short Initial and a Hello are screened first (`screen_first`): one the responder would only reject (a
+//! prekey or ticket this node does not hold) is answered by the endpoint without a session (`stateless`), one it would
+//! not answer at all is dropped, and neither takes a half-open slot. Every server session a first flight makes is owed to
 //! the host until the host reads its `Incoming` (`session_taken`) or it ends, and while the owed sessions fill the room
 //! the host has left to accept them (`set_backlog_room`) no first flight starts one, before a ticket is opened and with
 //! nothing kept, so a session that finishes its handshake always has a place to wait. Of that room the sessions that
@@ -28,9 +30,9 @@
 
 use core::net::SocketAddr;
 
-use vinc_security::message::{FULL_INITIAL_MIN, MAX_MESSAGE_LEN, MessageType, SHORT_INITIAL_MIN};
-use vinc_security::responder::hello_opens_ticket;
-use vinc_security::{ConnId, Env, Failure};
+use vinc_security::message::{FULL_INITIAL_MIN, MAX_MESSAGE_LEN, MessageType, RESUME_HELLO_MIN, SHORT_INITIAL_MIN};
+use vinc_security::responder::{Screen, screen_first};
+use vinc_security::{AeadSet, ConnId, Env, Failure};
 use vinc_transport::conn::{Connection, Drop, PathId, ServerParams, connect_limit};
 use vinc_transport::packet::{LongHeader, LongType, short_dcid};
 use vinc_wire::Reader;
@@ -56,6 +58,8 @@ pub const HALF_OPEN_HOLD: u64 = vinc_transport::conn::RESPONDER_HOLD;
 /// What the first packet of an unroutable datagram says.
 struct First<'a> {
     odcid: ConnId,
+    /// The id the dialer chose for itself.
+    scid: ConnId,
     /// The length of the whole message.
     total: u64,
     kind: MessageType,
@@ -91,6 +95,7 @@ fn classify(buf: &[u8]) -> Option<First<'_>> {
     let message = usize::try_from(total).ok().and_then(|t| data.get(..t));
     Some(First {
         odcid: h.dcid,
+        scid: h.scid,
         total,
         kind,
         message,
@@ -338,29 +343,48 @@ ep_impl! {
         let floor = match first.kind {
             MessageType::Initial => FULL_INITIAL_MIN,
             MessageType::ShortInitial => SHORT_INITIAL_MIN,
-            MessageType::ResumeHello => 0,
+            MessageType::ResumeHello => RESUME_HELLO_MIN,
             _ => {
                 self.counters.dropped_in += 1;
                 return;
             }
         };
+        // A first packet under the least its type has is never admitted: it costs the sender less than the session.
+        if buf.len() < floor {
+            self.counters.first_too_short += 1;
+            self.counters.dropped_in += 1;
+            self.note_first(now, 0, false);
+            return;
+        }
         // Back-pressure: every session this node owes its host would have to wait to be accepted, so while they fill
         // the room the host has left none starts, before a ticket is opened and with nothing kept (the holders of the
         // flight's id are left as they are); the dialer sends the flight again on its own timer.
         if self.owed >= self.backlog_room {
             self.counters.backlog_refused += 1;
+            self.note_first(now, 0, false);
             return;
         }
-        let resume = first.kind == MessageType::ResumeHello && self.opens_ticket(now, first.message);
+        let resume = match first.kind {
+            MessageType::ShortInitial | MessageType::ResumeHello => match self.screen(now, &first) {
+                Screen::Admit { resume } => resume,
+                Screen::Reject(message) => {
+                    self.note_first(now, 2, false);
+                    self.reject_stateless(now, local, remote, (first.odcid, first.scid), &message);
+                    return;
+                }
+                Screen::Drop => {
+                    self.counters.dropped_in += 1;
+                    self.note_first(now, 2, false);
+                    return;
+                }
+            },
+            _ => false,
+        };
         // Sessions whose peer is not authenticated yet hold at most half of that room (rounded up): what first flights
         // that never finish can reserve leaves the other half to peers that resume with a ticket.
         let cap = MAX_HALF_OPEN.min(self.backlog_room.div_ceil(2));
-        let admitted = buf.len() >= floor && (resume || self.half_open < cap);
-        trace!(self, now, HalfOpen {
-            admitted: u64::from(admitted),
-            half_open: self.half_open as u64,
-            resume: u64::from(resume),
-        });
+        let admitted = resume || self.half_open < cap;
+        self.note_first(now, u64::from(admitted), resume);
         if !admitted {
             self.counters.dropped_in += 1;
             return;
@@ -389,12 +413,26 @@ ep_impl! {
         }
     }
 
-    /// Whether a resumption Hello names an unused ticket that opens, so it needs no half-open slot.
-    fn opens_ticket(&self, now: u64, message: Option<&[u8]>) -> bool {
-        message.is_some_and(|m| {
-            self.alpn_list()
-                .is_some_and(|alpns| hello_opens_ticket(&self.stores.tickets, &alpns, now, m))
-        })
+    /// Record the decision on a first message: `admitted` 1 a session may start, 0 refused (the floor, the room or the
+    /// cap), 2 answered without a session or dropped.
+    #[cfg_attr(not(feature = "trace"), allow(unused_variables, reason = "only the trace reads them"))]
+    fn note_first(&mut self, now: u64, admitted: u64, resume: bool) {
+        trace!(self, now, HalfOpen {
+            admitted,
+            half_open: self.half_open as u64,
+            resume: u64::from(resume),
+            room: self.backlog_room.min(i32::MAX as usize) as u64,
+            owed: self.owed as u64,
+        });
+    }
+
+    /// What the responder would do with the first message of `first`: a message that is not whole in its first packet
+    /// is dropped (a short Initial and a Hello are never longer than a datagram). Without a protocol registered
+    /// nothing is admitted either.
+    fn screen(&mut self, now: u64, first: &First<'_>) -> Screen {
+        let (Some(message), Some(alpns)) = (first.message, self.alpn_list()) else { return Screen::Drop };
+        let own = AeadSet::offer(self.provider.capabilities());
+        screen_first(&mut self.stores, &alpns, own, now, first.kind, message)
     }
 
     /// Create the server session for a first handshake message.

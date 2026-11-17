@@ -50,7 +50,7 @@ mod rec;
 mod runs;
 
 use rec::{Seen, add};
-use runs::{big_run, small_run};
+use runs::{big_run, room_run, small_run};
 use vinc_tests::*;
 
 #[test]
@@ -59,6 +59,12 @@ fn the_half_open_cap_matches_the_models() {
         let (mut ms, mut ns, mut seen) = (String::new(), String::new(), Seen::default());
         for (run, seed) in [(1u32, 0x686f_0001u64), (2, 0x686f_0002)] {
             let (a, b, s) = big_run(run, seed);
+            ms.push_str(&a);
+            ns.push_str(&b);
+            add(&mut seen, &s);
+        }
+        for run in 5..9u32 {
+            let (a, b, s) = room_run(run, 0x686f_0200 + u64::from(run));
             ms.push_str(&a);
             ns.push_str(&b);
             add(&mut seen, &s);
@@ -82,8 +88,12 @@ fn the_half_open_cap_matches_the_models() {
     );
     assert!(seen.resume_at_cap > 0, "no resumption was admitted at the cap");
     assert!(
-        seen.hello_refused_at_cap > 0,
-        "no forged or replayed Hello was refused at the cap"
+        seen.rejected > 0,
+        "no forged or replayed first packet was answered without a session"
+    );
+    assert!(
+        seen.refused_half > 0,
+        "no first flight was refused at half a room smaller than twice the cap"
     );
     assert!(
         seen.accept_failed > 0,
@@ -95,7 +105,7 @@ fn the_half_open_cap_matches_the_models() {
         seen.expired > 0 && seen.expired_at_end > 0,
         "no session expired at its end"
     );
-    assert!(seen.spared_before_end > 0, "no timer ran just before a session's end");
+    assert!(seen.spared_at_limit > 0, "no timer ran at a session's limit itself");
     assert!(
         seen.left_by_est > 0 && seen.left_uncounted_by_est > 0,
         "no session was established"

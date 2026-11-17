@@ -293,16 +293,17 @@ fn the_half_open_cap_floors_and_expiry() {
         assert_eq!(admissions(&mut ep), [(false, false), (false, false)]);
         assert_eq!(ep.node_stats().half_open, 0);
         feed(&mut ep, addr, now, 3, craft(3, 1, 1200));
+        // A short Initial that does not parse is dropped before it takes a slot.
         feed(&mut ep, addr, now, 4, craft(4, 2, 464));
-        assert_eq!(admissions(&mut ep), [(true, false), (true, false)]);
-        assert_eq!(ep.node_stats().half_open, 2);
+        assert_eq!(admissions(&mut ep), [(true, false), (false, false)]);
+        assert_eq!(ep.node_stats().half_open, 1);
         // Only a first handshake message starts a session; a reply or a finish does not.
         feed(&mut ep, addr, now, 5, craft(5, 4, 1300));
         feed(&mut ep, addr, now, 6, craft(6, 5, 1300));
-        assert_eq!(ep.node_stats().half_open, 2);
+        assert_eq!(ep.node_stats().half_open, 1);
 
         // Fill to the cap with sessions that never finish.
-        for i in 10..(10 + (MAX_HALF_OPEN as u64 - 2)) {
+        for i in 10..(10 + (MAX_HALF_OPEN as u64 - 1)) {
             feed(&mut ep, addr, now, i, craft(i, 1, 1200));
         }
         assert_eq!(ep.node_stats().half_open, MAX_HALF_OPEN);
@@ -542,28 +543,37 @@ impl Duo {
         d.hang_up(first);
         let now = d.net.now;
         for i in 0..MAX_HALF_OPEN as u64 {
-            feed(&mut d.srv, d.addr, now, 1000 + i, craft(1000 + i, 6, 300));
+            feed(&mut d.srv, d.addr, now, 1000 + i, craft(1000 + i, 1, FULL_INITIAL_MIN));
         }
         assert_eq!(
             d.srv.node_stats().half_open,
             MAX_HALF_OPEN,
-            "a forged resumption Hello must count"
+            "a forged full Initial must count"
         );
         d
     }
 }
 
 #[test]
-fn a_flood_of_forged_resume_hellos_is_held_to_the_cap() {
+fn a_flood_of_forged_initials_is_held_to_the_cap_and_forged_hellos_hold_nothing() {
     big_stack(|| {
         let now = 100 * SEC_NS;
+        let (mut ep, addr) = big_server(now);
+        for i in 0..(MAX_HALF_OPEN as u64 + 100) {
+            feed(&mut ep, addr, now, i, craft(i + 1, 1, FULL_INITIAL_MIN));
+        }
+        let ns = ep.node_stats();
+        assert_eq!((ns.half_open, ns.sessions), (MAX_HALF_OPEN, MAX_HALF_OPEN));
+        assert_eq!(ns.dropped_in, 100);
         let (mut ep, addr) = big_server(now);
         for i in 0..(MAX_HALF_OPEN as u64 + 100) {
             feed(&mut ep, addr, now, i, craft(i + 1, 6, 300));
         }
         let ns = ep.node_stats();
-        assert_eq!((ns.half_open, ns.sessions), (MAX_HALF_OPEN, MAX_HALF_OPEN));
-        assert_eq!(ns.dropped_in, 100);
+        assert_eq!(
+            (ns.half_open, ns.sessions, ns.dropped_in),
+            (0, 0, MAX_HALF_OPEN as u64 + 100)
+        );
     });
 }
 
@@ -584,7 +594,7 @@ fn a_genuine_resume_connects_while_the_cap_is_full_of_forgeries() {
 }
 
 #[test]
-fn replays_of_a_used_ticket_are_held_to_the_cap() {
+fn replays_of_a_used_ticket_get_a_reject_and_no_session() {
     big_stack(|| {
         let mut d = Duo::with_full_cap();
         let mark = d.net.captured.len();
@@ -597,14 +607,21 @@ fn replays_of_a_used_ticket_are_held_to_the_cap() {
             "the resumed session is gone"
         );
         let _ = admissions(&mut d.srv);
-        let (now, dropped) = (d.net.now, d.srv.node_stats().dropped_in);
+        let (now, ns0) = (d.net.now, d.srv.node_stats());
+        let mut out = vec![0u8; 65_536];
         for i in 0..50u64 {
             feed(&mut d.srv, d.addr, now, 5000 + i, hello.clone());
+            while d.srv.poll_transmit(now, &mut out).is_some() {}
         }
         let adm = admissions(&mut d.srv);
         assert!(adm.iter().all(|a| *a == (false, false)), "a replay was exempt: {adm:?}");
-        assert_eq!(d.srv.node_stats().half_open, MAX_HALF_OPEN);
-        assert_eq!(d.srv.node_stats().dropped_in, dropped + 50);
+        let ns = d.srv.node_stats();
+        assert_eq!(ns.half_open, MAX_HALF_OPEN);
+        assert_eq!(ns.dropped_in, ns0.dropped_in);
+        assert_eq!(
+            (ns.stateless_rejects - ns0.stateless_rejects) + (ns.stateless_refused - ns0.stateless_refused),
+            50
+        );
     });
 }
 
@@ -761,7 +778,7 @@ fn ten_thousand_forged_resumption_hellos_leave_the_half_open_table_empty() {
         let mut tally = Tally::new();
         // Half are 20-byte datagrams that start a Hello, half whole Hellos of a ticket nobody issued.
         let hello = |i: u64| {
-            if i % 2 == 0 {
+            if i.is_multiple_of(2) {
                 first_datagram(i + 1, &[6], 20)
             } else {
                 first_datagram(i + 1, &forged_hello(i), 0)
@@ -780,6 +797,8 @@ fn ten_thousand_forged_resumption_hellos_leave_the_half_open_table_empty() {
         let ns = d.srv.node_stats();
         assert_eq!((ns.half_open, ns.sessions), (0, 1), "{ns:?}");
         assert_within_three_times(&tally);
+        assert_eq!(ns.first_too_short, 5_000, "{ns:?}");
+        assert_eq!((ns.stateless_rejects, ns.stateless_refused), (5_000, 0), "{ns:?}");
     });
 }
 
@@ -790,7 +809,7 @@ fn ten_thousand_short_initials_with_unknown_keys_leave_the_half_open_table_empty
         let mut tally = Tally::new();
         // Half are as small as a short Initial may be, half larger.
         let short = |i: u64| {
-            let len = if i % 2 == 0 { SHORT_INITIAL_MIN } else { 900 };
+            let len = if i.is_multiple_of(2) { SHORT_INITIAL_MIN } else { 900 };
             first_datagram(i + 1, &unknown_key_initial(i), len)
         };
         flood(&mut d, 0..5_000, &short, &mut tally);
@@ -835,19 +854,27 @@ fn a_hello_with_a_wrong_binder_gets_no_answer_and_no_session_and_the_genuine_hel
         *message.last_mut().unwrap() ^= 1;
         let (sessions, now) = (d.srv.node_stats().sessions, d.net.now);
         let x: SocketAddr = "10.9.9.9:1000".parse().unwrap();
-        d.srv.handle_datagram(now, d.addr, x, &mut forge_message(dcid, &message));
+        d.srv
+            .handle_datagram(now, d.addr, x, &mut forge_message(dcid, &message));
         let mut out = vec![0u8; 65_536];
-        assert!(d.srv.poll_transmit(now, &mut out).is_none(), "a wrong binder was answered");
+        assert!(
+            d.srv.poll_transmit(now, &mut out).is_none(),
+            "a wrong binder was answered"
+        );
         let ns = d.srv.node_stats();
-        assert_eq!((ns.half_open, ns.sessions), (0, sessions), "a wrong binder left a session: {ns:?}");
+        assert_eq!(
+            (ns.half_open, ns.sessions),
+            (0, sessions),
+            "a wrong binder left a session: {ns:?}"
+        );
         // The ticket is still there: the genuine Hello resumes.
-        let n = d.net.nodes[0].count(|e| matches!(e, Event::Connected { .. }));
         d.taken = mark;
         d.drive(300 * MS_NS);
+        let ns = d.srv.node_stats();
         assert_eq!(
-            d.net.nodes[0].count(|e| matches!(e, Event::Connected { .. })),
-            n + 1,
-            "the genuine resumption did not connect"
+            (ns.sessions, ns.stateless_rejects),
+            (1, 0),
+            "the genuine resumption did not make a session: {ns:?}"
         );
         assert_eq!(d.srv.node_stats().half_open, 0);
     });
@@ -863,7 +890,11 @@ fn assert_ends_strictly_past(ep: &mut BigEp, addr: SocketAddr, now: u64, limit: 
     ep.handle_timeout(now + limit);
     assert_eq!(ep.node_stats().half_open, 1, "{what}: gone at the limit itself");
     ep.handle_timeout(now + limit + 1);
-    assert_eq!(ep.node_stats().half_open, 0, "{what}: still there one tick past the limit");
+    assert_eq!(
+        ep.node_stats().half_open,
+        0,
+        "{what}: still there one tick past the limit"
+    );
 }
 
 #[test]
@@ -898,6 +929,10 @@ fn a_half_open_session_of_a_thin_node_ends_strictly_past_60_s() {
         ep.handle_timeout(now + 60 * SEC_NS);
         assert_eq!(ep.node_stats().half_open, 1, "60 s: gone at the limit itself");
         ep.handle_timeout(now + 60 * SEC_NS + 1);
-        assert_eq!(ep.node_stats().half_open, 0, "60 s: still there one tick past the limit");
+        assert_eq!(
+            ep.node_stats().half_open,
+            0,
+            "60 s: still there one tick past the limit"
+        );
     });
 }

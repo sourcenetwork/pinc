@@ -15,7 +15,7 @@
 //!
 //! The model's numbers stand for the code's as `MbtHalfOpen.tla` says: model time `t` is `origin + t * step` with
 //! `step = HALF_OPEN_LIFE / LIFE`, and a model length is the real floor of the type (`FULL_INITIAL_MIN`,
-//! `SHORT_INITIAL_MIN`, 40 for a type with no floor) plus the model's length minus the model's floor. The cap, the
+//! `SHORT_INITIAL_MIN`, `RESUME_HELLO_MIN`, 40 for a type with no floor) plus the model's length minus the model's floor. The cap, the
 //! lifetime and the size of the slot table (300, so the cap and not the table refuses) are the code's. The origin is
 //! `2 * HALF_OPEN_LIFE` or an odd millisecond past `5 * HALF_OPEN_LIFE`, by case.
 #![allow(
@@ -32,7 +32,7 @@ use std::rc::Rc;
 
 use vinc_core::{Endpoint, EndpointConfig, HALF_OPEN_LIFE, MAX_HALF_OPEN, Slot, TraceEvent};
 use vinc_crypto::{Drbg, IdentityAlg, Keypair, Software};
-use vinc_security::message::{FULL_INITIAL_MIN, SHORT_INITIAL_MIN};
+use vinc_security::message::{FULL_INITIAL_MIN, RESUME_HELLO_MIN, SHORT_INITIAL_MIN};
 use vinc_security::{ConnId, KeyHandle, LocalIdentity};
 use vinc_tests::{ALPN_A, Caps, Json, MS_NS, MbtCase, big_stack, mbt_cases};
 use vinc_transport::conn::{Held, Resources, Shared, Tables};
@@ -127,6 +127,7 @@ struct Map {
     origin: u64,
     full: u64,
     short: u64,
+    hello: u64,
 }
 
 impl Map {
@@ -139,6 +140,7 @@ impl Map {
         let (real, model) = match kind {
             1 => (FULL_INITIAL_MIN, self.full),
             2 => (SHORT_INITIAL_MIN, self.short),
+            6 => (RESUME_HELLO_MIN, self.hello),
             _ => (40, 0),
         };
         real + len as usize - model as usize
@@ -184,12 +186,13 @@ fn drain(ep: &mut Ep<'_>) {
 }
 
 /// Runs one case of `file` on a fresh endpoint; returns the number of calls.
-fn run(file: &str, case: &MbtCase, init: &Json, full: u64, short: u64, step: u64) -> usize {
+fn run(file: &str, case: &MbtCase, init: &Json, (full, short, hello): (u64, u64, u64), step: u64) -> usize {
     let map = Map {
         step,
         origin: [2 * HALF_OPEN_LIFE, 5 * HALF_OPEN_LIFE + 123 * MS_NS][(case.id % 2) as usize],
         full,
         short,
+        hello,
     };
     let mut table = slots();
     let (mut ep, addr) = server(map.origin, &mut table);
@@ -215,9 +218,11 @@ fn run(file: &str, case: &MbtCase, init: &Json, full: u64, short: u64, step: u64
                         admitted,
                         half_open,
                         resume,
+                        ..
                     } = rec.event
                     {
-                        decisions.push((admitted, half_open, resume));
+                        // 2: answered without a session or dropped, which a forged short Initial or Hello is
+                        decisions.push((u64::from(admitted == 1), half_open, resume));
                     }
                 }
                 if matches!(kind, 1 | 2 | 6) {
@@ -278,7 +283,13 @@ fn walk(file: &str) -> bool {
     let init = head.get("init").unwrap();
     let (mut n, mut steps) = (0u64, 0usize);
     for case in &mut cases {
-        steps += run(file, &case.unwrap(), init, k("FULL"), k("SHORT"), HALF_OPEN_LIFE / life);
+        steps += run(
+            file,
+            &case.unwrap(),
+            init,
+            (k("FULL"), k("SHORT"), k("HELLO")),
+            HALF_OPEN_LIFE / life,
+        );
         n += 1;
     }
     let count = |f: &str| num(head.get(f).unwrap());

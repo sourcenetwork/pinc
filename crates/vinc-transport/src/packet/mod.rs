@@ -45,7 +45,7 @@ mod header;
 mod number;
 mod protect;
 
-pub use datagram::{Header, Packet, Packets, packets, pad_to};
+pub use datagram::{Header, Packet, Packets, handshake_packet, packets, pad_to};
 pub use error::PacketError;
 pub use header::{LongHeader, LongType, ShortHeader, short_dcid, short_header_len};
 pub use number::{MAX_PN, PN_LEN_BASE, PN_LEN_WIDE, WIDE_WINDOW, decode_pn, encode_pn, pn_len_for};
