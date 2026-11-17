@@ -18,7 +18,10 @@
 (* follows only a store of this message. A hub in Rivals already holds the *)
 (* id for another message: it stores nothing and, by the code's rule, sends*)
 (* no PACK (AckById is the old rule, which acknowledged any known id and   *)
-(* is kept as a witness).                                                  *)
+(* is kept as a witness). A hub in Evicts loses the PACK of its first     *)
+(* store and evicts the message from its log: its later retry is a         *)
+(* duplicate of an evicted message and is acknowledged iff the hub keeps   *)
+(* the print of what it evicted (KeepPrint; _evictLost is the witness).    *)
 (*                                                                         *)
 (* Checked: PendingBound (a pending publish is never older than GiveUp + 1 *)
 (* ticks); GiveUpExact (the give-up happens exactly at the first instant   *)
@@ -27,7 +30,8 @@
 (* for another message acknowledges it: the publish ends in the give-up); RetryCadence (every retry is at   *)
 (* least Retry after the previous step and goes to the hub the index       *)
 (* names); FanShape (the fan out iff every hub was up); ReachBound (with a hub that stays up and PACKs that   *)
-(* arrive, the publish is acknowledged within Retry * hubs, when no rival holds the id); TakenGivesUp (all hubs holding it for another message: never acknowledged); the fallback: *)
+(* arrive, the publish is acknowledged within Retry * hubs, when no rival holds the id, also if the hub evicted *)
+(* the message after its first store); TakenGivesUp (all hubs holding it for another message: never acknowledged); the fallback: *)
 (* it fires only while no hub is up (FallbackOnlyNoHub), at most Batch per *)
 (* step, no repeat, only subscribers in view that are reachable, never the *)
 (* publisher (FallbackBound), and with every hub unreachable every         *)
@@ -40,7 +44,9 @@
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC
 
-CONSTANTS Retry, GiveUp, Batch, MaxNow, NHubs, PeerSet, InView, Reach, Me, AlwaysUp, PackReliable, Churn, Rivals, AckById
+CONSTANTS Retry, GiveUp, Batch, MaxNow, NHubs, PeerSet, InView, Reach, Me, AlwaysUp, PackReliable, Churn, Rivals, AckById, Evicts, KeepPrint
+
+ASSUME NoRivalEvicts == Rivals \cap Evicts = {}
 
 Sub(a, b) == IF a >= b THEN a - b ELSE 0
 Hub == 1..NHubs
@@ -56,6 +62,11 @@ vars == <<now, up, pend, outcome, stored, ackers, served, evs, nsteps, t0, lastT
 
 \* on_msg: a hub acknowledges a known id only for the message it stored; a hub in Rivals holds another one
 Acks(h) == h \notin Rivals \/ AckById
+
+\* does hub h acknowledge the PUB it receives now? `was`: it stored this message before. A hub in Evicts loses the PACK
+\* of its first store and evicts the message from its log; its later retry finds a known id whose print it compares
+\* (KeepPrint; AckById is the old rule that acknowledged any known id)
+AcksAt(h, was) == IF h \in Evicts THEN was /\ (KeepPrint \/ AckById) ELSE Acks(h)
 
 AnyUp == \E h \in Hub : up[h]
 AllUp == \A h \in Hub : up[h]
@@ -79,7 +90,7 @@ Publish ==
     /\ ~started /\ now = 0
     /\ LET fan == AllUp
            stSet == IF fan THEN Hub ELSE IF up[Primary] THEN {Primary} ELSE {}
-           ak == IF up[Primary] /\ Acks(Primary) THEN {Primary} ELSE {}
+           ak == IF up[Primary] /\ AcksAt(Primary, FALSE) THEN {Primary} ELSE {}
            fb == IF AnyUp THEN [srv |-> {}, sent |-> 0, acc |-> <<>>] ELSE Fall(1, {}, 0, <<>>)
        IN /\ stored' = stSet \ Rivals /\ ackers' = ak /\ mode' = IF fan THEN "fan" ELSE "single"
           /\ served' = fb.srv /\ evs' = fb.acc /\ nsteps' = 1 /\ lastT' = now
@@ -104,7 +115,7 @@ RetryStep ==
            hub == (idx % NHubs) + 1
            fb == IF AnyUp THEN [srv |-> served, sent |-> 0, acc |-> <<>>] ELSE Fall(1, served, 0, <<>>)
        IN /\ stored' = IF up[hub] /\ hub \notin Rivals THEN stored \union {hub} ELSE stored
-          /\ ackers' = IF up[hub] /\ Acks(hub) THEN ackers \union {hub} ELSE ackers
+          /\ ackers' = IF up[hub] /\ AcksAt(hub, hub \in stored) THEN ackers \union {hub} ELSE ackers
           /\ pend' = [next |-> now + Retry, idx |-> idx]
           /\ served' = fb.srv /\ evs' = fb.acc /\ nsteps' = nsteps + 1 /\ hubSent' = hub
     /\ lastT' = now
