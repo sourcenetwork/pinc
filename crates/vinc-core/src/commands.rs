@@ -555,6 +555,7 @@ ep_impl! {
                     lost: v.and_then(|v| v.lost),
                     window: c.recovery().cwnd(),
                     done: v.is_none_or(|v| v.done),
+                    finished: v.is_none_or(|v| v.finished),
                 })
             }),
             Query::InFlight(id) => self

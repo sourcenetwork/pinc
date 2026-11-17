@@ -86,6 +86,8 @@ pub struct SendView {
     pub lost: Option<u64>,
     /// Nothing more will be sent or sent again: the end and every byte are acknowledged, or the half is closed.
     pub done: bool,
+    /// The end of the stream is fixed: it was finished, with or without a later reset. A reset alone leaves it false.
+    pub finished: bool,
 }
 
 /// Whether `id` is unidirectional.

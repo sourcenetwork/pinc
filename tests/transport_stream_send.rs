@@ -412,3 +412,26 @@ fn a_resend_starts_after_the_acknowledged_prefix() {
     assert_eq!(t.resend_from(id, 2000), 2000);
     assert_eq!(t.resend_from(99, 7), 7, "a stream that is gone has nothing to cut");
 }
+
+#[test]
+fn the_send_view_says_whether_the_end_is_fixed() {
+    let (mut pool, mut t) = setup(1024, |_| {});
+    let [open, finished, stopped, reset] = [0; 4].map(|_| t.open_stream(&pool, true).unwrap());
+    for id in [open, finished, stopped, reset] {
+        t.write(&mut pool, id, b"x", NO_CAP).unwrap();
+    }
+    assert!(!t.send_view(open).unwrap().finished, "an open stream is not finished");
+    t.finish(finished).unwrap();
+    assert!(t.send_view(finished).unwrap().finished);
+    t.finish(stopped).unwrap();
+    assert_eq!(t.on_stop_sending(&mut pool, stopped, 3), Ok(true));
+    assert!(
+        t.send_view(stopped).unwrap().finished,
+        "a reset by the peer's stop undid the end"
+    );
+    t.reset(&mut pool, reset, 9).unwrap();
+    assert!(
+        !t.send_view(reset).unwrap().finished,
+        "a reset with no finish counts as finished"
+    );
+}

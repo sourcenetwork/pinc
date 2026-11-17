@@ -137,6 +137,7 @@ impl<S: StreamSource, const C: usize> Send<S, C> {
             sent: self.sent_max,
             lost: self.lost.first().map(|r| r.start),
             done: self.is_done(),
+            finished: self.final_size.is_some(),
         }
     }
 

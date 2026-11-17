@@ -736,6 +736,9 @@ pub struct SendState {
     pub window: u64,
     /// Every byte and the end are acknowledged, or the stream is gone: nothing more will be sent.
     pub done: bool,
+    /// The end of the stream is fixed, because it was finished (a reset alone leaves this false); a stream that is
+    /// gone counts as finished.
+    pub finished: bool,
 }
 
 /// The node-wide numbers.
