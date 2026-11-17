@@ -8,11 +8,15 @@
 (* the answer ("ok" or the reason of the refusal) and the effects in the   *)
 (* order the code emits them (frames, closes, wake-ups and every Trace).   *)
 (*                                                                         *)
-(* A message held for a member is released when a packet from the member   *)
+(* A message held for a member is released when a packet from the member  *)
 (* is heard (UdpHeard, and the SPU datagram through it) and its route is   *)
-(* ready, and a packet for a member that holds messages is held behind     *)
-(* them (Route): nothing overtakes a held message. cf.old restores the     *)
-(* rule before (no release, packets overtake), for the witnesses.          *)
+(* ready: the pass hands over, oldest first, every held message that fits  *)
+(* the route, steps over one too long for the tunnel (it waits for the     *)
+(* carrier) and stops at a hand-over the host refuses. Routing a packet    *)
+(* (Route) starts no release, whatever the destination holds. For the     *)
+(* witnesses only: cf.old (nothing is released), cf.hb (a packet for a     *)
+(* member that holds messages is held behind them, the rule withdrawn)     *)
+(* and cf.stop (the pass stops at the first message that does not fit).    *)
 (*                                                                         *)
 (* Time is in whole seconds, the unit of the trace; every rule constant is *)
 (* a whole number of seconds in the code. Node ids are small naturals,     *)
@@ -102,7 +106,8 @@ DeliverClient(cf, R, now, src, dst, flag, len, stalecopy) ==
          IN [R |-> R1, ok |-> TRUE, ef |-> <<fe, RoutedE(src, dst, "carrier", len)>> \o t.ef]
 
 (* route.rs hold: the packet goes into the mailbox, and a wake-up is requested on the first one or 30 s after the last,
-   only while the member is still marked asleep *)
+   only while the member is still marked asleep (route reaches hold only for a member with a mark; the withdrawn rule
+   of cf.hb holds a packet without one, and then requests none) *)
 Hold(cf, R, now, dst, src, flag, len) ==
     LET p == Push(MC(cf), R.mb, now, dst, src, flag, len) IN
     IF p.res = "stored"
@@ -113,20 +118,27 @@ Hold(cf, R, now, dst, src, flag, len) ==
          IN [R |-> R1, res |-> "ok", ef |-> e]
     ELSE [R |-> [R EXCEPT !.mb = p.mb], res |-> "mbrefused", ef |-> <<RejE("mbrefused", src)>>]
 
-(* route.rs forward: RELAY_FORWARD to the home relay, the reply route first *)
-Forward(cf, R, now, src, dst, flag, len) ==
+(* route.rs forward: the relay `forward` sends dst's packets to: the reply route (the relay that forwarded dst's packets
+   within 30 s, not this one), else the home of dst's stored record; 0 when there is none *)
+HomeOf(cf, R, now, dst) ==
     LET slot == R.fb[R.bk[dst]]
         back == IF slot.n = dst /\ Sat(now - slot.at) < FWDB /\ slot.rel # cf.me THEN slot.rel ELSE 0
-        home == IF back # 0 THEN back ELSE IF dst \in DOMAIN R.rec THEN R.rec[dst].home ELSE 0
+    IN IF back # 0 THEN back ELSE IF dst \in DOMAIN R.rec THEN R.rec[dst].home ELSE 0
+
+(* route.rs forward: RELAY_FORWARD to the home relay, the reply route first *)
+Forward(cf, R, now, src, dst, flag, len) ==
+    LET home == HomeOf(cf, R, now, dst)
     IN IF home = 0 \/ home = cf.me THEN Fail(R, "noroute", src)
        ELSE IF ~IsPeer(R, home) THEN Fail(R, "nopeer", src)
        ELSE [R |-> R, res |-> "ok", ef |-> <<<<"peer", home, "fwd", src, dst, flag, len>>, RoutedE(src, dst, "peer", len)>>]
 
-(* route.rs deliver_held: look, hand over, then remove; the pass stops at the first message that cannot be handed over,
-   which stays held, and is counted once *)
+(* route.rs deliver_held: look for the oldest message that fits the route (a longer one is stepped over and stays
+   held), hand it over, then remove it; the pass stops at the first hand-over the host refuses, which stays held with
+   those behind it, and is counted once. A message that does not fit is no refusal. cf.stop: the first round's pass,
+   which stops at a front message that does not fit *)
 RECURSIVE DHLoop(_, _, _, _, _, _, _)
 DHLoop(cf, R, now, node, open, fit, acc) ==
-    LET p == Look(MC(cf), R.mb, now, node, fit)
+    LET p == IF cf.stop THEN Look(MC(cf), R.mb, now, node, fit) ELSE LookFit(MC(cf), R.mb, now, node, fit)
         R1 == [R EXCEPT !.mb = p.mb]
     IN IF ~p.got THEN [R |-> R1, ef |-> acc]
        ELSE LET m == p.m
@@ -134,7 +146,7 @@ DHLoop(cf, R, now, node, open, fit, acc) ==
                         ELSE TunnelDown(R1, now, node, m.src, m.flag, m.len)
                 R2 == IF open THEN sent.R ELSE R1
             IN IF sent.ok
-               THEN DHLoop(cf, [R2 EXCEPT !.mb = MbRemove(MC(cf), R2.mb, node, m.seq)], now, node, open, fit,
+               THEN DHLoop(cf, [R2 EXCEPT !.mb = RemoveSeq(MC(cf), R2.mb, node, m.seq)], now, node, open, fit,
                            acc \o sent.ef \o <<<<"t", "mdeliv", node, m.seq>>>>)
                ELSE [R |-> R2, ef |-> acc \o sent.ef \o <<RejE("notunnel", node)>>]
 
@@ -144,9 +156,10 @@ DeliverHeld(cf, R, now, node) ==
          IN IF ~open /\ ~Fresh(R, now, node) THEN [R |-> R, ef |-> <<>>]
             ELSE DHLoop(cf, R, now, node, open, IF open THEN MAXPKT ELSE MAXTUN - 35, <<>>)
 
-(* route.rs release_held: nothing held returns at once; a member whose session is not fresh or whose route the host
-   reports not ready keeps its messages and nothing is emitted; otherwise the pass of deliver_held runs. more says
-   messages remain held (counted as pending, as the code does). cf.old is the rule before: nothing is released *)
+(* route.rs release_held, called by udp_heard: nothing held returns at once; a member whose session is not fresh or
+   whose route the host reports not ready keeps its messages and nothing is emitted; otherwise the pass of deliver_held
+   runs. more says messages remain held (counted as pending, as the code does; only the withdrawn rule of cf.hb reads
+   it). cf.old: nothing is released *)
 ReleaseHeld(cf, R, now, node) ==
     IF cf.old \/ Pending(R.mb, node)[1] = 0 THEN [R |-> R, ef |-> <<>>, more |-> FALSE]
     ELSE IF ~Fresh(R, now, node) \/ node \in R.nr THEN [R |-> R, ef |-> <<>>, more |-> TRUE]
@@ -155,11 +168,10 @@ ReleaseHeld(cf, R, now, node) ==
 (* the answer o behind the effects of an earlier step of the same call *)
 After(ef, o) == [o EXCEPT !.ef = ef \o o.ef]
 
-(* route.rs route; origin is "client", "peer" or "tunnel". After the carrier, a destination that holds messages is
-   released first and the packet is held behind what remains, so nothing overtakes a held message *)
-Route(cf, R, now, src, dst, flag, len, origin) ==
-    IF dst = cf.me THEN [R |-> R, res |-> "ok", ef |-> LocalEf(src, cf.me, len)]
-    ELSE LET dc == DeliverClient(cf, R, now, src, dst, flag, len, TRUE) IN
+(* The withdrawn rule, for its witness only (cf.hb): after the carrier, a destination that holds messages is released
+   first and the packet is held behind what remains, so a packet for a member that holds mail is never forwarded *)
+RouteBehind(cf, R, now, src, dst, flag, len, origin) ==
+    LET dc == DeliverClient(cf, R, now, src, dst, flag, len, TRUE) IN
     IF dc.ok THEN [R |-> dc.R, res |-> "ok", ef |-> dc.ef]
     ELSE LET rh == ReleaseHeld(cf, R, now, dst)
              R2 == rh.R
@@ -169,6 +181,20 @@ Route(cf, R, now, src, dst, flag, len, origin) ==
     ELSE IF dst \in DOMAIN R2.sl THEN After(rh.ef, Hold(cf, R2, now, dst, src, flag, len))
     ELSE IF origin = "peer" THEN After(rh.ef, Fail(R2, "noroute", src))
     ELSE After(rh.ef, Forward(cf, R2, now, src, dst, flag, len))
+
+(* route.rs route; origin is "client", "peer" or "tunnel". Whatever the destination holds, the packet goes down its
+   carrier, or down its UDP session, or is held while its sleep mark lasts, or is forwarded to its home; routing starts
+   no release *)
+Route(cf, R, now, src, dst, flag, len, origin) ==
+    IF dst = cf.me THEN [R |-> R, res |-> "ok", ef |-> LocalEf(src, cf.me, len)]
+    ELSE IF cf.hb THEN RouteBehind(cf, R, now, src, dst, flag, len, origin)
+    ELSE LET dc == DeliverClient(cf, R, now, src, dst, flag, len, TRUE) IN
+    IF dc.ok THEN [R |-> dc.R, res |-> "ok", ef |-> dc.ef]
+    ELSE LET td == TunnelDown(R, now, dst, src, flag, len) IN
+    IF td.ok THEN [R |-> R, res |-> "ok", ef |-> td.ef]
+    ELSE IF dst \in DOMAIN R.sl THEN Hold(cf, R, now, dst, src, flag, len)
+    ELSE IF origin = "peer" THEN Fail(R, "noroute", src)
+    ELSE Forward(cf, R, now, src, dst, flag, len)
 
 (* clients.rs carrier_opened *)
 CarrierOpened(cf, R, now, node) ==

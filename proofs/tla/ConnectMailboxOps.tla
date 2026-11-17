@@ -93,6 +93,30 @@ MbRemove(c, mb, node, seq) ==
          [held |-> IF h2.count = 0 THEN Del(mb.held, node) ELSE Put(mb.held, node, h2),
           seq |-> mb.seq, st |-> Bump(mb.st, "delivered", 1)]
 
+(* The two steps of a pass that steps over a message too long for the route (used by ConnectRelayOps.tla only).
+   LookFit: the oldest live message whose body is at most max, which may stand behind older longer ones; got says there
+   is one, m is it. Nothing leaves but the expired messages. *)
+LookFit(c, mb, now, node, max) ==
+    IF node \notin DOMAIN mb.held THEN [mb |-> mb, got |-> FALSE, m |-> NoMsg]
+    ELSE LET e == ExpireH(c, now, mb.held[node])
+             S == {i \in 1..Len(e.h.q) : e.h.q[i].len <= max}
+         IN [mb |-> [held |-> IF e.h.count = 0 THEN Del(mb.held, node) ELSE Put(mb.held, node, e.h),
+                     seq |-> mb.seq, st |-> Bump(mb.st, "expired", e.n)],
+             got |-> S # {}, m |-> IF S # {} THEN e.h.q[CHOOSE i \in S : \A j \in S : i <= j] ELSE NoMsg]
+
+(* RemoveSeq: the message numbered seq leaves wherever it stands in the member's queue and is counted delivered. The
+   ring offset is left as it is: the model does not place bytes. *)
+RemoveSeq(c, mb, node, seq) ==
+    IF node \notin DOMAIN mb.held THEN mb
+    ELSE LET h == mb.held[node]
+             S == {i \in 1..Len(h.q) : h.q[i].seq = seq}
+         IN IF S = {} THEN mb
+            ELSE LET i == CHOOSE j \in S : TRUE
+                     h2 == [q |-> SubSeq(h.q, 1, i - 1) \o SubSeq(h.q, i + 1, Len(h.q)), head |-> h.head,
+                            used |-> Sub(h.used, Size(c, h.q[i])), count |-> Sub(h.count, 1)]
+                 IN [held |-> IF h2.count = 0 THEN Del(mb.held, node) ELSE Put(mb.held, node, h2),
+                     seq |-> mb.seq, st |-> Bump(mb.st, "delivered", 1)]
+
 (* Mailbox::pop_fitting: the look followed by the removal of what it returned; max is the longest body the caller can
    deliver *)
 Pop(c, mb, now, node, max) ==

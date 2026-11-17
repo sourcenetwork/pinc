@@ -319,9 +319,12 @@ par run_tlc connect_cache ConnectTable ConnectTable_cache
 par run_tlc connect_relay ConnectRelay ConnectRelay
 par run_tlc connect_relay_sleep ConnectRelay ConnectRelay_sleep
 par run_tlc connect_relay_ready ConnectRelay ConnectRelay_ready
+par run_tlc connect_relay_fwd ConnectRelay ConnectRelay_fwd
+par run_tlc connect_relay_long ConnectRelay ConnectRelay_long
 par witness_tlc connect_relay_refused ConnectRelay ConnectRelay_refused NoRefusal
 par witness_tlc connect_relay_wheard ConnectRelay ConnectRelay_wheard HeardDelivers
-par witness_tlc connect_relay_wfirst ConnectRelay ConnectRelay_wfirst HeldFirst
+par witness_tlc connect_relay_wfwd ConnectRelay ConnectRelay_wfwd Forwarded
+par witness_tlc connect_relay_wstop ConnectRelay ConnectRelay_wstop StepsOver
 par run_tlc connect_records ConnectRecords ConnectRecords
 par run_tlc connect_records_own ConnectRecords ConnectRecords_own
 par witness_tlc connect_records_nocheck ConnectRecords ConnectRecords_nocheck OnlyGood

@@ -25,7 +25,7 @@ Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/connect.ndjson")
 Ev == Trace[i]
 
 Init == i = 1 /\ cf = [me |-> 0, C |-> 1, R |-> 1, MN |-> 1, MB |-> 1, Bytes |-> 0, Window |-> 1, SessT |-> 1, Age |-> 1,
-                old |-> FALSE]
+                old |-> FALSE, hb |-> FALSE, stop |-> FALSE]
         /\ R = NewRelay(cf)
 
 Step(o) == /\ o.res = Ev.res /\ o.ef = Ev.out /\ R' = o.R /\ cf' = cf /\ i' = i + 1
@@ -33,7 +33,7 @@ Step(o) == /\ o.res = Ev.res /\ o.ef = Ev.out /\ R' = o.R /\ cf' = cf /\ i' = i 
 NewE == /\ Ev.t = "rnew"
         /\ cf' = [me |-> Ev.me, C |-> Ev.c, R |-> Ev.r, MN |-> Ev.mn, MB |-> Ev.mb, Bytes |-> Ev.bytes,
                   Window |-> Ev.window, SessT |-> Ev.sess, Age |-> Ev.age,
-                  old |-> FALSE]
+                  old |-> FALSE, hb |-> FALSE, stop |-> FALSE]
         /\ R' = NewRelay(cf') /\ i' = i + 1
 BkE == /\ Ev.t = "rbk" /\ R' = [R EXCEPT !.bk = Put(R.bk, Ev.n, Ev.b)] /\ cf' = cf /\ i' = i + 1
 AddE == /\ Ev.t = "radd"
