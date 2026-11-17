@@ -17,9 +17,10 @@ Theorems, for every configuration with `0 < B` and every sequence of steps from 
   message count is its length, the head is inside the ring, and at most `N` members exist.
 * `conservation`: stored = delivered + dropped oldest + expired + held, so every loss is counted.
 * `fifo_once`: the messages of a member are in increasing sequence number, and no message that was delivered is held.
-* `pop_look_out`, `look_keeps`, `remove_front`, `remove_other`: `pop` is `look` then `remove`; a look removes nothing
-  (the message stays held, in front) and only a removal counts a delivery, so a message leaves the mailbox only when
-  it is delivered or expires.
+* `pop_look_out`, `look_keeps`, `remove_front`, `remove_other`: `pop` returns the message `look` returns; a look counts
+  no delivery and its message is the front of the member's queue once the old ones are expired; `remove` of the front
+  counts one delivery and of any other number changes nothing. A look without a removal is not a step of `Reach`: that
+  a refused hand-over keeps its message is checked by TLC (`RefusedKept`), not proven here.
 * `age_bound` and `pop_front`: `pop` returns the first message of the member after the old ones are expired, and it
   is younger than the maximum age.
 * `drop_oldest`: the quota loop removes a prefix of the queue.
@@ -704,8 +705,8 @@ theorem pop_look_out (c : Cfg) (now : Nat) (mb : MB) (k mx : Nat) :
   | some h =>
     simp only []
 
-/-- `look` returns the first message left after the old ones are expired, and removes none: the delivered counter is
-unchanged and the message is still the front of the member's queue. -/
+/-- `look` returns the first message left after the old ones are expired, and counts no delivery: the delivered counter
+is unchanged and the message is the front of the member's queue once the old ones are expired. -/
 theorem look_keeps (c : Cfg) (now : Nat) (mb : MB) (k mx : Nat) (m : Msg)
     (h : (look c now mb k mx).2 = some m) :
     (look c now mb k mx).1.st.delivered = mb.st.delivered ∧
@@ -716,7 +717,7 @@ theorem look_keeps (c : Cfg) (now : Nat) (mb : MB) (k mx : Nat) (m : Msg)
   unfold look
   simp [h1]
 
-/-- `remove` of the front message counts it delivered and takes it from the queue. -/
+/-- `remove` of the front message counts it delivered. -/
 theorem remove_front (c : Cfg) (mb : MB) (k : Nat) (h0 : Held) (m : Msg) (r : List Msg)
     (hl : lookup k mb.held = some h0) (hq : h0.q = m :: r) :
     (remove c mb k m.seq).st.delivered = mb.st.delivered + 1 := by

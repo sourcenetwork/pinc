@@ -72,7 +72,8 @@ RejE(why, node) == <<"t", "rej", why, node>>
 LocalEf(from, me, len) == <<RoutedE(from, me, "local", len), <<"local", from, len>>>>
 Fail(R, why, node) == [R |-> R, res |-> why, ef |-> <<RejE(why, node)>>]
 
-(* The host answers Sink::tunnel_ready from nr, the members with no validated direct route; it is an input of the call *)
+(* The host answers Sink::tunnel_ready from nr, the members with no validated direct route; it is an input of the
+   call *)
 SetReady(R, node, ok) == [R EXCEPT !.nr = IF ok = 1 THEN R.nr \ {node} ELSE R.nr \cup {node}]
 
 (* route.rs tunnel_down *)

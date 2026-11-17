@@ -85,7 +85,8 @@ Look(c, mb, now, node, max) ==
                      seq |-> mb.seq, st |-> Bump(mb.st, "expired", e.n)],
              got |-> ok, m |-> IF ok THEN Head(e.h.q) ELSE NoMsg]
 
-(* Mailbox::remove (MbRemove, as Remove is the session table's): the front message leaves when it is the one numbered seq, and is counted delivered *)
+(* Mailbox::remove (MbRemove, as Remove is the session table's): the front message leaves when it is the one
+   numbered seq, and is counted delivered *)
 MbRemove(c, mb, node, seq) ==
     IF node \notin DOMAIN mb.held \/ mb.held[node].q = <<>> \/ Head(mb.held[node].q).seq # seq THEN mb
     ELSE LET h2 == SkipFront(c, mb.held[node]).h IN

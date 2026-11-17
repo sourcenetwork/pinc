@@ -7,19 +7,17 @@
 (* forwarded); 5 and 6 are peer relays that may be added and removed; 9 is *)
 (* this relay.                                                             *)
 (*                                                                         *)
-(*  CallsOk        for each call: NoReforward (a packet that came from a peer relay produces no relay frame), FwdToPeers, TunnelOk, ReplyRoute (below) *)
 (*  CallsOk        for every call: NoReforward (a packet that came from a  *)
 (*                 peer relay produces no relay frame), FwdToPeers (every  *)
 (*                 relay frame goes to an authenticated peer), TunnelOk    *)
 (*                 (a tunnelled packet goes down a session heard less than *)
 (*                 20 s ago and fits 1452 - 28 bytes), ReplyRoute (a reply *)
 (*                 route is learnt only for the sender of the frame and    *)
-(*                 for a node without a carrier here)                      *)
+(*                 for a node without a carrier here); a refused hand-over *)
+(*                 of a held message (a member the host reports not ready) *)
+(*                 ends the pass and the member still holds messages       *)
 (*  QuotaOk        no node's window total exceeds the quota                *)
 (*  SessionLimit   after a sweep, no session is older than the limit       *)
-(*  CallsOk        also: a refused hand-over of a held message (a member    *)
-(*                 the host reports not ready) ends the pass and the       *)
-(*                 message stays held                                      *)
 (*  SessionsBound  at most C sessions, one per node, and the mailbox keeps *)
 (*                 its quota                                               *)
 (* Lean: Vinc/ConnectRelayThm.lean (peer_unauth, forward_peer, no_reforward,*)
@@ -51,7 +49,7 @@ Checks(kind, o, from, tm) ==
     /\ \A k \in 1..Len(E) : IsUdp(E[k]) =>
            E[k][2] \in DOMAIN o.R.udp /\ Sat(tm - o.R.udp[E[k][2]]) < FRESH /\ 35 + E[k][6] <= MAXTUN
     /\ \A k \in 1..Len(E) : IsLearn(E[k]) => E[k][4] = from /\ E[k][3] \notin DOMAIN o.R.cd
-    \* a refused hand-over ends the pass and its message stays held
+    \* a refused hand-over ends the pass and the member still holds messages
     /\ \A k \in 1..Len(E) : IsNoTunnel(E[k]) => k = Len(E) /\ E[k][4] \in DOMAIN o.R.mb.held
 
 Do(kind, o, from) == /\ R' = o.R /\ last' = Checks(kind, o, from, clock') /\ steps' = steps + 1
@@ -73,11 +71,12 @@ Next == \/ \E t \in Times : t >= clock /\ clock' = t /\
             \/ Do("time", Timeout(cf, R, t), 0) )
         \/ (\E p \in Peers : R' = AddPeer(R, p).R /\ UNCHANGED <<clock, last, ref>> /\ steps' = steps + 1)
         \/ (\E p \in Peers : R' = RemovePeer(R, p) /\ UNCHANGED <<clock, last, ref>> /\ steps' = steps + 1)
-        \/ (WithReady /\ \E n \in Cl, o \in {0, 1} : R' = SetReady(R, n, o) /\ UNCHANGED <<clock, last, ref>> /\ steps' = steps + 1)
+        \/ (WithReady /\ \E n \in Cl, o \in {0, 1} :
+                R' = SetReady(R, n, o) /\ UNCHANGED <<clock, last, ref>> /\ steps' = steps + 1)
 
 Spec == Init /\ [][Next]_vars
 
-\* the checks of the last call: NoReforward, FwdToPeers, TunnelOk and ReplyRoute (see Checks)
+\* the checks of the last call: NoReforward, FwdToPeers, TunnelOk, ReplyRoute and the refused hand-over (see Checks)
 CallsOk == last
 QuotaOk == \A n \in DOMAIN R.cd : R.cd[n].wb <= cf.Bytes
 SessionLimit == R.ls = clock /\ clock > 0 => \A n \in DOMAIN R.cd : Sat(clock - R.cd[n].opened) < cf.SessT
