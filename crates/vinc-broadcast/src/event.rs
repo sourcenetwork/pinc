@@ -55,22 +55,41 @@ pub enum Reject {
     /// the log let the message go), so the publish is not acknowledged. A copy due no acknowledgement is a
     /// [`Reject::Duplicate`] and is compared with nothing.
     IdTaken,
+    /// The frame came from a sender the node does not take that kind of frame from (a publish at a node that is not a
+    /// hub, a hub message from a node that is not a boot node). Counted and not traced.
+    NotAllowed,
 }
 
-impl Reject {
-    /// Every reason, in the order [`RejectStats`] counts them.
-    pub const ALL: [Self; 10] = [
-        Self::BadHead,
-        Self::BadSignature,
-        Self::Duplicate,
-        Self::Revoked,
-        Self::SeenFull,
-        Self::TopicsFull,
-        Self::LogFull,
-        Self::Old,
-        Self::HeldFull,
-        Self::IdTaken,
-    ];
+/// The position of each [`Reject`] in [`RejectStats`] and the list of them all, from one table: the `match` is
+/// exhaustive, so a reason added to the enum does not compile until it has a position here, and the size of the
+/// counters follows from the table.
+macro_rules! reject_positions {
+    ($($pos:literal => $why:ident),+ $(,)?) => {
+        impl Reject {
+            /// Every reason, in the order [`RejectStats`] counts them.
+            pub const ALL: [Self; [$($pos),+].len()] = [$(Self::$why),+];
+
+            const fn position(self) -> usize {
+                match self {
+                    $(Self::$why => $pos),+
+                }
+            }
+        }
+    };
+}
+
+reject_positions! {
+    0 => BadHead,
+    1 => BadSignature,
+    2 => Duplicate,
+    3 => Revoked,
+    4 => SeenFull,
+    5 => TopicsFull,
+    6 => LogFull,
+    7 => Old,
+    8 => HeldFull,
+    9 => IdTaken,
+    10 => NotAllowed,
 }
 
 /// How many messages each [`Reject`] reason turned away, and how many long walks the id tables made. Counted whether or
@@ -84,12 +103,7 @@ pub struct RejectStats {
 impl RejectStats {
     /// How many messages were turned away for `why`.
     pub fn count(&self, why: Reject) -> u64 {
-        Reject::ALL
-            .iter()
-            .position(|r| *r == why)
-            .and_then(|i| self.counts.get(i))
-            .copied()
-            .unwrap_or(0)
+        self.counts.get(why.position()).copied().unwrap_or(0)
     }
 
     /// How many messages were turned away, for any reason.
@@ -105,11 +119,7 @@ impl RejectStats {
 
     #[cfg(feature = "alloc")]
     pub(crate) fn note(&mut self, why: Reject) {
-        if let Some(n) = Reject::ALL
-            .iter()
-            .position(|r| *r == why)
-            .and_then(|i| self.counts.get_mut(i))
-        {
+        if let Some(n) = self.counts.get_mut(why.position()) {
             *n = n.saturating_add(1);
         }
     }
@@ -332,6 +342,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[allow(clippy::indexing_slicing, reason = "the test asserts")]
     fn every_reason_has_its_own_counter() {
         let mut s = RejectStats::default();
         for (i, why) in Reject::ALL.iter().enumerate() {
@@ -340,7 +351,12 @@ mod tests {
             }
         }
         for (i, why) in Reject::ALL.iter().enumerate() {
-            assert_eq!(s.count(*why), i as u64 + 1);
+            assert_eq!(s.count(*why), i as u64 + 1, "{why:?}");
+        }
+        // The positions are a permutation of 0..N: no two reasons share a counter.
+        let mut seen = [false; Reject::ALL.len()];
+        for why in Reject::ALL {
+            assert!(!core::mem::replace(&mut seen[why.position()], true), "{why:?}");
         }
         assert_eq!(s.total(), (1..=Reject::ALL.len() as u64).sum::<u64>());
         assert_eq!(s.with_long_walks(7).long_walks(), 7);
