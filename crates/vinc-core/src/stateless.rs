@@ -4,11 +4,14 @@
 //!
 //! The reject is the message the responder would have sent, in a datagram of its own. It is bounded like every answer
 //! to an address not yet heard from: the datagram is charged to the amplification ledger when it is queued, and when
-//! the ledger refuses it nothing is queued or sent. The queue holds at most [`REJECT_QUEUE`] datagrams, built whole when
-//! queued; one that finds it full is dropped without a charge.
+//! the ledger refuses it nothing is queued or sent and `stateless_refused` counts it. The queue holds at most
+//! [`REJECT_QUEUE`] datagrams, built whole when queued; one that finds it full is dropped without a charge and counted
+//! only in `dropped_in`. A reject is counted as sent (`stateless_rejects`, `datagrams_out`) when it is written to the
+//! caller's buffer; if that buffer is shorter than the datagram, the reject is lost and counted once in `dropped_out`,
+//! the same as a datagram kept by a session, and its charge to the ledger is not given back.
 //!
-//! Invariants: a queued datagram has been charged to the ledger exactly once; nothing here allocates; the queue never
-//! holds more than [`REJECT_QUEUE`] datagrams.
+//! Invariants: a queued datagram has been charged to the ledger exactly once and counted as sent at most once; nothing
+//! here allocates; the queue never holds more than [`REJECT_QUEUE`] datagrams.
 
 use core::net::SocketAddr;
 
@@ -77,8 +80,9 @@ impl Rejects {
 
 ep_impl! {
     /// Answer a first message from `remote` with `message`, a reject, without a session: to the id the dialer chose
-    /// (`scid`), from the id it dialed (`odcid`). Counted in [`NodeStats`](crate::NodeStats) as sent, or refused when
-    /// the ledger holds the answer back; a full queue drops it uncharged.
+    /// (`scid`), from the id it dialed (`odcid`). Queued for [`send_reject`](Self::send_reject), which counts it as
+    /// sent; counted as refused and thrown away when the ledger will not let this node answer that address; a full
+    /// queue drops it uncharged and counts it in `dropped_in` only.
     pub(crate) fn reject_stateless(
         &mut self,
         now: u64,
@@ -107,11 +111,11 @@ ep_impl! {
             self.counters.stateless_refused += 1;
             return;
         }
-        self.counters.stateless_rejects += 1;
         self.rejects.push(Pending { local, remote, len, bytes });
     }
 
-    /// Write the oldest queued reject into `out`, if any.
+    /// Write the oldest queued reject into `out`, if any, and count it as sent. When `out` is shorter than the reject
+    /// the reject is lost and counted in `dropped_out` instead.
     pub(crate) fn send_reject(&mut self, out: &mut [u8]) -> Option<Transmit> {
         let p = self.rejects.pop()?;
         let (Some(dst), Some(src)) = (out.get_mut(..p.len), p.bytes.get(..p.len)) else {
@@ -119,7 +123,73 @@ ep_impl! {
             return None;
         };
         dst.copy_from_slice(src);
+        self.counters.stateless_rejects += 1;
         self.counters.datagrams_out += 1;
         Some(Transmit { local: p.local, remote: p.remote, len: p.len, segment_size: p.len })
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "test assertions")]
+mod tests {
+    use vinc_crypto::{Drbg, IdentityAlg, Keypair, Software};
+    use vinc_security::{KeyHandle, LocalIdentity};
+    use vinc_transport::conn::{Resources, Tables};
+    use vinc_transport::recovery::LossEstimate;
+    use vinc_transport::stream::pool::{BufferPool, RawChunk};
+    use vinc_transport::stream::{self, NoSource, Streams};
+
+    use super::*;
+    use crate::endpoint::{Endpoint, EndpointConfig};
+    use crate::slot::Slot;
+
+    type Ep<'s> = Endpoint<'s, 's, Software, NoSource, 1, 2, 16, 1, 1, 10, 1, 1, 1>;
+
+    fn addr(i: u8) -> SocketAddr {
+        SocketAddr::from(([10, 0, 0, i], 9))
+    }
+
+    fn ids() -> (ConnId, ConnId) {
+        (ConnId::new(&[1; 8]).unwrap(), ConnId::new(&[2; 4]).unwrap())
+    }
+
+    /// An address the ledger has heard too little from to be answered. No endpoint state reaches this through
+    /// `handle_datagram` (a first message is at least 93 bytes and the reject's datagram, with its overhead, is under
+    /// three times that), so the ledger's bound is exercised here directly.
+    #[test]
+    fn a_reject_the_ledger_will_not_pay_for_is_counted_refused_and_never_sent() {
+        let kp = Keypair::from_seed(IdentityAlg::Ed25519, &[7u8; 32]).unwrap();
+        let id = LocalIdentity::from_keypair(&kp, KeyHandle(1)).unwrap();
+        let mut slab: [RawChunk; 0] = [];
+        let pool = BufferPool::from_slab(&mut slab);
+        let mut streams = Streams::<NoSource, 1, 2>::new(&stream::Config::new(false), &pool);
+        let loss = LossEstimate::new();
+        let mut slots = [Slot::<Software, NoSource, 1, 2, 16, 1>::new(Resources {
+            pool,
+            streams: (&mut streams).into(),
+            loss: (&loss).into(),
+            tables: Tables::new(),
+        })];
+        let mut ep: Ep<'_> = Endpoint::new(0, Software, Drbg::new(&[3; 32]), id, EndpointConfig::new(5), &mut slots);
+        let msg = [0u8; REJECT_LEN];
+        // 10 bytes heard: three times that is under the reject's 65 bytes plus the 28 of overhead
+        assert!(ep.ledger.on_receive(addr(1), 10));
+        ep.reject_stateless(0, addr(9), addr(1), ids(), &msg);
+        let ns = ep.node_stats();
+        assert_eq!((ns.stateless_refused, ns.dropped_in), (1, 0), "{ns:?}");
+        let mut out = [0u8; 1200];
+        assert!(ep.send_reject(&mut out).is_none(), "a refused reject was queued");
+        let ns = ep.node_stats();
+        assert_eq!(
+            (ns.stateless_rejects, ns.datagrams_out, ns.dropped_out),
+            (0, 0, 0),
+            "{ns:?}"
+        );
+        // an address heard from enough is answered, once, and counted when written
+        assert!(ep.ledger.on_receive(addr(2), 93));
+        ep.reject_stateless(0, addr(9), addr(2), ids(), &msg);
+        assert!(ep.send_reject(&mut out).is_some());
+        let ns = ep.node_stats();
+        assert_eq!((ns.stateless_rejects, ns.stateless_refused), (1, 1), "{ns:?}");
     }
 }

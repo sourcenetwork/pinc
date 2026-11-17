@@ -824,6 +824,113 @@ fn ten_thousand_short_initials_with_unknown_keys_leave_the_half_open_table_empty
         let ns = d.srv.node_stats();
         assert_eq!((ns.half_open, ns.sessions), (0, 1), "{ns:?}");
         assert_within_three_times(&tally);
+        // Every one of them was answered with a reject: none was dropped in silence or refused.
+        assert_eq!(
+            (ns.stateless_rejects, ns.stateless_refused, ns.first_too_short),
+            (10_000, 0, 0),
+            "{ns:?}"
+        );
+    });
+}
+
+/// The datagram of a forged Hello that opens no ticket, and the address one datagram of the tests below comes from.
+fn lone_hello(i: u64) -> (Vec<u8>, SocketAddr) {
+    (
+        first_datagram(i + 1, &forged_hello(i), 0),
+        ([10, 2, (i >> 8) as u8, i as u8], 9).into(),
+    )
+}
+
+#[test]
+fn one_address_is_answered_every_time_and_sent_at_most_three_times_what_it_sent() {
+    big_stack(|| {
+        let mut d = Duo::new();
+        let (now, from): (u64, SocketAddr) = (d.net.now, "10.7.7.7:9".parse().unwrap());
+        let (mut rx, mut tx, mut out) = (0u64, 0u64, vec![0u8; 65_536]);
+        for i in 0..2_000u64 {
+            let mut dg = first_datagram(i + 1, &forged_hello(i), 0);
+            rx += dg.len() as u64;
+            d.srv.handle_datagram(now, d.addr, from, &mut dg);
+            while let Some(t) = d.srv.poll_transmit(now, &mut out) {
+                assert_eq!(t.remote, from);
+                tx += t.len as u64 + 28;
+            }
+        }
+        let ns = d.srv.node_stats();
+        assert_eq!(
+            (ns.stateless_rejects, ns.stateless_refused, ns.half_open),
+            (2_000, 0, 0),
+            "{ns:?}"
+        );
+        assert!(tx > 0 && tx <= 3 * rx, "{from} was sent {tx} bytes for {rx}");
+    });
+}
+
+#[test]
+fn rejects_wait_in_a_queue_of_sixteen_and_the_seventeenth_is_dropped() {
+    big_stack(|| {
+        let mut d = Duo::new();
+        let now = d.net.now;
+        for i in 0..20 {
+            let (mut dg, from) = lone_hello(i);
+            d.srv.handle_datagram(now, d.addr, from, &mut dg);
+        }
+        let ns = d.srv.node_stats();
+        assert_eq!(
+            (ns.dropped_in, ns.stateless_rejects, ns.datagrams_out),
+            (4, 0, 0),
+            "20 rejects into a queue of 16, none written yet: {ns:?}"
+        );
+        let mut out = vec![0u8; 65_536];
+        let mut sent = 0;
+        while d.srv.poll_transmit(now, &mut out).is_some() {
+            sent += 1;
+        }
+        let ns = d.srv.node_stats();
+        assert_eq!(
+            (sent, ns.stateless_rejects, ns.datagrams_out, ns.dropped_in),
+            (16, 16, 16, 4),
+            "{ns:?}"
+        );
+        // The queue has room again.
+        let (mut dg, from) = lone_hello(99);
+        d.srv.handle_datagram(now, d.addr, from, &mut dg);
+        assert!(
+            d.srv.poll_transmit(now, &mut out).is_some(),
+            "the queue stayed full after it drained"
+        );
+    });
+}
+
+#[test]
+fn a_reject_is_counted_as_sent_when_written_and_a_short_buffer_loses_it_once() {
+    big_stack(|| {
+        let mut d = Duo::new();
+        let now = d.net.now;
+        let (mut dg, from) = lone_hello(1);
+        d.srv.handle_datagram(now, d.addr, from, &mut dg);
+        let ns = d.srv.node_stats();
+        assert_eq!(
+            (ns.stateless_rejects, ns.datagrams_out),
+            (0, 0),
+            "counted as sent before it was written"
+        );
+        assert!(d.srv.poll_transmit(now, &mut [0u8; 10]).is_none());
+        let ns = d.srv.node_stats();
+        assert_eq!(
+            (ns.stateless_rejects, ns.datagrams_out, ns.dropped_out),
+            (0, 0, 1),
+            "a reject that did not fit was not counted once as dropped: {ns:?}"
+        );
+        let (mut dg, from) = lone_hello(2);
+        d.srv.handle_datagram(now, d.addr, from, &mut dg);
+        assert!(d.srv.poll_transmit(now, &mut vec![0u8; 65_536]).is_some());
+        let ns = d.srv.node_stats();
+        assert_eq!(
+            (ns.stateless_rejects, ns.datagrams_out, ns.dropped_out),
+            (1, 1, 1),
+            "{ns:?}"
+        );
     });
 }
 

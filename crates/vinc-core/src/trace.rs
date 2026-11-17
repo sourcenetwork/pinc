@@ -50,10 +50,11 @@ pub enum TraceEvent {
         /// Bytes charged to the address.
         tx: u64,
     },
-    /// A decision on a first message: `admitted` 1, refused 0, or 2 for one answered without a session or dropped;
+    /// A decision on a first message: `admitted` 1, refused 0, 2 for one answered with a reject, 3 for one dropped;
     /// `half_open` sessions were open.
     HalfOpen {
-        /// 1 if admitted, 0 if refused, 2 if answered without a session or dropped.
+        /// 1 if admitted, 0 if refused, 2 if answered with a reject without a session because the prekey or ticket is
+        /// not held, 3 if dropped without an answer.
         admitted: u64,
         /// Unauthenticated sessions at the decision.
         half_open: u64,

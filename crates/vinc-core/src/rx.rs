@@ -374,7 +374,7 @@ ep_impl! {
                 }
                 Screen::Drop => {
                     self.counters.dropped_in += 1;
-                    self.note_first(now, 2, false);
+                    self.note_first(now, 3, false);
                     return;
                 }
             },
@@ -414,7 +414,7 @@ ep_impl! {
     }
 
     /// Record the decision on a first message: `admitted` 1 a session may start, 0 refused (the floor, the room or the
-    /// cap), 2 answered without a session or dropped.
+    /// cap), 2 answered with a reject because the prekey or ticket is not held, 3 dropped without an answer.
     #[cfg_attr(not(feature = "trace"), allow(unused_variables, reason = "only the trace reads them"))]
     fn note_first(&mut self, now: u64, admitted: u64, resume: bool) {
         trace!(self, now, HalfOpen {

@@ -759,16 +759,17 @@ pub struct NodeStats {
     pub datagrams_in: u64,
     /// Datagrams sent.
     pub datagrams_out: u64,
-    /// Datagrams dropped before any connection (unroutable, too large, floors, the half-open cap, a full table).
+    /// Datagrams dropped before any connection (unroutable, too large, floors, the half-open cap, a full table), and
+    /// the rejects dropped because the queue of rejects waiting to be sent was full.
     pub dropped_in: u64,
     /// Datagrams a connection produced that could not leave: the path they were for is gone, or the buffer offered
-    /// for a datagram kept from the last call is shorter than it.
+    /// for a datagram kept from the last call or for a reject is shorter than it.
     pub dropped_out: u64,
     /// Reach-out bodies lost: kept no longer because newer ones took their place, or too long to keep.
     pub reach_dropped: u64,
     /// Extension frames lost: dropped as the oldest of a full ring, or too long to keep.
     pub ext_dropped: u64,
-    /// Datagrams the ledger held back.
+    /// Datagrams of sessions the ledger held back; a reject it refused is counted in `stateless_refused` instead.
     pub held_by_ledger: u64,
     /// Packets refused because they would raise events while the host left unrecoverable events unread or a session's
     /// held events were full; the peer sends them again.
@@ -783,10 +784,12 @@ pub struct NodeStats {
     /// First handshake messages dropped before admission because their datagram was shorter than the least a first
     /// packet of their type is (also counted in `dropped_in`).
     pub first_too_short: u64,
-    /// Rejects sent without a session to a first message the responder would only have rejected: a resumption Hello
-    /// whose ticket does not open, a short Initial whose prekey this node does not hold.
+    /// Rejects written to the caller's buffer, without a session, for a first message the responder would only have
+    /// rejected: a resumption Hello whose ticket does not open, a short Initial whose prekey this node does not hold.
     pub stateless_rejects: u64,
-    /// Rejects held back because the ledger would not let this node answer that address yet.
+    /// Rejects thrown away, not kept for later, because the ledger would not let this node answer that address.
+    /// With today's sizes it stays 0, as a first message of the floor's size pays for its reject three times over; it
+    /// guards the bound should a reject ever grow.
     pub stateless_refused: u64,
     /// Events waiting for the host now.
     pub events_queued: usize,
