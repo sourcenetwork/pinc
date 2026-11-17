@@ -139,16 +139,20 @@ impl Net {
         Some(p)
     }
 
-    /// Give back one use of `p`. The last use frees the slot, and the free slots at the end leave the table.
+    /// Give back one use of `p`. The last use frees the slot, and the free slots at the end leave the table. A
+    /// give-back of a free number (a holder giving back twice) is caught where debug assertions are on; a give-back
+    /// that takes a use from a number other holders still use is not.
     pub(crate) fn release(&mut self, p: Provider) {
-        let Some(slot) = self.provs.get_mut(p.0 as usize) else {
-            return;
-        };
-        if let Some(s) = slot.as_mut() {
-            s.uses = s.uses.saturating_sub(1);
-            if s.uses == 0 {
-                *slot = None;
+        match self.provs.get_mut(p.0 as usize) {
+            Some(slot @ Some(_)) => {
+                if let Some(s) = slot.as_mut() {
+                    s.uses = s.uses.saturating_sub(1);
+                    if s.uses == 0 {
+                        *slot = None;
+                    }
+                }
             }
+            _ => debug_assert!(false, "a provider number was given back that is not in use"),
         }
         while self.provs.last().is_some_and(Option::is_none) {
             self.provs.pop();
@@ -187,11 +191,14 @@ impl Net {
     }
 
     /// A fetch started and holds `provs`: they are given back by [`Net::end_fetch`]. The id is not one of a running
-    /// fetch ([`next_fetch_id`]); were it, both lists would be kept and given back together, never one early.
+    /// fetch ([`next_fetch_id`] skips them), so no list is replaced; were it, a release build would drop the running
+    /// fetch's list without giving it back, and its uses would stay taken.
     pub(crate) fn begin_fetch(&mut self, fetch: u32, provs: Vec<Provider>) {
-        let held = self.held.entry(fetch).or_default();
-        debug_assert!(held.is_empty(), "a fetch id was handed out while the fetch was running");
-        held.extend(provs);
+        debug_assert!(
+            !self.held.contains_key(&fetch),
+            "a fetch id was handed out while the fetch was running"
+        );
+        self.held.insert(fetch, provs);
     }
 
     /// A fetch ended (finished, failed or cancelled): give back what it holds.
@@ -361,6 +368,16 @@ mod tests {
         net.begin_fetch(1, vec![a]);
         let b = net.acquire(&peer(2)).unwrap();
         net.begin_fetch(1, vec![b]);
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "given back that is not in use")]
+    fn giving_back_a_number_twice_is_caught() {
+        let mut net = Net::default();
+        let a = net.acquire(&peer(1)).unwrap();
+        net.release(a);
+        net.release(a);
     }
 
     #[test]
