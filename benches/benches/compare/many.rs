@@ -62,7 +62,7 @@ fn keep_first(why: &mut String, e: &io::Error) {
 /// line keeps both, so a later dial error never hides that clients could not start.
 fn why_of(did_not_start: u32, start: &str, dial: &str) -> String {
     match (start.is_empty(), dial.is_empty()) {
-        (false, false) => format!("{did_not_start} clients did not start: {start}; last dial error: {dial}"),
+        (false, false) => format!("clients that did not start: {did_not_start} ({start}); last dial error: {dial}"),
         (false, true) => start.to_owned(),
         _ => dial.to_owned(),
     }
@@ -584,8 +584,9 @@ mod tests {
     fn a_dial_error_does_not_hide_that_clients_could_not_start() {
         for spread in [false, true] {
             let v = burst(spread, 6, NO_CONNECT, usize::MAX, 3);
+            let both = "clients that did not start: 1 (no endpoint); last dial error: no connection";
             assert!(
-                v.contains("\"last_error\":\"1 clients did not start: no endpoint; last dial error: no connection\""),
+                v.contains(&format!("\"last_error\":\"{both}\"")),
                 "spread {spread}: {v}"
             );
         }
