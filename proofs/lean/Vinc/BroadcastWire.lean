@@ -430,7 +430,8 @@ theorem env_dec_enc (topic : List Nat) (h : Head) (hw : h.WF) (body tail : List 
   simp only [List.append_assoc, List.cons_append, List.nil_append, rd1, ne_eq, not_true_eq_false, if_false]
   rw [rd_append _ (length_beBytes 2 topic.length)]
   simp only [e2, Nat.not_lt.mpr ht, if_false]
-  rw [rd_append _ rfl, parse_write_gen h hw _ hb]
+  rw [rd_append _ rfl]
+  simp only [parse_write_gen h hw _ hb]
   cases tail with
   | nil => simp
   | cons x xs =>
