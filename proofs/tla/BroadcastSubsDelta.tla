@@ -23,11 +23,19 @@
 (*  - A change is taken between the capped lists.                          *)
 (* The whole list travels as ordered pieces of Piece ids (the lowest ranks *)
 (* first), all at one version; a list of at most Piece ids is one piece.   *)
-(* The hub keeps each stale recipient's place (the next piece) and sends   *)
-(* one piece per step while its stream has room; a recipient stays stale   *)
-(* until its last piece. Any change to the list, a restart, an ASK, a new  *)
-(* SUB and a new publisher put the places back to 0. A member gathers the  *)
-(* pieces of each hub apart and never acts on a partial list:              *)
+(* The hub keeps each stale recipient's place (the next piece). A list that *)
+(* fits the stream (its pieces are at most StreamCap, what a stream holds  *)
+(* when empty, counted in pieces) is queued whole or not at all: a         *)
+(* recipient at place 0 is sent every piece in one step when the room for  *)
+(* them is there, nothing when it is not (FitWhole; one function, Need and *)
+(* Can, for Announce, Writable and HubAsk). A larger list goes one piece a *)
+(* step from the recipient's place; a recipient stays stale until its last *)
+(* piece. The places go back to 0 only on a change to the list, a restart, *)
+(* an ASK and the end of the recipient's session (Resub); a fresh SUB from *)
+(* a recipient in the middle of a list keeps its place (KeepPlace; the new *)
+(* subscriber and the new publisher are not stale yet, their place is 0    *)
+(* already). A member gathers the pieces of each hub apart and never acts  *)
+(* on a partial list:                                                      *)
 (*  - first 0 and the piece is the whole list: take it now, drop the       *)
 (*    gathering of that hub;                                               *)
 (*  - first 0 and more due: start (or restart) that hub's gathering;       *)
@@ -57,7 +65,14 @@
 (* Assumptions the model makes. In the code a change of more than a piece  *)
 (* of ids is not sent: the recipients get the whole list; the model sends  *)
 (* the change whatever its size. Hub-to-hub pieces (a hub's report of its  *)
-(* own subscribers to another hub) are not modelled, as the report is not. *)
+(* own subscribers to another hub) are not modelled, as the report is not; *)
+(* the hub as a recipient of a set is in BroadcastSubsRoom.tla. The stream *)
+(* is counted in frames, a delta takes a frame as a piece does (in the     *)
+(* code the room is bytes and a delta is smaller). That a recipient left   *)
+(* waiting for room is offered again, and that a list changed forever      *)
+(* still ends, are liveness: BroadcastSubsRoom.tla (the version is         *)
+(* unbounded here, so a run is bounded by MaxSteps and carries no          *)
+(* liveness).                                                              *)
 (* One limit: Max is the limit of the hubs                                 *)
 (* and of the members alike. In the code a member's max_subscribers may be *)
 (* under its hub's: its list is then cut, and it takes a change that       *)
@@ -100,6 +115,14 @@
 (* PartIsPrefix: an unbroken gathering holds the lowest ids of the hub's   *)
 (* list at its version, as many as it has counted; with ViewIsHubSet this  *)
 (* is "the member's view equals the hub's set" across the pieces.          *)
+(* PlaceKept (an action property): a recipient's place goes back to 0 while *)
+(* it is still owed the list only when the list changed, when it asked, or *)
+(* when its session ended. KeepPlace off (the place reset by every fresh   *)
+(* SUB) violates it: BroadcastSubsDelta_keepnot.cfg.                       *)
+(* FitPlaceZero: a recipient whose list fits the stream is never owed it   *)
+(* from the middle, so a change cannot leave it a part of that list.       *)
+(* FitWhole off (every list piece by piece) violates it:                   *)
+(* BroadcastSubsDelta_nofit.cfg.                                           *)
 (*                                                                         *)
 (* Lean counterpart: proofs/lean/Vinc/BroadcastSubsDelta.lean (the change  *)
 (* of two sorted lists, applied, gives the new list: Apply below).         *)
@@ -111,8 +134,10 @@ EXTENDS Integers, Sequences, FiniteSets
 \* members that take join hints (every member in the code; fewer keep a large configuration small); HintMax: how many
 \* hints a member keeps (max_subscribers in the code); Piece: how many ids a piece of the whole list carries (SUBS_PIECE
 \* in the code; Max makes every list one piece); the six guards are booleans (TRUE in the code).
+\* KeepPlace: a fresh SUB keeps the place of a recipient that is stale. FitWhole: a list that fits the stream goes whole or
+\* not at all. StreamCap is also what a stream holds when empty, in frames.
 CONSTANTS Hubs, Members, Max, StreamCap, MaxSteps, MaxLives, Hinted, HintMax, Piece,
-          GapRule, FromCheck, CapDelta, HintGuard, ChainCheck, WholeOnly
+          GapRule, FromCheck, CapDelta, HintGuard, ChainCheck, WholeOnly, KeepPlace, FitWhole
 
 \* live: each hub's subscribers; pubs: its recent publishers; told: the list it last told; life: its incarnation;
 \* seq: the number of its list; hist: every (life, number, list) it ever had; stale: the recipients it owes the whole
@@ -141,9 +166,21 @@ Last(S, j) == (j + 1) * Piece >= Cardinality(S)
 Rcpt(h) == live[h] \cup pubs[h]
 \* A hub's current version.
 Cur(h) == <<life[h], seq[h]>>
+\* The number of pieces of the whole list S (an empty list is one piece).
+Np(S) == IF S = {} THEN 1 ELSE (Cardinality(S) + Piece - 1) \div Piece
+\* Whether the whole list S fits what the stream holds when empty.
+Fits(S) == Np(S) <= StreamCap
+\* The pieces handed over in one step to a recipient at place j: all of a list that fits, one otherwise.
+Need(S, j) == IF FitWhole /\ j = 0 /\ Fits(S) THEN Np(S) ELSE 1
+\* Whether the stream ch has room for the pieces of that step.
+Can(S, j, ch) == StreamCap - Len(ch) >= Need(S, j)
+\* Whether that step hands over the last piece.
+Done(S, j) == Last(S, j + Need(S, j) - 1)
 \* Piece j of the whole list S at version v, as a frame.
 PieceF(v, S, j) ==
     [k |-> "piece", v |-> v, s |-> Ids(S, j), add |-> {}, rem |-> {}, first |-> j * Piece, total |-> Cardinality(S)]
+\* The frames of a step at place j: Need(S, j) pieces from piece j.
+Pieces(v, S, j) == [i \in 1..Need(S, j) |-> PieceF(v, S, j + i - 1)]
 \* A change making version v, as a frame.
 Delta(v, a, r) == [k |-> "delta", v |-> v, s |-> {}, add |-> a, rem |-> r, first |-> 0, total |-> 0]
 \* A member applies a change: drop the removed, add the added, keep the lowest Max (subs.rs apply).
@@ -163,10 +200,10 @@ Init ==
     /\ hints = [m \in Members |-> {}]
     /\ steps = 0
 
-\* Hub h's set became nl and its publishers np; fresh are owed the whole list from its first piece; ch is what its
-\* streams hold. This is announce: tell_members sends the change to the recipients that are not stale, then flush_stale
-\* sends the next piece of the whole list to the stale ones that have room.
-Announce(h, nl, np, fresh, ch) ==
+\* Hub h's set became nl and its publishers np; fresh are owed the whole list; rst are the recipients whose session
+\* ended; ch is what its streams hold. This is announce: tell_members sends the change to the recipients that are not
+\* stale, then flush_stale sends the next pieces of the whole list to the stale ones that have room.
+Announce(h, nl, np, fresh, rst, ch) ==
     LET rc == nl \cup np
         \* the new list, and whether it changed
         nt == Cap(nl)
@@ -184,67 +221,65 @@ Announce(h, nl, np, fresh, ch) ==
         refused == {p \in dto : Len(ch[p]) >= StreamCap}
         c1 == [p \in Members |-> IF p \in dto \ refused THEN Append(ch[p], Delta(v, a, r)) ELSE ch[p]]
         s2 == s1 \cup refused
-        \* where each owed recipient is: a change, a fresh SUB, ASK or publisher and a refused change put it at piece 0
-        pl == [p \in Members |-> IF chg \/ p \in fresh \/ p \notin s2 THEN 0 ELSE place[h][p]]
-        \* the stale recipients whose stream has room take their next piece
-        ok == {p \in s2 : Len(c1[p]) < StreamCap}
+        \* where each owed recipient is: a change, an ended session and a refused change put it at piece 0; a fresh SUB
+        \* keeps the place of one in the middle of a list (without KeepPlace it puts it at 0)
+        pl == [p \in Members |-> IF chg \/ p \in rst \/ p \notin s2 \/ (~KeepPlace /\ p \in fresh) THEN 0
+                                 ELSE place[h][p]]
+        \* the stale recipients whose stream has room for their next step take it
+        ok == {p \in s2 : Can(nt, pl[p], c1[p])}
         \* those that took the last piece are no longer stale
-        done == {p \in ok : Last(nt, pl[p])}
+        done == {p \in ok : Done(nt, pl[p])}
     IN  /\ live' = [live EXCEPT ![h] = nl]
         /\ pubs' = [pubs EXCEPT ![h] = np]
         /\ told' = [told EXCEPT ![h] = nt]
         /\ seq' = [seq EXCEPT ![h] = v[2]]
         /\ hist' = [hist EXCEPT ![h] = @ \cup {<<v[1], v[2], nt>>}]
-        /\ chan' = [chan EXCEPT ![h] = [p \in Members |-> IF p \in ok THEN Append(c1[p], PieceF(v, nt, pl[p])) ELSE c1[p]]]
+        /\ chan' = [chan EXCEPT ![h] = [p \in Members |-> IF p \in ok THEN c1[p] \o Pieces(v, nt, pl[p]) ELSE c1[p]]]
         /\ stale' = [stale EXCEPT ![h] = s2 \ done]
-        /\ place' = [place EXCEPT ![h] = [p \in Members |-> IF p \in done THEN 0 ELSE IF p \in ok THEN pl[p] + 1 ELSE pl[p]]]
+        /\ place' = [place EXCEPT ![h] = [p \in Members |-> IF p \in done THEN 0 ELSE IF p \in ok THEN pl[p] + Need(nt, pl[p]) ELSE pl[p]]]
         /\ UNCHANGED <<life, asks, peers, from, pver, part, hints>>
 
 \* What on_sub owes the whole list: a subscriber that is new, or whose SUB does not carry the current version.
 SubFresh(h, m, isnew) == IF isnew \/ Held(m, h) # Cur(h) THEN {m} ELSE {}
 
 \* gap.rs on_sub: m subscribes at h.
-Sub(h, m) == m \notin live[h] /\ Announce(h, live[h] \cup {m}, pubs[h], SubFresh(h, m, TRUE), chan[h])
+Sub(h, m) == m \notin live[h] /\ Announce(h, live[h] \cup {m}, pubs[h], SubFresh(h, m, TRUE), {}, chan[h])
 
 \* gap.rs on_unsub, and subs.rs hold and release: m stops being a live subscriber at h.
-Unsub(h, m) == m \in live[h] /\ Announce(h, live[h] \ {m}, pubs[h], {}, chan[h])
+Unsub(h, m) == m \in live[h] /\ Announce(h, live[h] \ {m}, pubs[h], {}, {}, chan[h])
 
 \* The periodic gap check's SUB (gap_ae), which carries the version m holds.
-Gap(h, m) == m \in live[h] /\ Announce(h, live[h], pubs[h], SubFresh(h, m, FALSE), chan[h])
+Gap(h, m) == m \in live[h] /\ Announce(h, live[h], pubs[h], SubFresh(h, m, FALSE), {}, chan[h])
 
 \* A new session: what the old stream held is lost, and m subscribes again on it (resubscribe, then on_sub).
-Resub(h, m) == m \in live[h] /\ Announce(h, live[h], pubs[h], SubFresh(h, m, FALSE), [chan[h] EXCEPT ![m] = <<>>])
+Resub(h, m) == m \in live[h] /\ Announce(h, live[h], pubs[h], SubFresh(h, m, FALSE), {m}, [chan[h] EXCEPT ![m] = <<>>])
 
 \* subs.rs note_publisher: a member that is not a subscriber publishes at h; it is owed the whole list.
-Pub(h, m) == m \notin live[h] /\ m \notin pubs[h] /\ Announce(h, live[h], pubs[h] \cup {m}, {m}, chan[h])
+Pub(h, m) == m \notin live[h] /\ m \notin pubs[h] /\ Announce(h, live[h], pubs[h] \cup {m}, {m}, {}, chan[h])
 
-\* behind.rs peer_writable, subs.rs subs_writable: m's stream has room and m is stale: it is sent its next piece, and
-\* stays stale until the last one.
+\* behind.rs peer_writable, subs.rs subs_writable: m's stream has room for its next step and m is stale: it is sent the
+\* next piece (all the pieces of a list that fits, from place 0), and stays stale until the last one.
 Writable(h, m) ==
-    /\ m \in stale[h] /\ m \in Rcpt(h) /\ Len(chan[h][m]) < StreamCap
-    /\ chan' = [chan EXCEPT ![h][m] = Append(@, PieceF(Cur(h), told[h], place[h][m]))]
-    /\ IF Last(told[h], place[h][m])
+    /\ m \in stale[h] /\ m \in Rcpt(h) /\ Can(told[h], place[h][m], chan[h][m])
+    /\ chan' = [chan EXCEPT ![h][m] = @ \o Pieces(Cur(h), told[h], place[h][m])]
+    /\ IF Done(told[h], place[h][m])
        THEN /\ stale' = [stale EXCEPT ![h] = @ \ {m}]
             /\ place' = [place EXCEPT ![h][m] = 0]
-       ELSE /\ place' = [place EXCEPT ![h][m] = @ + 1]
+       ELSE /\ place' = [place EXCEPT ![h][m] = @ + Need(told[h], place[h][m])]
             /\ UNCHANGED stale
     /\ UNCHANGED <<live, pubs, told, life, seq, hist, asks, peers, from, pver, part, hints>>
 
-\* subs.rs on_subs ASK at the hub: a recipient that asked is stale at piece 0, and is sent that piece if its stream has
-\* room.
+\* subs.rs on_subs ASK at the hub: a recipient that asked is stale at piece 0, and is sent its first step if its stream
+\* has room for it.
 HubAsk(h, m) ==
     /\ m \in asks[h]
     /\ asks' = [asks EXCEPT ![h] = @ \ {m}]
-    /\ IF m \in Rcpt(h) /\ Len(chan[h][m]) < StreamCap
-       THEN /\ chan' = [chan EXCEPT ![h][m] = Append(@, PieceF(Cur(h), told[h], 0))]
-            /\ IF Last(told[h], 0)
-               THEN /\ stale' = [stale EXCEPT ![h] = @ \ {m}]
-                    /\ place' = [place EXCEPT ![h][m] = 0]
-               ELSE /\ stale' = [stale EXCEPT ![h] = @ \cup {m}]
-                    /\ place' = [place EXCEPT ![h][m] = 1]
-       ELSE /\ stale' = [stale EXCEPT ![h] = IF m \in Rcpt(h) THEN @ \cup {m} ELSE @]
-            /\ place' = [place EXCEPT ![h][m] = 0]
-            /\ UNCHANGED chan
+    /\ LET rcpt == m \in Rcpt(h)
+           go == rcpt /\ Can(told[h], 0, chan[h][m])
+           fin == go /\ Done(told[h], 0)
+       IN /\ chan' = [chan EXCEPT ![h][m] = IF go THEN @ \o Pieces(Cur(h), told[h], 0) ELSE @]
+          /\ stale' = [stale EXCEPT ![h] = IF fin THEN @ \ {m} ELSE IF rcpt THEN @ \cup {m} ELSE @]
+          /\ place' = [place EXCEPT ![h][m] = IF go /\ ~fin THEN Need(told[h], 0) ELSE 0]
     /\ UNCHANGED <<live, pubs, told, life, seq, hist, peers, from, pver, part, hints>>
 
 \* A frame is lost on the way and nobody is told (a relay drop).
@@ -380,6 +415,17 @@ ViewIsHubSet == \A m \in Members :
 \* A member that holds its hub's current version holds its hub's list.
 Synced == \A m \in Members :
     (from[m] # "none" /\ pver[m] = Cur(from[m])) => peers[m] = told[from[m]]
+
+\* A recipient whose list fits the stream is never owed it from the middle: a list that fits goes whole or not at all.
+FitPlaceZero == \A h \in Hubs, m \in Members : (m \in stale[h] /\ Fits(told[h])) => place[h][m] = 0
+
+\* A recipient's place goes back to 0 while it is still owed the list only when the list changed, when it asked, or when
+\* its session ended.
+PlaceKept == [][\A h \in Hubs, m \in Members :
+                  (place[h][m] > 0 /\ place'[h][m] = 0 /\ m \in stale'[h]) =>
+                      \/ told'[h] # told[h]
+                      \/ (m \in asks[h] /\ m \notin asks'[h])
+                      \/ Resub(h, m)]_vars
 
 \* A hint is never a node the member's list names: the list covers it (and a member's reach is the two sets together,
 \* each node once).
