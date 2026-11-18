@@ -340,9 +340,13 @@ impl ChunkStore {
         Some(id)
     }
 
-    /// Take chunk `id` back; false for a chunk this store did not hand out (an empty store, lent where none was).
-    pub fn give(&mut self, id: u32) -> bool {
-        let ok = (id as usize) < self.marks.len() && self.free.len() < self.free.capacity();
+    /// Take chunk `id` back; false for a chunk this store did not hand out (an empty store, lent where none was, or a
+    /// number past every chunk taken so far). Crate-private: only a pool gives back, and it clears its own copy of the
+    /// number first, so a chunk comes back once. A debug build also checks that the chunk is not already free.
+    // vertexia: the double-give check is debug-only (an O(free) scan); a per-chunk held bit if it must hold in release.
+    pub(crate) fn give(&mut self, id: u32) -> bool {
+        debug_assert!(!self.free.contains(&id), "chunk {id} given back twice");
+        let ok = id < self.fresh && self.free.len() < self.free.capacity();
         if ok {
             self.stats.used = self.stats.used.saturating_sub(1);
             self.free.push(id);
@@ -482,5 +486,29 @@ mod tests {
         }
         assert_eq!(s.stats().used, 0);
         assert_eq!(s.stats().touched, 16);
+    }
+
+    #[test]
+    fn a_chunk_never_handed_out_is_refused() {
+        let mut s = ChunkStore::new(16, 2, 1024);
+        let m = s.new_mark();
+        let c = s.take(m).unwrap();
+        assert!(
+            !s.give(c + 1),
+            "a number past every chunk taken is not the store's to take back"
+        );
+        assert_eq!(s.stats().used, 1);
+        assert!(s.give(c));
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "given back twice")]
+    fn a_chunk_given_back_twice_panics_in_a_debug_build() {
+        let mut s = ChunkStore::new(16, 2, 1024);
+        let m = s.new_mark();
+        let c = s.take(m).unwrap();
+        s.give(c);
+        s.give(c);
     }
 }
