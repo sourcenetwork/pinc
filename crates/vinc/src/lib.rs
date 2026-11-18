@@ -41,7 +41,10 @@
 //!
 //! One endpoint per core, each with its own socket and identity, and each polled on its core. The handles are `Rc`-based
 //! and `!Send`: they stay on the thread that built the endpoint, and the host spawns the futures with its executor's local
-//! spawn (`nuclei::spawn_local`, a tokio `LocalSet`, a smol `LocalExecutor`). Nothing in the crate is synchronised.
+//! spawn (`nuclei::spawn_local`, a tokio `LocalSet`, a smol `LocalExecutor`). An endpoint's futures stay on the thread
+//! that built it also when the runtime moves that worker's reactor to another thread, so a runtime that hands a worker
+//! off when a poll runs long has that turned off for the workers that run endpoints
+//! (`nuclei::Builder::handoff_after(None)`). Nothing in the crate is synchronised.
 //!
 //! ```compile_fail
 //! fn needs_send<T: Send>(_: &T) {}
