@@ -213,18 +213,20 @@ impl<const N: usize> RangeSet<N> {
     /// The intervals and how many there are. A spilled set whose slot cannot be read (never: see the arena's module
     /// docs) reads as empty.
     fn view<'a>(&'a self, pool: &'a BufferPool<'_>) -> (View<'a>, usize) {
-        self.view_of(self.spill.as_ref().map(|r| pool.spill_read(r)))
+        self.view_of(|r| pool.spill_read(r))
     }
 
     /// As [`view`](Self::view), reading a spilled set from `arena` while it is not lent to the pool.
     fn view_in<'a>(&'a self, arena: &'a SpillArena<'_>) -> (View<'a>, usize) {
-        self.view_of(self.spill.as_ref().map(|r| arena.read(r)))
+        self.view_of(|r| arena.read(r))
     }
 
-    fn view_of<'a>(&'a self, spilled: Option<Option<&'a [u64]>>) -> (View<'a>, usize) {
-        match spilled {
-            Some(Some(w)) => (View::Spilled(w), self.len),
-            Some(None) => (View::Inline(&[]), 0),
+    fn view_of<'a, F>(&'a self, read: F) -> (View<'a>, usize)
+    where
+        F: FnOnce(&'a SpillRef) -> Option<&'a [u64]>,
+    {
+        match self.spill.as_ref() {
+            Some(r) => read(r).map_or((View::Inline(&[]), 0), |w| (View::Spilled(w), self.len)),
             None => (View::Inline(self.items.get(..self.len).unwrap_or(&[])), self.len),
         }
     }

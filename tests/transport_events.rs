@@ -337,5 +337,39 @@ fn the_connection_statistics_count_a_stream_range_spill() {
         opened_by(net, 5000, &frames);
         let stats = net.b.conn.stats();
         assert_eq!((stats.range_spills, stats.range_overflows), (1, 0));
+        assert_eq!((stats.spill_refused, stats.spill_lost), (0, 0));
+    });
+}
+
+/// With no arena lent to it (the endpoint default) the same holes are refused a slot, and the statistics count the
+/// refusal.
+#[test]
+fn the_connection_statistics_count_a_refused_spill() {
+    gated_pair(|net| {
+        while net.b.conn.poll_event().is_some() {}
+        let frames: Vec<Frame<'_>> = (0..100u64)
+            .map(|k| Frame::Stream {
+                id: 0,
+                offset: 20 * k + 10,
+                fin: false,
+                data: b"x",
+                implicit_len: false,
+            })
+            .collect();
+        let mut buf = vec![0u8; 2000];
+        let mut w = Writer::new(&mut buf);
+        for f in &frames {
+            f.write(&mut w).unwrap();
+        }
+        let n = w.written().len();
+        let now = net.now;
+        let r = net.b.with_lent(now, |c, env, l| {
+            c.inject_payload(env, l, PathId(1), now, 5000, &buf[..n])
+        });
+        assert!(r.is_err(), "the packet with the frame that found no slot is refused");
+        let stats = net.b.conn.stats();
+        assert_eq!(stats.range_spills, 0, "no slot to spill into");
+        assert!(stats.spill_refused > 0, "the refused spill is counted");
+        assert_eq!(stats.spill_lost, 0);
     });
 }

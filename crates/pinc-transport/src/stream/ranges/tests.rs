@@ -173,6 +173,11 @@ impl Rng {
     }
 }
 
+/// Set the model's bytes `r` to `v`.
+fn mark(model: &mut [bool], r: &Range<u64>, v: bool) {
+    model.get_mut(r.start as usize..r.end as usize).unwrap().fill(v);
+}
+
 /// The offsets of a model set, as maximal runs.
 fn runs(model: &[bool]) -> Vec<Range<u64>> {
     let mut out: Vec<Range<u64>> = Vec::new();
@@ -206,13 +211,13 @@ fn any_edit_sequence_gives_the_contents_of_a_plain_model_while_the_set_spills_an
             // Short inserts scatter intervals (spill); wide removes and front takes sweep them away (move back).
             let remove = |s: &mut Set, pool: &mut BufferPool<'_>, model: &mut [bool; SPAN], r: Range<u64>| {
                 s.remove(pool, &r).unwrap();
-                model[r.start as usize..r.end as usize].fill(false);
+                mark(model.as_mut_slice(), &r, false);
             };
             match rng.below(20) {
                 0..=8 => {
                     let r = a..a + 1 + rng.below(3);
                     s.insert(&mut pool, r.clone()).unwrap();
-                    model[r.start as usize..r.end as usize].fill(true);
+                    mark(model.as_mut_slice(), &r, true);
                 }
                 9..=13 => remove(&mut s, &mut pool, &mut model, a..a + 1 + rng.below(3)),
                 14..=17 => {
@@ -221,7 +226,7 @@ fn any_edit_sequence_gives_the_contents_of_a_plain_model_while_the_set_spills_an
                     let want = runs(&model).first().map(|f| f.start..f.end.min(f.start + max));
                     assert_eq!(got, want, "seed {seed} step {step}: the front taken");
                     if let Some(r) = got {
-                        model[r.start as usize..r.end as usize].fill(false);
+                        mark(model.as_mut_slice(), &r, false);
                     }
                 }
                 18 => remove(

@@ -226,6 +226,9 @@ pub struct Stats {
     pub range_spills: u64,
     /// Range sets that needed a spill slot and found none free, in the arena or in the session's share of it.
     pub spill_refused: u64,
+    /// Spill slots returned while the arena was not lent, and so lost to it. Always 0: a non-zero count is a call path
+    /// that frees a range set without its `Lent`.
+    pub spill_lost: u64,
     /// Repair packets sent.
     pub repairs: u64,
     /// Datagrams dropped from the send queue to make room.

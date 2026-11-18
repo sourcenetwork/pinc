@@ -20,10 +20,11 @@ fn handing_the_memory_back_mid_transfer_returns_every_spill_slot() {
         let mut off = 0;
         let spilled = net.run(net.now + 60 * SEC, |n| {
             // Half the datagrams A sends from its 3,000th to its 3,600th are lost: one burst in a wide flight.
-            let ab = &mut n.link.routes[0].ab;
+            let ab = &mut n.link.routes.first_mut().unwrap().ab;
             ab.p.loss_ppm = if (3000..3600).contains(&ab.sent) { 500_000 } else { 0 };
             while off < data.len() {
-                let k = n.a.conn.write(id, &data[off..(off + 65_536).min(data.len())]).unwrap();
+                let chunk = data.get(off..(off + 65_536).min(data.len())).unwrap();
+                let k = n.a.conn.write(id, chunk).unwrap();
                 if k == 0 {
                     break;
                 }
@@ -34,6 +35,7 @@ fn handing_the_memory_back_mid_transfer_returns_every_spill_slot() {
         assert!(spilled, "nothing spilled");
         let (a, b) = (net.a.conn.stats(), net.b.conn.stats());
         assert!(a.range_spills + b.range_spills > 0, "the connections count the spill");
+        assert_eq!(a.spill_lost + b.spill_lost, 0, "every slot went back to a lent arena");
         let Net { mut a, mut b, .. } = net;
         drop(a.conn.into_resources(&mut Lent { spill: &mut a.spill }));
         drop(b.conn.into_resources(&mut Lent { spill: &mut b.spill }));

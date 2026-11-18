@@ -358,3 +358,46 @@ fn a_stream_whose_spilled_ranges_are_full_refuses_the_next_hole_and_counts_it() 
     );
     assert_eq!(t.read_chunk(&pool, 0).map(<[u8]>::len), Some(20));
 }
+
+/// A grant deferred for want of pool room goes out when a sibling's read frees the room, though the waiting stream has
+/// nothing left to read. Stream 0 reads its whole 32 KiB window while two chunks are held elsewhere (as the datagram
+/// queues hold them), so its next window does not fit and is deferred at its limit. Stream 4 then reads its 32 KiB and
+/// ends: its chunks go back, and stream 0's grant is retried in that same read. A grant retried only for the stream
+/// that read would leave stream 0 at its limit for good; the two-stream spill model never reaches this state in a
+/// config small enough to check, so this test covers it.
+#[test]
+fn a_deferred_grant_goes_out_when_a_sibling_read_frees_room() {
+    const KIB: u64 = 1024;
+    let mut pool = BufferPool::new_boxed(6);
+    let mut cfg = Config::new(false);
+    cfg.initial_stream_window = 32 * KIB;
+    let mut t: Streams<NoSource, 72, 65> = Streams::new(&cfg, &pool);
+    let block = alloc::vec![5u8; 32 * 1024];
+    t.on_stream_frame(&mut pool, 4, 0, &block, true).unwrap();
+    t.on_stream_frame(&mut pool, 0, 0, &block, false).unwrap();
+    let held = [pool.alloc_chunk().unwrap(), pool.alloc_chunk().unwrap()];
+    let read = |t: &mut Streams<NoSource, 72, 65>, pool: &mut BufferPool<'_>, id| {
+        while let Some(k) = t.read_chunk(pool, id).map(<[u8]>::len) {
+            t.consume(pool, id, k, 0, 0).unwrap();
+        }
+    };
+    read(&mut t, &mut pool, 0);
+    assert_eq!(
+        t.stream_recv_window(0),
+        Some((32 * KIB, 32 * KIB)),
+        "stream 0 waits at its limit"
+    );
+    assert!(
+        t.slot(t.find(0).unwrap()).unwrap().recv.win.deferred,
+        "its grant is deferred"
+    );
+    read(&mut t, &mut pool, 4);
+    assert_eq!(
+        t.stream_recv_window(0),
+        Some((32 * KIB, 64 * KIB)),
+        "the sibling's read freed room and stream 0's grant went out"
+    );
+    for c in held {
+        pool.free_chunk(c);
+    }
+}
