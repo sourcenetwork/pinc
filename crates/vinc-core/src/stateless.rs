@@ -71,6 +71,10 @@ impl Rejects {
     }
 
     fn pop(&mut self) -> Option<Pending> {
+        // Asked on every transmit poll: an empty queue costs one test, not the move of a cell.
+        if self.len == 0 {
+            return None;
+        }
         let p = self.ring.get_mut(self.head)?.take()?;
         self.head = (self.head + 1) % REJECT_QUEUE;
         self.len -= 1;
