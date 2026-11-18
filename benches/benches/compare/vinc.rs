@@ -17,6 +17,10 @@
 //! session nor the tickets it was given; its session then ends at its timeouts and it dials again, as a stranger (a
 //! full handshake, not a resumption). A resumption from the same socket reaches the same endpoint and resumes. Each
 //! endpoint also limits its own sessions and half-open dials.
+//!
+//! A per-core process builds its runtime with the handoff off (`runtime`): an endpoint's tasks are bound to the thread
+//! that made them, so a handoff would move only the worker's shard and leave the endpoint serving off its worker. With
+//! it off a long poll only delays its own worker, and every endpoint stays on the worker it was placed on for its life.
 #![allow(
     missing_docs,
     clippy::unwrap_used,
@@ -252,6 +256,17 @@ async fn serve_per_core() -> io::Result<String> {
     addr.ok_or_else(|| io::Error::other("no endpoint started"))
 }
 
+/// The runtime of this process, from `builder`. A per-core process never hands a worker's shard off (see the module's
+/// top comment); the one-endpoint path keeps nuclei's defaults. The harness and its tests build every runtime here.
+fn runtime(builder: nuclei::Builder) -> io::Result<nuclei::Runtime> {
+    if super::per_core() {
+        builder.handoff_after(None)
+    } else {
+        builder
+    }
+    .build()
+}
+
 /// The library under test.
 pub struct Vinc1;
 
@@ -283,7 +298,7 @@ impl Lib for Vinc1 {
     type Rx = RecvStream<H>;
 
     fn run<T>(f: impl Future<Output = T>) -> T {
-        match nuclei::Builder::new().build() {
+        match runtime(nuclei::Builder::new()) {
             Ok(rt) => rt.block_on(f),
             Err(e) => panic!("the runtime did not start: {e}"),
         }
@@ -375,8 +390,7 @@ mod tests {
 
     /// Run `f` on a runtime of two workers.
     fn on_two_workers<T>(f: impl Future<Output = T>) -> T {
-        let rt = nuclei::Builder::new().worker_threads(2).build().unwrap();
-        rt.block_on(f)
+        runtime(nuclei::Builder::new().worker_threads(2)).unwrap().block_on(f)
     }
 
     /// The worker each of `n` clients started by [`Vinc1::spawn_client`] ran on, in client order.
@@ -471,7 +485,7 @@ mod tests {
     #[test]
     fn the_per_core_server_serves_every_dial_from_both_workers() {
         use std::sync::atomic::Ordering::Relaxed;
-        let served = with_switches(false, false, || {
+        let served = with_switches(true, false, || {
             on_two_workers(async {
                 let addr = serve_per_core().await.unwrap();
                 let before: Vec<usize> = ACCEPTED.iter().map(|a| a.load(Relaxed)).collect();
