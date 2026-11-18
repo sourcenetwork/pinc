@@ -94,7 +94,7 @@ proptest! {
                 }
                 Op::Consume(k) => {
                     let id = 4 * k as u64;
-                    let n = t.read_chunk(&pool, id).map_or(0, <[u8]>::len);
+                    let n = t.read_chunk(pool.mem(), id).map_or(0, <[u8]>::len);
                     let _ = t.consume(&mut pool, id, n, now, 2000);
                     let after = limits(&t);
                     if before.iter().zip(&after).any(|(b, a)| a > b && b.is_some()) {
@@ -181,7 +181,7 @@ fn hot_paths_do_not_allocate() {
         for round in 0..200u64 {
             // Receive on a peer stream and read it back.
             t.on_stream_frame(&mut pool, 0, round * 1400, &payload, false).unwrap();
-            while let Some(c) = t.read_chunk(&pool, 0) {
+            while let Some(c) = t.read_chunk(pool.mem(), 0) {
                 let n = c.len();
                 t.consume(&mut pool, 0, n, round * 1000, 500).unwrap();
             }

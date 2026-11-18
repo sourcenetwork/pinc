@@ -812,6 +812,9 @@ pub struct NodeStats {
     /// ([`Endpoint::session_taken`](crate::Endpoint::session_taken)): their handshakes are under way, or their
     /// `Incoming` waits to be read.
     pub owed: usize,
+    /// The chunk store of an endpoint that owns its table ([`Endpoint::new_owned`](crate::Endpoint::new_owned)), the
+    /// memory of every slot's buffer pool, charged in full when the endpoint is built; all zero for another endpoint.
+    pub store: pinc_transport::stream::store::StoreStats,
 }
 
 /// A peer in the round-trip table.

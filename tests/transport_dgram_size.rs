@@ -38,13 +38,13 @@ fn resumed_exchange(len: usize) -> Vec<(bool, Vec<u8>)> {
     let log: Log = Rc::default();
     let sink = log.clone();
     net.on_tx = Some(Box::new(move |is_a, d, _| sink.borrow_mut().push((is_a, d.to_vec()))));
-    let id = net.a.conn.open_bi().unwrap();
-    net.a.conn.write(id, &vec![1; len]).unwrap();
+    let id = net.a.open_bi().unwrap();
+    net.a.write(id, &vec![1; len]).unwrap();
     net.a.conn.finish(id).unwrap();
     let mut answered = false;
     let done = net.run(net.now + 10 * SEC, |n| {
         if !answered && n.b.fin.contains(&id) {
-            n.b.conn.write(id, &vec![2; len]).unwrap();
+            n.b.write(id, &vec![2; len]).unwrap();
             n.b.conn.finish(id).unwrap();
             answered = true;
         }

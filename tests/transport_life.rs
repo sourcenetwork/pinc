@@ -94,7 +94,7 @@ fn one_close_then_the_state_is_freed() {
         assert_eq!(net.b.tx_log.len(), b_sent);
         assert_eq!(net.a.tx_log.len(), a_sent);
         assert!(net.a.conn.poll_timeout().is_none() && net.b.conn.poll_timeout().is_none());
-        assert!(net.b.conn.open_bi().is_err());
+        assert!(net.b.open_bi().is_err());
     });
 }
 
@@ -117,15 +117,15 @@ fn a_held_back_stream_does_not_discard_the_frames_behind_it_in_its_packet() {
         net.b.auto_read = false;
         // The opener ignores the credit the server gave: the held-back rule is the net under test.
         net.a.conn.raise_stream_credit(100);
-        let parked = net.a.conn.open_bi().unwrap();
-        net.a.conn.write(parked, &[9; 100]).unwrap();
+        let parked = net.a.open_bi().unwrap();
+        net.a.write(parked, &[9; 100]).unwrap();
         net.run(net.now + SEC, |_| false);
-        let (first, second) = (net.a.conn.open_bi().unwrap(), net.a.conn.open_bi().unwrap());
+        let (first, second) = (net.a.open_bi().unwrap(), net.a.open_bi().unwrap());
         // The second stream is served first, so its frame leads the packet that carries the first stream's bytes.
         net.a.conn.set_urgency(second, 0).unwrap();
         let (d1, d2) = (pattern(30_000, 61), pattern(100, 62));
         for (id, d) in [(first, &d1), (second, &d2)] {
-            assert_eq!(net.a.conn.write(id, d).unwrap(), d.len());
+            assert_eq!(net.a.write(id, d).unwrap(), d.len());
             net.a.conn.finish(id).unwrap();
         }
         let ok = net.run(net.now + 60 * SEC, |n| {
@@ -155,10 +155,10 @@ fn a_stream_the_pool_cannot_hold_waits_unacknowledged_and_is_delivered_once_ther
         net.b.auto_read = false;
         // The opener ignores the credit the server gave: the held-back rule is the net under test.
         net.a.conn.raise_stream_credit(100);
-        let ids: Vec<u64> = (0..5).map(|_| net.a.conn.open_bi().unwrap()).collect();
+        let ids: Vec<u64> = (0..5).map(|_| net.a.open_bi().unwrap()).collect();
         let data: Vec<Vec<u8>> = (0..5).map(|i| pattern(20_000 + 1_000 * i, 50 + i as u64)).collect();
         for (id, d) in ids.iter().zip(&data) {
-            assert_eq!(net.a.conn.write(*id, d).unwrap(), d.len());
+            assert_eq!(net.a.write(*id, d).unwrap(), d.len());
             net.a.conn.finish(*id).unwrap();
         }
         // Nothing is read, so the pool stays full: the streams beyond it keep being retried, without a reset.
@@ -192,8 +192,8 @@ fn a_restarted_peer_is_caught_by_the_give_up() {
         // From the client this looks like a peer that went silent, and the give-up closes the connection.
         let gone = Params::new(10 * MS).loss(100.0);
         net.link.set(PathId(1), gone, gone);
-        let id = net.a.conn.open_bi().unwrap();
-        net.a.conn.write(id, b"anyone there").unwrap();
+        let id = net.a.open_bi().unwrap();
+        net.a.write(id, b"anyone there").unwrap();
         let ok = net.run(net.now + 400 * SEC, |n| n.a.closed().is_some());
         assert!(ok, "the client must give up");
         assert_eq!(net.a.closed(), Some(CloseReason::PathDead));
@@ -204,7 +204,7 @@ fn a_restarted_peer_is_caught_by_the_give_up() {
 /// B sends `size` bytes to A on a new stream; returns the stream id.
 fn serve(net: &mut Net<'_, '_>, data: &[u8], off: &mut usize, id: u64) {
     while *off < data.len() {
-        let k = net.b.conn.write(id, &data[*off..]).unwrap();
+        let k = net.b.write(id, &data[*off..]).unwrap();
         if k == 0 {
             break;
         }
@@ -219,7 +219,7 @@ fn sleep_and_wake_resume_a_transfer_without_collapse() {
         let (mut sa, mut sb) = (Store::new(true), Store::new(false));
         let mut net = connected(&mut w, &mut sa, &mut sb, Link::new(8, Params::new(10 * MS)));
         let data = pattern(8 << 20, 9);
-        let id = net.b.conn.open_bi().unwrap();
+        let id = net.b.open_bi().unwrap();
         let mut off = 0;
         // The server sends; the client sleeps part way through.
         net.run(net.now + 60 * SEC, |n| {
@@ -318,7 +318,7 @@ fn a_link_outage_freezes_the_probe_backoff() {
         let (mut sa, mut sb) = (Store::new(true), Store::new(false));
         let mut net = connected(&mut w, &mut sa, &mut sb, Link::new(10, Params::new(10 * MS)));
         let data = pattern(4 << 20, 11);
-        let id = net.b.conn.open_bi().unwrap();
+        let id = net.b.open_bi().unwrap();
         let mut off = 0;
         net.run(net.now + 60 * SEC, |n| {
             serve(n, &data, &mut off, id);
@@ -385,8 +385,8 @@ fn early_one_rtt_packets_wait_for_the_finish() {
         let mut id = None;
         let ok = net.run(net.now + 20 * SEC, |n| {
             if id.is_none() && n.a.conn.is_connected() {
-                let s = n.a.conn.open_bi().unwrap();
-                n.a.conn.write(s, b"before the finish").unwrap();
+                let s = n.a.open_bi().unwrap();
+                n.a.write(s, b"before the finish").unwrap();
                 n.a.conn.finish(s).unwrap();
                 id = Some(s);
             }
@@ -447,8 +447,8 @@ fn tail_repair_covers_a_lost_last_packet() {
         // Let the connection age and the shared loss average build up.
         for round in 0..300u64 {
             let data = pattern(3_000, round);
-            let id = net.a.conn.open_uni().unwrap();
-            net.a.conn.write(id, &data).unwrap();
+            let id = net.a.open_uni().unwrap();
+            net.a.write(id, &data).unwrap();
             net.a.conn.finish(id).unwrap();
             assert!(net.run(net.now + 60 * SEC, |n| n.b.fin.contains(&id)), "round {round}");
             assert!(net.b.read[&id] == data);
@@ -467,8 +467,8 @@ fn net_with_a_repair_pending<'a>(w: &'a mut World, sa: &'a mut Store, sb: &'a mu
     net.buf.truncate(room);
     assert!(net.connect(net.now + 30 * SEC), "{:?}", net.rx_drops);
     net.run(net.now + 3 * SEC, |_| false);
-    let id = net.a.conn.open_uni().unwrap();
-    net.a.conn.write(id, &pattern(100, 7)).unwrap();
+    let id = net.a.open_uni().unwrap();
+    net.a.write(id, &pattern(100, 7)).unwrap();
     net.a.conn.finish(id).unwrap();
     assert!(poll_a(&mut net).is_some(), "the stream packet leaves");
     assert_eq!(net.a.conn.stats().repairs, 0, "{:?}", net.a.conn.stats());
@@ -485,13 +485,7 @@ fn poll_a(net: &mut Net<'_, '_>) -> Option<usize> {
     };
     net.a
         .conn
-        .poll_transmit(
-            &mut env,
-            &mut Lent {
-                spill: &mut net.a.spill,
-            },
-            &mut net.buf,
-        )
+        .poll_transmit(&mut env, lent!(net.a), &mut net.buf)
         .map(|t| t.len)
 }
 
@@ -534,8 +528,8 @@ fn a_node_that_serves_a_relay_sends_no_tail_repair() {
         let mut net = connected(&mut w, &mut sa, &mut sb, Link::new(14, Params::new(10 * MS).loss(8.0)));
         for round in 0..300u64 {
             let data = pattern(3_000, round);
-            let id = net.a.conn.open_uni().unwrap();
-            net.a.conn.write(id, &data).unwrap();
+            let id = net.a.open_uni().unwrap();
+            net.a.write(id, &data).unwrap();
             net.a.conn.finish(id).unwrap();
             assert!(net.run(net.now + 60 * SEC, |n| n.b.fin.contains(&id)), "round {round}");
             net.run(net.now + 30 * MS, |_| false);
@@ -555,8 +549,8 @@ fn a_tail_repair_of_a_small_packet_is_not_padded_to_the_full_size_when_datagrams
         let before = net.a.tx_log.len();
         for round in 0..300u64 {
             let data = pattern(100, round);
-            let id = net.a.conn.open_uni().unwrap();
-            net.a.conn.write(id, &data).unwrap();
+            let id = net.a.open_uni().unwrap();
+            net.a.write(id, &data).unwrap();
             net.a.conn.finish(id).unwrap();
             assert!(net.run(net.now + 60 * SEC, |n| n.b.fin.contains(&id)), "round {round}");
             net.run(net.now + 30 * MS, |_| false);
@@ -598,7 +592,7 @@ fn every_path_gets_its_own_connection_id() {
             .unwrap();
         net.run(net.now + 3 * SEC, |_| false);
         net.a.conn.set_active(PathId(3)).unwrap();
-        net.a.conn.send_datagram(b"x").unwrap();
+        net.a.conn.send_datagram(lent!(net.a), b"x").unwrap();
         net.run(net.now + SEC, |_| false);
         let mut ids: Vec<Vec<u8>> = seen.borrow().iter().map(|s| s.1.clone()).collect();
         ids.sort();
@@ -635,8 +629,8 @@ fn a_path_is_not_size_probed_while_a_packet_sent_on_another_path_is_in_flight() 
             "a path that is not active is not probed"
         );
         // A packet leaves on the first path and the session moves to the other before it is acknowledged.
-        let id = net.a.conn.open_uni().unwrap();
-        net.a.conn.write(id, &pattern(100, 3)).unwrap();
+        let id = net.a.open_uni().unwrap();
+        net.a.write(id, &pattern(100, 3)).unwrap();
         assert!(
             poll_a(&mut net).is_some_and(|n| n < 700),
             "the data packet leaves on the first path"
@@ -734,12 +728,12 @@ fn the_pool_budget_is_never_exceeded() {
         let p = Params::new(10 * MS).loss(2.0).reorder(2.0, 3 * MS);
         let mut net = connected(&mut w, &mut sa, &mut sb, Link::new(17, p));
         let data = pattern(16 << 20, 18);
-        let id = net.a.conn.open_bi().unwrap();
+        let id = net.a.open_bi().unwrap();
         let (mut off, mut finished) = (0, false);
         let (mut max_a, mut max_b) = (0, 0);
         let ok = net.run(net.now + 900 * SEC, |n| {
             while off < data.len() {
-                let k = n.a.conn.write(id, &data[off..]).unwrap();
+                let k = n.a.write(id, &data[off..]).unwrap();
                 if k == 0 {
                     break;
                 }
@@ -750,8 +744,8 @@ fn the_pool_budget_is_never_exceeded() {
                 finished = true;
             }
             for _ in 0..4 {
-                n.a.conn.send_datagram(&[7; 900]).ok();
-                n.b.conn.send_datagram(&[8; 900]).ok();
+                n.a.conn.send_datagram(lent!(n.a), &[7; 900]).ok();
+                n.b.conn.send_datagram(lent!(n.b), &[8; 900]).ok();
             }
             max_a = max_a.max(n.a.conn.pool().used_bytes());
             max_b = max_b.max(n.b.conn.pool().used_bytes());
@@ -782,21 +776,21 @@ fn steady_state_allocates_nothing() {
         let stores = net.stores;
         let (mut a, mut b) = (net.a, net.b);
         let mut now = net.now;
-        let sid = a.conn.open_bi().unwrap();
+        let sid = a.open_bi().unwrap();
         let chunk = [0x5au8; 8192];
         let mut abuf = vec![0u8; 4096];
         let mut bbuf = vec![0u8; 4096];
         // Warm up the direct pump itself, then measure a window of the transfer.
         for _ in 0..300 {
             now += MS;
-            a.conn.write(sid, &chunk).ok();
+            a.write(sid, &chunk).ok();
             pump(&mut a, &mut b, stores, &mut abuf, &mut bbuf, sid, now);
         }
         let before = a.conn.stats().packets_sent + b.conn.stats().packets_sent;
         let stats = measure(|| {
             for _ in 0..2_000 {
                 now += MS;
-                a.conn.write(sid, &chunk).ok();
+                a.write(sid, &chunk).ok();
                 pump(&mut a, &mut b, stores, &mut abuf, &mut bbuf, sid, now);
             }
         });
@@ -821,40 +815,43 @@ fn pump(a: &mut Node<'_>, b: &mut Node<'_>, stores: &mut Stores, abuf: &mut [u8]
             now,
             drbg: &mut b.drbg,
         };
-        while let Some(t) = a.conn.poll_transmit(&mut ea, &mut Lent { spill: &mut a.spill }, abuf) {
+        while let Some(t) = a.conn.poll_transmit(&mut ea, lent!(a), abuf) {
             b.conn
-                .handle_datagram_with(
-                    &mut eb,
-                    &mut Lent { spill: &mut b.spill },
-                    stores,
-                    PathId(2),
-                    &mut abuf[..t.len],
-                )
+                .handle_datagram_with(&mut eb, lent!(b), stores, PathId(2), &mut abuf[..t.len])
                 .ok();
             any = true;
         }
-        while let Some(t) = b.conn.poll_transmit(&mut eb, &mut Lent { spill: &mut b.spill }, bbuf) {
+        while let Some(t) = b.conn.poll_transmit(&mut eb, lent!(b), bbuf) {
             a.conn
-                .handle_datagram(
-                    &mut ea,
-                    &mut Lent { spill: &mut a.spill },
-                    PathId(1),
-                    &mut bbuf[..t.len],
-                )
+                .handle_datagram(&mut ea, lent!(a), PathId(1), &mut bbuf[..t.len])
                 .ok();
             any = true;
         }
-        while a.conn.poll_event().is_some() {}
-        while b.conn.poll_event().is_some() {}
-        while let Some(c) = b.conn.read_chunk(sid) {
+        while a
+            .conn
+            .poll_event(Lent {
+                spill: &mut a.spill,
+                store: &mut a.store,
+            })
+            .is_some()
+        {}
+        while b
+            .conn
+            .poll_event(Lent {
+                spill: &mut b.spill,
+                store: &mut b.store,
+            })
+            .is_some()
+        {}
+        while let Some(c) = b.conn.read_chunk(&b.store, sid) {
             let n = c.len();
-            b.conn.consume(&mut eb, &mut Lent { spill: &mut b.spill }, sid, n).ok();
+            b.conn.consume(&mut eb, lent!(b), sid, n).ok();
         }
         if a.conn.poll_timeout().is_some_and(|t| t <= now) {
-            a.conn.handle_timeout(&mut ea, &mut Lent { spill: &mut a.spill });
+            a.conn.handle_timeout(&mut ea, lent!(a));
         }
         if b.conn.poll_timeout().is_some_and(|t| t <= now) {
-            b.conn.handle_timeout(&mut eb, &mut Lent { spill: &mut b.spill });
+            b.conn.handle_timeout(&mut eb, lent!(b));
         }
         if !any {
             break;
@@ -885,8 +882,8 @@ proptest! {
                 let _ = net.b.with_lent(now, |c, env, l| c.handle_datagram_with(env, l, &mut *net.stores, PathId(2), &mut d));
             }
             assert!(net.connect(net.now + 30 * SEC));
-            let id = net.a.conn.open_bi().unwrap();
-            net.a.conn.write(id, &vec![1; 20_000]).unwrap();
+            let id = net.a.open_bi().unwrap();
+            net.a.write(id, &vec![1; 20_000]).unwrap();
             net.run(net.now + SEC, |_| false);
             // Then junk and altered copies of real packets, at both ends of a live connection.
             let real = seen.borrow().clone();
@@ -909,7 +906,7 @@ proptest! {
             }
             net.run(net.now + 10 * SEC, |_| false);
             if net.a.closed().is_none() && net.b.closed().is_none() {
-                net.a.conn.write(id, &[2; 100]).unwrap();
+                net.a.write(id, &[2; 100]).unwrap();
                 net.a.conn.finish(id).unwrap();
                 assert!(net.run(net.now + 30 * SEC, |n| n.b.fin.contains(&id)), "the connection still works");
             }

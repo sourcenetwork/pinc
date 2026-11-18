@@ -102,7 +102,7 @@ ep_impl! {
             path_info: PathInfo { interface_mtu: self.cfg.conn.interface_mtu, ..PathInfo::default() },
         };
         let mut env = env!(self, now);
-        let conn = match Connection::sub_session(cfg, open, mem, &mut env) {
+        let conn = match Connection::sub_session(cfg, open, mem, &mut lent!(self), &mut env) {
             Ok(c) => c,
             Err(e) => {
                 self.retire_slot(child);
@@ -182,7 +182,7 @@ ep_impl! {
         let queued = self.slots.get_mut(parent).and_then(|s| {
             s.m.has_sub = true;
             s.m.ctrl_pending = true;
-            s.conn.as_mut().map(|c| c.send_extension(ext::SUB_SESSION_OPEN, body.get(..used).unwrap_or_default()))
+            s.conn.as_mut().map(|c| c.send_extension(&mut lent!(self), ext::SUB_SESSION_OPEN, body.get(..used).unwrap_or_default()))
         });
         matches!(queued, Some(Ok(())))
     }
@@ -247,7 +247,7 @@ ep_impl! {
         let cfg = self.conn_config(Some(&peer));
         let open = SubWait { alpn, cc, cs, identity: self.identity, path, path_info: PathInfo { interface_mtu: self.cfg.conn.interface_mtu, ..PathInfo::default() } };
         let mut env = env!(self, now);
-        let conn = match Connection::sub_pending(cfg, open, mem, &mut env) {
+        let conn = match Connection::sub_pending(cfg, open, mem, &mut lent!(self), &mut env) {
             Ok(c) => c,
             Err(e) => {
                 self.retire_slot(child);
@@ -294,7 +294,7 @@ ep_impl! {
                 .slots
                 .get_mut(c)
                 .and_then(|s| s.conn.as_mut())
-                .is_some_and(|k| k.activate_sub(&mut env, &est, alpn).is_ok());
+                .is_some_and(|k| k.activate_sub(&mut env, &mut lent!(self), &est, alpn).is_ok());
             if let Some(s) = self.slots.get_mut(c) {
                 s.m.waiting = false;
             }
@@ -357,7 +357,7 @@ ep_impl! {
             path_info: PathInfo { interface_mtu: self.cfg.conn.interface_mtu, ..PathInfo::default() },
         };
         let mut env = env!(self, now);
-        let Ok(conn) = Connection::sub_session(cfg, open, mem, &mut env) else {
+        let Ok(conn) = Connection::sub_session(cfg, open, mem, &mut lent!(self), &mut env) else {
             self.retire_slot(child);
             return;
         };

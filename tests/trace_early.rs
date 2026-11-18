@@ -477,8 +477,8 @@ fn resumed_run(out: &mut String, run: u32, name: &str, raw: &[u8], refuse: bool)
         &mut world.stores,
     );
     net.a.conn.inject_frames(raw);
-    let id = net.a.conn.open_bi().unwrap();
-    net.a.conn.write(id, b"early bytes").unwrap();
+    let id = net.a.open_bi().unwrap();
+    net.a.write(id, b"early bytes").unwrap();
     net.a.conn.finish(id).unwrap();
     // The client's first datagram, built by hand and never sent on the link: the Hello, then one 0-RTT packet.
     let now = net.now;

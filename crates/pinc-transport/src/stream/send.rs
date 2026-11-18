@@ -190,8 +190,10 @@ impl<S: StreamSource, const C: usize> Send<S, C> {
             0 => 0,
             at => CHUNK_SIZE as u64 - at,
         };
+        let fits = want.min(stream_credit).min(room).min(ring_room);
+        pool.make_room(fits.saturating_sub(tail_room));
         let pool_room = pool.available_bytes() + tail_room;
-        let n = want.min(stream_credit).min(room).min(ring_room).min(pool_room);
+        let n = fits.min(pool_room);
         self.cap_cut |= room <= n && room < want;
         let n = n as usize;
         self.ring.write(pool, self.written, data.get(..n).unwrap_or(&[]))?;

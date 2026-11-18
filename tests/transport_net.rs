@@ -92,7 +92,7 @@ fn black_hole_falls_back_to_the_minimum_size() {
         assert_eq!(net.a.conn.path_mtu(PathId(1)), Some(1452));
         // The path shrinks under a running transfer: full-size packets vanish.
         let data = pattern(3 << 20, 6);
-        let id = net.a.conn.open_bi().unwrap();
+        let id = net.a.open_bi().unwrap();
         let mut off = 0;
         let mut shrunk = false;
         let mut finished = false;
@@ -106,7 +106,7 @@ fn black_hole_falls_back_to_the_minimum_size() {
                 shrunk = true;
             }
             while off < data.len() {
-                let k = n.a.conn.write(id, &data[off..]).unwrap();
+                let k = n.a.write(id, &data[off..]).unwrap();
                 if k == 0 {
                     break;
                 }
@@ -136,11 +136,11 @@ fn key_update_during_a_transfer() {
         let (_, id) = bulk(&mut net, &data, 600 * SEC);
         let back = pattern(3 << 20, 9);
         // And the other way, so both directions update.
-        let id2 = net.b.conn.open_bi().unwrap();
+        let id2 = net.b.open_bi().unwrap();
         let mut off = 0;
         let ok = net.run(net.now + 600 * SEC, |n| {
             while off < back.len() {
-                let k = n.b.conn.write(id2, &back[off..]).unwrap();
+                let k = n.b.write(id2, &back[off..]).unwrap();
                 if k == 0 {
                     break;
                 }
@@ -212,12 +212,12 @@ fn a_path_rebound_to_a_new_local_address_carries_the_wake_and_the_resent_data_at
         let mut link = Link::new(14, Params::new(150 * MS));
         link.add_route(PathId(3), PathId(4), Params::new(150 * MS), Params::new(150 * MS));
         let mut net = connected(&mut w, &mut sa, &mut sb, link);
-        let (up, down) = (net.a.conn.open_bi().unwrap(), net.b.conn.open_bi().unwrap());
+        let (up, down) = (net.a.open_bi().unwrap(), net.b.open_bi().unwrap());
         let (to_server, to_client) = (pattern(3000, 5), pattern(3000, 6));
         // Both sides send, and the client's old address then goes away: both segments are lost on the old route.
         net.link.route(PathId(1)).up = false;
-        net.a.conn.write(up, &to_server).unwrap();
-        net.b.conn.write(down, &to_client).unwrap();
+        net.a.write(up, &to_server).unwrap();
+        net.b.write(down, &to_client).unwrap();
         net.run(net.now + MS, |_| false);
         let ptos_before = (net.a.conn.stats().ptos, net.b.conn.stats().ptos);
         let now = net.now;
@@ -264,7 +264,7 @@ fn nat_rebinding_keeps_the_transfer_alive() {
         let (mut sa, mut sb) = (Store::new(true), Store::new(false));
         let mut net = connected(&mut w, &mut sa, &mut sb, Link::new(12, Params::new(10 * MS).loss(0.5)));
         let data = pattern(6 << 20, 13);
-        let id = net.a.conn.open_bi().unwrap();
+        let id = net.a.open_bi().unwrap();
         let (mut off, mut rebound, mut finished) = (0, false, false);
         let ok = net.run(net.now + 120 * SEC, |n| {
             if !rebound && n.b.read.get(&id).map_or(0, Vec::len) > (1 << 20) {
@@ -272,7 +272,7 @@ fn nat_rebinding_keeps_the_transfer_alive() {
                 rebound = true;
             }
             while off < data.len() {
-                let k = n.a.conn.write(id, &data[off..]).unwrap();
+                let k = n.a.write(id, &data[off..]).unwrap();
                 if k == 0 {
                     break;
                 }
@@ -502,8 +502,8 @@ fn a_path_the_endpoint_adds_is_unheard_until_a_datagram_arrives_on_it() {
         );
         // The direct path dies under data and the session falls back to the relay path, silent too.
         net.link.route(PathId(1)).up = false;
-        let id = net.a.conn.open_uni().unwrap();
-        net.a.conn.write(id, &pattern(10_000, 24)).unwrap();
+        let id = net.a.open_uni().unwrap();
+        net.a.write(id, &pattern(10_000, 24)).unwrap();
         assert!(net.run(net.now + 60 * SEC, |n| n.a.conn.active_path() == Some(PathId(3))));
         assert_eq!(
             net.a.conn.path_last_rx(PathId(3)),
@@ -535,8 +535,8 @@ fn relay_path_goes_silent(carrier_answers: bool, pulses: bool) -> Option<u64> {
     assert_eq!(net.a.conn.active_path(), Some(PathId(3)));
     // The relay path stops answering while data is in flight.
     net.link.route(PathId(3)).up = false;
-    let id = net.a.conn.open_uni().unwrap();
-    net.a.conn.write(id, &pattern(50_000, 22)).unwrap();
+    let id = net.a.open_uni().unwrap();
+    net.a.write(id, &pattern(50_000, 22)).unwrap();
     let start = net.now;
     while net.now < start + 8 * SEC && net.a.closed().is_none() {
         if carrier_answers {
@@ -593,8 +593,8 @@ fn a_session_with_a_long_round_trip_challenges_its_lost_direct_path_at_most_once
         net.b.with_env(now, |c, env| c.add_path(env, PathId(4), relay)).unwrap();
         assert!(net.run(net.now + 10 * SEC, |n| n.a.conn.path_validated(PathId(3))));
         net.link.route(PathId(1)).up = false;
-        let id = net.a.conn.open_uni().unwrap();
-        net.a.conn.write(id, &pattern(100_000, 23)).unwrap();
+        let id = net.a.open_uni().unwrap();
+        net.a.write(id, &pattern(100_000, 23)).unwrap();
         assert!(net.run(net.now + 120 * SEC, |n| n.a.conn.active_path() == Some(PathId(3))));
         let mark = net.a.tx_log.len();
         net.run(net.now + 15 * SEC, |_| false);
@@ -700,7 +700,10 @@ fn a_black_hole_is_detected_and_the_mtu_falls_to_the_minimum() {
         // then the full-size retransmission of the held frame.
         let p = Params::new(10 * MS).mtu(1200);
         net.link.set(PathId(1), p, p);
-        net.a.conn.send_extension(ext::TEST_FIRST, &vec![5u8; big]).unwrap();
+        net.a
+            .conn
+            .send_extension(lent!(net.a), ext::TEST_FIRST, &vec![5u8; big])
+            .unwrap();
         assert!(net.run(net.now + 60 * SEC, |n| n.a.conn.path_mtu(PathId(1)) == Some(1200)));
         assert!(
             net.a.saw(|r| *r == Rec::ExtensionUndeliverable(ext::TEST_FIRST, big)),
@@ -714,7 +717,10 @@ fn a_black_hole_is_detected_and_the_mtu_falls_to_the_minimum() {
         // The path works at the new size: a frame that fits is delivered.
         let max = net.a.conn.max_extension_size(0x41);
         assert!(max < big);
-        net.a.conn.send_extension(ext::TEST_FIRST + 1, &vec![6u8; max]).unwrap();
+        net.a
+            .conn
+            .send_extension(lent!(net.a), ext::TEST_FIRST + 1, &vec![6u8; max])
+            .unwrap();
         assert!(net.run(net.now + 30 * SEC, |n| {
             n.b.saw(|r| *r == Rec::Extension(ext::TEST_FIRST + 1, vec![6u8; max]))
         }));
@@ -737,11 +743,11 @@ fn a_black_hole_drops_at_the_first_probe_timeout_and_the_next_probe_waits_for_a_
             Params::new(10 * MS).mtu(1300),
         );
         let data = pattern(2 << 20, 7);
-        let id = net.a.conn.open_bi().unwrap();
+        let id = net.a.open_bi().unwrap();
         let mut off = 0;
         let ok = net.run(net.now + 60 * SEC, |n| {
             while off < data.len() {
-                let k = n.a.conn.write(id, &data[off..]).unwrap();
+                let k = n.a.write(id, &data[off..]).unwrap();
                 if k == 0 {
                     break;
                 }

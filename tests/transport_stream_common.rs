@@ -67,7 +67,7 @@ pub fn read_all<S: StreamSource, const N: usize, const C: usize>(
     id: u64,
 ) -> Vec<u8> {
     let mut out = Vec::new();
-    while let Some(chunk) = t.read_chunk(pool, id) {
+    while let Some(chunk) = t.read_chunk(pool.mem(), id) {
         let n = chunk.len();
         out.extend_from_slice(chunk);
         t.consume(pool, id, n, 0, 0).unwrap();

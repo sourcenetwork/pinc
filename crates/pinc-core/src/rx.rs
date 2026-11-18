@@ -449,7 +449,7 @@ ep_impl! {
             ticket_lifetime_s: self.cfg.ticket_lifetime_s,
         };
         let mut env: Env<'_, P> = env!(self, now);
-        let Ok(conn) = Connection::server(cfg, &params, mem, &mut env) else {
+        let Ok(conn) = Connection::server(cfg, &params, mem, &mut lent!(self), &mut env) else {
             self.retire_slot(i);
             return None;
         };

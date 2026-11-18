@@ -68,7 +68,7 @@ fn bench_receive(c: &mut Criterion) {
                     table
                         .on_stream_frame(&mut pool, id, offset, black_box(&payload), fin)
                         .unwrap();
-                    while let Some(chunk) = table.read_chunk(&pool, id) {
+                    while let Some(chunk) = table.read_chunk(pool.mem(), id) {
                         let n = chunk.len();
                         read += n;
                         table.consume(&mut pool, id, n, 0, 0).unwrap();

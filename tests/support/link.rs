@@ -44,6 +44,7 @@ use pinc_transport::conn::{
 use pinc_transport::recovery::LossEstimate;
 use pinc_transport::stream::pool::BufferPool;
 use pinc_transport::stream::spill::SpillArena;
+use pinc_transport::stream::store::ChunkStore;
 use pinc_transport::stream::{self, NoSource, RecvStatus, Streams};
 
 use crate::{Link, Params, SplitMix64};
@@ -250,9 +251,34 @@ pub struct Node<'a, const C: usize = RING, const F: usize = 512> {
     pub fail_keys: bool,
     /// The arena this node lends its connection; empty unless a test gives it slots.
     pub spill: SpillArena<'a>,
+    /// The chunk store this node lends its connection; empty, as its pool has memory of its own.
+    pub store: ChunkStore,
 }
 
 impl<'a, const C: usize, const F: usize> Node<'a, C, F> {
+    /// The arena and the store this node lends its connection for one call.
+    pub fn lent(&mut self) -> Lent<'_, 'a> {
+        Lent {
+            spill: &mut self.spill,
+            store: &mut self.store,
+        }
+    }
+
+    /// Open a bidirectional stream.
+    pub fn open_bi(&mut self) -> Result<u64, pinc_transport::stream::StreamError> {
+        self.conn.open_bi(crate::lent!(self))
+    }
+
+    /// Open a unidirectional stream.
+    pub fn open_uni(&mut self) -> Result<u64, pinc_transport::stream::StreamError> {
+        self.conn.open_uni(crate::lent!(self))
+    }
+
+    /// Buffer `data` on stream `id`; returns how many bytes were taken.
+    pub fn write(&mut self, id: u64, data: &[u8]) -> Result<usize, pinc_transport::stream::StreamError> {
+        self.conn.write(crate::lent!(self), id, data)
+    }
+
     /// Drain events: answer key requests, store tickets, read streams and datagrams.
     pub fn service(&mut self, now: u64) {
         loop {
@@ -260,7 +286,10 @@ impl<'a, const C: usize, const F: usize> Node<'a, C, F> {
             let mut new_tickets: Option<TicketBatch> = None;
             let mut readable: Vec<u64> = Vec::new();
             let mut datagram = false;
-            while let Some(ev) = self.conn.poll_event() {
+            while let Some(ev) = self.conn.poll_event(Lent {
+                spill: &mut self.spill,
+                store: &mut self.store,
+            }) {
                 let rec = match ev {
                     Event::KeyRequest(req) => {
                         if self.auto_keys {
@@ -322,9 +351,9 @@ impl<'a, const C: usize, const F: usize> Node<'a, C, F> {
                 self.conn.store_tickets(&mut self.tickets, &b, now);
             }
             if datagram {
-                while let Some(d) = self.conn.recv_datagram() {
+                while let Some(d) = self.conn.recv_datagram(&self.store) {
                     self.dgrams.push(d.to_vec());
-                    self.conn.pop_datagram();
+                    self.conn.pop_datagram(crate::lent!(self));
                 }
             }
             if self.auto_read {
@@ -342,7 +371,8 @@ impl<'a, const C: usize, const F: usize> Node<'a, C, F> {
                     now,
                     drbg: &mut self.drbg,
                 };
-                while self.conn.answer_soft(&mut env, &soft).unwrap_or(false) {}
+                let lent = crate::lent!(self);
+                while self.conn.answer_soft(&mut env, lent, &soft).unwrap_or(false) {}
                 continue;
             }
             break;
@@ -356,24 +386,14 @@ impl<'a, const C: usize, const F: usize> Node<'a, C, F> {
             now,
             drbg: &mut self.drbg,
         };
-        while let Some(chunk) = self.conn.read_chunk(id) {
+        while let Some(chunk) = self.conn.read_chunk(&self.store, id) {
             let n = chunk.len();
             self.read.entry(id).or_default().extend_from_slice(chunk);
-            if self
-                .conn
-                .consume(&mut env, &mut Lent { spill: &mut self.spill }, id, n)
-                .unwrap()
-                == RecvStatus::Finished
-            {
+            if self.conn.consume(&mut env, crate::lent!(self), id, n).unwrap() == RecvStatus::Finished {
                 self.fin.insert(id);
             }
         }
-        if self
-            .conn
-            .consume(&mut env, &mut Lent { spill: &mut self.spill }, id, 0)
-            .ok()
-            == Some(RecvStatus::Finished)
-        {
+        if self.conn.consume(&mut env, crate::lent!(self), id, 0).ok() == Some(RecvStatus::Finished) {
             self.fin.insert(id);
         }
     }
@@ -399,16 +419,16 @@ impl<'a, const C: usize, const F: usize> Node<'a, C, F> {
             now,
             drbg: &mut self.drbg,
         };
-        f(&mut self.conn, &mut env, &mut Lent { spill: &mut self.spill })
+        f(&mut self.conn, &mut env, crate::lent!(self))
     }
 
     /// Deliver the held key answer.
     pub fn deliver_deferred(&mut self, now: u64) -> Result<(), pinc_security::Failure> {
         let held = self.deferred.take().unwrap();
-        self.with_env(now, |c, env| match held {
-            Deferred::Signature(s) => c.on_key_response(env, pinc_security::KeyResponse::Signature(&s)),
-            Deferred::Secret(s) => c.on_key_response(env, pinc_security::KeyResponse::SharedSecret(s)),
-            Deferred::Failed => c.on_key_response(env, pinc_security::KeyResponse::Failed),
+        self.with_lent(now, |c, env, l| match held {
+            Deferred::Signature(s) => c.on_key_response(env, l, pinc_security::KeyResponse::Signature(&s)),
+            Deferred::Secret(s) => c.on_key_response(env, l, pinc_security::KeyResponse::SharedSecret(s)),
+            Deferred::Failed => c.on_key_response(env, l, pinc_security::KeyResponse::Failed),
         })
     }
 
@@ -501,6 +521,10 @@ impl World {
                 path_info: PathInfo::default(),
             },
             store.resources(),
+            &mut Lent {
+                spill: &mut SpillArena::default(),
+                store: &mut ChunkStore::default(),
+            },
             &mut env,
         )
         .unwrap();
@@ -521,6 +545,7 @@ impl World {
             deferred: None,
             fail_keys: false,
             spill: SpillArena::default(),
+            store: ChunkStore::default(),
         }
     }
 
@@ -542,6 +567,10 @@ impl World {
                 ticket_lifetime_s: 86_400,
             },
             store.resources(),
+            &mut Lent {
+                spill: &mut SpillArena::default(),
+                store: &mut ChunkStore::default(),
+            },
             &mut env,
         )
         .unwrap();
@@ -562,6 +591,7 @@ impl World {
             deferred: None,
             fail_keys: false,
             spill: SpillArena::default(),
+            store: ChunkStore::default(),
         }
     }
 }
@@ -632,10 +662,7 @@ impl<'a, 'b, const C: usize, const F: usize> Net<'a, 'b, C, F> {
                         now,
                         drbg: &mut node.drbg,
                     };
-                    let Some(t) =
-                        node.conn
-                            .poll_transmit(&mut env, &mut Lent { spill: &mut node.spill }, &mut self.buf)
-                    else {
+                    let Some(t) = node.conn.poll_transmit(&mut env, crate::lent!(node), &mut self.buf) else {
                         break;
                     };
                     progress = true;
@@ -694,15 +721,11 @@ impl<'a, 'b, const C: usize, const F: usize> Net<'a, 'b, C, F> {
                 now: *now,
                 drbg: &mut self.b.drbg,
             };
-            if let Err(e) = self.b.conn.handle_datagram_with(
-                &mut env,
-                &mut Lent {
-                    spill: &mut self.b.spill,
-                },
-                self.stores,
-                p,
-                &mut d,
-            ) {
+            if let Err(e) = self
+                .b
+                .conn
+                .handle_datagram_with(&mut env, crate::lent!(self.b), self.stores, p, &mut d)
+            {
                 self.rx_drops.push((false, e));
             }
             progress = true;
@@ -717,14 +740,7 @@ impl<'a, 'b, const C: usize, const F: usize> Net<'a, 'b, C, F> {
                 now: *now,
                 drbg: &mut self.a.drbg,
             };
-            if let Err(e) = self.a.conn.handle_datagram(
-                &mut env,
-                &mut Lent {
-                    spill: &mut self.a.spill,
-                },
-                p,
-                &mut d,
-            ) {
+            if let Err(e) = self.a.conn.handle_datagram(&mut env, crate::lent!(self.a), p, &mut d) {
                 self.rx_drops.push((true, e));
             }
             progress = true;
@@ -762,7 +778,7 @@ impl<'a, 'b, const C: usize, const F: usize> Net<'a, 'b, C, F> {
                     now,
                     drbg: &mut node.drbg,
                 };
-                node.conn.handle_timeout(&mut env, &mut Lent { spill: &mut node.spill });
+                node.conn.handle_timeout(&mut env, crate::lent!(node));
             }
         }
         true
@@ -841,14 +857,14 @@ pub fn first_session(w: &mut World) -> ClientTickets<8> {
 /// Send `data` on a new bidirectional stream from A and run until B has read it all and A has nothing in flight.
 /// Returns the virtual time the transfer took and the stream id.
 pub fn bulk<const C: usize, const F: usize>(net: &mut Net<'_, '_, C, F>, data: &[u8], timeout: u64) -> (u64, u64) {
-    let id = net.a.conn.open_bi().unwrap();
+    let id = net.a.open_bi().unwrap();
     let mut off = 0;
     let mut finished = false;
     let start = net.now;
     let done = net.run(net.now + timeout, |n| {
         while off < data.len() {
             let end = (off + 256 * 1024).min(data.len());
-            let k = n.a.conn.write(id, &data[off..end]).unwrap();
+            let k = n.a.write(id, &data[off..end]).unwrap();
             if k == 0 {
                 break;
             }

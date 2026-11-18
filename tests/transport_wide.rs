@@ -50,8 +50,8 @@ fn a_window_above_40_mb_selects_the_3_byte_packet_number_and_a_long_transfer_del
         let log: Rc<RefCell<Vec<(bool, usize)>>> = Rc::default();
         let sink = log.clone();
         net.on_tx = Some(Box::new(move |is_a, d, _| sink.borrow_mut().push((is_a, d.len()))));
-        let id = net.a.conn.open_bi().unwrap();
-        net.a.conn.write(id, &[0x42u8; 100]).unwrap();
+        let id = net.a.open_bi().unwrap();
+        net.a.write(id, &[0x42u8; 100]).unwrap();
         net.run(net.now + 200 * MS, |_| false);
         assert!(
             log.borrow()

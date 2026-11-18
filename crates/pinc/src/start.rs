@@ -85,6 +85,10 @@ fn node_config<S: KeyStore, A: Admit>(
 ///
 /// # Errors
 /// [`ErrorKind::Config`](crate::ErrorKind::Config) if the limits or the keys are not usable.
+#[allow(
+    clippy::too_many_lines,
+    reason = "the endpoint, the node and the core, built in the order each needs the last"
+)]
 pub(crate) fn build<S: KeyStore, A: Admit>(mut cfg: CoreConfig<S, A>, now: u64) -> Result<Core<S, A>> {
     cfg.limits.check()?;
     if cfg.alpns.len() > crate::mem::MAX_PROTOCOLS {
@@ -107,6 +111,7 @@ pub(crate) fn build<S: KeyStore, A: Admit>(mut cfg: CoreConfig<S, A>, now: u64) 
         identity,
         ecfg,
         cfg.limits.pool_chunks,
+        cfg.limits.store_chunks(),
         cfg.limits.spill_slots,
     )
     .ok_or_else(|| Error::config("a limit is out of range"))?;

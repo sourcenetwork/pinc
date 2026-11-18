@@ -13,7 +13,7 @@
 )]
 
 use pinc_security::{Env, ResponderStores};
-use pinc_transport::conn::{Drop, KeyEvent, KeysView, Lent, PathId, Transmit};
+use pinc_transport::conn::{Drop, KeyEvent, KeysView, PathId, Transmit};
 
 use super::{Net, Node, PK, TK};
 
@@ -91,9 +91,7 @@ impl<'a> Pair<'a> {
                 path,
                 len,
                 segment_size,
-            }) = node
-                .conn
-                .poll_transmit(&mut env, &mut Lent { spill: &mut node.spill }, &mut self.buf)
+            }) = node.conn.poll_transmit(&mut env, crate::lent!(node), &mut self.buf)
             else {
                 break;
             };
@@ -151,14 +149,9 @@ impl<'a> Pair<'a> {
                 now,
                 drbg: &mut self.a.drbg,
             };
-            self.a.conn.handle_datagram(
-                &mut env,
-                &mut Lent {
-                    spill: &mut self.a.spill,
-                },
-                path_of(d.path, true),
-                &mut bytes,
-            )
+            self.a
+                .conn
+                .handle_datagram(&mut env, crate::lent!(self.a), path_of(d.path, true), &mut bytes)
         } else {
             let mut env = Env {
                 provider: &self.b.prov,
@@ -167,9 +160,7 @@ impl<'a> Pair<'a> {
             };
             self.b.conn.handle_datagram_with(
                 &mut env,
-                &mut Lent {
-                    spill: &mut self.b.spill,
-                },
+                crate::lent!(self.b),
                 &mut self.stores,
                 path_of(d.path, false),
                 &mut bytes,
@@ -192,7 +183,7 @@ impl<'a> Pair<'a> {
                 now,
                 drbg: &mut node.drbg,
             };
-            node.conn.handle_timeout(&mut env, &mut Lent { spill: &mut node.spill });
+            node.conn.handle_timeout(&mut env, crate::lent!(node));
         }
         node_service(self, a);
         self.drain(a);

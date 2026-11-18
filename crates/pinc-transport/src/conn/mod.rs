@@ -123,7 +123,7 @@ use self::path::Paths;
 use crate::packet::PN_LEN_BASE;
 use crate::recovery::{LossEstimate, ReceivedPackets, Recovery, TailRepair};
 use crate::stream::datagram::{Datagrams, EarlyData};
-use crate::stream::pool::BufferPool;
+use crate::stream::pool::{BufferPool, Mem};
 use crate::stream::{NoSource, StreamSource, Streams};
 
 /// The received packet-number ranges tracked. Below the floor a packet counts as a duplicate, so this must hold the
@@ -226,11 +226,18 @@ where
     P: Provider,
     S: StreamSource,
 {
+    /// Try the window grants and the stream credit held back for want of pool room again: room came back from outside
+    /// the connection (another session gave chunks back to the endpoint's store).
+    pub fn regrant(&mut self, lent: &mut Lent<'_, 'a>) {
+        self.with_lent(lent, |c| c.streams.regrant(&mut c.pool));
+    }
+
     #[allow(clippy::too_many_arguments, reason = "the fields both constructors fix, passed once")]
     fn base(
         client: bool,
         cfg: Config,
         res: Resources<'a, S, N, C, F>,
+        lent: &mut Lent<'_, 'a>,
         machine: Machine,
         first_cid: ConnId,
         odcid: ConnId,
@@ -258,7 +265,11 @@ where
             hold: false,
         };
         let Tables { sent, events, machines } = tables;
-        let hs = Handshake::new(machine, machines, &mut pool, now, timing)?;
+        // The handshake's chunk comes from the endpoint's store when the pool is over one.
+        pool.lend_store(core::mem::take(lent.store));
+        let hs = Handshake::new(machine, machines, &mut pool, now, timing);
+        *lent.store = pool.return_store();
+        let hs = hs?;
         let mut life = Life::new(now);
         life.keepalive = cfg.keepalive;
         let mut rec = Recovery::with_ring(u64::from(MIN_MTU), sent);
@@ -327,9 +338,9 @@ where
     /// stream window clamped to what this stream table and pool can hold, and the stream limit to the table's slots
     /// and to the streams the pool has room to promise. One record for both, so the window a peer is told is the one
     /// enforced and counted here, and the configured stream limit is the most streams the peer ever has live.
-    fn advertise(cfg: &Config, streams: &mut Streams<S, N, C>, pool: &BufferPool<'_>) -> CreditRecord {
+    fn advertise(cfg: &Config, streams: &mut Streams<S, N, C>, mem: Mem<'_, '_>) -> CreditRecord {
         let slots = cfg.credit.max_streams.min(u16::try_from(N).unwrap_or(u16::MAX));
-        streams.adopt(pool, cfg.credit.window_bytes(), u64::from(slots));
+        streams.adopt(mem, cfg.credit.window_bytes(), u64::from(slots));
         CreditRecord {
             window_units: cfg
                 .credit
@@ -360,11 +371,12 @@ where
         cfg: Config,
         params: ClientParams<'_>,
         mut res: Resources<'a, S, N, C, F>,
+        lent: &mut Lent<'_, 'a>,
         env: &mut Env<'_, P>,
     ) -> Result<Self, Failure> {
         let cid = Self::random_cid(env, cfg.cid_len)?;
         let odcid = Self::random_cid(env, 8)?;
-        let local = Self::advertise(&cfg, &mut res.streams, &res.pool);
+        let local = Self::advertise(&cfg, &mut res.streams, res.pool.mem_in(lent.store));
         let remembered = params.ticket.as_ref().map(|t| *t.peer_credit());
         let init = Initiator::new(
             env,
@@ -379,7 +391,7 @@ where
                 credit: local,
             },
         )?;
-        let mut c = Self::base(true, cfg, res, Machine::Client(init), cid, odcid, env.now, local)?;
+        let mut c = Self::base(true, cfg, res, lent, Machine::Client(init), cid, odcid, env.now, local)?;
         // Until the server's parameters arrive, the minimum holds; with a ticket, 0-RTT data may rely on what the
         // server advertised in the session that issued it.
         if let Some(p) = remembered {
@@ -392,7 +404,7 @@ where
             p.amp.validate();
         }
         c.sess_amp.validate();
-        c.pump(env);
+        c.with_lent(lent, |c| c.pump(env));
         Ok(c)
     }
 
@@ -405,11 +417,12 @@ where
         cfg: Config,
         params: &ServerParams,
         mut res: Resources<'a, S, N, C, F>,
+        lent: &mut Lent<'_, 'a>,
         env: &mut Env<'_, P>,
     ) -> Result<Self, Failure> {
         let cid = Self::random_cid(env, cfg.cid_len)?;
         let odcid = ConnId::default();
-        let local = Self::advertise(&cfg, &mut res.streams, &res.pool);
+        let local = Self::advertise(&cfg, &mut res.streams, res.pool.mem_in(lent.store));
         let mut rc = ResponderConfig::new(params.identity, cid, params.alpns);
         rc.tickets_per_session = params.tickets_per_session;
         rc.ticket_lifetime_s = params.ticket_lifetime_s;
@@ -418,6 +431,7 @@ where
             false,
             cfg,
             res,
+            lent,
             Machine::Server(Responder::new(rc)),
             cid,
             odcid,

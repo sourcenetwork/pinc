@@ -315,8 +315,8 @@ fn the_handshake_buffers_go_back_to_the_pool() {
         assert_eq!(net.a.conn.pool().used_chunks(), 0);
         assert_eq!(net.b.conn.pool().used_chunks(), 0);
         // And the connection works without them.
-        let id = net.a.conn.open_bi().unwrap();
-        net.a.conn.write(id, b"hello").unwrap();
+        let id = net.a.open_bi().unwrap();
+        net.a.write(id, b"hello").unwrap();
         net.a.conn.finish(id).unwrap();
         assert!(net.run(net.now + SEC, |n| n.b.fin.contains(&id)));
     });

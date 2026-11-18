@@ -16,7 +16,7 @@ use core::net::SocketAddr;
 
 use pinc_crypto::NodeId;
 use pinc_security::Alpn;
-use pinc_transport::conn::{ClientParams, Connection, PathInfo, code};
+use pinc_transport::conn::{ClientParams, Connection, Lent, PathInfo, code};
 use pinc_transport::recovery::PathKind;
 
 use crate::acp::ACP_RECHECK;
@@ -95,10 +95,10 @@ ep_impl! {
     pub fn read_datagram(&mut self, session: SessionId, out: &mut [u8]) -> Result<Option<usize>, CommandError> {
         let i = self.live(session)?;
         let conn = self.slots.get_mut(i).and_then(|s| s.conn.as_mut()).ok_or(CommandError::NoSession)?;
-        let Some(d) = conn.recv_datagram() else { return Ok(None) };
+        let Some(d) = conn.recv_datagram(&self.store) else { return Ok(None) };
         let len = d.len();
         out.get_mut(..len).ok_or(CommandError::BufferTooSmall { len })?.copy_from_slice(d);
-        conn.pop_datagram();
+        conn.pop_datagram(&mut lent!(self));
         Ok(Some(len))
     }
 
@@ -124,7 +124,8 @@ ep_impl! {
             Command::OpenStream { session, bidi } => {
                 let i = self.live(session)?;
                 let conn = self.slots.get_mut(i).and_then(|s| s.conn.as_mut()).ok_or(CommandError::NoSession)?;
-                let id = if bidi { conn.open_bi() } else { conn.open_uni() }.map_err(CommandError::Stream)?;
+                let lent = &mut lent!(self);
+                let id = if bidi { conn.open_bi(lent) } else { conn.open_uni(lent) }.map_err(CommandError::Stream)?;
                 self.settle(i, now);
                 Ok(Value::Stream(id))
             }
@@ -132,7 +133,7 @@ ep_impl! {
                 let i = self.live(session)?;
                 let slot = self.slots.get_mut(i).ok_or(CommandError::NoSession)?;
                 let conn = slot.conn.as_mut().ok_or(CommandError::NoSession)?;
-                let n = conn.write(stream, data).map_err(CommandError::Stream)?;
+                let n = conn.write(&mut lent!(self), stream, data).map_err(CommandError::Stream)?;
                 // A quiet session is armed only by the dialing side's own writes above a control message, and
                 // never on the fan stream.
                 if !slot.m.role.quiet()
@@ -144,16 +145,16 @@ ep_impl! {
                 Ok(Value::Written(n))
             }
             Command::WriteSource { session, stream, source, len } => {
-                self.with_conn(session, now, |c| c.write_source(stream, source, len).map_err(CommandError::Stream))
+                self.with_conn(session, now, |c, _| c.write_source(stream, source, len).map_err(CommandError::Stream))
             }
             Command::SetUrgency { session, stream, urgency } => {
-                self.with_conn(session, now, |c| c.set_urgency(stream, urgency).map_err(CommandError::Stream))
+                self.with_conn(session, now, |c, _| c.set_urgency(stream, urgency).map_err(CommandError::Stream))
             }
             Command::SendExtension { session, ty, body } => {
-                self.with_conn(session, now, |c| c.send_extension(ty, body).map_err(CommandError::Extension))
+                self.with_conn(session, now, |c, l| c.send_extension(l, ty, body).map_err(CommandError::Extension))
             }
             Command::Finish { session, stream } => {
-                self.with_conn(session, now, |c| c.finish(stream).map_err(CommandError::Stream))
+                self.with_conn(session, now, |c, _| c.finish(stream).map_err(CommandError::Stream))
             }
             Command::Reset { session, stream, error } => {
                 let i = self.live(session)?;
@@ -163,7 +164,7 @@ ep_impl! {
                 Ok(Value::None)
             }
             Command::StopSending { session, stream, error } => {
-                self.with_conn(session, now, |c| c.stop_sending(stream, error).map_err(CommandError::Stream))
+                self.with_conn(session, now, |c, _| c.stop_sending(stream, error).map_err(CommandError::Stream))
             }
             Command::Consume { session, stream, n } => {
                 let i = self.live(session)?;
@@ -177,7 +178,7 @@ ep_impl! {
                 let i = self.live(session)?;
                 let slot = self.slots.get_mut(i).ok_or(CommandError::NoSession)?;
                 let conn = slot.conn.as_mut().ok_or(CommandError::NoSession)?;
-                conn.send_datagram(data).map_err(CommandError::Datagram)?;
+                conn.send_datagram(&mut lent!(self), data).map_err(CommandError::Datagram)?;
                 if !slot.m.role.quiet() || data.len() > CTRL_SMALL {
                     slot.m.last_app = now;
                 }
@@ -218,7 +219,7 @@ ep_impl! {
                     return Err(CommandError::NoKeyRequest);
                 }
                 let mut env = env!(self, now);
-                let r = conn.on_key_response(&mut env, response);
+                let r = conn.on_key_response(&mut env, &mut lent!(self), response);
                 self.settle(i, now);
                 r.map(|()| Value::None).map_err(CommandError::Failure)
             }
@@ -309,7 +310,7 @@ ep_impl! {
                 }
                 let i = self.live(session)?;
                 let conn = self.slots.get_mut(i).and_then(|s| s.conn.as_mut()).ok_or(CommandError::NoSession)?;
-                conn.send_extension(pinc_transport::frame::ext::REACH_OUT, body).map_err(|_| CommandError::NoSession)?;
+                conn.send_extension(&mut lent!(self), pinc_transport::frame::ext::REACH_OUT, body).map_err(|_| CommandError::NoSession)?;
                 // The round also probes the direct paths the session already tracks, as the reference model's does.
                 let mut env = env!(self, now);
                 conn.punch_known(&mut env);
@@ -336,7 +337,7 @@ ep_impl! {
                 self.settle(i, now);
                 Ok(Value::None)
             }
-            Command::Ping { session } => self.with_conn(session, now, |c| {
+            Command::Ping { session } => self.with_conn(session, now, |c, _| {
                 c.ping();
                 Ok(())
             }),
@@ -362,11 +363,11 @@ ep_impl! {
         &mut self,
         session: SessionId,
         now: u64,
-        f: impl FnOnce(&mut Connection<'a, P, S, N, C, F, NP>) -> Result<(), CommandError>,
+        f: impl FnOnce(&mut Connection<'a, P, S, N, C, F, NP>, &mut Lent<'_, 'a>) -> Result<(), CommandError>,
     ) -> Result<Value, CommandError> {
         let i = self.live(session)?;
         let conn = self.slots.get_mut(i).and_then(|s| s.conn.as_mut()).ok_or(CommandError::NoSession)?;
-        f(conn)?;
+        f(conn, &mut lent!(self))?;
         self.settle(i, now);
         Ok(Value::None)
     }
@@ -461,7 +462,7 @@ ep_impl! {
             path_info: path_info(&first, self.cfg.conn.interface_mtu),
         };
         let mut env = env!(self, now);
-        let mut conn = match Connection::client(cfg, params, mem, &mut env) {
+        let mut conn = match Connection::client(cfg, params, mem, &mut lent!(self), &mut env) {
             Ok(c) => c,
             Err(e) => {
                 self.retire_slot(i);
@@ -543,11 +544,11 @@ ep_impl! {
                 .slot_of(session)
                 .and_then(|i| self.slots.get(i))
                 .and_then(|s| s.conn.as_ref())
-                .and_then(|c| c.read_chunk(stream))
+                .and_then(|c| c.read_chunk(&self.store, stream))
                 .map_or(Answer::None, Answer::Chunk),
             Query::ReadAt { session, stream, offset } => self
                 .conn_of(session)
-                .and_then(|c| c.read_at(&self.spill, stream, offset))
+                .and_then(|c| c.read_at(&self.spill, &self.store, stream, offset))
                 .map_or(Answer::None, Answer::Chunk),
             Query::StoredAfter { session, stream, from } => self
                 .conn_of(session)

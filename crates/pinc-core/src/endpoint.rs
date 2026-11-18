@@ -55,6 +55,8 @@ use pinc_transport::conn::{Config, PathId, Resources};
 use pinc_transport::stream::{self, StreamSource};
 
 use crate::api::{Event, Events, NodeStats, SessionId};
+#[cfg(feature = "alloc")]
+use crate::fresh::Fresh;
 use crate::heap::DeadlineHeap;
 use crate::ledger::Ledger;
 use crate::queue::EventRing;
@@ -169,6 +171,9 @@ pub struct Endpoint<
     pub(crate) slots: Slots<'s, Slot<'a, P, S, N, C, F, NP>, K>,
     /// The slots every session's range sets spill into, lent to each connection call that can use them (`lent!`).
     pub(crate) spill: pinc_transport::stream::spill::SpillArena<'a>,
+    /// The chunks of every slot's pool, lent to each connection call that can take, give or read one (`lent!`); empty
+    /// when the host gave every slot memory of its own.
+    pub(crate) store: pinc_transport::stream::store::ChunkStore,
     /// What an endpoint that owns its table makes a slot's memory from; `None` when the host gave every slot its own.
     #[cfg(feature = "alloc")]
     pub(crate) fresh: Option<Fresh>,
@@ -313,15 +318,18 @@ where
     P: Provider,
     S: StreamSource,
 {
-    /// A new endpoint that owns its connection table and the memory of every slot: up to `pool_chunks` buffer chunks
-    /// and a stream table each, and one loss estimate they share. A slot and its memory are made when the slot is
-    /// first taken and kept for the sessions that follow in it, and its buffer chunks are made a segment at a time as
-    /// a session needs them. So the endpoint holds the memory of as many sessions as it has had at once, as large as
-    /// they grew, not of the `K` it may have. Nothing outlives the endpoint and nothing is borrowed, so dropping it
-    /// frees everything. The endpoint is built on the heap, piece by piece: no table of megabytes is ever formed on
-    /// the stack. `D` must be at least ten times `K`. The sessions' range sets spill into one arena of `spill_slots`
-    /// slots of [`pinc_transport::stream::spill::SLOT_RANGES`] ranges (8 KiB each), made here and never grown; 0 turns
-    /// spilling off.
+    /// A new endpoint that owns its connection table and the memory of every slot: a stream table and a pool of up to
+    /// `pool_chunks` chunks each, and one loss estimate they share. The pools' chunks come from one store of `store_chunks`
+    /// chunks, one allocation the system commits only as chunks are first used. Each of the `K` slots holds a floor of it
+    /// from the start ([`floor_chunks`](pinc_transport::stream::store::floor_chunks)), so with `store_chunks` at least `K`
+    /// floors no session is refused; the rest is burst room, oldest waiter first. A slot's tables are made when it is first
+    /// taken and kept for the sessions after. Dropping the endpoint frees everything; it is built on the heap, piece by
+    /// piece. `D` must be at least ten times `K`. Range sets spill into one arena of `spill_slots` slots of
+    /// [`pinc_transport::stream::spill::SLOT_RANGES`] ranges (8 KiB each), never grown; 0 turns spilling off.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the sizes of the three memories an owning endpoint makes"
+    )]
     pub fn new_owned(
         now: u64,
         provider: P,
@@ -329,6 +337,7 @@ where
         identity: LocalIdentity,
         cfg: EndpointConfig,
         pool_chunks: usize,
+        store_chunks: usize,
         spill_slots: usize,
     ) -> alloc::boxed::Box<Self> {
         use alloc::{boxed::Box, vec::Vec};
@@ -343,6 +352,7 @@ where
             Slots::Owned(Vec::with_capacity(K)),
         ));
         ep.fresh = Some(Fresh::new(pool_chunks));
+        ep.store = pinc_transport::stream::store::ChunkStore::new(store_chunks, K, pool_chunks);
         ep.spill = pinc_transport::stream::spill::SpillArena::new_boxed(spill_slots);
         ep
     }
@@ -357,50 +367,13 @@ where
     }
 }
 
-/// What an endpoint that owns its table makes a slot's memory from, the first time the slot is taken.
-#[cfg(feature = "alloc")]
-pub(crate) struct Fresh {
-    pool_chunks: usize,
-    loss: alloc::rc::Rc<pinc_transport::recovery::LossEstimate>,
-    machines: pinc_transport::conn::Machines,
-    /// The pool a new stream table is made against; [`Endpoint::alloc_slot`] ties the table to the slot's own.
-    probe: pinc_transport::stream::pool::BufferPool<'static>,
-}
-
-#[cfg(feature = "alloc")]
-impl Fresh {
-    fn new(pool_chunks: usize) -> Self {
-        Self {
-            pool_chunks,
-            loss: alloc::rc::Rc::new(pinc_transport::recovery::LossEstimate::new()),
-            machines: pinc_transport::conn::Machines::new(),
-            probe: pinc_transport::stream::pool::BufferPool::new_boxed(1),
-        }
-    }
-
-    /// The memory of one slot: its buffer pool, its stream table and its tables, none of which holds more than the
-    /// slot's sessions come to use.
-    fn memory<'m, S: StreamSource, const N: usize, const C: usize, const F: usize>(&self) -> Resources<'m, S, N, C, F> {
-        use pinc_transport::conn::{Held, Shared, Tables};
-        use pinc_transport::stream::Streams;
-        use pinc_transport::stream::pool::BufferPool;
-
-        Resources {
-            pool: BufferPool::new_grown(self.pool_chunks),
-            streams: Held::Owned(alloc::boxed::Box::new(Streams::new(
-                &stream::Config::new(false),
-                &self.probe,
-            ))),
-            loss: Shared::Counted(alloc::rc::Rc::clone(&self.loss)),
-            tables: Tables::sharing(&self.machines),
-        }
-    }
-}
-
 /// What the endpoint lends a connection call: its spill arena.
 macro_rules! lent {
     ($s:ident) => {
-        ::pinc_transport::conn::Lent { spill: &mut $s.spill }
+        ::pinc_transport::conn::Lent {
+            spill: &mut $s.spill,
+            store: &mut $s.store,
+        }
     };
 }
 pub(crate) use lent;
@@ -457,6 +430,7 @@ ep_impl! {
             alpns: [None; MAX_ALPNS],
             slots,
             spill: pinc_transport::stream::spill::SpillArena::default(),
+            store: pinc_transport::stream::store::ChunkStore::default(),
             #[cfg(feature = "alloc")]
             fresh: None,
             free,
@@ -636,6 +610,10 @@ ep_impl! {
             fragments_evicted: self.orphans.counts.evicted,
             fragments_waiting: self.orphans.waiting(),
             owed: self.owed,
+            #[cfg(feature = "alloc")]
+            store: self.store.stats(),
+            #[cfg(not(feature = "alloc"))]
+            store: pinc_transport::stream::store::StoreStats::default(),
         }
     }
 
@@ -747,12 +725,11 @@ ep_impl! {
         let mut mem = match slot.mem.take() {
             Some(m) => m,
             #[cfg(feature = "alloc")]
-            None => self.fresh.as_ref()?.memory(),
+            None => self.fresh.as_mut()?.memory(i),
             #[cfg(not(feature = "alloc"))]
             None => return None,
         };
         self.free = slot.m.next_free;
-        mem.pool.reset();
         mem.streams.reinit(&stream::Config::new(client), &mem.pool);
         mem.tables.clear();
         slot.m.begin(client, now);
@@ -875,7 +852,10 @@ ep_impl! {
         slot.m.generation = slot.m.generation.wrapping_add(1);
         slot.m.next_free = self.free;
         if let Some(c) = slot.conn.take() {
-            slot.mem = Some(c.into_resources(&mut lent!(self)));
+            let mut mem = c.into_resources(&mut lent!(self));
+            // The chunks and the reservation above the floor of a pool over the endpoint's store go back to it.
+            mem.pool.release(&mut self.store);
+            slot.mem = Some(mem);
         }
         self.free = idx;
         self.live = self.live.saturating_sub(1);
@@ -885,6 +865,21 @@ ep_impl! {
         }
         crate::trace::trace!(self, now, Session { slot: i as u64, step: 2, dialer: step_dialer });
         let _ = (now, step_dialer);
+        self.wake_store();
+    }
+
+    /// Once chunks come back to the endpoint's store, the sessions that wait for room in it try their held-back grants
+    /// and stream credit again, oldest first, and are queued to send: the chunks they wait for were given back by
+    /// another session, and nothing of their own would make them try again. The store hands out one waiter at a time,
+    /// only once the head of its queue has the room it asked for, so a wake costs one session's regrant.
+    pub(crate) fn wake_store(&mut self) {
+        #[cfg(feature = "alloc")]
+        while let Some(i) = self.store.pop_ready() {
+            let Some(slot) = self.slots.get_mut(i).filter(|s| s.m.in_use) else { continue };
+            let Some(conn) = slot.conn.as_mut() else { continue };
+            conn.regrant(&mut lent!(self));
+            self.mark_dirty(i);
+        }
     }
 
     /// Append session `idx` to the end of its peer's list, so sessions are visited in the order they were made.

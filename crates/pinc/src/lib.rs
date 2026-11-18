@@ -105,7 +105,7 @@ pub use error::{Error, ErrorKind, Result};
 pub use event::{Event, MessageId};
 pub use host::{BatchHost, Host, Hosted, Io, IoHost};
 pub use keys::Identity;
-pub use mem::{Limits, MAX_CONNECTIONS, MAX_PROTOCOLS, RING, STREAMS};
+pub use mem::{Limits, MAX_CONNECTIONS, MAX_PROTOCOLS, RING, STREAMS, default_memory_chunks};
 pub use node::CAPACITIES;
 pub use protocol::{MAX_TAG, Protocol, Registered, read_tag, write_tag};
 pub use records::{KNOWN_MAX, MAX_HINTS, PeerRecord, Records, Rendezvous};

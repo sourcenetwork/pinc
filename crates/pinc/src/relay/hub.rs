@@ -62,6 +62,7 @@ impl Hub {
             local_id,
             cfg,
             limits.hub_pool_chunks,
+            crate::mem::default_memory_chunks(limits.hub_sessions, limits.hub_pool_chunks),
             pinc_transport::stream::spill::DEFAULT_SLOTS,
         )
         .ok_or_else(|| Error::config("the hub session limit is out of range"))?;

@@ -36,7 +36,7 @@ fn table(chunks: usize, window: u64) -> (BufferPool<'static>, Box<Table>) {
 /// Read a stream to its end and let it see the end; returns the bytes read.
 fn read_to_end(t: &mut Table, pool: &mut BufferPool<'_>, id: u64) -> usize {
     let mut n = 0;
-    while let Some(c) = t.read_chunk(pool, id) {
+    while let Some(c) = t.read_chunk(pool.mem(), id) {
         let k = c.len();
         n += k;
         t.consume(pool, id, k, 0, 0).unwrap();
@@ -80,13 +80,13 @@ fn an_opener_far_beyond_the_credit_delivers_every_stream_and_the_receiver_holds_
         let mut waited = 0usize;
         let done = net.run(net.now + 600 * SEC, |n| {
             while opened.len() < STREAMS {
-                let ready = n.a.conn.open_ready(false);
-                match n.a.conn.open_uni() {
+                let ready = n.a.conn.open_ready(&n.a.store, false);
+                match n.a.open_uni() {
                     Ok(id) => {
                         assert_eq!(ready, Ok(()), "open_ready said no to an open that worked");
                         let k = opened.len();
                         let data = pattern(LEN, 1000 + k as u64);
-                        assert_eq!(n.a.conn.write(id, &data).unwrap(), LEN);
+                        assert_eq!(n.a.write(id, &data).unwrap(), LEN);
                         n.a.conn.finish(id).unwrap();
                         opened.push(id);
                     }
@@ -127,27 +127,27 @@ fn a_stream_that_ends_gives_the_opener_one_more_while_every_other_stream_stays_l
         net.run(net.now + SEC, |_| false);
         let credit = usize::from(net.a.conn.peer_credit().max_streams);
         assert_eq!(credit, 32, "half the slots of the table");
-        let ids: Vec<u64> = (0..credit).map(|_| net.a.conn.open_bi().unwrap()).collect();
+        let ids: Vec<u64> = (0..credit).map(|_| net.a.open_bi().unwrap()).collect();
         for id in &ids {
-            assert_eq!(net.a.conn.write(*id, &[7]).unwrap(), 1);
+            assert_eq!(net.a.write(*id, &[7]).unwrap(), 1);
         }
-        assert_eq!(net.a.conn.open_bi(), Err(StreamError::StreamLimit));
+        assert_eq!(net.a.open_bi(), Err(StreamError::StreamLimit));
         let all = net.run(net.now + 10 * SEC, |n| ids.iter().all(|id| n.b.read.contains_key(id)));
         assert!(all, "the receiver saw {} of {credit} streams", net.b.read.len());
         net.run(net.now + SEC, |_| false);
-        assert_eq!(net.a.conn.open_ready(true), Err(StreamError::StreamLimit));
+        assert_eq!(net.a.conn.open_ready(&net.a.store, true), Err(StreamError::StreamLimit));
 
         let last = *ids.last().unwrap();
         net.a.conn.finish(last).unwrap();
         net.b.conn.finish(last).unwrap();
-        let again = net.run(net.now + 10 * SEC, |n| n.a.conn.open_ready(true).is_ok());
+        let again = net.run(net.now + 10 * SEC, |n| n.a.conn.open_ready(&n.a.store, true).is_ok());
         assert!(
             again,
             "the stream ended and no credit came back: {:?}",
-            net.a.conn.open_ready(true)
+            net.a.conn.open_ready(&net.a.store, true)
         );
-        let id = net.a.conn.open_bi().unwrap();
-        assert_eq!(net.a.conn.write(id, &[8]).unwrap(), 1);
+        let id = net.a.open_bi().unwrap();
+        assert_eq!(net.a.write(id, &[8]).unwrap(), 1);
         let seen = net.run(net.now + 10 * SEC, |n| n.b.read.contains_key(&id));
         assert!(seen, "the new stream did not arrive");
         assert_eq!(net.b.conn.stats().held_back, 0, "the receiver held a stream back");
@@ -173,12 +173,12 @@ fn the_configured_stream_window_is_the_one_advertised_and_the_one_the_streams_ru
                 window,
                 "the window the opener was told"
             );
-            let id = net.a.conn.open_uni().unwrap();
+            let id = net.a.open_uni().unwrap();
             let data = pattern(LONG, 9);
             let (mut sent, mut ended) = (0, false);
             let done = net.run(net.now + 60 * SEC, |n| {
                 while sent < LONG {
-                    let k = n.a.conn.write(id, &data[sent..]).unwrap();
+                    let k = n.a.write(id, &data[sent..]).unwrap();
                     if k == 0 {
                         break;
                     }
@@ -212,10 +212,10 @@ fn a_first_frame_on_the_highest_of_many_streams_opens_the_silent_ones_below_it_w
         net.run(net.now + SEC, |_| false);
         let credit = usize::from(net.a.conn.peer_credit().max_streams);
         assert!(credit >= 12, "the handshake credit is {credit}");
-        let ids: Vec<u64> = (0..12).map(|_| net.a.conn.open_uni().unwrap()).collect();
+        let ids: Vec<u64> = (0..12).map(|_| net.a.open_uni().unwrap()).collect();
         let last = *ids.last().unwrap();
         let data = pattern(LEN, 77);
-        assert_eq!(net.a.conn.write(last, &data).unwrap(), LEN);
+        assert_eq!(net.a.write(last, &data).unwrap(), LEN);
         net.a.conn.finish(last).unwrap();
         let done = net.run(net.now + 30 * SEC, |n| n.b.fin.contains(&last));
         assert!(done, "the stream with the high index was not delivered");
@@ -231,7 +231,7 @@ fn a_first_frame_on_the_highest_of_many_streams_opens_the_silent_ones_below_it_w
 fn a_peer_stream_whose_answer_has_left_no_longer_counts_against_the_limit() {
     let (mut pool, mut t) = table(64, 4);
     assert_eq!(t.advertised_streams(), 4, "half of the 8 slots");
-    let raise = |t: &mut Table, pool: &BufferPool<'_>| {
+    let raise = |t: &mut Table, pool: &mut BufferPool<'_>| {
         t.regrant(pool);
         std::iter::from_fn(|| t.pending_control()).find_map(|f| match f {
             ControlFrame::MaxStreams { limit } => Some(limit),
@@ -245,7 +245,7 @@ fn a_peer_stream_whose_answer_has_left_no_longer_counts_against_the_limit() {
         assert_eq!(t.write(&mut pool, id, &[9; 200], u64::MAX).unwrap(), 200);
         t.finish(id).unwrap();
     }
-    assert_eq!(raise(&mut t, &pool), None, "no reply has left yet");
+    assert_eq!(raise(&mut t, &mut pool), None, "no reply has left yet");
     // The replies leave. Nothing is acknowledged.
     let mut sent = Vec::new();
     while let Some(c) = t.next_stream_frame(&mut pool, 1200) {
@@ -254,7 +254,7 @@ fn a_peer_stream_whose_answer_has_left_no_longer_counts_against_the_limit() {
         sent.push(c);
     }
     assert_eq!(
-        raise(&mut t, &pool),
+        raise(&mut t, &mut pool),
         Some(8),
         "four admitted, and room for four more at once"
     );
@@ -293,17 +293,17 @@ fn an_opener_with_most_of_its_limit_in_flight_is_never_refused() {
         let done = net.run(net.now + 600 * SEC, |n| {
             let ready: Vec<u64> = n.b.fin.iter().copied().filter(|id| !replied.contains(id)).collect();
             for id in ready {
-                assert_eq!(n.b.conn.write(id, &resp).unwrap(), resp.len());
+                assert_eq!(n.b.write(id, &resp).unwrap(), resp.len());
                 n.b.conn.finish(id).unwrap();
                 replied.insert(id);
             }
             live.retain(|id| !n.a.fin.contains(id));
             while live.len() < limit * 3 / 4 && started < total {
-                let Ok(id) = n.a.conn.open_bi() else {
+                let Ok(id) = n.a.open_bi() else {
                     refused += 1;
                     break;
                 };
-                assert_eq!(n.a.conn.write(id, &req).unwrap(), req.len());
+                assert_eq!(n.a.write(id, &req).unwrap(), req.len());
                 n.a.conn.finish(id).unwrap();
                 live.push(id);
                 started += 1;
@@ -329,8 +329,8 @@ fn the_credit_a_reply_frees_arrives_with_the_reply() {
         let limit = usize::from(net.a.conn.peer_credit().max_streams);
         let ids: Vec<u64> = (0..limit)
             .map(|_| {
-                let id = net.a.conn.open_bi().unwrap();
-                assert_eq!(net.a.conn.write(id, &[0xa5; 300]).unwrap(), 300);
+                let id = net.a.open_bi().unwrap();
+                assert_eq!(net.a.write(id, &[0xa5; 300]).unwrap(), 300);
                 net.a.conn.finish(id).unwrap();
                 id
             })
@@ -338,15 +338,15 @@ fn the_credit_a_reply_frees_arrives_with_the_reply() {
         // Every request arrives and every acknowledgement is back: only the limit holds the opener.
         net.run(net.now + SEC, |_| false);
         assert_eq!(net.b.fin.len(), limit);
-        assert_eq!(net.a.conn.open_bi(), Err(StreamError::StreamLimit));
+        assert_eq!(net.a.open_bi(), Err(StreamError::StreamLimit));
         let first = ids[0];
-        assert_eq!(net.b.conn.write(first, &[0x5a; 300]).unwrap(), 300);
+        assert_eq!(net.b.write(first, &[0x5a; 300]).unwrap(), 300);
         net.b.conn.finish(first).unwrap();
         let sent = net.b.conn.stats().packets_sent;
         let mut opened = None;
         net.run(net.now + SEC, |n| {
             if n.a.fin.contains(&first) && opened.is_none() {
-                opened = Some(n.a.conn.open_bi().is_ok());
+                opened = Some(n.a.open_bi().is_ok());
             }
             opened.is_some()
         });
@@ -394,7 +394,7 @@ fn a_window_is_charged_from_its_first_byte_and_a_stream_is_admitted_while_a_firs
     // first charge fits the 29 chunks the pool has left.
     let mut ours = vec![t.open_stream(&pool, true).unwrap()];
     // The credit is not raised: the peer has as many streams live as it may.
-    t.regrant(&pool);
+    t.regrant(&mut pool);
     assert!(std::iter::from_fn(|| t.pending_control()).all(|f| !matches!(f, ControlFrame::MaxStreams { .. })));
     // A peer stream beyond the credit is admitted too, while its first charge fits.
     t.on_stream_frame(&mut pool, 16, 0, &[4], false).unwrap();
@@ -424,7 +424,7 @@ fn a_window_is_charged_from_its_first_byte_and_a_stream_is_admitted_while_a_firs
     }
     assert_eq!(t.open_streams(), 0);
     assert_eq!(t.granted_unreceived(), 0);
-    t.regrant(&pool);
+    t.regrant(&mut pool);
     let raise = std::iter::from_fn(|| t.pending_control()).find_map(|f| match f {
         ControlFrame::MaxStreams { limit } => Some(limit),
         _ => None,

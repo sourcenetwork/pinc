@@ -41,14 +41,14 @@ fn early_request(from_client: bool, k: u64) -> (u64, u64, Vec<u8>) {
         }
     }
     let mut net = Net::new(a, b, link, &mut w.stores);
-    let id = net.a.conn.open_bi().unwrap();
-    net.a.conn.write(id, b"ping").unwrap();
+    let id = net.a.open_bi().unwrap();
+    net.a.write(id, b"ping").unwrap();
     net.a.conn.finish(id).unwrap();
     let t0 = net.now;
     let mut at_responder = None;
     let answered = net.run(t0 + 10 * SEC, |n| {
         if at_responder.is_none() && n.b.fin.contains(&id) {
-            n.b.conn.write(id, b"pong").unwrap();
+            n.b.write(id, b"pong").unwrap();
             n.b.conn.finish(id).unwrap();
             at_responder = Some(n.now - t0);
         }
@@ -102,9 +102,9 @@ fn the_early_data_of_a_dial_nobody_answers_goes_again_once() {
         let mut link = Link::new(72, Params::new(ONE_WAY));
         link.route(PathId(1)).ab.drop_next(u32::MAX);
         let mut net = Net::new(a, b, link, &mut w.stores);
-        let id = net.a.conn.open_bi().unwrap();
+        let id = net.a.open_bi().unwrap();
         let request = pattern(600, 3);
-        net.a.conn.write(id, &request).unwrap();
+        net.a.write(id, &request).unwrap();
         net.a.conn.finish(id).unwrap();
         let t0 = net.now;
         net.run(t0 + 6 * SEC, |_| false);

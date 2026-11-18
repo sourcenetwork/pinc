@@ -47,7 +47,7 @@ use std::collections::BTreeMap;
 
 use pinc_crypto::IdentityAlg;
 use pinc_tests::*;
-use pinc_transport::conn::{CreditRecord, Lent, PackKind, PackMode, PackProbe, PackRecord, PathId, PathInfo};
+use pinc_transport::conn::{CreditRecord, PackKind, PackMode, PackProbe, PackRecord, PathId, PathInfo};
 use pinc_transport::frame::{Frame, FrameIter, MAX_STREAM_END, ext, stream_overhead};
 use pinc_wire::{Reader, Writer, varint};
 
@@ -378,7 +378,7 @@ fn bulk(out: &mut Out, seed: u64, loss: f64, gso: usize, total: usize) {
     enable(&mut net);
     assert!(net.connect(net.now + 10 * SEC));
     let mut rng = SplitMix64::new(seed);
-    let ids: Vec<u64> = (0..4).map(|_| net.a.conn.open_bi().unwrap()).collect();
+    let ids: Vec<u64> = (0..4).map(|_| net.a.open_bi().unwrap()).collect();
     for (i, id) in ids.iter().enumerate() {
         net.a.conn.set_urgency(*id, [3, 1, 3, 6][i]).unwrap();
     }
@@ -391,7 +391,7 @@ fn bulk(out: &mut Out, seed: u64, loss: f64, gso: usize, total: usize) {
         for i in 0..4 {
             while off[i] < data[i].len() {
                 let end = (off[i] + 3000 + (rng.next_u64() % 9000) as usize).min(data[i].len());
-                let k = n.a.conn.write(ids[i], &data[i][off[i]..end]).unwrap();
+                let k = n.a.write(ids[i], &data[i][off[i]..end]).unwrap();
                 if k == 0 {
                     break;
                 }
@@ -404,11 +404,14 @@ fn bulk(out: &mut Out, seed: u64, loss: f64, gso: usize, total: usize) {
         }
         if ticks.is_multiple_of(3) {
             let len = 1 + (rng.next_u64() % 300) as usize;
-            let _ = n.a.conn.send_datagram(&pattern(len, u64::from(ticks)));
-            let _ = n.b.conn.send_datagram(&pattern(len / 2 + 1, u64::from(ticks) + 1));
+            let _ = n.a.conn.send_datagram(lent!(n.a), &pattern(len, u64::from(ticks)));
+            let _ =
+                n.b.conn
+                    .send_datagram(lent!(n.b), &pattern(len / 2 + 1, u64::from(ticks) + 1));
         }
         if ticks.is_multiple_of(7) {
             let _ = n.a.conn.send_extension(
+                lent!(n.a),
                 ext::TEST_FIRST + u64::from(ticks % 3),
                 &pattern(1 + (ticks as usize % 90), 9),
             );
@@ -436,9 +439,9 @@ fn requests(out: &mut Out, seed: u64, loss: f64) {
     let mut opened = Vec::new();
     let mut k = 0u64;
     let done = net.run(net.now + 60 * SEC, |n| {
-        while opened.len() < 40 && n.a.conn.open_ready(true).is_ok() {
-            let id = n.a.conn.open_bi().unwrap();
-            n.a.conn.write(id, &pattern(20 + (k as usize * 37) % 400, k)).unwrap();
+        while opened.len() < 40 && n.a.conn.open_ready(&n.a.store, true).is_ok() {
+            let id = n.a.open_bi().unwrap();
+            n.a.write(id, &pattern(20 + (k as usize * 37) % 400, k)).unwrap();
             n.a.conn.finish(id).unwrap();
             opened.push(id);
             k += 1;
@@ -448,7 +451,7 @@ fn requests(out: &mut Out, seed: u64, loss: f64) {
             let ans = pattern(10 + (id as usize * 53) % 1500, id);
             let at = answered.entry(id).or_default();
             if *at < ans.len() {
-                *at += n.b.conn.write(id, &ans[*at..]).unwrap();
+                *at += n.b.write(id, &ans[*at..]).unwrap();
                 if *at == ans.len() {
                     n.b.conn.finish(id).unwrap();
                 }
@@ -458,21 +461,12 @@ fn requests(out: &mut Out, seed: u64, loss: f64) {
     });
     assert!(done, "the requests were not all answered");
     // A stream reset and a stop request, each answered.
-    let id = net.a.conn.open_bi().unwrap();
-    net.a.conn.write(id, &pattern(5000, 1)).unwrap();
+    let id = net.a.open_bi().unwrap();
+    net.a.write(id, &pattern(5000, 1)).unwrap();
     net.run(net.now + 50 * MS, |_| false);
-    net.a
-        .conn
-        .reset(
-            &mut Lent {
-                spill: &mut net.a.spill,
-            },
-            id,
-            7,
-        )
-        .unwrap();
-    let id2 = net.a.conn.open_bi().unwrap();
-    net.a.conn.write(id2, b"stop me").unwrap();
+    net.a.conn.reset(lent!(net.a), id, 7).unwrap();
+    let id2 = net.a.open_bi().unwrap();
+    net.a.write(id2, b"stop me").unwrap();
     net.run(net.now + 50 * MS, |_| false);
     let _ = net.b.conn.stop_sending(id2, 9);
     net.run(net.now + SEC, |_| false);
@@ -497,9 +491,9 @@ fn life(out: &mut Out, seed: u64) {
     let _ = net.a.conn.ping_path(PathId(3));
     net.run(net.now + SEC, |_| false);
     net.a.conn.send_ready();
-    let id = net.a.conn.open_bi().unwrap();
+    let id = net.a.open_bi().unwrap();
     for i in 0..200u64 {
-        let _ = net.a.conn.write(id, &pattern(700, i));
+        let _ = net.a.write(id, &pattern(700, i));
         net.run(net.now + 2 * MS, |_| false);
     }
     net.run(net.now + SEC, |_| false);
@@ -515,7 +509,7 @@ fn life(out: &mut Out, seed: u64) {
     net.run(net.now + 2 * SEC, |_| false);
     net.a.conn.set_keepalive(None);
     // A lost tail: the probe timeout sends its PING.
-    net.a.conn.write(id, &pattern(3000, 5)).unwrap();
+    net.a.write(id, &pattern(3000, 5)).unwrap();
     net.link.route(PathId(1)).ab.drop_next(6);
     net.link.route(PathId(3)).ab.drop_next(6);
     net.run(net.now + 5 * SEC, |_| false);
@@ -550,11 +544,11 @@ fn resume(out: &mut Out, seed: u64) {
     let mut net = Net::new(a, b, Link::new(seed + 1, Params::new(10 * MS)), &mut w.stores);
     enable(&mut net);
     for i in 0..3u64 {
-        let id = net.a.conn.open_bi().unwrap();
-        net.a.conn.write(id, &pattern(200 + 2500 * i as usize, i)).unwrap();
+        let id = net.a.open_bi().unwrap();
+        net.a.write(id, &pattern(200 + 2500 * i as usize, i)).unwrap();
         net.a.conn.finish(id).unwrap();
     }
-    let _ = net.a.conn.send_datagram(b"early datagram");
+    let _ = net.a.conn.send_datagram(lent!(net.a), b"early datagram");
     assert!(net.connect(net.now + 5 * SEC));
     net.run(net.now + SEC, |_| false);
     take(out, &mut net);
@@ -575,8 +569,8 @@ fn repair(out: &mut Out, seed: u64) {
     assert!(net.connect(net.now + 10 * SEC));
     for round in 0..300u64 {
         let data = pattern(if round % 2 == 0 { 3_000 } else { 100 }, round);
-        let id = net.a.conn.open_uni().unwrap();
-        net.a.conn.write(id, &data).unwrap();
+        let id = net.a.open_uni().unwrap();
+        net.a.write(id, &data).unwrap();
         net.a.conn.finish(id).unwrap();
         assert!(net.run(net.now + 60 * SEC, |n| n.b.fin.contains(&id)), "round {round}");
         net.run(net.now + 30 * MS, |_| false);
@@ -619,8 +613,8 @@ fn probe_with_repair(out: &mut Out, seed: u64) {
     net.buf.truncate(1300);
     assert!(net.connect(net.now + 30 * SEC), "{:?}", net.rx_drops);
     net.run(net.now + 3 * SEC, |_| false);
-    let id = net.a.conn.open_uni().unwrap();
-    net.a.conn.write(id, &pattern(100, seed)).unwrap();
+    let id = net.a.open_uni().unwrap();
+    net.a.write(id, &pattern(100, seed)).unwrap();
     net.a.conn.finish(id).unwrap();
     assert!(poll_a(&mut net).is_some(), "the stream packet leaves");
     assert_eq!(net.a.conn.stats().repairs, 0, "{:?}", net.a.conn.stats());
@@ -653,8 +647,8 @@ fn repair_after_no_packet(out: &mut Out, seed: u64) {
     enable(&mut net);
     assert!(net.connect(net.now + 30 * SEC), "{:?}", net.rx_drops);
     net.run(net.now + 3 * SEC, |_| false);
-    let id = net.a.conn.open_uni().unwrap();
-    net.a.conn.write(id, &pattern(100, seed)).unwrap();
+    let id = net.a.open_uni().unwrap();
+    net.a.write(id, &pattern(100, seed)).unwrap();
     net.a.conn.finish(id).unwrap();
     assert!(poll_a(&mut net).is_some(), "the stream packet leaves");
     assert_eq!(net.a.conn.stats().repairs, 0, "{:?}", net.a.conn.stats());

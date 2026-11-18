@@ -57,13 +57,13 @@ fn run(hold: u64, window: u64, cost: u64, stale: bool) -> Outcome {
             loop {
                 let mut wrote = false;
                 while ids.len() < STREAMS {
-                    let Ok(id) = n.a.conn.open_uni() else { break };
+                    let Ok(id) = n.a.open_uni() else { break };
                     ids.push(id);
                     wrote = true;
                 }
                 for (i, id) in ids.iter().enumerate() {
                     while off[i] < data.len() {
-                        let k = n.a.conn.write(*id, &data[off[i]..]).unwrap();
+                        let k = n.a.write(*id, &data[off[i]..]).unwrap();
                         if k == 0 {
                             break;
                         }

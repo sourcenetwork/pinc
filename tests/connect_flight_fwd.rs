@@ -121,6 +121,7 @@ impl Port for Stub {
             events_queued: 0,
             backlog_refused: 0,
             owed: 0,
+            store: pinc_transport::stream::store::StoreStats::default(),
         })
     }
 

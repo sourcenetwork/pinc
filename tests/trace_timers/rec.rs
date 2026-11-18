@@ -4,7 +4,7 @@
 use std::fmt::Write as _;
 
 use pinc_tests::*;
-use pinc_transport::conn::{CarrierView, CloseReason, Event, TimerView};
+use pinc_transport::conn::{CarrierView, CloseReason, Event, Lent, TimerView};
 
 /// The largest integer TLC holds.
 pub const TOP: i64 = 2_147_483_647;
@@ -122,7 +122,10 @@ impl Log {
     pub fn line(&mut self, n: usize, node: &mut Node<'_>, now: u64, op: &str, extra: &str) -> Vec<&'static str> {
         let v = node.conn.trace_timers();
         let mut ev = Vec::new();
-        while let Some(e) = node.conn.poll_event() {
+        while let Some(e) = node.conn.poll_event(Lent {
+            spill: &mut node.spill,
+            store: &mut node.store,
+        }) {
             ev.push(match e {
                 Event::Closed(r) => match r {
                     CloseReason::Local { .. } => "local",

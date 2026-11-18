@@ -3,7 +3,7 @@
 
 use pinc_crypto::IdentityAlg;
 use pinc_tests::*;
-use pinc_transport::conn::{Drop, PathId, code};
+use pinc_transport::conn::{Drop, Lent, PathId, code};
 use pinc_wire::Writer;
 
 use crate::rec::{Log, carrier_decision, ous, probe_json};
@@ -129,7 +129,7 @@ pub fn simple(log: &mut Log, n: usize, node: &mut Node<'_>, now: u64, op: &str, 
 
 /// The application opens a stream and writes `len` bytes on it.
 pub fn app(log: &mut Log, n: usize, node: &mut Node<'_>, now: u64, len: usize) {
-    let r = node.conn.open_bi().and_then(|id| node.conn.write(id, &vec![0x5a; len]));
+    let r = node.open_bi().and_then(|id| node.write(id, &vec![0x5a; len]));
     let ok = r.is_ok();
     if node.conn.is_closed() {
         assert!(!ok, "a closed connection took application data");
@@ -298,7 +298,14 @@ pub fn take_over<'a, 'b>(net: Net<'a, 'b>, f: impl FnOnce(&mut Duo<'a, 'b>)) {
         buf: vec![0u8; 65_536],
     };
     for x in &mut d.nodes {
-        while x.conn.poll_event().is_some() {}
+        while x
+            .conn
+            .poll_event(Lent {
+                spill: &mut x.spill,
+                store: &mut x.store,
+            })
+            .is_some()
+        {}
     }
     f(&mut d);
 }

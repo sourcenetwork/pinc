@@ -22,7 +22,7 @@ fn connected<'a>(w: &'a mut World, sa: &'a mut Store, sb: &'a mut Store, after: 
     let mut net = setup(w, sa, sb, Link::new(1, Params::new(MS)));
     assert!(net.connect(net.now + 10 * SEC), "{:?}", net.rx_drops);
     let mut pair = Pair::from_net(net);
-    let (ia, ib) = (pair.a.conn.open_bi().unwrap(), pair.b.conn.open_bi().unwrap());
+    let (ia, ib) = (pair.a.open_bi().unwrap(), pair.b.open_bi().unwrap());
     pair.settle();
     pair.events.clear();
     pair.pool.clear();
@@ -35,7 +35,7 @@ fn until_request(pair: &mut Pair<'_>, a: bool, stream: u64) -> (Vec<usize>, Reke
     let data = pattern(1100, 5);
     let mut built = Vec::new();
     for _ in 0..40 {
-        let _ = pair.node(a).conn.write(stream, &data);
+        let _ = pair.node(a).write(stream, &data);
         built.extend(pair.pump(a));
         if let Some(req) = sent_rekey(pair, a, false) {
             return (built, req);
@@ -170,7 +170,7 @@ fn a_late_copy_of_the_request_that_lost_a_collision_is_ignored() {
                 break;
             }
             for (a, id) in [(true, ia), (false, ib)] {
-                let _ = pair.node(a).conn.write(id, &data);
+                let _ = pair.node(a).write(id, &data);
             }
             pair.settle();
         }

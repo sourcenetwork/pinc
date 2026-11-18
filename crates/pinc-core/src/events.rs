@@ -88,7 +88,7 @@ ep_impl! {
                 return;
             }
             let Some(conn) = slot.conn.as_mut() else { return };
-            let Some(ev) = conn.poll_event() else { return };
+            let Some(ev) = conn.poll_event(lent!(self)) else { return };
             let co = match ev {
                 ConnEvent::KeyRequest(_) => Co::KeyRequest,
                 ConnEvent::Connected { resumed } => Co::Connected(resumed),

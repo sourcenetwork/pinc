@@ -58,7 +58,12 @@ conn_impl! {
     ///
     /// # Errors
     /// A [`Failure`] if there is no such request or the machine refuses the answer.
-    pub fn on_key_response(&mut self, env: &mut Env<'_, P>, resp: KeyResponse<'_>) -> Result<(), Failure> {
+    pub fn on_key_response(
+        &mut self,
+        env: &mut Env<'_, P>,
+        lent: &mut super::Lent<'_, 'a>,
+        resp: KeyResponse<'_>,
+    ) -> Result<(), Failure> {
         self.hs.request = None;
         let r = match self.hs.machine_mut() {
             Some(Machine::Client(m)) => m.on_key_response(env, resp),
@@ -66,7 +71,7 @@ conn_impl! {
             None => Err(Failure::UnexpectedKeyResponse),
         };
         self.count_unauthentic(&r);
-        self.pump(env);
+        self.with_lent(lent, |c| c.pump(env));
         r
     }
 
@@ -74,7 +79,12 @@ conn_impl! {
     ///
     /// # Errors
     /// As [`on_key_response`](Self::on_key_response).
-    pub fn answer_soft(&mut self, env: &mut Env<'_, P>, keys: &SoftKeys<'_, P>) -> Result<bool, Failure> {
+    pub fn answer_soft(
+        &mut self,
+        env: &mut Env<'_, P>,
+        lent: &mut super::Lent<'_, 'a>,
+        keys: &SoftKeys<'_, P>,
+    ) -> Result<bool, Failure> {
         self.hs.request = None;
         let r = match self.hs.machine_mut() {
             Some(Machine::Client(m)) => m.answer_soft(env, keys),
@@ -82,7 +92,7 @@ conn_impl! {
             None => Ok(false),
         };
         self.count_unauthentic(&r);
-        self.pump(env);
+        self.with_lent(lent, |c| c.pump(env));
         r
     }
 

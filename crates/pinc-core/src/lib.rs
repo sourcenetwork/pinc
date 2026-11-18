@@ -57,6 +57,8 @@ mod commands;
 mod endpoint;
 mod events;
 mod ext_in;
+#[cfg(feature = "alloc")]
+mod fresh;
 mod heap;
 mod iface;
 mod keepalive;

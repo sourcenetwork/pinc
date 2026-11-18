@@ -11,7 +11,7 @@
 
 use pinc_crypto::IdentityAlg;
 use pinc_tests::*;
-use pinc_transport::conn::{Lent, credit_for_streams};
+use pinc_transport::conn::credit_for_streams;
 use pinc_transport::stream;
 
 pinc_tests::install_counting_allocator!();
@@ -36,22 +36,13 @@ fn a_reset_of_a_stream_opened_past_the_peers_limit_leaves_once_the_limit_covers_
         );
         let mut net = setup(&mut w, &mut sa, &mut sb, Link::new(61, Params::new(5 * MS)));
         net.a.conn.allow_early_streams();
-        let ids: Vec<u64> = (0..LIMIT + 2).map(|_| net.a.conn.open_uni().unwrap()).collect();
+        let ids: Vec<u64> = (0..LIMIT + 2).map(|_| net.a.open_uni().unwrap()).collect();
         for &id in &ids[..LIMIT as usize] {
-            net.a.conn.write(id, &pattern(10, id)).unwrap();
+            net.a.write(id, &pattern(10, id)).unwrap();
             net.a.conn.finish(id).unwrap();
         }
         let late = ids[LIMIT as usize + 1];
-        net.a
-            .conn
-            .reset(
-                &mut Lent {
-                    spill: &mut net.a.spill,
-                },
-                late,
-                7,
-            )
-            .unwrap();
+        net.a.conn.reset(lent!(net.a), late, 7).unwrap();
         let seen = net.run(net.now + 10 * SEC, |n| {
             n.b.saw(|r| *r == Rec::Reset(late, 7)) || n.b.closed().is_some()
         });
@@ -72,9 +63,9 @@ fn a_stop_request_on_a_stream_opened_past_the_peers_limit_leaves_once_the_limit_
         );
         let mut net = setup(&mut w, &mut sa, &mut sb, Link::new(62, Params::new(5 * MS)));
         net.a.conn.allow_early_streams();
-        let ids: Vec<u64> = (0..=LIMIT).map(|_| net.a.conn.open_bi().unwrap()).collect();
+        let ids: Vec<u64> = (0..=LIMIT).map(|_| net.a.open_bi().unwrap()).collect();
         for &id in &ids[..LIMIT as usize] {
-            net.a.conn.write(id, &pattern(10, id)).unwrap();
+            net.a.write(id, &pattern(10, id)).unwrap();
             net.a.conn.finish(id).unwrap();
         }
         let late = ids[LIMIT as usize];
