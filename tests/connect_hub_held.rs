@@ -333,6 +333,46 @@ proptest! {
     }
 }
 
+#[test]
+fn a_return_on_a_fresh_ready_route_hands_the_mail_over() {
+    let mut fx = Fx::new();
+    let (a, _, m, seqs) = hold_for_sleeper(&mut fx, 2);
+    // the session is heard while its route is not ready: stamped, nothing sent
+    fx.s.2.push(m);
+    fx.r.udp_heard(T0 + 3 * SEC, &m, &mut fx.s).unwrap();
+    assert!(fx.fx().is_empty());
+    // the route becomes ready; the return hands the mail over
+    fx.s.2.clear();
+    fx.r.member_returned(T0 + 4 * SEC, &m, &mut fx.s);
+    assert_eq!(fx.fx(), spls(m, a, 1..=2));
+    assert_eq!(delivered(&fx), seqs);
+    assert_eq!(fx.r.mailbox_pending(&m).0, 0);
+}
+
+#[test]
+fn a_relay_datagram_from_a_member_with_a_ready_route_hands_its_mail_over() {
+    let mut fx = Fx::new();
+    let (a, _, m, seqs) = hold_for_sleeper(&mut fx, 2);
+    // the return finds no UDP session heard: silent
+    fx.r.member_returned(T0 + 3 * SEC, &m, &mut fx.s);
+    assert!(fx.fx().is_empty());
+    assert_eq!(fx.r.mailbox_pending(&m).0, 2);
+    // the member's own datagram is read on its validated route: the mail goes first, then the answer
+    let qad = dg(&Datagram::Qad { nonce: [3; 8] });
+    fx.r.datagram(T0 + 4 * SEC, addr(), Some(&m), &qad, &mut fx.s).unwrap();
+    let mut want = spls(m, a, 1..=2);
+    want.push(Rec::Udp(
+        UdpTarget::Reply(addr()),
+        dg(&Datagram::Qadr {
+            nonce: [3; 8],
+            addr: addr(),
+        }),
+    ));
+    assert_eq!(fx.fx(), want);
+    assert_eq!(delivered(&fx), seqs);
+    assert_eq!(fx.r.mailbox_pending(&m).0, 0);
+}
+
 /// A collector that counts the readiness questions and the effects it is given.
 #[derive(Default)]
 struct Probe {
