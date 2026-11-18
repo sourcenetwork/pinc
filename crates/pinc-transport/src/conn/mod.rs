@@ -67,6 +67,7 @@ mod handshake;
 mod held;
 mod hooks;
 mod keys;
+mod lent;
 mod life;
 mod mtu;
 mod params;
@@ -98,6 +99,7 @@ pub use held::{Held, Shared};
 pub use hooks::{SubOpen, SubWait};
 #[cfg(feature = "trace")]
 pub use keys::trace::{KeyEvent, KeysView, Slot};
+pub use lent::Lent;
 #[cfg(feature = "trace")]
 pub use mtu::trace::{MtuProbe, MtuView};
 pub use params::{CreditRecord, credit_for_streams, peer_limits};
@@ -457,6 +459,7 @@ where
         s.held_back = streams.held_back;
         s.range_overflows = streams.range_overflows;
         s.range_spills = streams.range_spills;
+        s.spill_refused = self.pool.spill_refused();
         s
     }
 

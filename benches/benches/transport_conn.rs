@@ -25,10 +25,11 @@ use pinc_crypto::provider::{KEM_CIPHERTEXT_LEN, KEM_ENCAPS_KEY_LEN};
 use pinc_crypto::{Aead, Capabilities, CryptoError, Drbg, IdentityAlg, Keypair, Provider, Secret, Software};
 use pinc_security::{AlpnList, Env, KeyHandle, LocalIdentity, PrekeyPolicy, ResponderStores, SoftKeys, SoftPrekeys};
 use pinc_transport::conn::{
-    ClientParams, Config, Connection, Event, PathId, PathInfo, Resources, ServerParams, Tables,
+    ClientParams, Config, Connection, Event, Lent, PathId, PathInfo, Resources, ServerParams, Tables,
 };
 use pinc_transport::recovery::LossEstimate;
 use pinc_transport::stream::pool::BufferPool;
+use pinc_transport::stream::spill::SpillArena;
 use pinc_transport::stream::{self, NoSource, Streams};
 
 const ALPN: &[u8] = b"pinc/1";
@@ -162,6 +163,9 @@ struct Rig<'a> {
     b: Conn<'a>,
     sa: Side,
     sb: Side,
+    /// Each side's spill arena, the endpoint default of 128 slots, lent to every call that can spill.
+    spa: SpillArena<'a>,
+    spb: SpillArena<'a>,
     stores: Box<ResponderStores<4, 16>>,
     now: u64,
     rng: u64,
@@ -239,6 +243,8 @@ impl<'a> Rig<'a> {
                 kp: kp_b,
                 prekeys: None,
             },
+            spa: SpillArena::new_boxed(128),
+            spb: SpillArena::new_boxed(128),
             stores: Box::default(),
             now: 1_000_000_000_000,
             rng: 0x9E37_79B9_7F4A_7C15,
@@ -297,7 +303,8 @@ impl<'a> Rig<'a> {
                     now: self.now,
                     drbg: &mut self.sa.drbg,
                 };
-                self.a.poll_transmit(&mut env, &mut self.abuf)
+                self.a
+                    .poll_transmit(&mut env, &mut Lent { spill: &mut self.spa }, &mut self.abuf)
             };
             *send += t.elapsed();
             let Some(tx) = tx else { break };
@@ -313,7 +320,13 @@ impl<'a> Rig<'a> {
                 drbg: &mut self.sb.drbg,
             };
             self.b
-                .handle_datagram_with(&mut env, &mut self.stores, PathId(2), &mut self.abuf[..tx.len])
+                .handle_datagram_with(
+                    &mut env,
+                    &mut Lent { spill: &mut self.spb },
+                    &mut self.stores,
+                    PathId(2),
+                    &mut self.abuf[..tx.len],
+                )
                 .ok();
             *recv += t.elapsed();
         }
@@ -324,7 +337,8 @@ impl<'a> Rig<'a> {
                     now: self.now,
                     drbg: &mut self.sb.drbg,
                 };
-                self.b.poll_transmit(&mut env, &mut self.bbuf)
+                self.b
+                    .poll_transmit(&mut env, &mut Lent { spill: &mut self.spb }, &mut self.bbuf)
             };
             let Some(tx) = tx else { break };
             moved = true;
@@ -338,18 +352,26 @@ impl<'a> Rig<'a> {
                 drbg: &mut self.sa.drbg,
             };
             self.a
-                .handle_datagram(&mut env, PathId(1), &mut self.bbuf[..tx.len])
+                .handle_datagram(
+                    &mut env,
+                    &mut Lent { spill: &mut self.spa },
+                    PathId(1),
+                    &mut self.bbuf[..tx.len],
+                )
                 .ok();
         }
         self.serve_keys();
-        for (conn, side) in [(&mut self.a, &mut self.sa), (&mut self.b, &mut self.sb)] {
+        for (conn, side, spill) in [
+            (&mut self.a, &mut self.sa, &mut self.spa),
+            (&mut self.b, &mut self.sb, &mut self.spb),
+        ] {
             if conn.poll_timeout().is_some_and(|t| t <= self.now) {
                 let mut env = Env {
                     provider: &side.prov,
                     now: self.now,
                     drbg: &mut side.drbg,
                 };
-                conn.handle_timeout(&mut env);
+                conn.handle_timeout(&mut env, &mut Lent { spill });
             }
         }
         moved
@@ -392,7 +414,9 @@ impl<'a> Rig<'a> {
             while let Some(c) = self.b.read_chunk(id) {
                 let n = c.len();
                 got += n;
-                self.b.consume(&mut env, id, n).unwrap();
+                self.b
+                    .consume(&mut env, &mut Lent { spill: &mut self.spb }, id, n)
+                    .unwrap();
             }
         }
     }

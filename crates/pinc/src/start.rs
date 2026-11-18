@@ -107,6 +107,7 @@ pub(crate) fn build<S: KeyStore, A: Admit>(mut cfg: CoreConfig<S, A>, now: u64) 
         identity,
         ecfg,
         cfg.limits.pool_chunks,
+        cfg.limits.spill_slots,
     )
     .ok_or_else(|| Error::config("a limit is out of range"))?;
     let mut prekeys = Prekeys::new()?;

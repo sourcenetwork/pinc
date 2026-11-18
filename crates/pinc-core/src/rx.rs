@@ -37,7 +37,7 @@ use pinc_transport::conn::{Connection, Drop, PathId, ServerParams, connect_limit
 use pinc_transport::packet::{LongHeader, LongType, short_dcid};
 use pinc_wire::Reader;
 
-use crate::endpoint::{CID_LEN, MAX_DATAGRAM, env, ep_impl};
+use crate::endpoint::{CID_LEN, MAX_DATAGRAM, env, ep_impl, lent};
 use crate::orphan::ORPHAN_MAX;
 use crate::relay_net::is_relay_addr;
 use crate::slot::State;
@@ -273,7 +273,7 @@ ep_impl! {
         // again. Packets that raise none (ACK, CLOSE) are still taken.
         conn.set_gated(slot.m.held.stalled() || self.events.stalled());
         let mut env = env!(self, now);
-        let r = conn.handle_datagram_with(&mut env, &mut self.stores, pid, buf);
+        let r = conn.handle_datagram_with(&mut env, &mut lent!(self), &mut self.stores, pid, buf);
         self.counters.stalled_in += u64::from(r == Err(Drop::Gated));
         let returned = conn.take_rejoined();
         if r.is_ok() {

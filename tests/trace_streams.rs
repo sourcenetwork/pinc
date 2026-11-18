@@ -37,6 +37,7 @@ use std::fmt::Write as _;
 
 use pinc_tests::{SplitMix64, big_stack};
 use pinc_transport::stream::pool::{BufferPool, CHUNK_SIZE, Chunk};
+use pinc_transport::stream::spill::SpillArena;
 use pinc_transport::stream::trace::{SlotView, TableView};
 use pinc_transport::stream::{Config, ControlFrame, NoSource, PeerLimits, StreamError, Streams};
 
@@ -300,11 +301,36 @@ impl Run<'_> {
     }
 
     fn burst(&mut self) {
-        // Many one-byte frames at even offsets of one stream spill its stored ranges past the 96 it keeps inline.
-        let id = REMOTE[self.below(4) as usize];
+        // Many one-byte frames at even offsets of one stream fragment its stored ranges past the 96 it can track. A
+        // third of the time a second stream is fragmented too, which the session's one arena slot cannot take.
+        // Open peer streams whose first chunk is held take the frames rather than holding them back.
+        let mut ids: Vec<u64> = self
+            .view()
+            .slots
+            .iter()
+            .filter(|s| s.id != u64::MAX && s.id % 2 == 0 && s.open && s.held.contains(&0))
+            .map(|s| s.id)
+            .collect();
+        if ids.is_empty() {
+            ids.push(REMOTE[self.below(4) as usize]);
+        }
+        ids.truncate(if self.below(3) == 0 { 2 } else { 1 });
+        for &id in &ids {
+            self.scatter(id, 8);
+        }
+        // Half the time the holes are then filled, so a spilled set shrinks through half of inline and moves back.
+        if self.below(2) == 0 {
+            for &id in &ids {
+                self.scatter(id, 9);
+            }
+        }
+    }
+
+    /// One-byte frames at every other offset of stream `id` from `from`, inside its limit.
+    fn scatter(&mut self, id: u64, from: u64) {
         let limit = self.slot(id).map_or(WINDOW, |s| s.limit);
         for k in 0..110u64 {
-            let off = 2 * k + 8;
+            let off = 2 * k + from;
             if off < limit {
                 self.frame(id, off, 1, false, false);
             }
@@ -681,7 +707,9 @@ fn fresh(seed: u64, out: &mut String, run: u32) -> Run<'_> {
         window: 1 << 20,
         max_streams: 2,
     };
-    let pool = BufferPool::new_boxed(POOL);
+    // Two slots: a session holds at most one (ARENA in TraceStreams.cfg), so a second spilled stream is refused.
+    let mut pool = BufferPool::new_boxed(POOL);
+    pool.lend_spill(SpillArena::new_boxed(2));
     let t = Box::new(Table::new(&config, &pool));
     Run {
         t,
@@ -725,6 +753,16 @@ fn run(seed: u64, out: &mut String, run: u32, early: bool, reset_early: bool) ->
     } else {
         u64::MAX
     };
+    if run == 1 {
+        // The session's one arena slot: stream 0 spills into it, stream 4 is refused it (Fragmented), stream 0's holes
+        // fill so it moves back, and stream 4 then spills into the slot it gave back.
+        r.frame(0, 0, 1, false, false);
+        r.frame(4, 0, 1, false, false);
+        r.scatter(0, 8);
+        r.scatter(4, 8);
+        r.scatter(0, 9);
+        r.scatter(4, 8);
+    }
     for k in 0..220 {
         if k == establish_at {
             r.establish();
@@ -800,7 +838,7 @@ fn stream_table_runs_match_the_models() {
             );
         }
         // The runs reach the interesting steps: a peer stream held back and admitted later, stop requests sent and lost, implicit opens, a deferred grant, a conflict, a stream
-        // whose ranges outgrew their inline array and spilled into a pool chunk, a limit raised, a reset acknowledged.
+        // whose ranges outgrew their inline array and spilled into an arena slot, one refused the slot, a limit raised, a reset acknowledged.
         for needle in [
             r#""kind":"stop""#,
             r#""fresh":true"#,
@@ -808,6 +846,7 @@ fn stream_table_runs_match_the_models() {
             r#""opened":2"#,
             r#""err":"Conflict""#,
             r#""sp":true"#,
+            r#""err":"Fragmented""#,
             r#""err":"FlowControl""#,
             r#""err":"Exhausted""#,
             r#""defer":true"#,
@@ -827,7 +866,7 @@ fn stream_table_runs_match_the_models() {
     });
 }
 
-/// A stream whose ranges filled the pool chunk they spilled into refuses the next hole with `Fragmented`: 1,024 ranges
+/// A stream whose ranges filled the arena slot they spilled into refuses the next hole with `Fragmented`: 512 ranges
 /// of one byte, then one more. The runs above never get that far, so the refusal has a run of its own.
 #[test]
 fn a_stream_that_fills_its_spill_chunk_is_refused_fragmented_in_the_trace() {

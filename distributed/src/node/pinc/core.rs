@@ -260,7 +260,15 @@ fn build<const K: usize, const D: usize>(
     cfg.conn.interface_mtu = spec.mtu;
     cfg.conn.credit = pinc_security::CreditRecord::new(1 << 20, stream_limit(), u16::MAX);
     let ep_drbg = Drbg::new(&seed32(&spec.name, "pinc-ep-drbg"));
-    let mut ep: Box<Ep<K, D>> = Endpoint::new_owned(now, prov, ep_drbg, identity, cfg, spec.pool_chunks);
+    let mut ep: Box<Ep<K, D>> = Endpoint::new_owned(
+        now,
+        prov,
+        ep_drbg,
+        identity,
+        cfg,
+        spec.pool_chunks,
+        pinc_transport::stream::spill::DEFAULT_SLOTS,
+    );
     let mut env = Env {
         provider: &prov,
         now,

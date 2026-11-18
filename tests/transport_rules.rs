@@ -131,7 +131,8 @@ fn a_colliding_connection_id_is_decided_by_the_packet_authentication() {
         dg[1] = shared.as_bytes()[0];
         let before = n2.b.conn.stats();
         let now = n2.now;
-        let r = n2.b.with_env(now, |c, env| c.handle_datagram(env, PathId(2), &mut dg));
+        let r =
+            n2.b.with_lent(now, |c, env, l| c.handle_datagram(env, l, PathId(2), &mut dg));
         assert!(r.is_err(), "another session's packet must not open");
         assert!(n2.b.conn.is_connected());
         assert_eq!(n2.b.conn.stats().packets_received, before.packets_received);
@@ -152,7 +153,7 @@ fn close_carries_one_code_and_leave_is_0x4c() {
         let (mut sa, mut sb) = (Store::new(true), Store::new(false));
         let mut net = connected(&mut w, &mut sa, &mut sb, Link::new(3, Params::new(5 * MS)));
         let now = net.now;
-        net.a.with_env(now, |c, env| c.close(env, code::LEAVE));
+        net.a.with_lent(now, |c, env, l| c.close(env, l, code::LEAVE));
         assert!(net.run(net.now + SEC, |n| n.b.closed().is_some()));
         assert_eq!(net.b.closed(), Some(CloseReason::Peer { error: 0x4C }));
         assert!(net.a.conn.is_closed() && net.b.conn.is_closed());
@@ -717,7 +718,7 @@ fn dcid_of(d: &[u8], cid_len: usize) -> Option<ConnId> {
 fn drain(node: &mut Node<'_>, now: u64) -> Vec<(PathId, Vec<u8>)> {
     let mut buf = vec![0u8; 65_536];
     let mut out = Vec::new();
-    while let Some(t) = node.with_env(now, |c, env| c.poll_transmit(env, &mut buf)) {
+    while let Some(t) = node.with_lent(now, |c, env, l| c.poll_transmit(env, l, &mut buf)) {
         out.extend(buf[..t.len].chunks(t.segment_size).map(|s| (t.path, s.to_vec())));
     }
     out
@@ -739,7 +740,9 @@ fn a_forged_handshake_packet_on_a_candidate_path_moves_validates_and_names_nothi
         net.flush();
         // The forger read the dialing side's id in its first flight; the body is no fragment of a message.
         let mut d = forge_packet(net.a.conn.local_cids().next().unwrap(), &[0xff; 4]);
-        let _ = net.a.with_env(now, |c, env| c.handle_datagram(env, PathId(3), &mut d));
+        let _ = net
+            .a
+            .with_lent(now, |c, env, l| c.handle_datagram(env, l, PathId(3), &mut d));
         assert_eq!(net.a.conn.active_path(), Some(PathId(1)));
         assert!(net.a.conn.path_validated(PathId(1)));
         assert!(!net.a.conn.path_validated(PathId(3)));
@@ -808,8 +811,8 @@ fn a_forged_packet_between_the_parts_of_a_reply_moves_nothing_and_the_part_that_
         let t1 = T0 + 10 * MS;
         for (path, mut d) in drain(&mut client, T0) {
             assert_eq!(path, PathId(1));
-            let _ = server.with_env(t1, |c, env| {
-                c.handle_datagram_with(env, &mut *w.stores, PathId(2), &mut d)
+            let _ = server.with_lent(t1, |c, env, l| {
+                c.handle_datagram_with(env, l, &mut *w.stores, PathId(2), &mut d)
             });
         }
         server.service(t1);
@@ -819,17 +822,17 @@ fn a_forged_packet_between_the_parts_of_a_reply_moves_nothing_and_the_part_that_
         let t2 = t1 + 10 * MS;
         // The first part arrives on path 1, then a forged packet on path 5.
         client
-            .with_env(t2, |c, env| c.handle_datagram(env, PathId(1), &mut reply[0].1))
+            .with_lent(t2, |c, env, l| c.handle_datagram(env, l, PathId(1), &mut reply[0].1))
             .unwrap();
         let mut d = forge_packet(client.conn.local_cids().next().unwrap(), &[0xff; 4]);
-        let _ = client.with_env(t2, |c, env| c.handle_datagram(env, PathId(5), &mut d));
+        let _ = client.with_lent(t2, |c, env, l| c.handle_datagram(env, l, PathId(5), &mut d));
         client.service(t2);
         assert_eq!(client.conn.active_path(), Some(PathId(1)));
         assert!(client.conn.path_validated(PathId(1)));
         assert!(!client.conn.path_validated(PathId(5)));
         // The rest arrives on path 3 and completes the Reply, which authenticates: the session continues there.
         for (_, d) in reply.iter_mut().skip(1) {
-            let _ = client.with_env(t2, |c, env| c.handle_datagram(env, PathId(3), d));
+            let _ = client.with_lent(t2, |c, env, l| c.handle_datagram(env, l, PathId(3), d));
         }
         client.service(t2);
         assert!(client.connected());
@@ -846,8 +849,8 @@ fn a_forged_packet_between_the_parts_of_a_reply_moves_nothing_and_the_part_that_
             if let Ok((header, _)) = LongHeader::parse(&d) {
                 assert_eq!(header.dcid, server_id);
             }
-            let _ = server.with_env(t3, |c, env| {
-                c.handle_datagram_with(env, &mut *w.stores, PathId(4), &mut d)
+            let _ = server.with_lent(t3, |c, env, l| {
+                c.handle_datagram_with(env, l, &mut *w.stores, PathId(4), &mut d)
             });
         }
         server.service(t3);
@@ -867,7 +870,7 @@ fn a_forged_reply_that_the_machine_takes_gives_no_round_trip_sample() {
         let reply = forge_reply(&net.a.prov, &initial, &Forgery::Unopened);
         let mut d = forge_message(net.a.conn.local_cids().next().unwrap(), &reply);
         net.a
-            .with_env(t0, |c, env| c.handle_datagram(env, PathId(1), &mut d))
+            .with_lent(t0, |c, env, l| c.handle_datagram(env, l, PathId(1), &mut d))
             .unwrap();
         net.a.service(t0);
         assert!(!net.a.conn.is_closed(), "a Reply that does not open is dropped");
@@ -890,7 +893,9 @@ fn a_handshake_message_dropped_for_not_authenticating_is_counted_on_either_side(
         // One refused before the machine takes it, one after its sealed block opened.
         for how in [Forgery::ZeroKey, Forgery::Garbage] {
             let mut d = forge_message(dcid, &forge_reply(&net.a.prov, &initial, &how));
-            let _ = net.a.with_env(now, |c, env| c.handle_datagram(env, PathId(1), &mut d));
+            let _ = net
+                .a
+                .with_lent(now, |c, env, l| c.handle_datagram(env, l, PathId(1), &mut d));
             net.a.service(now);
         }
         assert_eq!(net.a.conn.stats().handshake_dropped, 2);
@@ -911,7 +916,7 @@ fn a_handshake_message_dropped_for_not_authenticating_is_counted_on_either_side(
         let stores = &mut *net.stores;
         let r = net
             .b
-            .with_env(t, |c, env| c.handle_datagram_with(env, stores, PathId(2), &mut d));
+            .with_lent(t, |c, env, l| c.handle_datagram_with(env, l, stores, PathId(2), &mut d));
         assert!(r.is_err() && !net.b.conn.is_closed(), "{r:?}");
         assert_eq!(net.b.conn.stats().handshake_dropped, 1);
         assert!(net.connect(t + 5 * SEC), "{:?}", net.rx_drops);
@@ -931,9 +936,9 @@ fn a_handshaking_responder_learns_the_path_of_a_forged_packet_but_neither_valida
         let now = net.now;
         let mut d = forge_packet(net.b.conn.local_cids().next().unwrap(), &[0xff; 4]);
         let stores = &mut *net.stores;
-        let _ = net
-            .b
-            .with_env(now, |c, env| c.handle_datagram_with(env, stores, PathId(6), &mut d));
+        let _ = net.b.with_lent(now, |c, env, l| {
+            c.handle_datagram_with(env, l, stores, PathId(6), &mut d)
+        });
         assert!(net.b.conn.has_path(PathId(6)));
         assert!(!net.b.conn.path_validated(PathId(6)));
         assert_eq!(net.b.conn.active_path(), Some(PathId(2)));

@@ -120,8 +120,8 @@ conn_impl! {
     /// Close the connection with `error`. One CLOSE goes out with the next `poll_transmit` and the connection is
     /// over; nothing waits afterwards. Call `poll_transmit` before `handle_timeout`: the timer ends a closing
     /// connection, and a CLOSE that has not left by then is not sent.
-    pub fn close(&mut self, env: &mut Env<'_, P>, error: u64) {
-        self.begin_close(env.now, error, CloseReason::Local { error });
+    pub fn close(&mut self, env: &mut Env<'_, P>, lent: &mut super::Lent<'_, 'a>, error: u64) {
+        self.with_lent(lent, |c| c.begin_close(env.now, error, CloseReason::Local { error }));
     }
 
     /// Set (or turn off) the keepalive interval: a PING goes out after this long without sending anything.

@@ -47,7 +47,7 @@ use std::collections::BTreeMap;
 
 use pinc_crypto::IdentityAlg;
 use pinc_tests::*;
-use pinc_transport::conn::{CreditRecord, PackKind, PackMode, PackProbe, PackRecord, PathId, PathInfo};
+use pinc_transport::conn::{CreditRecord, Lent, PackKind, PackMode, PackProbe, PackRecord, PathId, PathInfo};
 use pinc_transport::frame::{Frame, FrameIter, MAX_STREAM_END, ext, stream_overhead};
 use pinc_wire::{Reader, Writer, varint};
 
@@ -461,7 +461,16 @@ fn requests(out: &mut Out, seed: u64, loss: f64) {
     let id = net.a.conn.open_bi().unwrap();
     net.a.conn.write(id, &pattern(5000, 1)).unwrap();
     net.run(net.now + 50 * MS, |_| false);
-    net.a.conn.reset(id, 7).unwrap();
+    net.a
+        .conn
+        .reset(
+            &mut Lent {
+                spill: &mut net.a.spill,
+            },
+            id,
+            7,
+        )
+        .unwrap();
     let id2 = net.a.conn.open_bi().unwrap();
     net.a.conn.write(id2, b"stop me").unwrap();
     net.run(net.now + 50 * MS, |_| false);
@@ -513,7 +522,7 @@ fn life(out: &mut Out, seed: u64) {
     net.a.conn.ping();
     net.run(net.now + SEC, |_| false);
     let now = net.now;
-    net.b.with_env(now, |c, env| c.close(env, 3));
+    net.b.with_lent(now, |c, env, l| c.close(env, l, 3));
     net.run(net.now + SEC, |_| false);
     take(out, &mut net);
 }
@@ -587,7 +596,8 @@ fn repair(out: &mut Out, seed: u64) {
 fn poll_a(net: &mut Net<'_, '_>) -> Option<usize> {
     let now = net.now;
     let Net { a, buf, .. } = net;
-    a.with_env(now, |c, env| c.poll_transmit(env, buf)).map(|t| t.len)
+    a.with_lent(now, |c, env, l| c.poll_transmit(env, l, buf))
+        .map(|t| t.len)
 }
 
 /// A tail repair that is due together with a path MTU probe: a connection old enough and with a loss average high

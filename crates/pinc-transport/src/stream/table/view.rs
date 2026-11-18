@@ -25,8 +25,8 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
                 v
             })
             .collect();
-        // A receive half whose ranges spilled holds one more chunk; a send half's spill counts with the others.
-        let held: u64 = slots.iter().map(|v| v.held.len() as u64 + u64::from(v.spilled)).sum();
+        // A spill holds a slot of the arena, never a pool chunk.
+        let held: u64 = slots.iter().map(|v| v.held.len() as u64).sum();
         TableView {
             slots,
             remote_next: self.remote_next,

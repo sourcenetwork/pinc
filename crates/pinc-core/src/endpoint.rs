@@ -167,6 +167,8 @@ pub struct Endpoint<
     pub(crate) cfg: EndpointConfig,
     pub(crate) alpns: [Option<Alpn>; MAX_ALPNS],
     pub(crate) slots: Slots<'s, Slot<'a, P, S, N, C, F, NP>, K>,
+    /// The slots every session's range sets spill into, lent to each connection call that can use them (`lent!`).
+    pub(crate) spill: pinc_transport::stream::spill::SpillArena<'a>,
     /// What an endpoint that owns its table makes a slot's memory from; `None` when the host gave every slot its own.
     #[cfg(feature = "alloc")]
     pub(crate) fresh: Option<Fresh>,
@@ -317,7 +319,9 @@ where
     /// a session needs them. So the endpoint holds the memory of as many sessions as it has had at once, as large as
     /// they grew, not of the `K` it may have. Nothing outlives the endpoint and nothing is borrowed, so dropping it
     /// frees everything. The endpoint is built on the heap, piece by piece: no table of megabytes is ever formed on
-    /// the stack. `D` must be at least ten times `K`.
+    /// the stack. `D` must be at least ten times `K`. The sessions' range sets spill into one arena of `spill_slots`
+    /// slots of [`pinc_transport::stream::spill::SLOT_RANGES`] ranges (8 KiB each), made here and never grown; 0 turns
+    /// spilling off.
     pub fn new_owned(
         now: u64,
         provider: P,
@@ -325,6 +329,7 @@ where
         identity: LocalIdentity,
         cfg: EndpointConfig,
         pool_chunks: usize,
+        spill_slots: usize,
     ) -> alloc::boxed::Box<Self> {
         use alloc::{boxed::Box, vec::Vec};
 
@@ -338,6 +343,7 @@ where
             Slots::Owned(Vec::with_capacity(K)),
         ));
         ep.fresh = Some(Fresh::new(pool_chunks));
+        ep.spill = pinc_transport::stream::spill::SpillArena::new_boxed(spill_slots);
         ep
     }
 
@@ -391,6 +397,14 @@ impl Fresh {
     }
 }
 
+/// What the endpoint lends a connection call: its spill arena.
+macro_rules! lent {
+    ($s:ident) => {
+        ::pinc_transport::conn::Lent { spill: &mut $s.spill }
+    };
+}
+pub(crate) use lent;
+
 /// The environment a connection call needs, borrowing only the provider and the generator.
 macro_rules! env {
     ($s:ident, $now:expr) => {
@@ -442,6 +456,7 @@ ep_impl! {
             cfg,
             alpns: [None; MAX_ALPNS],
             slots,
+            spill: pinc_transport::stream::spill::SpillArena::default(),
             #[cfg(feature = "alloc")]
             fresh: None,
             free,
@@ -860,7 +875,7 @@ ep_impl! {
         slot.m.generation = slot.m.generation.wrapping_add(1);
         slot.m.next_free = self.free;
         if let Some(c) = slot.conn.take() {
-            slot.mem = Some(c.into_resources());
+            slot.mem = Some(c.into_resources(&mut lent!(self)));
         }
         self.free = idx;
         self.live = self.live.saturating_sub(1);

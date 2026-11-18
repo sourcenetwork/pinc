@@ -138,7 +138,11 @@ conn_impl! {
     /// Write the next datagram into `out`. Returns `None` when there is nothing to send now (call again after the
     /// next input or timeout). With `Config::max_gso` above 1, several same-size datagrams to one path may be
     /// batched in `out`; `segment_size` is the size of each.
-    pub fn poll_transmit(&mut self, env: &mut Env<'_, P>, out: &mut [u8]) -> Option<Transmit> {
+    pub fn poll_transmit(&mut self, env: &mut Env<'_, P>, lent: &mut super::Lent<'_, 'a>, out: &mut [u8]) -> Option<Transmit> {
+        self.with_lent(lent, |c| c.poll_transmit_inner(env, out))
+    }
+
+    fn poll_transmit_inner(&mut self, env: &mut Env<'_, P>, out: &mut [u8]) -> Option<Transmit> {
         self.paced_until = None;
         self.life.clock = env.now;
         match self.phase {

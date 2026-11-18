@@ -13,7 +13,7 @@
 )]
 
 use pinc_security::{Env, ResponderStores};
-use pinc_transport::conn::{Drop, KeyEvent, KeysView, PathId, Transmit};
+use pinc_transport::conn::{Drop, KeyEvent, KeysView, Lent, PathId, Transmit};
 
 use super::{Net, Node, PK, TK};
 
@@ -91,7 +91,9 @@ impl<'a> Pair<'a> {
                 path,
                 len,
                 segment_size,
-            }) = node.conn.poll_transmit(&mut env, &mut self.buf)
+            }) = node
+                .conn
+                .poll_transmit(&mut env, &mut Lent { spill: &mut node.spill }, &mut self.buf)
             else {
                 break;
             };
@@ -149,16 +151,29 @@ impl<'a> Pair<'a> {
                 now,
                 drbg: &mut self.a.drbg,
             };
-            self.a.conn.handle_datagram(&mut env, path_of(d.path, true), &mut bytes)
+            self.a.conn.handle_datagram(
+                &mut env,
+                &mut Lent {
+                    spill: &mut self.a.spill,
+                },
+                path_of(d.path, true),
+                &mut bytes,
+            )
         } else {
             let mut env = Env {
                 provider: &self.b.prov,
                 now,
                 drbg: &mut self.b.drbg,
             };
-            self.b
-                .conn
-                .handle_datagram_with(&mut env, &mut self.stores, path_of(d.path, false), &mut bytes)
+            self.b.conn.handle_datagram_with(
+                &mut env,
+                &mut Lent {
+                    spill: &mut self.b.spill,
+                },
+                &mut self.stores,
+                path_of(d.path, false),
+                &mut bytes,
+            )
         };
         if let Err(e) = result {
             self.drops.push((to_a, e));
@@ -177,7 +192,7 @@ impl<'a> Pair<'a> {
                 now,
                 drbg: &mut node.drbg,
             };
-            node.conn.handle_timeout(&mut env);
+            node.conn.handle_timeout(&mut env, &mut Lent { spill: &mut node.spill });
         }
         node_service(self, a);
         self.drain(a);

@@ -269,7 +269,7 @@ fn a_handshake_flight_can_leave_on_several_candidate_paths() {
         let mut paths = Vec::new();
         let mut buf = vec![0u8; 65_536];
         let mut drain = |client: &mut Node<'_>, paths: &mut Vec<(PathId, usize)>| {
-            while let Some(t) = client.with_env(now, |c, env| c.poll_transmit(env, &mut buf)) {
+            while let Some(t) = client.with_lent(now, |c, env, l| c.poll_transmit(env, l, &mut buf)) {
                 paths.push((t.path, t.len));
             }
         };
@@ -283,9 +283,9 @@ fn a_handshake_flight_can_leave_on_several_candidate_paths() {
         client.conn.set_flight_fanout(&[second]);
         paths.clear();
         let later = now + 600 * MS;
-        client.with_env(later, pinc_transport::conn::Connection::handle_timeout);
+        client.with_lent(later, pinc_transport::conn::Connection::handle_timeout);
         let mut buf2 = vec![0u8; 65_536];
-        while let Some(t) = client.with_env(later, |c, env| c.poll_transmit(env, &mut buf2)) {
+        while let Some(t) = client.with_lent(later, |c, env, l| c.poll_transmit(env, l, &mut buf2)) {
             paths.push((t.path, t.len));
         }
         let on = |p: PathId| paths.iter().filter(|(q, _)| *q == p).map(|(_, l)| l).sum::<usize>();
@@ -398,7 +398,7 @@ fn a_flight_can_skip_the_primary_path_and_leave_on_the_listed_ones_only() {
         client.conn.set_flight_skip_primary(true);
         let mut buf = vec![0u8; 65_536];
         let mut paths = Vec::new();
-        while let Some(t) = client.with_env(now, |c, env| c.poll_transmit(env, &mut buf)) {
+        while let Some(t) = client.with_lent(now, |c, env, l| c.poll_transmit(env, l, &mut buf)) {
             paths.push((t.path, t.len));
         }
         assert!(
@@ -408,8 +408,8 @@ fn a_flight_can_skip_the_primary_path_and_leave_on_the_listed_ones_only() {
         // The resend after the timer goes the same way, and only there.
         paths.clear();
         let later = now + 600 * MS;
-        client.with_env(later, pinc_transport::conn::Connection::handle_timeout);
-        while let Some(t) = client.with_env(later, |c, env| c.poll_transmit(env, &mut buf)) {
+        client.with_lent(later, pinc_transport::conn::Connection::handle_timeout);
+        while let Some(t) = client.with_lent(later, |c, env, l| c.poll_transmit(env, l, &mut buf)) {
             paths.push((t.path, t.len));
         }
         assert!(
@@ -420,16 +420,16 @@ fn a_flight_can_skip_the_primary_path_and_leave_on_the_listed_ones_only() {
         client.conn.set_flight_fanout(&[]);
         paths.clear();
         let later = later + 2 * SEC_NS;
-        client.with_env(later, pinc_transport::conn::Connection::handle_timeout);
-        while let Some(t) = client.with_env(later, |c, env| c.poll_transmit(env, &mut buf)) {
+        client.with_lent(later, pinc_transport::conn::Connection::handle_timeout);
+        while let Some(t) = client.with_lent(later, |c, env, l| c.poll_transmit(env, l, &mut buf)) {
             paths.push((t.path, t.len));
         }
         assert!(paths.is_empty(), "a try with no path sends nothing: {paths:?}");
         // Turned off, the flight returns to the primary path.
         client.conn.set_flight_skip_primary(false);
         let later = later + 10 * SEC_NS;
-        client.with_env(later, pinc_transport::conn::Connection::handle_timeout);
-        while let Some(t) = client.with_env(later, |c, env| c.poll_transmit(env, &mut buf)) {
+        client.with_lent(later, pinc_transport::conn::Connection::handle_timeout);
+        while let Some(t) = client.with_lent(later, |c, env, l| c.poll_transmit(env, l, &mut buf)) {
             paths.push((t.path, t.len));
         }
         assert!(paths.iter().any(|(p, _)| *p == PathId(1)), "{paths:?}");

@@ -219,10 +219,13 @@ pub struct Stats {
     pub ptos: u64,
     /// Peer streams held back for want of room (see `StreamStats::held_back`).
     pub held_back: u64,
-    /// Range maps of streams that were full even spilled (see `StreamStats::range_overflows`).
+    /// Range maps that were full, so a range was widened, sent again or a frame refused (see
+    /// `StreamStats::range_overflows`).
     pub range_overflows: u64,
-    /// Times a stream's range map moved into a pool chunk (see `StreamStats::range_spills`).
+    /// Range sets that moved into a slot of the endpoint's spill arena.
     pub range_spills: u64,
+    /// Range sets that needed a spill slot and found none free, in the arena or in the session's share of it.
+    pub spill_refused: u64,
     /// Repair packets sent.
     pub repairs: u64,
     /// Datagrams dropped from the send queue to make room.

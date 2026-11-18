@@ -71,7 +71,11 @@ conn_impl! {
 
     /// Run whatever timer expired: the handshake retransmit, loss detection and probes, path challenges, the wake
     /// wait, the idle timeout and the end of a close.
-    pub fn handle_timeout(&mut self, env: &mut Env<'_, P>) {
+    pub fn handle_timeout(&mut self, env: &mut Env<'_, P>, lent: &mut super::Lent<'_, 'a>) {
+        self.with_lent(lent, |c| c.handle_timeout_inner(env));
+    }
+
+    fn handle_timeout_inner(&mut self, env: &mut Env<'_, P>) {
         let now = env.now;
         match self.phase {
             Phase::Closed => return,

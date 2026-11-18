@@ -24,7 +24,7 @@ use pinc_crypto::NodeId;
 use pinc_transport::conn::code;
 
 use crate::api::{CommandError, Event, SessionId};
-use crate::endpoint::{AcpAnswer, env, ep_impl};
+use crate::endpoint::{AcpAnswer, env, ep_impl, lent};
 use crate::slot::State;
 use crate::trace::trace;
 
@@ -143,7 +143,7 @@ ep_impl! {
             slot.m.deferred_close = Some(code::FLOW_CONTROL);
         } else if let Some(conn) = slot.conn.as_mut() {
             let mut env = env!(self, now);
-            conn.close(&mut env, code::FLOW_CONTROL);
+            conn.close(&mut env, &mut lent!(self), code::FLOW_CONTROL);
         }
         if announce_failure && let (Some(node), Some(alpn)) = (peer, alpn) {
             self.emit(Event::ConnectFailed {
@@ -162,7 +162,7 @@ ep_impl! {
         let Some(error) = slot.m.deferred_close.take() else { return false };
         if let Some(conn) = slot.conn.as_mut() {
             let mut env = env!(self, now);
-            conn.close(&mut env, error);
+            conn.close(&mut env, &mut lent!(self), error);
         }
         true
     }

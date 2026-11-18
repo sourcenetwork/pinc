@@ -121,7 +121,9 @@ fn rx(l: &mut Log, net: &mut Net<'_, '_>, p: u64, d: &[u8]) {
     );
     let (coal, rej) = (has_short(&net.a.conn, d), is_reject(d));
     let mut d = d.to_vec();
-    let r = net.a.with_env(now, |c, env| c.handle_datagram(env, PathId(p), &mut d));
+    let r = net
+        .a
+        .with_lent(now, |c, env, l| c.handle_datagram(env, l, PathId(p), &mut d));
     assert!(
         !matches!(r, Err(pinc_transport::conn::Drop::NoPath)),
         "a datagram on path {p} was dropped for its path"

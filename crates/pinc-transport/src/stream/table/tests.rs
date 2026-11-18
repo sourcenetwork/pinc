@@ -287,11 +287,12 @@ fn a_window_follows_the_rate_of_its_own_stream() {
 
 /// Scattered drops leave a stream more holes than its inline range set holds. Before #478 the frame that needed one
 /// more range was refused (`Fragmented`) and its packet went unacknowledged, so the sender declared it lost and sent it
-/// again though it had arrived. Now the set spills into one pool chunk: every frame is stored, the stream reads through
-/// once the holes fill, and the chunk is back in the pool when the stream ends.
+/// again though it had arrived. Now the set spills into one arena slot: every frame is stored, the stream reads through
+/// once the holes fill, and the slot is back in the arena when the stream ends.
 #[test]
-fn a_stream_with_more_holes_than_its_inline_ranges_spills_into_one_pool_chunk() {
+fn a_stream_with_more_holes_than_its_inline_ranges_spills_into_one_arena_slot() {
     let mut pool = BufferPool::new_boxed(64);
+    pool.lend_spill(crate::stream::spill::SpillArena::new_boxed(8));
     let mut cfg = Config::new(false);
     cfg.initial_stream_window = 64 * 1024;
     let mut t: Streams<NoSource, 72, 65> = Streams::new(&cfg, &pool);
@@ -300,7 +301,11 @@ fn a_stream_with_more_holes_than_its_inline_ranges_spills_into_one_pool_chunk() 
         let got = t.on_stream_frame(&mut pool, 0, 20 * k + 10, &[7; 10], false);
         assert_eq!(got, Ok(()), "frame {k} of {holes} refused");
     }
-    assert_eq!(pool.used_chunks(), 2, "one ring chunk and the spill chunk");
+    assert_eq!(
+        (pool.used_chunks(), pool.spill_held()),
+        (1, 1),
+        "one ring chunk, and the spill slot"
+    );
     assert_eq!(t.stats().range_spills, 1, "the spill is counted once");
     assert_eq!(t.stats().range_overflows, 0);
     for k in 0..holes {
@@ -315,22 +320,23 @@ fn a_stream_with_more_holes_than_its_inline_ranges_spills_into_one_pool_chunk() 
     t.consume(&mut pool, 0, 0, 0, 0).unwrap();
     assert_eq!(read, 20 * holes);
     assert_eq!(
-        pool.used_chunks(),
-        0,
-        "the ring chunk and the spill chunk are back in the pool"
+        (pool.used_chunks(), pool.spill_held()),
+        (0, 0),
+        "the ring chunk and the spill slot are back"
     );
 }
 
-/// The spill chunk is the bound: a stream holds at most `SPILL` (1,024) received ranges. The frame that would need
+/// The spill slot is the bound: a stream holds at most `SLOT_RANGES` (512) received ranges. The frame that would need
 /// one more is refused (`Fragmented`) and counted, and the set is as it was, so a later frame that fills a hole
 /// is stored.
 #[test]
 fn a_stream_whose_spilled_ranges_are_full_refuses_the_next_hole_and_counts_it() {
     let mut pool = BufferPool::new_boxed(64);
+    pool.lend_spill(crate::stream::spill::SpillArena::new_boxed(8));
     let mut cfg = Config::new(false);
     cfg.initial_stream_window = 64 * 1024;
     let mut t: Streams<NoSource, 72, 65> = Streams::new(&cfg, &pool);
-    let full = crate::stream::ranges::SPILL as u64;
+    let full = crate::stream::spill::SLOT_RANGES as u64;
     for k in 0..full {
         let got = t.on_stream_frame(&mut pool, 0, 20 * k + 10, &[7; 10], false);
         assert_eq!(got, Ok(()), "frame {k} of {full} refused");
@@ -340,7 +346,7 @@ fn a_stream_whose_spilled_ranges_are_full_refuses_the_next_hole_and_counts_it() 
     assert_eq!(
         got,
         Err(StreamError::Fragmented),
-        "range {} is past the spill chunk",
+        "range {} is past the spill slot",
         full + 1
     );
     assert_eq!(t.stats().range_overflows, 1, "the refusal is counted");

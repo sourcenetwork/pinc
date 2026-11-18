@@ -64,7 +64,9 @@ fn forged_then_real(pick: Pick) {
         let now = net.now;
         let reply = forge_reply(&net.a.prov, &initial, &how);
         let mut d = forge_message(net.a.conn.local_cids().next().unwrap(), &reply);
-        let r = net.a.with_env(now, |c, env| c.handle_datagram(env, PathId(1), &mut d));
+        let r = net
+            .a
+            .with_lent(now, |c, env, l| c.handle_datagram(env, l, PathId(1), &mut d));
         net.a.service(now);
         assert_eq!(net.a.closed(), None, "{pick:?} ({r:?})");
         assert!(net.connect(now + 5 * SEC), "{pick:?}: {:?}", net.rx_drops);
@@ -110,7 +112,9 @@ fn a_forged_resume_reply_with_a_zero_key_share_is_dropped_and_the_real_one_resum
         net.flush();
         let now = net.now;
         let mut d = forge_message(net.a.conn.local_cids().next().unwrap(), &forge_resume_reply());
-        let taken = net.a.with_env(now, |c, env| c.handle_datagram(env, PathId(1), &mut d));
+        let taken = net
+            .a
+            .with_lent(now, |c, env, l| c.handle_datagram(env, l, PathId(1), &mut d));
         net.a.service(now);
         assert_eq!(net.a.closed(), None, "{taken:?}");
         assert!(net.connect(now + 5 * SEC), "{:?}", net.rx_drops);
@@ -141,7 +145,8 @@ fn a_handshake_that_hears_only_forged_replies_ends_at_its_connect_limit() {
             if n.now >= due {
                 let now = n.now;
                 let mut d = replies[sent % replies.len()].clone();
-                let _ = n.a.with_env(now, |c, env| c.handle_datagram(env, PathId(1), &mut d));
+                let _ =
+                    n.a.with_lent(now, |c, env, l| c.handle_datagram(env, l, PathId(1), &mut d));
                 n.a.service(now);
                 sent += 1;
                 due = now + SEC;

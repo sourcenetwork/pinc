@@ -20,7 +20,7 @@ use core::net::SocketAddr;
 
 use pinc_transport::conn::PathId;
 
-use crate::endpoint::{MAX_DATAGRAM, StashMeta, env, ep_impl};
+use crate::endpoint::{MAX_DATAGRAM, StashMeta, env, ep_impl, lent};
 use crate::trace::trace;
 
 /// A datagram, or a batch of equal-size datagrams, for the host to send.
@@ -61,7 +61,7 @@ ep_impl! {
                 continue;
             };
             let mut env = env!(self, now);
-            let Some(tx) = conn.poll_transmit(&mut env, out) else {
+            let Some(tx) = conn.poll_transmit(&mut env, &mut lent!(self), out) else {
                 self.dirty_pop(q);
                 let closing = self.run_deferred_close(i, now);
                 self.settle_core(i, now, closing);
@@ -156,7 +156,7 @@ ep_impl! {
             let room = (out.len() - first.len).min(MAX_DATAGRAM);
             let Some(window) = out.get_mut(first.len..first.len + room) else { return };
             let mut env = env!(self, now);
-            let Some(tx) = conn.poll_transmit(&mut env, window) else {
+            let Some(tx) = conn.poll_transmit(&mut env, &mut lent!(self), window) else {
                 // A window shorter than a full datagram may be why there was none: the session stays for the next call.
                 if room < MAX_DATAGRAM {
                     return;

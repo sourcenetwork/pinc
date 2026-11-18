@@ -58,6 +58,13 @@ pub struct Limits {
     /// use, so thousands of quiet sessions hold little whatever the ceiling. Streams that move data at once are charged
     /// their whole window, so a path whose bandwidth times round trip is above half the pool needs more.
     pub pool_chunks: usize,
+    /// The slots of the endpoint's spill arena (0 to 65,536; default 128, 1 MiB): when a stream's ranges (received,
+    /// lost or acknowledged) outgrow the few it keeps inline, under scattered loss, they move into one 8 KiB slot until
+    /// they shrink to half of inline again. The arena is allocated once with the endpoint, commits a slot's memory the
+    /// first time it is used, and is shared by every session, each holding at most half of it. With no slot free a
+    /// received frame that needs one more range is refused and sent again by the peer, and a lost range is widened or
+    /// sent again; 0 turns spilling off.
+    pub spill_slots: usize,
     /// The receive window a stream starts with, in bytes (default 1,310,720, 1.25 MiB). It grows toward twice what the
     /// stream's own reader drains per round trip, up to half the pool and `(RING - 1) * 16 KiB` (4 MiB): a stream moves at
     /// most one window per round trip. The pool is charged the window of a stream from its first byte, so a raised
@@ -101,6 +108,7 @@ impl Default for Limits {
         Self {
             connections: 1024,
             pool_chunks: 1024,
+            spill_slots: pinc_transport::stream::spill::DEFAULT_SLOTS,
             stream_window: 1_310_720,
             // vertexia: the transport's own default is the reference's 1,310,720 bytes, a figure sized for its test
             // links; at the facade a session of one stream or many would be held to 8.7 MiB/s on a 150 ms path
@@ -126,6 +134,7 @@ impl Limits {
     pub fn check(&self) -> Result<()> {
         let ok = (1..=MAX_CONNECTIONS).contains(&self.connections)
             && (8..=65_535).contains(&self.pool_chunks)
+            && self.spill_slots <= 65_536
             && (16 * 1024..=16 * 1024 * 1024).contains(&self.stream_window)
             && (16 * 1024..=1 << 30).contains(&self.send_window)
             && (1..=STREAMS / 2).contains(&usize::from(self.streams))

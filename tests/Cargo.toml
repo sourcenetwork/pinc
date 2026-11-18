@@ -182,6 +182,10 @@ name = "transport_stream_pool"
 path = "transport_stream_pool.rs"
 
 [[test]]
+name = "transport_spill"
+path = "transport_spill.rs"
+
+[[test]]
 name = "transport_stream_ring"
 path = "transport_stream_ring.rs"
 
@@ -572,6 +576,10 @@ path = "core_reorder.rs"
 [[test]]
 name = "core_noalloc"
 path = "core_noalloc.rs"
+
+[[test]]
+name = "core_spill"
+path = "core_spill.rs"
 
 [[test]]
 name = "core_garbage"

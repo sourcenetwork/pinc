@@ -102,13 +102,13 @@ impl<S: StreamSource, const C: usize> Send<S, C> {
         self.ring.release_all(pool);
     }
 
-    /// Give back the pool chunks the lost and acknowledged ranges spilled into; the slot is being freed.
+    /// Return the spill slots of the lost and acknowledged ranges; the stream slot is being freed.
     pub(super) fn release_sets(&mut self, pool: &mut BufferPool<'_>) {
         self.lost.clear(pool);
         self.acked.clear(pool);
     }
 
-    /// The times the lost and acknowledged ranges spilled into a pool chunk since the last call.
+    /// The times the lost and acknowledged ranges spilled into an arena slot since the last call.
     pub(super) fn take_spills(&mut self) -> u64 {
         self.lost.take_spills() + self.acked.take_spills()
     }
@@ -369,8 +369,10 @@ impl<S: StreamSource, const C: usize> Send<S, C> {
         }
         let range = offset..offset.saturating_add(len).min(self.sent_max);
         let (mut widened, mut at) = (0, range.start);
-        // One gap at a time: the acknowledged ranges are read from the pool and the lost ones written to it.
-        while let Some(gap) = self.acked.gaps(pool, at..range.end).next() {
+        // One gap at a time: the acknowledged ranges are read from the arena and the lost ones written to it.
+        loop {
+            let next = self.acked.gaps(pool, at..range.end).next();
+            let Some(gap) = next else { break };
             at = gap.end;
             widened += usize::from(self.lost.insert_widening(pool, gap));
         }

@@ -1,4 +1,4 @@
-//! Unit tests of the range set: spilling into a pool chunk and moving back, against a plain model.
+//! Unit tests of the range set: spilling into an arena slot and moving back, against a plain model.
 
 use alloc::vec::Vec;
 
@@ -9,6 +9,13 @@ type Set = RangeSet<4>;
 
 fn contents(s: &Set, pool: &BufferPool<'_>) -> Vec<Range<u64>> {
     s.overlaps(pool, 0..u64::MAX).collect()
+}
+
+/// A pool lent an arena of eight slots, as the endpoint lends it for a call.
+fn spilling() -> BufferPool<'static> {
+    let mut pool = BufferPool::new_boxed(4);
+    pool.lend_spill(crate::stream::spill::SpillArena::new_boxed(8));
+    pool
 }
 
 /// `n` disjoint, non-adjacent intervals of 5 offsets, 10 apart.
@@ -24,7 +31,7 @@ fn filled(pool: &mut BufferPool<'_>, n: u64) -> Set {
     s
 }
 
-/// The chunk takes and returns the pool saw across `edit`, from its used count after each step.
+/// The slot takes and returns the arena saw across `edit`, from the slots the session holds after each step.
 struct Moves {
     takes: u32,
     returns: u32,
@@ -36,12 +43,12 @@ impl Moves {
         Self {
             takes: 0,
             returns: 0,
-            used: pool.used_chunks(),
+            used: pool.spill_held(),
         }
     }
 
     fn after(&mut self, pool: &BufferPool<'_>) {
-        let now = pool.used_chunks();
+        let now = pool.spill_held();
         self.takes += u32::from(now > self.used);
         self.returns += u32::from(now < self.used);
         self.used = now;
@@ -62,7 +69,7 @@ fn rem(s: &mut Set, pool: &mut BufferPool<'_>, m: &mut Moves, r: Range<u64>) {
 /// crossing, and a set that sits between the two does not move on any edit.
 #[test]
 fn a_set_moves_once_per_crossing_and_not_at_all_between_the_boundaries() {
-    let mut pool = BufferPool::new_boxed(4);
+    let mut pool = spilling();
     let mut s = filled(&mut pool, 4);
     let mut m = Moves::new(&pool);
     assert!(!s.is_spilled(), "four intervals fit inline");
@@ -70,7 +77,7 @@ fn a_set_moves_once_per_crossing_and_not_at_all_between_the_boundaries() {
         // 4 -> 5 spills.
         ins(&mut s, &mut pool, &mut m, 40..45);
         assert!(s.is_spilled());
-        // Between 3 and 5 intervals the chunk stays, edit by edit.
+        // Between 3 and 5 intervals the slot stays, edit by edit.
         for _ in 0..10 {
             rem(&mut s, &mut pool, &mut m, 40..45);
             ins(&mut s, &mut pool, &mut m, 40..45);
@@ -78,7 +85,7 @@ fn a_set_moves_once_per_crossing_and_not_at_all_between_the_boundaries() {
         rem(&mut s, &mut pool, &mut m, 30..35);
         ins(&mut s, &mut pool, &mut m, 30..35);
         assert!(s.is_spilled(), "cycle {cycle}: 5 intervals stay spilled");
-        // 5 -> 2 returns the chunk on the edit that reaches 2, and not before.
+        // 5 -> 2 returns the slot on the edit that reaches 2, and not before.
         rem(&mut s, &mut pool, &mut m, 40..45);
         rem(&mut s, &mut pool, &mut m, 30..35);
         assert!(s.is_spilled(), "cycle {cycle}: 3 intervals stay spilled");
@@ -101,7 +108,7 @@ fn a_set_moves_once_per_crossing_and_not_at_all_between_the_boundaries() {
 /// The move back keeps every interval, in order, and the lowest one is what `first` answers.
 #[test]
 fn moving_back_inline_keeps_every_range() {
-    let mut pool = BufferPool::new_boxed(4);
+    let mut pool = spilling();
     let mut s = filled(&mut pool, 9);
     assert!(s.is_spilled());
     assert_eq!(contents(&s, &pool), run_of(9));
@@ -111,33 +118,33 @@ fn moving_back_inline_keeps_every_range() {
         assert_eq!(contents(&s, &pool), run_of(k as u64), "after cutting interval {k}");
         assert_eq!(s.is_spilled(), k > 2);
     }
-    assert_eq!(pool.used_chunks(), 0, "the chunk is back in the pool");
+    assert_eq!(pool.spill_held(), 0, "the slot is back in the arena");
     assert_eq!(s.first(), Some(0..5));
     s.take_front(&mut pool, 100).unwrap();
     assert_eq!(s.first(), Some(10..15));
 }
 
-/// An emptied set holds no chunk, whichever edit emptied it.
+/// An emptied set holds no slot, whichever edit emptied it.
 #[test]
-fn an_empty_set_holds_no_chunk() {
-    let mut pool = BufferPool::new_boxed(4);
+fn an_empty_set_holds_no_slot() {
+    let mut pool = spilling();
     let mut s = filled(&mut pool, 6);
-    assert_eq!(pool.used_chunks(), 1);
+    assert_eq!(pool.spill_held(), 1);
     while s.take_front(&mut pool, u64::MAX).is_some() {}
     assert!(s.is_empty());
     assert!(!s.is_spilled());
-    assert_eq!(pool.used_chunks(), 0);
+    assert_eq!(pool.spill_held(), 0);
     let mut s = filled(&mut pool, 6);
     s.remove(&mut pool, &(0..100)).unwrap();
     assert!(!s.is_spilled());
-    assert_eq!(pool.used_chunks(), 0);
+    assert_eq!(pool.spill_held(), 0);
 }
 
 /// An insertion between spilled intervals shifts the ones above it right, a merge joins its neighbours and a cut in
 /// the middle of an interval splits it.
 #[test]
 fn edits_in_the_middle_of_a_spilled_set_shift_the_intervals_around_them() {
-    let mut pool = BufferPool::new_boxed(4);
+    let mut pool = spilling();
     let mut s = filled(&mut pool, 8);
     assert!(s.is_spilled());
     // New interval between the 4th (30..35) and 5th (40..45).
@@ -190,7 +197,7 @@ fn any_edit_sequence_gives_the_contents_of_a_plain_model_while_the_set_spills_an
     let (mut takes, mut returns) = (0, 0);
     for seed in 0..64u64 {
         let mut rng = Rng(seed);
-        let mut pool = BufferPool::new_boxed(4);
+        let mut pool = spilling();
         let mut s = Set::EMPTY;
         let mut model = [false; SPAN];
         let mut m = Moves::new(&pool);
@@ -238,7 +245,10 @@ fn any_edit_sequence_gives_the_contents_of_a_plain_model_while_the_set_spills_an
                 !s.is_spilled() || s.len > 2,
                 "seed {seed} step {step}: spilled only above half the inline size"
             );
-            assert_eq!(pool.used_chunks(), usize::from(s.is_spilled()));
+            assert_eq!(
+                (pool.used_chunks(), pool.spill_held()),
+                (0, usize::from(s.is_spilled()))
+            );
         }
         takes += m.takes;
         returns += m.returns;

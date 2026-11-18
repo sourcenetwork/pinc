@@ -29,7 +29,7 @@ use pinc_transport::conn::{Connection, PathId, PathInfo, SubOpen, SubWait};
 use pinc_transport::frame::ext;
 
 use crate::api::{CommandError, SessionId};
-use crate::endpoint::{CID_LEN, env, ep_impl};
+use crate::endpoint::{CID_LEN, env, ep_impl, lent};
 use crate::keepalive::Role;
 use crate::slot::State;
 
@@ -308,7 +308,7 @@ ep_impl! {
                 if let Some(s) = self.slots.get_mut(c) {
                     s.m.orphaned = true;
                     if let Some(k) = s.conn.as_mut() {
-                        k.close(&mut env!(self, now), pinc_transport::conn::code::NO_ERROR);
+                        k.close(&mut env!(self, now), &mut lent!(self), pinc_transport::conn::code::NO_ERROR);
                     }
                 }
             }

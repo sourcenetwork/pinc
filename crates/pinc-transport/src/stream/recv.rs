@@ -7,6 +7,7 @@
 use super::flow::{Meter, Window};
 use super::pool::{BufferPool, CHUNK_SIZE, Ring};
 use super::ranges::RangeSet;
+use super::spill::SpillArena;
 use super::{FIRST_CHARGE, MAX_OFFSET, RECV_RANGES, RecvStatus, StreamError};
 
 /// A request to the sender to stop, and where it stands.
@@ -147,9 +148,14 @@ impl<const C: usize> Recv<C> {
         self.ranges.clear(pool);
     }
 
-    /// The times the received ranges spilled into a pool chunk since the last call.
+    /// The times the received ranges spilled into an arena slot since the last call.
     pub(super) fn take_spills(&mut self) -> u64 {
         self.ranges.take_spills()
+    }
+
+    /// Forget the received ranges and return their spill slot; the connection is going away.
+    pub(super) fn release_sets(&mut self, pool: &mut BufferPool<'_>) {
+        self.ranges.clear(pool);
     }
 
     /// The pool bytes the credit up to the granted limit may still claim, as the ledger counts them
@@ -252,7 +258,7 @@ impl<const C: usize> Recv<C> {
                 }
             }
         }
-        if self.ring.missing(first, last) + self.ranges.insert_cost(pool, &(lo..end)) > pool.available_chunks() {
+        if self.ring.missing(first, last) > pool.available_chunks() {
             return Err(StreamError::Exhausted);
         }
         self.ranges.insert(pool, lo..end).map_err(|_| StreamError::Fragmented)?;
@@ -274,24 +280,25 @@ impl<const C: usize> Recv<C> {
 
     /// The stored bytes from absolute offset `at`, to the end of the stored run holding it or of its chunk; the run
     /// may lie beyond a hole. `None` below the read position, past a reset, or where nothing is stored.
-    pub(super) fn read_at<'a>(&self, pool: &'a BufferPool<'_>, at: u64) -> Option<&'a [u8]> {
+    /// `arena` is the endpoint's, which holds the received ranges if they spilled.
+    pub(super) fn read_at<'a>(&self, pool: &'a BufferPool<'_>, arena: &SpillArena<'_>, at: u64) -> Option<&'a [u8]> {
         if self.reset.is_some() || at < self.read_off {
             return None;
         }
-        let run = self.ranges.containing(pool, at)?;
+        let run = self.ranges.containing(arena, at)?;
         let chunk = CHUNK_SIZE as u64;
         let len = usize::try_from((run.end - at).min(chunk - at % chunk)).ok()?;
         self.ring.span(pool, at / chunk, (at % chunk) as usize, len)
     }
 
     /// The first stored run that reaches past `from`, cut to start at `from` or later.
-    pub(super) fn stored_after(&self, pool: &BufferPool<'_>, from: u64) -> Option<core::ops::Range<u64>> {
+    pub(super) fn stored_after(&self, arena: &SpillArena<'_>, from: u64) -> Option<core::ops::Range<u64>> {
         if self.reset.is_some() {
             return None;
         }
         let from = from.max(self.read_off);
         self.ranges
-            .first_ending_after(pool, from)
+            .first_ending_after(arena, from)
             .map(|r| r.start.max(from)..r.end)
     }
 

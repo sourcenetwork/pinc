@@ -100,7 +100,7 @@ pub fn dial_run(log: &mut Log, seed: u64, close_at: Option<u64>) {
             close(log, 0, &mut node, now, 9);
         }
         loop {
-            let r = node.with_env(now, |c, env| c.poll_transmit(env, &mut buf));
+            let r = node.with_lent(now, |c, env, l| c.poll_transmit(env, l, &mut buf));
             let len = r.map_or(0, |t| t.len);
             log.line(0, &mut node, now, "tx", &format!(r#","len":{len}"#));
             if r.is_none() {

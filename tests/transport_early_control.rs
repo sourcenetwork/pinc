@@ -11,7 +11,7 @@
 
 use pinc_crypto::IdentityAlg;
 use pinc_tests::*;
-use pinc_transport::conn::credit_for_streams;
+use pinc_transport::conn::{Lent, credit_for_streams};
 use pinc_transport::stream;
 
 pinc_tests::install_counting_allocator!();
@@ -42,7 +42,16 @@ fn a_reset_of_a_stream_opened_past_the_peers_limit_leaves_once_the_limit_covers_
             net.a.conn.finish(id).unwrap();
         }
         let late = ids[LIMIT as usize + 1];
-        net.a.conn.reset(late, 7).unwrap();
+        net.a
+            .conn
+            .reset(
+                &mut Lent {
+                    spill: &mut net.a.spill,
+                },
+                late,
+                7,
+            )
+            .unwrap();
         let seen = net.run(net.now + 10 * SEC, |n| {
             n.b.saw(|r| *r == Rec::Reset(late, 7)) || n.b.closed().is_some()
         });
