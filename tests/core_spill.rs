@@ -86,7 +86,7 @@ fn burst(from: SocketAddr, on: Rc<Cell<bool>>, sent: Rc<Cell<u64>>) -> LossFn {
         }
         let k = sent.get() + 1;
         sent.set(k);
-        (4000..4400).contains(&k) && k % 2 == 0
+        (4000..4400).contains(&k) && k.is_multiple_of(2)
     })
 }
 

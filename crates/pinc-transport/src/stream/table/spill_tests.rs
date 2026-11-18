@@ -360,3 +360,16 @@ fn a_session_holds_at_most_half_of_the_arena() {
         "the arena holds no more than its slots"
     );
 }
+
+/// A slot given back while no arena is lent is counted lost, in every build, so a call path that frees a range set
+/// without its `Lent` shows in the statistics instead of shrinking the arena silently.
+#[test]
+fn a_slot_given_back_with_no_arena_lent_is_counted_lost() {
+    let mut pool = lent(2);
+    let r = pool.spill_take().unwrap();
+    let arena = pool.return_spill();
+    assert_eq!(pool.spill_lost(), 0);
+    pool.spill_give(r);
+    assert_eq!(pool.spill_lost(), 1, "the slot is counted lost");
+    assert_eq!(arena.held(), 1, "and the arena still has it out");
+}

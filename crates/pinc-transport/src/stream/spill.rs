@@ -3,17 +3,17 @@
 //!
 //! Invariants: the arena never holds more slots than it was made with, and its memory is all taken when it is made
 //! (a caller slab, or one zeroed buffer the system commits as slots are first written); taking and returning a slot
-//! is O(1) and never allocates: fresh slots come from a bump cursor, returned ones form a last-in first-out list kept in
-//! their first word. A session holds at most half of the slots ([`SpillUse::take`]), so one session cannot shut out the
-//! rest. A [`SpillRef`] is neither `Copy` nor `Clone`, so a slot cannot be returned twice through safe code. With no
-//! slot left a range set does what it did with no arena: the received ranges refuse the frame and the lost and
-//! acknowledged ranges fall back, each counted as a refusal.
+//! is O(1) and never allocates: fresh slots come from a bump cursor, returned ones form a last-in first-out list kept
+//! in their first word. A session holds at most half of the slots, so one session cannot shut out the rest. A
+//! [`SpillRef`] is neither `Copy` nor `Clone`, so a slot cannot be returned twice through safe code. With no slot left
+//! a range set does what it did with no arena: the received ranges refuse the frame and the lost and acknowledged
+//! ranges fall back, each counted as a refusal.
 //!
 //! The endpoint owns the arena and lends it, by `&mut` in a [`Lent`](crate::conn::Lent), to each connection call that
 //! can spill, read a spilled set or return a slot. For that call the arena moves into the session's pool
-//! ([`BufferPool::lend_spill`]) and moves back when it returns ([`BufferPool::return_spill`]); between calls a session
-//! holds only the indices of its slots. No cell, no reference count: the borrow checker keeps every session's call
-//! apart.
+//! ([`BufferPool::lend_spill`](super::pool::BufferPool::lend_spill)) and moves back when it returns
+//! ([`BufferPool::return_spill`](super::pool::BufferPool::return_spill)); between calls a session holds only the
+//! indices of its slots. No cell, no reference count: the borrow checker keeps every session's call apart.
 
 use core::num::NonZeroU32;
 
@@ -165,12 +165,13 @@ impl<'a> SpillArena<'a> {
 }
 
 /// One session's use of its endpoint's arena: the arena while a call has it lent, the slots the session holds, and
-/// the spills refused.
+/// what it lost: the spills refused and the slots given back with no arena lent.
 #[derive(Debug, Default)]
 pub(super) struct SpillUse<'p> {
     arena: Option<SpillArena<'p>>,
     held: u32,
     refused: u64,
+    lost: u64,
 }
 
 impl SpillUse<'_> {
@@ -191,11 +192,14 @@ impl SpillUse<'_> {
     }
 
     fn give(&mut self, r: SpillRef) {
-        // Every call that can free a range set is lent the arena; without it the slot would stay held.
-        debug_assert!(self.arena.is_some(), "a spill slot was returned with no arena lent");
-        if let Some(a) = self.arena.as_mut() {
-            self.held = self.held.saturating_sub(1);
-            a.give(r);
+        // Every call that can free a range set is lent the arena. A give without one would lose the slot until the
+        // endpoint is rebuilt, so it is counted (`spill_lost`) in every build.
+        match self.arena.as_mut() {
+            Some(a) => {
+                self.held = self.held.saturating_sub(1);
+                a.give(r);
+            }
+            None => self.lost += 1,
         }
     }
 }
@@ -220,6 +224,11 @@ impl<'p> super::pool::BufferPool<'p> {
     /// Spills refused for want of a slot since the pool was made or last [`reset`](Self::reset).
     pub const fn spill_refused(&self) -> u64 {
         self.spill.refused
+    }
+
+    /// Spill slots given back with no arena lent, so lost to the arena; always 0 unless a call path misses its lend.
+    pub const fn spill_lost(&self) -> u64 {
+        self.spill.lost
     }
 
     pub(super) fn reset_spill_counts(&mut self) {

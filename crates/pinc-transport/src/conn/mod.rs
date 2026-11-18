@@ -483,6 +483,7 @@ where
         s.range_overflows = streams.range_overflows;
         s.range_spills = streams.range_spills;
         s.spill_refused = self.pool.spill_refused();
+        s.spill_lost = self.pool.spill_lost();
         s
     }
 

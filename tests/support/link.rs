@@ -618,54 +618,8 @@ impl<'a, 'b, const C: usize, const F: usize> Net<'a, 'b, C, F> {
     pub fn flush(&mut self) -> bool {
         let mut moved = false;
         loop {
-            let mut progress = false;
             let mut now = self.now;
-            while let Some((p, mut d)) = self.link.pop_b(now) {
-                self.b_rx += d.len() as u64;
-                let mut env = Env {
-                    provider: &self.b.prov,
-                    now,
-                    drbg: &mut self.b.drbg,
-                };
-                if let Err(e) = self.b.conn.handle_datagram_with(
-                    &mut env,
-                    &mut Lent {
-                        spill: &mut self.b.spill,
-                    },
-                    self.stores,
-                    p,
-                    &mut d,
-                ) {
-                    self.rx_drops.push((false, e));
-                }
-                progress = true;
-                self.now += self.cost_ns;
-                if !self.stale_clock {
-                    now = self.now;
-                }
-            }
-            while let Some((p, mut d)) = self.link.pop_a(now) {
-                let mut env = Env {
-                    provider: &self.a.prov,
-                    now,
-                    drbg: &mut self.a.drbg,
-                };
-                if let Err(e) = self.a.conn.handle_datagram(
-                    &mut env,
-                    &mut Lent {
-                        spill: &mut self.a.spill,
-                    },
-                    p,
-                    &mut d,
-                ) {
-                    self.rx_drops.push((true, e));
-                }
-                progress = true;
-                self.now += self.cost_ns;
-                if !self.stale_clock {
-                    now = self.now;
-                }
-            }
+            let mut progress = self.deliver(&mut now);
             if self.drop_finish && self.a.conn.is_connected() && !self.b.conn.is_connected() {
                 self.link.route(PathId(1)).ab.drop_next(1);
                 self.drop_finish = false;
@@ -730,6 +684,57 @@ impl<'a, 'b, const C: usize, const F: usize> Net<'a, 'b, C, F> {
         moved
     }
 
+    /// Hand each node the datagrams due for it, advancing the clock by the per-datagram cost. Returns whether any arrived.
+    fn deliver(&mut self, now: &mut u64) -> bool {
+        let mut progress = false;
+        while let Some((p, mut d)) = self.link.pop_b(*now) {
+            self.b_rx += d.len() as u64;
+            let mut env = Env {
+                provider: &self.b.prov,
+                now: *now,
+                drbg: &mut self.b.drbg,
+            };
+            if let Err(e) = self.b.conn.handle_datagram_with(
+                &mut env,
+                &mut Lent {
+                    spill: &mut self.b.spill,
+                },
+                self.stores,
+                p,
+                &mut d,
+            ) {
+                self.rx_drops.push((false, e));
+            }
+            progress = true;
+            self.now += self.cost_ns;
+            if !self.stale_clock {
+                *now = self.now;
+            }
+        }
+        while let Some((p, mut d)) = self.link.pop_a(*now) {
+            let mut env = Env {
+                provider: &self.a.prov,
+                now: *now,
+                drbg: &mut self.a.drbg,
+            };
+            if let Err(e) = self.a.conn.handle_datagram(
+                &mut env,
+                &mut Lent {
+                    spill: &mut self.a.spill,
+                },
+                p,
+                &mut d,
+            ) {
+                self.rx_drops.push((true, e));
+            }
+            progress = true;
+            self.now += self.cost_ns;
+            if !self.stale_clock {
+                *now = self.now;
+            }
+        }
+        progress
+    }
     /// The next time anything is due.
     pub fn next_at(&self) -> Option<u64> {
         [
