@@ -511,7 +511,10 @@ impl<const K: usize, const D: usize> Rec<K, D> {
         });
         // the exact count, read after the write: every reject kept was counted once when it left, none twice
         self.written += sent;
-        assert_eq!(self.written, self.queued, "a reject was not counted exactly once when sent");
+        assert_eq!(
+            self.written, self.queued,
+            "a reject was not counted exactly once when sent"
+        );
         v
     }
 

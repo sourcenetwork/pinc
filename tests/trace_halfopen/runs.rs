@@ -54,7 +54,6 @@ pub fn big_run(run: u32, seed: u64) -> (String, String, Seen) {
     // the dialer then holds a ticket
     d.damage = true;
     let s = d.dial(3 * SEC_NS);
-    d.reverse = false;
     d.hang_up(s);
     // a close of a half-open session: it counts until it is freed
     let open = d.r.unauth();

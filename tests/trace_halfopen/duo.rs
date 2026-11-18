@@ -37,8 +37,6 @@ pub struct Duo {
     pub taken: usize,
     /// Damage the next first message the dialer sends, as a path that flips a bit would.
     pub damage: bool,
-    /// Deliver what the dialer sent in one tick in reverse.
-    pub reverse: bool,
 }
 
 /// Flip a bit of the message a first flight starts, 20 bytes into it.
@@ -62,7 +60,6 @@ impl Duo {
             r,
             taken: 0,
             damage: false,
-            reverse: false,
         }
     }
 
@@ -76,27 +73,15 @@ impl Duo {
         while let Some((from, to, mut d)) = self.net.captured.get(self.taken).cloned() {
             self.taken += 1;
             if to == self.r.addr {
-                let mut genuine = true;
                 if self.damage && matches!(kind_of(&d), 1 | 2) {
                     self.damage = false;
-                    self.reverse = true;
-                    genuine = false;
                     damage(&mut d);
                 }
-                batch.push((from, d, genuine));
+                batch.push((from, d));
             }
         }
-        if self.reverse && batch.len() > 1 {
-            // after the damage, what arrives together arrives in reverse, so the start of a repeated first message
-            // is what completes it
-            batch.reverse();
-        }
-        for (from, d, genuine) in batch {
-            if genuine {
-                self.r.peer_dgram(now, from, d);
-            } else {
-                self.r.dgram(now, from, d, None);
-            }
+        for (from, d) in batch {
+            self.r.peer_dgram(now, from, d);
         }
         self.r.tick(now);
         for (local, remote, d) in self.r.transmit(now) {
