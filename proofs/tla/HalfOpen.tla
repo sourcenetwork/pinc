@@ -104,7 +104,7 @@
 (* Lean counterpart: proofs/lean/Vinc/CoreHalfOpen*.lean, and              *)
 (* proofs/lean/Vinc/CoreBacklog*.lean for the room.                        *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, FiniteSets
+EXTENDS Integers, Sequences, FiniteSets, TLC
 CONSTANTS K, MAX, LIFE, HOLD, FULL, SHORT, HELLO, TMAX, LENS, IDS, MAXH, BUG_LE, BUG_GE, SUPERSEDE,
           QCAP, BUG_ROOM, BUG_EST, BUG_GONE, BUG_SUB, BUG_HALF, BUG_HOLD, BUG_REJ, BUG_LATE
 VARIABLES e, ids, stalled, refused, left, timed, resumed, atcap, kept, ow, pend, q, gone, busy, heldok, roomref,
