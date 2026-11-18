@@ -54,7 +54,6 @@ use vinc_crypto::{Keypair, NodeId};
 use vinc_tests::SplitMix64;
 
 const SEC: u64 = 1_000_000_000;
-type R = Relay<3, 4, 2, 300>;
 
 struct Names(Vec<NodeId>);
 
@@ -215,11 +214,35 @@ struct Cov {
     heard_deliv: u32,
     tunnel_held: u32,
     refused_held: u32,
+    stepped_over: u32,
+}
+
+/// The numbers of a mailbox trace line `["t","<kind>",node,seq,...]`.
+fn mailbox_line(e: &str, kind: &str) -> Option<(u64, u64, u64)> {
+    let mut f = e.strip_prefix(r#"["t",""#)?.strip_suffix(']')?.split(',');
+    let tail = f.next()?.strip_suffix('"')?;
+    if tail != kind {
+        return None;
+    }
+    let mut num = || f.next().and_then(|v| v.parse().ok());
+    Some((num()?, num()?, num().unwrap_or(0)))
 }
 
 type Cache = std::collections::HashMap<(u8, u64, u64, u8), Vec<u8>>;
 
-fn run(seed: u64, out: &mut Vec<String>, cov: &mut Cov, cache: &mut Cache) {
+/// One scripted step: (op, node, kind, dst, seconds to advance or MAX for random, packet length or 0 for random).
+type Step = (u64, usize, u64, usize, u64, usize);
+
+/// One run of 260 steps against a relay whose mailbox holds `MB` bytes and whose carrier quota is `quota_bytes`,
+/// after the scripted steps in `first`.
+fn run<const MB: usize>(
+    seed: u64,
+    quota_bytes: u64,
+    first: &[Step],
+    out: &mut Vec<String>,
+    cov: &mut Cov,
+    cache: &mut Cache,
+) {
     let mut rng = SplitMix64::traced(seed);
     let kps: Vec<Keypair> = (0..4u8).map(|i| ed(0x61 + i)).collect();
     let me_kp = ed(0x50);
@@ -232,28 +255,31 @@ fn run(seed: u64, out: &mut Vec<String>, cov: &mut Cov, cache: &mut Cache) {
     let me = ids[9];
     let mut cfg = Config::new(me, seed);
     cfg.quota = Quota {
-        bytes: 1000,
+        bytes: quota_bytes,
         window_ns: 60 * SEC,
         session_ns: 300 * SEC,
     };
     cfg.mailbox_max_age_ns = 100 * SEC;
-    let mut r: Box<R> = Box::new(R::new(cfg));
+    let mut r: Box<Relay<3, 4, 2, MB>> = Box::new(Relay::new(cfg));
     let tb: Table<(), 3> = Table::new(seed);
-    out.push(
-        r#"{"t":"rnew","me":10,"c":3,"r":4,"mn":2,"mb":300,"bytes":1000,"window":60,"sess":300,"age":100}"#.to_string(),
-    );
+    out.push(format!(
+        r#"{{"t":"rnew","me":10,"c":3,"r":4,"mn":2,"mb":{MB},"bytes":{quota_bytes},"window":60,"sess":300,"age":100}}"#
+    ));
     for (i, nd) in ids.iter().enumerate() {
         out.push(format!(r#"{{"t":"rbk","n":{},"b":{}}}"#, i + 1, tb.bucket_of(nd)));
     }
     let mut sess: [Option<SessionId>; 6] = [None; 6];
     let mut secs = 1000u64;
     let mut seqs = [0u64; 4];
+    // (node, seq, second stored) of the held messages the trace shows as still held, for the step-over count
+    let mut live: Vec<(u64, u64, u64)> = Vec::new();
     let mut off = 0u16;
     // (op, node, kind, dst, seconds to advance or MAX for random, packet length or 0 for random)
     let mut script: std::collections::VecDeque<(u64, usize, u64, usize, u64, usize)> =
         std::collections::VecDeque::new();
     const R: u64 = u64::MAX;
     script.extend([(15, 6, 1, 0, 0, 0), (15, 7, 1, 0, 0, 0), (15, 8, 1, 0, 0, 0)]);
+    script.extend(first.iter().copied());
     for _ in 0..260 {
         // now and then a guided sequence: a key holder opens, sends a good sleep notice and closes; another node sends
         // it two packets; it opens again (the mailbox is delivered)
@@ -663,6 +689,25 @@ fn run(seed: u64, out: &mut Vec<String>, cov: &mut Cov, cache: &mut Cache) {
             cov.refused_held += u32::from(e.contains(r#""notunnel""#));
         }
 
+        // A release stepped over a message when it handed over one while an older one for the same member is surely
+        // still held: it was stored less than the mailbox's age limit (100 s) ago and no later store for the member
+        // pushed anything out. A store that pushed something out forgets the member's older ones, so the count is a
+        // lower bound.
+        for e in &sink.out {
+            if let Some((node, seq, dropped)) = mailbox_line(e, "mstored") {
+                if dropped > 0 {
+                    live.retain(|l| l.0 != node);
+                }
+                live.push((node, seq, secs));
+            } else if let Some((node, seq, _)) = mailbox_line(e, "mdeliv") {
+                let at = live.iter().position(|l| l.0 == node && l.1 == seq);
+                if let Some(at) = at {
+                    let older = live.iter().take(at).filter(|l| l.0 == node && secs - l.2 < 100).count();
+                    cov.stepped_over += u32::from(older > 0);
+                    live.remove(at);
+                }
+            }
+        }
         let delivered = sink.out.iter().any(|e| e.contains("mdeliv"));
         cov.heard_deliv += u32::from(op == 11 && delivered);
         cov.tunnel_held += u32::from(
@@ -689,11 +734,25 @@ fn the_relay_records_its_trace() {
         heard_deliv: 0,
         tunnel_held: 0,
         refused_held: 0,
+        stepped_over: 0,
     };
     let mut cache = Cache::new();
     for seed in 0..24u64 {
-        run(seed, &mut out, &mut cov, &mut cache);
+        run::<300>(seed, 1000, &[], &mut out, &mut cov, &mut cache);
     }
+    // The mailbox above holds 300 bytes, so no message in those runs is too long for a route: a member (node 1) is
+    // put to sleep, a message of 1400 bytes (too long for a datagram, short enough for a carrier) and a short one
+    // are held for it, and its UDP session is heard: the pass steps over the long one.
+    const STEP_OVER: [Step; 7] = [
+        (0, 0, 0, 0, 1, 0),
+        (3, 0, 11, 0, 1, 0),
+        (2, 0, 0, 0, 30, 0),
+        (0, 4, 0, 0, 1, 0),
+        (3, 4, 0, 0, 1, 1400),
+        (3, 4, 0, 0, 1, 60),
+        (11, 0, 0, 0, 1, 0),
+    ];
+    run::<4096>(24, 100_000, &STEP_OVER, &mut out, &mut cov, &mut cache);
     assert!(vinc_tests::soaking() || cov.forwarded > 0, "no forward");
     assert!(vinc_tests::soaking() || cov.mailboxed > 0, "nothing mailboxed");
     assert!(vinc_tests::soaking() || cov.quota > 0, "no quota drop");
@@ -713,6 +772,10 @@ fn the_relay_records_its_trace() {
     assert!(
         vinc_tests::soaking() || cov.refused_held > 0,
         "no held packet kept for a tunnel that was not ready"
+    );
+    assert!(
+        vinc_tests::soaking() || cov.stepped_over > 0,
+        "no release stepped over a held message too long for the route"
     );
     let Some(dir) = std::env::var_os("VINC_TRACE_DIR") else {
         return;
