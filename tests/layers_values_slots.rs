@@ -71,7 +71,9 @@ fn a_provider_that_refuses_a_request_gives_its_stream_back() {
 fn the_request_a_full_server_refuses_as_busy_gives_its_provider_back() {
     // Ten requesters ask one provider for eight values each over slow links: a session carries a few requests at
     // once, and together they are more than the server's 32 slots, so some are refused as busy. Once every fetch is
-    // cancelled nothing is in use on any node, the refused requests' provider numbers included.
+    // cancelled nothing is in use on any node, the refused requests' provider numbers included. The fetches are
+    // cancelled, not awaited, because a refused request keeps its stream slot on both ends (vinc#675); the test waits
+    // for them once that is fixed.
     big(|| {
         let seed = 341u64;
         let mut w = LWorld::build_with(seed, 2, 11, 1_000_000, true, values_on);

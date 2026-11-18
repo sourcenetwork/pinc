@@ -453,6 +453,8 @@ where
         for sid in old {
             let lids = self.vals.as_deref().map(|v| v.net.of_session(sid)).unwrap_or_default();
             for lid in lids {
+                // The old session's close gives these back too (values_down); dropping them here keeps the table in
+                // step with the server just told.
                 self.server_in(now, &ServerIn::Reset(lid));
                 if let Some(v) = self.vals.as_deref_mut() {
                     v.net.drop_stream(lid);
