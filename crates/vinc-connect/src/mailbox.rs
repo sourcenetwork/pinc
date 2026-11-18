@@ -7,10 +7,13 @@
 //! Invariants:
 //! - The bytes held for one member never exceed `BYTES` (headers included), and the members never exceed `NODES`.
 //! - A message is delivered at most once: [`Mailbox::pop`] removes it before returning it, and [`Mailbox::look`] then
-//!   [`Mailbox::remove`] is the same step in two halves for a caller that removes it only once it was handed over.
+//!   [`Mailbox::remove`] is the same step in two halves for a caller that removes it only once it was handed over;
+//!   [`Mailbox::drain`] takes a message out only when the caller says it took it.
 //! - Overflow drops the oldest messages first, and age drops from the front; every drop is counted in [`Stats`], so
 //!   a loss is never silent.
-//! - Messages leave in the order they arrived.
+//! - Messages leave in the order they arrived. [`Mailbox::drain`] steps over a message too long for the caller: the
+//!   ones it hands over keep their order and the ones it leaves stay in theirs.
+//! - A drain reads every held byte once and moves it at most once, in place.
 //! - Nothing allocates or panics; a ring holds a message in at most two pieces and copies it out whole.
 
 use vinc_crypto::NodeId;
@@ -80,6 +83,9 @@ struct Held<const B: usize> {
     head: usize,
     used: usize,
     count: usize,
+    /// Bytes moved by drains, for the tests that check the bound.
+    #[cfg(test)]
+    moved: usize,
 }
 
 impl<const B: usize> Held<B> {
@@ -89,6 +95,8 @@ impl<const B: usize> Held<B> {
             head: 0,
             used: 0,
             count: 0,
+            #[cfg(test)]
+            moved: 0,
         }
     }
 
@@ -106,13 +114,25 @@ impl<const B: usize> Held<B> {
         }
     }
 
-    /// The header at the front: (source, flag, body length, arrival, sequence).
-    fn front(&self) -> Option<(NodeId, u8, usize, u64, u64)> {
-        if self.count == 0 {
-            return None;
+    /// Copy `len` bytes from ring offset `from` to ring offset `to`, lowest first, so a destination behind its
+    /// source may overlap it.
+    fn slide(&mut self, from: usize, to: usize, len: usize) {
+        for i in 0..len {
+            let b = self.ring.get((from + i) % B).copied().unwrap_or(0);
+            if let Some(d) = self.ring.get_mut((to + i) % B) {
+                *d = b;
+            }
         }
+        #[cfg(test)]
+        {
+            self.moved += len;
+        }
+    }
+
+    /// The header at ring offset `at`: (source, flag, body length, arrival, sequence).
+    fn header(&self, at: usize) -> Option<(NodeId, u8, usize, u64, u64)> {
         let mut head = [0u8; ENTRY_HEAD];
-        self.copy_out(self.head, &mut head);
+        self.copy_out(at, &mut head);
         let mut r = Reader::new(&head);
         let src = node::read(&mut r).ok()?;
         let flag = r.read_u8().ok()?;
@@ -120,6 +140,14 @@ impl<const B: usize> Held<B> {
         let at = r.read_u64().ok()?;
         let seq = r.read_u64().ok()?;
         Some((src, flag, len, at, seq))
+    }
+
+    /// The header at the front.
+    fn front(&self) -> Option<(NodeId, u8, usize, u64, u64)> {
+        if self.count == 0 {
+            return None;
+        }
+        self.header(self.head)
     }
 
     fn skip_front(&mut self) -> usize {
@@ -132,6 +160,28 @@ impl<const B: usize> Held<B> {
         self.count -= 1;
         size
     }
+}
+
+/// What a [`Mailbox::drain`] caller answers for a message it was offered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Offer {
+    /// The caller took the message: it leaves the mailbox and counts as delivered.
+    pub taken: bool,
+    /// Offer the messages behind it too; when false nothing more is offered and the rest stays held.
+    pub go_on: bool,
+}
+
+/// The state of one drain: messages are read in order from `read`; one that stays is moved down to `write`, the front
+/// of the gap the removed ones left, so every byte is read once and moved at most once. All are distances in bytes
+/// from the front the walk began at.
+#[derive(Clone, Copy)]
+struct Walk {
+    total: usize,
+    read: usize,
+    write: usize,
+    base: usize,
+    kept: usize,
+    left: usize,
 }
 
 /// Packets held for sleeping members: at most `NODES` members and `BYTES` bytes each.
@@ -201,14 +251,7 @@ impl<const NODES: usize, const BYTES: usize> Mailbox<NODES, BYTES> {
         }
         let mut at_off = h.head;
         for i in 0..=index {
-            let mut head = [0u8; ENTRY_HEAD];
-            h.copy_out(at_off, &mut head);
-            let mut r = Reader::new(&head);
-            let src = node::read(&mut r).ok()?;
-            let flag = r.read_u8().ok()?;
-            let len = usize::from(r.read_u16().ok()?);
-            let at = r.read_u64().ok()?;
-            let seq = r.read_u64().ok()?;
+            let (src, flag, len, at, seq) = h.header(at_off)?;
             if i == index {
                 h.copy_out(at_off + ENTRY_HEAD, buf.get_mut(..len)?);
                 return Some((Delivered { src, flag, len, seq }, at));
@@ -337,6 +380,116 @@ impl<const NODES: usize, const BYTES: usize> Mailbox<NODES, BYTES> {
         removed
     }
 
+    /// Offer `node`'s held messages to `offer`, oldest first, in one pass. Expired messages are dropped first. A
+    /// message whose body is longer than `max_len` is not offered: it stays held, in its place. For each message
+    /// that fits, the body is copied into `buf` and `offer` says whether it took it (it leaves the mailbox and counts
+    /// as delivered) and whether to go on; after a stop nothing more is offered. What stays keeps its order, the
+    /// member is freed when nothing is left, and the counts and byte totals are exact.
+    ///
+    /// The pass reads every held byte once and moves it at most once, in place, and allocates nothing. The mailbox
+    /// is reached through `mailbox` at each step and not borrowed while `offer` runs, so `offer` may use the rest of
+    /// `ctx` (it must not touch this member's messages).
+    pub fn drain<X>(
+        ctx: &mut X,
+        mailbox: fn(&mut X) -> &mut Self,
+        now: u64,
+        node: &NodeId,
+        max_len: usize,
+        buf: &mut [u8; MAX_PACKET_LEN],
+        mut offer: impl FnMut(&mut X, &Delivered, &[u8]) -> Offer,
+    ) {
+        let mut walk = {
+            let Self {
+                held,
+                max_age_ns,
+                stats,
+                ..
+            } = mailbox(ctx);
+            let Some(h) = held.get_mut(node) else {
+                return;
+            };
+            Self::expire(h, stats, now, *max_age_ns);
+            Walk {
+                total: h.used,
+                read: 0,
+                write: 0,
+                base: 0,
+                kept: 0,
+                left: h.count,
+            }
+        };
+        while walk.left > 0 {
+            let seen = {
+                let Some(h) = mailbox(ctx).held.get_mut(node) else {
+                    return;
+                };
+                let Some((src, flag, len, _, seq)) = h.header((h.head + walk.read) % BYTES) else {
+                    break;
+                };
+                let fits = len <= max_len.min(MAX_PACKET_LEN);
+                if fits && let Some(dst) = buf.get_mut(..len) {
+                    h.copy_out(h.head + walk.read + ENTRY_HEAD, dst);
+                }
+                (Delivered { src, flag, len, seq }, fits)
+            };
+            let (d, fits) = seen;
+            let size = ENTRY_HEAD + d.len;
+            let answer = if fits {
+                offer(ctx, &d, buf.get(..d.len).unwrap_or_default())
+            } else {
+                Offer {
+                    taken: false,
+                    go_on: true,
+                }
+            };
+            if !answer.taken && !answer.go_on {
+                break;
+            }
+            let Self { held, stats, .. } = mailbox(ctx);
+            let Some(h) = held.get_mut(node) else {
+                return;
+            };
+            if answer.taken {
+                stats.delivered += 1;
+                walk.read += size;
+                if walk.kept == 0 {
+                    walk.base = walk.read;
+                    walk.write = walk.read;
+                }
+            } else {
+                if walk.write != walk.read {
+                    h.slide(h.head + walk.read, h.head + walk.write, size);
+                }
+                walk.read += size;
+                walk.write += size;
+                walk.kept += 1;
+            }
+            walk.left -= 1;
+            if !answer.go_on {
+                break;
+            }
+        }
+        let Self { held, .. } = mailbox(ctx);
+        let Some(h) = held.get_mut(node) else {
+            return;
+        };
+        if walk.write != walk.read {
+            h.slide(h.head + walk.read, h.head + walk.write, walk.total - walk.read);
+        }
+        h.used = (walk.write - walk.base) + (walk.total - walk.read);
+        h.count = walk.kept + walk.left;
+        h.head = (h.head + walk.base) % BYTES;
+        if h.count == 0 {
+            held.remove(node);
+        }
+    }
+
+    /// Bytes the drains moved for `node` so far (tests only).
+    #[cfg(test)]
+    fn moved(&self, node: &NodeId) -> usize {
+        self.held.get(node).map_or(0, |h| h.moved)
+    }
+
     /// Drop expired messages of every member and free the empty ones.
     pub fn sweep(&mut self, now: u64) {
         let Self {
@@ -358,3 +511,6 @@ impl<const NODES: usize, const BYTES: usize> Mailbox<NODES, BYTES> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

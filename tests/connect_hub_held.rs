@@ -19,6 +19,7 @@ mod connect_common;
 use std::cell::Cell;
 
 use connect_common::*;
+use proptest::prelude::*;
 use vinc_connect::carrier::Frame;
 use vinc_connect::relay::datagram::{Datagram, MAX_TUNNEL_DATAGRAM};
 use vinc_connect::relay::{Effect, Reject, SessionId, Sink, Trace, UdpTarget};
@@ -255,6 +256,81 @@ fn a_pass_refused_midway_keeps_the_rest_in_order() {
     assert_eq!(fx.fx(), spls(m, a, 3..=4));
     assert_eq!(delivered(&fx), seqs, "each once, in order");
     assert_eq!(fx.r.mailbox_pending(&m).0, 0);
+}
+
+#[test]
+fn short_messages_behind_a_long_one_are_handed_over_and_the_long_one_waits_for_the_carrier() {
+    let mut fx = Fx::new();
+    let long = vec![9u8; MAX_TUNNEL_DATAGRAM - 34];
+    let (a, _, m, seqs) = hold(&mut fx, &[&[1, 2, 3], long.as_slice(), &[3, 2, 3], &[4, 2, 3]]);
+    let rejected = fx.r.stats().rejected;
+    fx.r.udp_heard(T0 + 3 * SEC, &m, &mut fx.s).unwrap();
+    assert_eq!(fx.fx(), [spl(m, a, 1), spl(m, a, 3), spl(m, a, 4)]);
+    assert_eq!(delivered(&fx), [seqs[0], seqs[2], seqs[3]]);
+    assert_eq!(fx.r.mailbox_stats().delivered, 3);
+    assert_eq!(fx.r.mailbox_pending(&m).0, 1, "the long one is still held");
+    assert_eq!(
+        fx.r.stats().rejected,
+        rejected,
+        "a message that does not fit is not a refusal"
+    );
+    fx.r.udp_heard(T0 + 4 * SEC, &m, &mut fx.s).unwrap();
+    assert!(fx.fx().is_empty());
+    assert_eq!(fx.r.mailbox_stats().delivered, 3);
+    assert_eq!(fx.r.mailbox_pending(&m).0, 1);
+    // the carrier reopens: the long one arrives, once
+    fx.open(T0 + 5 * SEC, m);
+    let carried = fx
+        .fx()
+        .into_iter()
+        .filter(|r| matches!(r, Rec::Carrier(n, _) if *n == m))
+        .count();
+    assert_eq!(carried, 1);
+    assert_eq!(delivered(&fx), [seqs[0], seqs[2], seqs[3], seqs[1]]);
+    assert_eq!(fx.r.mailbox_stats().delivered, 4);
+    assert_eq!(fx.r.mailbox_pending(&m).0, 0);
+}
+
+/// Held lengths that fit the mailbox's 4096 bytes together, short ones and ones too long for a datagram.
+fn held_lengths() -> impl Strategy<Value = Vec<usize>> {
+    proptest::collection::vec(prop_oneof![3 => 1usize..200, 1 => 1385usize..=1452], 1..9).prop_map(|lens| {
+        let mut total = 0;
+        lens.into_iter()
+            .take_while(|len| {
+                total += vinc_connect::mailbox::ENTRY_HEAD + len;
+                total <= 4096
+            })
+            .collect()
+    })
+}
+
+proptest! {
+    #[test]
+    fn a_pass_hands_over_exactly_the_messages_that_fit_in_order_and_keeps_the_rest_in_order(lens in held_lengths()) {
+        let bodies: Vec<Vec<u8>> = lens.iter().enumerate().map(|(i, len)| vec![i as u8 + 1; *len]).collect();
+        let refs: Vec<&[u8]> = bodies.iter().map(Vec::as_slice).collect();
+        let mut fx = Fx::new();
+        let (a, _, m, seqs) = hold(&mut fx, &refs);
+        prop_assert_eq!(seqs.len(), lens.len());
+        let fits: Vec<usize> = (0..lens.len()).filter(|i| lens[*i] <= MAX_TUNNEL_DATAGRAM - 35).collect();
+        let rest: Vec<usize> = (0..lens.len()).filter(|i| !fits.contains(i)).collect();
+        fx.r.udp_heard(T0 + 3 * SEC, &m, &mut fx.s).unwrap();
+        let want: Vec<Rec> = fits
+            .iter()
+            .map(|i| Rec::Udp(UdpTarget::Member(m), dg(&Datagram::Spl { src: a, flag: 7, packet: &bodies[*i] })))
+            .collect();
+        prop_assert_eq!(fx.fx(), want);
+        prop_assert_eq!(delivered(&fx), fits.iter().map(|i| seqs[*i]).collect::<Vec<_>>());
+        prop_assert_eq!(fx.r.mailbox_pending(&m).0, rest.len());
+        prop_assert_eq!(fx.r.mailbox_stats().delivered, fits.len() as u64);
+        // the carrier takes the rest, in their order
+        fx.open(T0 + 4 * SEC, m);
+        let carried = fx.fx().into_iter().filter(|r| matches!(r, Rec::Carrier(n, _) if *n == m)).count();
+        prop_assert_eq!(carried, rest.len());
+        let all: Vec<u64> = fits.iter().chain(rest.iter()).map(|i| seqs[*i]).collect();
+        prop_assert_eq!(delivered(&fx), all);
+        prop_assert_eq!(fx.r.mailbox_pending(&m).0, 0);
+    }
 }
 
 /// A collector that counts the readiness questions and the effects it is given.

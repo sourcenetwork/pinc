@@ -747,7 +747,7 @@ fn a_held_packet_too_long_for_a_datagram_stays_held_until_the_carrier_reopens() 
 }
 
 #[test]
-fn a_long_packet_in_front_holds_back_the_shorter_ones_behind_it_and_one_behind_stays_held() {
+fn a_long_packet_in_front_is_stepped_over_and_the_shorter_ones_behind_it_go_down_the_tunnel() {
     let mut fx = Fx::new();
     let a = nid(0xa1);
     let sa = fx.open(T0, a);
@@ -764,15 +764,40 @@ fn a_long_packet_in_front_holds_back_the_shorter_ones_behind_it_and_one_behind_s
             .unwrap();
     }
     fx.fx();
+    let rejected = fx.r.stats().rejected;
     fx.r.udp_heard(T0 + 3 * SEC, &m, &mut fx.s).unwrap();
     fx.r.member_returned(T0 + 3 * SEC, &m, &mut fx.s);
+    let spl = |flag, packet| Rec::Udp(UdpTarget::Member(m), dg(&Datagram::Spl { src: a, flag, packet }));
     let got: Vec<Rec> = fx.fx().into_iter().filter(|r| matches!(r, Rec::Udp(..))).collect();
-    assert_eq!(got.len(), 1, "only the short one in front goes: {got:?}");
     assert_eq!(
-        fx.r.mailbox_pending(&m).0,
-        2,
-        "the long one and the one behind it stay held"
+        got,
+        [spl(1, &[1, 2]), spl(3, &[3])],
+        "the shorter ones go, in their order"
     );
+    assert_eq!(fx.r.mailbox_pending(&m).0, 1, "the long one waits for the carrier");
+    assert_eq!(fx.r.mailbox_stats().delivered, 2);
+    assert_eq!(
+        fx.r.stats().rejected,
+        rejected,
+        "a message that does not fit is not a refusal"
+    );
+    // the carrier reopens: the long one goes on it
+    fx.open(T0 + 4 * SEC, m);
+    let carried: Vec<Rec> = fx
+        .fx()
+        .into_iter()
+        .filter(|r| matches!(r, Rec::Carrier(n, _) if *n == m))
+        .collect();
+    assert_eq!(carried.len(), 1);
+    let Rec::Carrier(_, bytes) = &carried[0] else {
+        unreachable!()
+    };
+    assert!(matches!(
+        Frame::decode(bytes).unwrap(),
+        Frame::RecvNew { src, flag: 2, packet, .. } if src == a && packet == &long[..]
+    ));
+    assert_eq!(fx.r.mailbox_pending(&m).0, 0);
+    assert_eq!(fx.r.mailbox_stats().delivered, 3);
 }
 
 #[test]

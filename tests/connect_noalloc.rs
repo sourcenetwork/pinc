@@ -161,6 +161,39 @@ fn the_mailbox_allocates_nothing_in_steady_state() {
 }
 
 #[test]
+fn a_release_pass_with_mail_held_allocates_nothing() {
+    big_stack(|| {
+        let kp = ed(0x10);
+        let mut r: Box<Relay<16, 16, 4, 2048>> = Box::new(Relay::new(Config::new(id(&kp), 7)));
+        let mut s = Count::default();
+        let (a, m) = (nid(0xa1), nid(0xe1));
+        // short messages go down the tunnel; the long one is stepped over and compacted past, pass after pass
+        let long = [0x42u8; 1400];
+        let short = [0x41u8; 30];
+        let step = |r: &mut Relay<16, 16, 4, 2048>, s: &mut Count, i: u64| {
+            let now = i * 1_000_000;
+            r.restore_held(now, now, &m, &a, 1, &short).unwrap();
+            r.restore_held(now, now, &m, &a, 2, &long).unwrap();
+            r.restore_held(now, now, &m, &a, 3, &short).unwrap();
+            r.udp_heard(now, &m, s).unwrap();
+        };
+        for i in 0..50 {
+            step(&mut r, &mut s, i);
+        }
+        let (before, delivered) = (s.0, r.mailbox_stats().delivered);
+        let stats = vinc_tests::measure(|| {
+            for i in 50..2050 {
+                step(&mut r, &mut s, i);
+            }
+        });
+        assert!(s.0 > before + 3000, "the passes did real work");
+        assert!(r.mailbox_stats().delivered > delivered + 3000);
+        assert_eq!(r.mailbox_pending(&m).0, 1, "the long one is still held");
+        assert_eq!(stats.count(), 0, "{stats:?}");
+    });
+}
+
+#[test]
 fn the_protected_carrier_allocates_nothing_in_steady_state() {
     big_stack(|| {
         let mut rig = Rig::new(None);

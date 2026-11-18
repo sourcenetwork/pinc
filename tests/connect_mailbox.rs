@@ -23,7 +23,7 @@ use std::collections::VecDeque;
 use connect_common::{SEC, nid};
 use proptest::prelude::*;
 use vinc_connect::carrier::MAX_PACKET_LEN;
-use vinc_connect::mailbox::{ENTRY_HEAD, Mailbox, Push};
+use vinc_connect::mailbox::{ENTRY_HEAD, Mailbox, Offer, Push};
 
 const B: usize = 1000;
 type M = Mailbox<3, B>;
@@ -327,4 +327,112 @@ fn a_looked_at_message_stays_held_with_its_seq_until_it_is_removed() {
     let d = m.look(0, &to, &mut buf, MAX_PACKET_LEN).unwrap();
     assert!(m.remove(&to, d.seq));
     assert_eq!((m.pending(&to), m.members()), ((0, 0), 0));
+}
+
+/// One drain of `m` for `to` against the plain model: the caller declines every second offer when `decline`, and at
+/// the `stop`th offer either takes it and stops (`take_on_stop`) or stops without it. Returns what was offered.
+fn drain(
+    m: &mut M,
+    to: &vinc_crypto::NodeId,
+    fit: usize,
+    stop: usize,
+    take_on_stop: bool,
+    decline: bool,
+) -> Vec<(u64, u8, usize)> {
+    let mut offered = Vec::new();
+    let mut buf = [0u8; MAX_PACKET_LEN];
+    Mailbox::drain(
+        m,
+        |m| m,
+        0,
+        to,
+        fit,
+        &mut buf,
+        |_, d, body| {
+            assert_eq!(body.len(), d.len);
+            assert!(body.iter().all(|b| *b == d.flag), "the body is the message's own");
+            let i = offered.len();
+            offered.push((d.seq, d.flag, d.len));
+            if i == stop {
+                return Offer {
+                    taken: take_on_stop,
+                    go_on: false,
+                };
+            }
+            Offer {
+                taken: !(decline && i % 2 == 1),
+                go_on: true,
+            }
+        },
+    );
+    offered
+}
+
+proptest! {
+    /// A drain offers what fits, in order, up to where the caller stops; takes what the caller takes; and leaves the
+    /// rest in order with exact counts, through a wrap of the ring (the quota pushes the oldest out) and two passes.
+    #[test]
+    fn draining_offers_what_fits_in_order_and_keeps_the_rest_in_order(
+        lens in proptest::collection::vec(1usize..300, 1..14),
+        fit in 0usize..300,
+        pops in 0usize..3,
+        stop in 0usize..16,
+        take_on_stop in any::<bool>(),
+        decline in any::<bool>(),
+    ) {
+        let mut m = M::new(100 * SEC, 1);
+        let to = nid(1);
+        let mut buf = [0u8; MAX_PACKET_LEN];
+        for (i, len) in lens.iter().enumerate() {
+            m.push(0, &to, &nid(9), i as u8, &vec![i as u8; *len]);
+        }
+        for _ in 0..pops {
+            m.pop(0, &to, &mut buf);
+        }
+        for round in 0..2 {
+            let held: Vec<(u64, u8, usize)> = (0..m.pending(&to).0)
+                .map(|i| {
+                    let (d, _) = m.peek(&to, i, &mut buf).unwrap();
+                    (d.seq, d.flag, d.len)
+                })
+                .collect();
+            let before = m.stats().delivered;
+            let offered = drain(&mut m, &to, fit, stop, take_on_stop, decline);
+            // the model
+            let mut want_offered = Vec::new();
+            let mut left = Vec::new();
+            let mut taken = 0u64;
+            let mut stopped = false;
+            for h in &held {
+                if stopped || h.2 > fit {
+                    left.push(*h);
+                    continue;
+                }
+                let i = want_offered.len();
+                want_offered.push(*h);
+                if i == stop {
+                    stopped = true;
+                    if take_on_stop { taken += 1; } else { left.push(*h); }
+                } else if decline && i % 2 == 1 {
+                    left.push(*h);
+                } else {
+                    taken += 1;
+                }
+            }
+            prop_assert_eq!(&offered, &want_offered, "offered, round {}", round);
+            prop_assert_eq!(m.stats().delivered - before, taken, "delivered");
+            prop_assert_eq!(m.pending(&to).0, left.len(), "count");
+            prop_assert_eq!(m.pending(&to).1, left.iter().map(|h| ENTRY_HEAD + h.2).sum::<usize>(), "bytes");
+            for (i, h) in left.iter().enumerate() {
+                let (d, _) = m.peek(&to, i, &mut buf).unwrap();
+                prop_assert_eq!((d.seq, d.flag, d.len), *h, "left, in order");
+                prop_assert!(buf[..d.len].iter().all(|b| *b == d.flag), "the body survived the move");
+            }
+            prop_assert_eq!(m.members(), usize::from(!left.is_empty()), "the member is freed when nothing is left");
+            // a later push goes last and the ring still reads right
+            if round == 0 {
+                m.push(0, &to, &nid(9), 200, &[200u8; 20]);
+            }
+        }
+    }
 }

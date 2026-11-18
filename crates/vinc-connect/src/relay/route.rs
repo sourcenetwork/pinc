@@ -220,12 +220,15 @@ impl<const C: usize, const R: usize, const MN: usize, const MB: usize> Relay<C, 
         }
     }
 
-    /// Hand the mailbox contents of `node` to it, oldest first, each at most once: on its carrier if one is open,
-    /// else down its fresh UDP session. A message leaves the mailbox only when it was handed over (or expires): the
-    /// pass stops at the first one that cannot go, which stays held in front. A hand-over the host refuses is counted
-    /// once as [`Reject::NoTunnel`]; a message too long for a datagram stops the pass silently and waits for the
-    /// carrier.
+    /// Hand the mailbox contents of `node` to it, oldest first, in one [`Mailbox::drain`](crate::mailbox::Mailbox::drain):
+    /// on its carrier if one is open, else down its fresh UDP session. A message leaves the mailbox only when it was
+    /// handed over (or expires). Over a UDP session a message too long for a datagram is stepped over: it stays held,
+    /// in its place, for the carrier, and the shorter ones behind it still go. A hand-over the host refuses stops the
+    /// pass: that message and those behind it stay held, and the stop is counted once as [`Reject::NoTunnel`]; a
+    /// message that does not fit is not a refusal and is not counted. Each held byte is read once and moved at most
+    /// once in a pass, in place; the pass holds one packet buffer on the stack.
     pub(crate) fn deliver_held<S: Sink>(&mut self, now: u64, node: &NodeId, sink: &mut S) {
+        use crate::mailbox::{Delivered, Mailbox, Offer};
         if self.mailbox.pending(node).0 == 0 {
             return;
         }
@@ -234,45 +237,58 @@ impl<const C: usize, const R: usize, const MN: usize, const MB: usize> Relay<C, 
             return;
         }
         let mut buf = [0u8; crate::carrier::frame::MAX_PACKET_LEN];
-        // A packet too long for a datagram stays held until the member's carrier is open.
         let fit = if open {
             crate::carrier::frame::MAX_PACKET_LEN
         } else {
             MAX_TUNNEL_DATAGRAM - 35
         };
-        while let Some(m) = self.mailbox.look(now, node, &mut buf, fit) {
-            let body = buf.get(..m.len).unwrap_or_default();
-            let sent = if open {
-                self.deliver_client(
-                    now,
-                    &Pkt {
-                        src: &m.src,
-                        dst: node,
-                        flag: m.flag,
-                        packet: body,
-                    },
-                    false,
-                    sink,
-                )
-            } else {
-                self.tunnel_down(now, node, &m.src, m.flag, body, sink)
-            };
-            if !sent {
-                self.reject(sink, Reject::NoTunnel, Some(*node));
-                return;
-            }
-            self.mailbox.remove(node, m.seq);
-            sink.emit(Effect::Trace(Trace::MailboxDelivered {
-                node: *node,
-                seq: m.seq,
-            }));
-        }
+        Mailbox::drain(
+            self,
+            |r| &mut r.mailbox,
+            now,
+            node,
+            fit,
+            &mut buf,
+            |r, m: &Delivered, body| {
+                let sent = if open {
+                    r.deliver_client(
+                        now,
+                        &Pkt {
+                            src: &m.src,
+                            dst: node,
+                            flag: m.flag,
+                            packet: body,
+                        },
+                        false,
+                        sink,
+                    )
+                } else {
+                    r.tunnel_down(now, node, &m.src, m.flag, body, sink)
+                };
+                if !sent {
+                    r.reject(sink, Reject::NoTunnel, Some(*node));
+                    return Offer {
+                        taken: false,
+                        go_on: false,
+                    };
+                }
+                sink.emit(Effect::Trace(Trace::MailboxDelivered {
+                    node: *node,
+                    seq: m.seq,
+                }));
+                Offer {
+                    taken: true,
+                    go_on: true,
+                }
+            },
+        );
     }
 
     /// A member came back without reopening its carrier (its UDP session woke): the sleep mark is cleared and the
-    /// mailbox is delivered down the UDP session if it is fresh and its route is ready. Otherwise the mail stays held
-    /// and the refusal is counted once as [`Reject::NoTunnel`]; the next packet heard from the member hands it over
-    /// when the route is ready ([`Relay::udp_heard`]).
+    /// mailbox is delivered down the UDP session if it is fresh and its route is ready. Otherwise the mail stays held:
+    /// a fresh route the host refuses is counted once as [`Reject::NoTunnel`]; a stale session, or a message too long
+    /// for the route, is not a refusal. The next packet heard from the member hands it over when the route is ready
+    /// ([`Relay::udp_heard`]).
     pub fn member_returned<S: Sink>(&mut self, now: u64, node: &NodeId, sink: &mut S) {
         self.sleeping.remove(node);
         self.deliver_held(now, node, sink);
