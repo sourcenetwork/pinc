@@ -120,6 +120,7 @@ keepalives) awaits `Endpoint::run()`.
 | `vinc-node` | the endpoint, the connectivity client and every layer composed over real sessions | yes | built |
 | `vinc-connect` | carriers, relays, signed records and lookup, hole punching, the hub tunnel, the mailbox | yes | built; relay side proven |
 | `vinc-portmap` | a UDP port mapping from the home gateway (PCP, NAT-PMP, UPnP-IGD), off unless turned on | yes, heap-free | built |
+| `vinc-table` | fixed tables over one block of bytes made once: sorted slab, array, ring, slot pool; no allocation after setup | yes, heap-free | built |
 | `vinc-membership` | hub roster and member view: leases, probes, incarnations, leave, revocation | yes | built |
 | `vinc-values` | verified streaming of values of any size from up to four providers, with resume | yes | built, proven |
 | `vinc-broadcast` | topic broadcast through hubs with origin authentication, replay floors and a bounded log | yes | built, proven |

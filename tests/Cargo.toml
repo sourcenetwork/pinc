@@ -38,6 +38,7 @@ nuclei = { workspace = true }
 tokio = { workspace = true }
 smol = { workspace = true }
 vinc-node = { workspace = true, features = ["trace"] }
+vinc-table = { workspace = true, features = ["alloc"] }
 
 [dev-dependencies]
 proptest = { workspace = true }
@@ -1440,3 +1441,19 @@ path = "broadcast_subs.rs"
 [[test]]
 name = "relay_stack"
 path = "relay_stack.rs"
+
+[[test]]
+name = "table_slab"
+path = "table_slab.rs"
+
+[[test]]
+name = "table_ring"
+path = "table_ring.rs"
+
+[[test]]
+name = "table_array_pool"
+path = "table_array_pool.rs"
+
+[[test]]
+name = "table_noalloc"
+path = "table_noalloc.rs"

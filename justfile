@@ -137,11 +137,12 @@ doc:
 # The program (tests/noalloc) runs an endpoint from caller storage, a handshake and a stream between two endpoints in
 # one program, so a crate it reaches that asks for the heap fails the link. It does not cover membership, broadcast,
 # reconcile, the node crate, the keystore or the facade, which still need an allocator (vinc#640). The targets without
-# compare-and-swap build only the program's crates (wire, crypto, security, transport, core).
+# compare-and-swap build the program's crates (wire, crypto, security, transport, core) and vinc-table.
 no-std:
     for c in $(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(" ".join(p["name"] for p in json.load(sys.stdin)["packages"] if "no_std" in (p.get("keywords") or [])))'); do \
         for t in {{no_std_targets}}; do cargo build -q -p "$c" --no-default-features --target "$t"; done; \
     done
+    for t in {{cas_less_targets}}; do cargo build -q -p vinc-table --no-default-features --target "$t"; done
     for t in {{no_std_targets}} {{cas_less_targets}}; do cargo build -q -p vinc-noalloc --target "$t"; done
 
 # Fail if any build script of the library's workspace compiled C (run after a build; checks cargo's real target

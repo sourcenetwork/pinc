@@ -1626,6 +1626,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "vinc-table"
+version = "0.1.0"
+
+[[package]]
 name = "vinc-tests"
 version = "0.1.0"
 dependencies = [
@@ -1656,6 +1660,7 @@ dependencies = [
  "vinc-reconcile",
  "vinc-security",
  "vinc-sim",
+ "vinc-table",
  "vinc-transport",
  "vinc-values",
  "vinc-wire",
