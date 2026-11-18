@@ -7,7 +7,7 @@
 
 use vinc_crypto::IdentityAlg;
 use vinc_tests::*;
-use vinc_transport::conn::{PathId, PathInfo};
+use vinc_transport::conn::{MtuProbe, PathId, PathInfo};
 
 vinc_tests::install_counting_allocator!();
 
@@ -171,18 +171,31 @@ fn a_probe_lost_after_the_session_moved_bars_the_path_it_left_on_and_not_the_new
         net.link.set(PathId(1), big, big);
         net.a.conn.set_active(PathId(1)).unwrap();
         trail.push(snap(&net, "first path active"));
+        assert_eq!(
+            net.a.conn.stats().probe_outcomes_dropped,
+            0,
+            "before the link toggle: {trail:?}"
+        );
+        let lost_before_toggle = net.a.conn.stats().packets_lost;
         let now = net.now;
         net.a.with_env(now, |c, env| c.set_link_down(env, true));
         net.a.with_env(now, |c, env| c.set_link_down(env, false));
         trail.push(snap(&net, "link toggled"));
+        assert_eq!(
+            net.a.conn.stats().probe_outcomes_dropped,
+            1,
+            "at the link toggle: {trail:?}"
+        );
+        assert_eq!(net.a.conn.stats().packets_lost, lost_before_toggle + 1, "{trail:?}");
         assert!(
             net.run(net.now + 30 * SEC, |n| n.a.conn.path_mtu(PathId(1)) == Some(PROBE_MTU)),
             "the first path never probed again (size {:?})",
             net.a.conn.path_mtu(PathId(1))
         );
         trail.push(snap(&net, "first path probed"));
-        // Dropped: the flush of the link return declares the second path's probe lost, and its echo had already raised
-        // that path and cleared the mark. The first path's own loss matched its probe, so it is not counted.
+        // The one dropped outcome comes from the link toggle (checked above, not from the loss of the first path's own
+        // probe): the second path's probe was raised by its echo, which cleared the mark, while its packet was still
+        // unacknowledged, and the toggle declared that packet lost. The first path's own loss matched its probe.
         assert_eq!(net.a.conn.stats().probe_outcomes_dropped, 1, "{trail:?}");
     });
 }
@@ -361,6 +374,192 @@ fn an_echo_that_arrives_after_its_probe_was_declared_lost_changes_no_size() {
             net.a.conn.path_mtu(PathId(1)),
             Some(1200),
             "an echo of a probe that was no longer in flight raised the path"
+        );
+    });
+}
+
+/// Move to the second path at 7 s and wait until its own probe raised it.
+fn raised_second(net: &mut Net<'_, '_>) {
+    net.run(T0 + 7 * SEC, |_| false);
+    net.a.conn.set_active(PathId(3)).unwrap();
+    assert!(
+        net.run(net.now + 5 * SEC, |n| n.a.conn.path_mtu(PathId(3)) == Some(PROBE_MTU)),
+        "the second path was never raised (size {:?})",
+        net.a.conn.path_mtu(PathId(3))
+    );
+}
+
+#[test]
+fn a_large_packet_acknowledged_on_another_path_counts_for_the_path_it_left_on() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let mut net = two_paths(&mut w, &mut sa, &mut sb, 68, 1500, (10 * MS, 10 * MS));
+        raised_second(&mut net);
+        // One large packet leaves on the second path, whose route to the peer is slow. The session then moves to the
+        // first path and sends a small one there: the peer takes that one first, follows it, and answers both on the
+        // first path's route, so the large packet is acknowledged on a path it did not leave on.
+        let id = net.a.conn.open_uni().unwrap();
+        net.link.set(
+            PathId(3),
+            Params::new(25 * MS).mtu(1500),
+            Params::new(10 * MS).mtu(1500),
+        );
+        net.a.conn.write(id, &pattern(1300, 3)).unwrap();
+        net.run(net.now + MS, |_| false);
+        let fast = Params::new(10 * MS).mtu(1500);
+        net.link.set(PathId(3), fast, fast);
+        net.a.conn.set_active(PathId(1)).unwrap();
+        write_on_second(&mut net);
+        let acked = net.a.conn.stats().packets_acked;
+        net.run(net.now + SEC, |_| false);
+        assert!(
+            net.a.conn.stats().packets_acked >= acked + 2,
+            "the packets were never acknowledged"
+        );
+        net.a.conn.set_active(PathId(3)).unwrap();
+        // A small packet is lost, so the timeout ping goes out on the second path and is acknowledged there.
+        let ptos = net.a.conn.stats().ptos;
+        net.link.route(PathId(3)).up = false;
+        write_on_second(&mut net);
+        net.run(net.now + 5 * MS, |_| false);
+        net.link.route(PathId(3)).up = true;
+        assert!(
+            net.run(net.now + 5 * SEC, |n| n.a.conn.stats().ptos > ptos),
+            "no probe timeout"
+        );
+        let mut dipped = None;
+        net.run(net.now + 3 * SEC, |n| {
+            if n.a.conn.path_mtu(PathId(3)) == Some(1200) {
+                dipped.get_or_insert(n.now / MS);
+            }
+            false
+        });
+        assert_eq!(net.a.conn.active_path(), Some(PathId(3)));
+        assert_eq!(dipped, None, "the second path fell back at {dipped:?} ms");
+        assert_eq!(
+            net.a.conn.path_mtu(PathId(3)),
+            Some(PROBE_MTU),
+            "the second path fell back for want of an acknowledgement its large packet had on the other route"
+        );
+    });
+}
+
+#[test]
+fn a_probe_timeout_ping_is_settled_on_the_path_it_left_on_after_the_session_moved() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let mut net = two_paths(&mut w, &mut sa, &mut sb, 69, 1500, (10 * MS, 10 * MS));
+        raised_second(&mut net);
+        // Large packets vanish on the second path; small ones pass.
+        let small = Params::new(10 * MS).mtu(1300);
+        net.link.set(PathId(3), small, small);
+        let id = net.a.conn.open_uni().unwrap();
+        net.a.conn.write(id, &pattern(3000, 3)).unwrap();
+        assert!(
+            net.run(net.now + 5 * SEC, |n| n.a.conn.stats().ptos > 0),
+            "no probe timeout"
+        );
+        let at = net.now;
+        assert!(
+            net.a.tx_log.iter().any(|t| t.0 >= at && t.2 == PathId(3)),
+            "the timeout ping did not leave on the second path"
+        );
+        // The session moves back before the ping is acknowledged.
+        net.a.conn.set_active(PathId(1)).unwrap();
+        assert!(
+            net.run(net.now + 20 * SEC, |n| n.a.conn.path_mtu(PathId(3)) == Some(1200)),
+            "the path the ping left on, where large packets vanish, kept its size (now {:?})",
+            net.a.conn.path_mtu(PathId(3))
+        );
+    });
+}
+
+/// The same size is probed again while the first probe of that size is still counted out: the earlier probe never
+/// left (its packet failed to seal after it was recorded), or the black-hole check cleared its mark while it was in
+/// flight. Only the outcome of the probe in flight is applied.
+#[test]
+fn the_outcome_of_an_earlier_probe_of_the_same_size_changes_nothing_while_a_later_one_is_in_flight() {
+    let mut p = MtuProbe::new();
+    p.start();
+    // Packet 10 was recorded but never reported as sent; packet 11 left.
+    p.probe_sent(PROBE_MTU, 11);
+    assert_eq!(p.raise(PROBE_MTU, 10), None);
+    p.probe_lost(PROBE_MTU, 10, SEC);
+    let v = p.view();
+    assert_eq!(
+        (v.current, v.inflight, v.probe_pn, v.retry_at),
+        (1200, Some(PROBE_MTU), Some(11), 0)
+    );
+    assert_eq!(p.raise(PROBE_MTU, 11), Some(PROBE_MTU));
+}
+
+#[test]
+fn the_outcome_of_a_probe_whose_mark_the_black_hole_check_cleared_changes_nothing() {
+    let mut p = MtuProbe::new();
+    p.start();
+    p.probe_sent(PROBE_MTU, 10);
+    assert_eq!(p.raise(PROBE_MTU, 10), Some(PROBE_MTU));
+    // The jumbo probe is in flight when a probe-timeout ping is acknowledged with a large packet still unacknowledged.
+    p.probe_sent(8952, 12);
+    p.set_big(Some(11), None, Some(11));
+    p.black_hole(SEC, 100 * MS);
+    assert!(p.black_hole_check(SEC + 100 * MS));
+    let v = p.view();
+    assert_eq!((v.current, v.inflight), (1200, None));
+    // A path event, the main probe again and the jumbo probe again, the same size as the one that was cleared.
+    p.event();
+    p.probe_sent(PROBE_MTU, 20);
+    assert_eq!(p.raise(PROBE_MTU, 20), Some(PROBE_MTU));
+    p.event();
+    p.probe_sent(8952, 30);
+    assert_eq!(
+        p.raise(8952, 12),
+        None,
+        "the cleared probe's acknowledgement raised the path"
+    );
+    p.probe_lost(8952, 12, 2 * SEC);
+    let v = p.view();
+    assert_eq!(
+        (v.current, v.inflight, v.probe_pn, v.retry_at),
+        (PROBE_MTU, Some(8952), Some(30), 0)
+    );
+    assert_eq!(p.raise(8952, 30), Some(8952));
+}
+
+/// A prober whose peer has nothing else to send. The peer takes the echo into its first datagram, which holds nothing
+/// but an acknowledgement that is not due yet, and drops that datagram: the next one, 25 ms after the probe arrived,
+/// holds the acknowledgement alone, and the probe succeeds by that acknowledgement only. This pins what is true now;
+/// it changes when the echo is made to travel.
+#[test]
+fn the_echo_of_a_probe_does_not_reach_a_prober_whose_peer_has_nothing_else_to_send() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let mut net = setup(&mut w, &mut sa, &mut sb, Link::new(70, Params::new(10 * MS).mtu(1500)));
+        net.a.conn.defer_mtu_probe(T0 + 6 * SEC);
+        assert!(net.connect(net.now + 10 * SEC), "{:?}", net.rx_drops);
+        net.run(T0 + 7 * SEC, |_| false);
+        assert!(
+            net.run(net.now + 10 * SEC, |n| n.a.conn.path_mtu(PathId(1)) == Some(PROBE_MTU)),
+            "the probe was never acknowledged"
+        );
+        let left = net.a.tx_log.iter().find(|t| t.1 == PROBE).unwrap().0;
+        let arrived = left + 10 * MS;
+        let answers: Vec<(u64, usize)> = net
+            .b
+            .tx_log
+            .iter()
+            .filter(|t| t.0 >= arrived)
+            .map(|t| ((t.0 - arrived) / 1000, t.1))
+            .collect();
+        // (microseconds after the arrival, bytes): one acknowledgement-only datagram after the acknowledgement delay.
+        assert_eq!(answers, [(25_000, 27)], "the peer's datagrams after the probe arrived");
+        assert_eq!(
+            net.now - left,
+            45 * MS,
+            "the probe is acknowledged one delay later than an echo would be"
         );
     });
 }
