@@ -126,3 +126,23 @@ fn a_request_the_provider_resets_gives_its_provider_back_when_the_fetch_complete
         assert_eq!(in_use(&w, m[0]), 0, "the fetching node holds a provider");
     });
 }
+
+#[test]
+fn a_session_that_closes_under_a_fetch_gives_its_provider_back_when_the_fetch_completes() {
+    // Nodes 1 and 2 serve the value; node 2 leaves while it sends, so its session closes under the fetch, which
+    // completes from node 1 with no cancel and no stall redial: only the closed session gives node 2's streams back.
+    big(|| {
+        let seed = 313u64;
+        let mut w = LWorld::build_with(seed, 2, 3, 8_000_000, true, values_on);
+        let m = w.members.clone();
+        let value = data(seed, 4 << 20);
+        let root = w.provide(m[1], value.clone());
+        assert_eq!(w.provide(m[2], value.clone()), root);
+        w.sim
+            .command(secs(30), m[0], fetch(root, value.len(), ids(&w, &m[1..3])));
+        w.sim.command(secs(31), m[2], NCmd::Leave);
+        w.run(secs(40));
+        assert_eq!(completes(&w, m[0]), 1, "the fetch did not complete");
+        assert_eq!(in_use(&w, m[0]), 0, "the fetching node holds a provider");
+    });
+}
