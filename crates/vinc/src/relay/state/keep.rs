@@ -52,7 +52,7 @@ pub(crate) enum Job {
 }
 
 /// Append one packet to a member's blob: source, flag, arrival, length, body.
-fn encode(out: &mut Vec<u8>, src: &NodeId, flag: u8, at: u64, body: &[u8]) {
+pub(super) fn encode(out: &mut Vec<u8>, src: &NodeId, flag: u8, at: u64, body: &[u8]) {
     out.push(src.alg.tag());
     out.extend_from_slice(&src.bytes);
     out.push(flag);

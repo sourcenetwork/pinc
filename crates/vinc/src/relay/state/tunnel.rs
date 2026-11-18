@@ -270,3 +270,86 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
         true
     }
 }
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::panic,
+    clippy::many_single_char_names,
+    clippy::similar_names,
+    reason = "tests assert"
+)]
+mod tests {
+    use alloc::rc::Rc;
+    use alloc::vec;
+    use core::cell::RefCell;
+
+    use vinc_connect::relay::datagram::Datagram;
+    use vinc_crypto::{IdentityAlg, NodeId};
+    use vinc_keystore::SoftwareStore;
+
+    use super::*;
+    use crate::keys::Identity;
+    use crate::relay::access::AllowAll;
+    use crate::relay::limits::Limits;
+    use crate::relay::state::keep::{Job, encode};
+    use crate::relay::store::Kept;
+
+    const T0: u64 = 1_000_000_000_000;
+    const SEC: u64 = 1_000_000_000;
+
+    fn node(tag: u8) -> NodeId {
+        NodeId {
+            alg: IdentityAlg::Ed25519,
+            bytes: [tag; 32],
+        }
+    }
+
+    /// Mail restored from the store (it has no sleep mark) goes down the hub on the first packet heard from the member:
+    /// the heard call stamps and releases, and its effects are applied and the store told in the same call.
+    #[test]
+    fn held_mail_restored_from_the_store_goes_down_the_hub_on_the_first_heard_packet() {
+        let identity = Rc::new(RefCell::new(Identity::from_seed(&[7; 32]).unwrap()));
+        let local: SocketAddr = "192.0.2.1:4000".parse().unwrap();
+        let mut core =
+            Core::<(), SoftwareStore, AllowAll>::new(identity, AllowAll, &[], Limits::default(), Some(local), T0)
+                .unwrap();
+        let (a, m) = (node(0xa1), node(0xe1));
+        let mut blob = Vec::new();
+        encode(&mut blob, &a, 7, T0, b"held");
+        core.restore(
+            T0,
+            &Kept {
+                records: vec![],
+                mailboxes: vec![(m, blob)],
+            },
+        );
+        assert!(core.next_job().is_none(), "a blob taken whole queues no write");
+        assert_eq!(core.sm.mailbox_pending(&m).0, 1);
+        let refused = core.counters.refused;
+
+        core.on_heard(T0 + SEC, Some(m));
+
+        let Some(Job::Mail(n, b)) = core.next_job() else {
+            panic!("the hand-over was not told to the store");
+        };
+        assert_eq!(n, m);
+        assert!(b.is_empty(), "nothing is held any more");
+        let hub = core.hub.as_ref().unwrap();
+        let [Work::Udp(to, s, e)] = hub.work.as_slice() else {
+            panic!("expected one datagram for the member: {:?}", hub.work);
+        };
+        assert_eq!(*to, m);
+        assert_eq!(
+            Datagram::decode(&hub.arena[*s..*e]).unwrap(),
+            Datagram::Spl {
+                src: a,
+                flag: 7,
+                packet: b"held"
+            }
+        );
+        assert_eq!(core.sm.mailbox_pending(&m).0, 0);
+        assert_eq!(core.counters.refused, refused);
+    }
+}
