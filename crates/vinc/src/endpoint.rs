@@ -604,7 +604,8 @@ impl<H: Hosted, D: Discovery> Endpoint<H, D> {
     /// Dial `to` for `alpn`. A peer already connected gets a sub-session at once, with no round trip. Without direct
     /// addresses in `to` the discovery hook and the address book are used; the hook has [`LOOKUP_WAIT`] to answer.
     /// A sub-session, and a dial towards a peer whose access was allowed in the last 25 s, return before the peer
-    /// answers; [`Connection::answered`] waits for it.
+    /// answers; [`Connection::answered`] waits for it. Such a connection to a peer that stopped ends as
+    /// [`Connection::answered`] says; the connect timeout bounds only the wait for this call.
     /// Dropping the future closes a session that was about to open.
     ///
     /// # Errors

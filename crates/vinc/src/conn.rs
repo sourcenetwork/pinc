@@ -333,9 +333,11 @@ impl<H: Hosted> Connection<H> {
 
     /// Wait until the peer has been heard on this connection. A dial towards a peer with a fresh cached allow, and a
     /// protocol opened over a session the peer already has, are handed over before the peer answers, so a peer that
-    /// stopped looks connected until the dial ends as unanswered (3 s for a resume, 7.5 s for a full handshake). This
-    /// returns at once for an accepted connection and for a dial handed over after its handshake. A protocol opened
-    /// over another session hears the peer once it answers what this side sends, or sends something itself.
+    /// stopped looks connected until the dial ends: as unanswered after its 4th unanswered first flight (3 s for a
+    /// resume and 7.5 s for a full handshake at the 500 ms first delay), or, on a thin node, at the 60 s handshake
+    /// limit. This returns at once for an accepted connection and for a dial handed over after its handshake. A
+    /// protocol opened over another session hears the peer once it answers what this side sends, or sends something
+    /// itself.
     ///
     /// # Errors
     /// The reason the connection ended before the peer was heard.

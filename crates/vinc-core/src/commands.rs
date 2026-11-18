@@ -481,7 +481,8 @@ ep_impl! {
             conn.set_first_retransmit(now.saturating_add(delay));
         }
         let optimistic = self.acp_cached(&node, now).is_some_and(|a| a.allow && a.until > now.saturating_add(ACP_RECHECK));
-        // Reported before the peer answered: a peer that stopped ends it after its 4th unanswered flight, not at 30 s.
+        // Reported before the peer answered: a peer that stopped ends it after its 4th unanswered flight, not at 30 s
+        // (a thin node keeps its 60 s).
         if optimistic {
             conn.end_unanswered();
             // A resumed dial carries its remembered credit; a fresh one may open streams before the peer's limits arrive.
