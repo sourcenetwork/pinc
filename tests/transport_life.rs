@@ -20,7 +20,7 @@ use std::rc::Rc;
 use pinc_crypto::IdentityAlg;
 use pinc_security::Env;
 use pinc_tests::*;
-use pinc_transport::conn::{CloseReason, PathId, PathInfo};
+use pinc_transport::conn::{CloseReason, Lent, PathId, PathInfo};
 use pinc_transport::packet::LongHeader;
 use proptest::prelude::*;
 
@@ -83,7 +83,7 @@ fn one_close_then_the_state_is_freed() {
         let mut net = connected(&mut w, &mut sa, &mut sb, Link::new(3, Params::new(10 * MS)));
         net.run(net.now + SEC, |_| false);
         let at = net.now;
-        net.a.with_env(at, |c, env| c.close(env, 42));
+        net.a.with_lent(at, |c, env, l| c.close(env, l, 42));
         assert!(net.run(at + 5 * SEC, |n| n.b.closed().is_some()));
         assert_eq!(net.a.closed(), Some(CloseReason::Local { error: 42 }));
         assert_eq!(net.b.closed(), Some(CloseReason::Peer { error: 42 }));
@@ -424,8 +424,8 @@ fn at_most_eight_early_packets_are_held() {
             let mut d = vec![0x40u8];
             d.extend_from_slice(cid.as_bytes());
             d.extend_from_slice(&[i; 40]);
-            let _ = net.b.with_env(now, |c, env| {
-                c.handle_datagram_with(env, &mut *net.stores, PathId(2), &mut d)
+            let _ = net.b.with_lent(now, |c, env, l| {
+                c.handle_datagram_with(env, l, &mut *net.stores, PathId(2), &mut d)
             });
         }
         let s = net.b.conn.stats();
@@ -483,7 +483,16 @@ fn poll_a(net: &mut Net<'_, '_>) -> Option<usize> {
         now: net.now,
         drbg: &mut net.a.drbg,
     };
-    net.a.conn.poll_transmit(&mut env, &mut net.buf).map(|t| t.len)
+    net.a
+        .conn
+        .poll_transmit(
+            &mut env,
+            &mut Lent {
+                spill: &mut net.a.spill,
+            },
+            &mut net.buf,
+        )
+        .map(|t| t.len)
 }
 
 #[test]
@@ -812,27 +821,40 @@ fn pump(a: &mut Node<'_>, b: &mut Node<'_>, stores: &mut Stores, abuf: &mut [u8]
             now,
             drbg: &mut b.drbg,
         };
-        while let Some(t) = a.conn.poll_transmit(&mut ea, abuf) {
+        while let Some(t) = a.conn.poll_transmit(&mut ea, &mut Lent { spill: &mut a.spill }, abuf) {
             b.conn
-                .handle_datagram_with(&mut eb, stores, PathId(2), &mut abuf[..t.len])
+                .handle_datagram_with(
+                    &mut eb,
+                    &mut Lent { spill: &mut b.spill },
+                    stores,
+                    PathId(2),
+                    &mut abuf[..t.len],
+                )
                 .ok();
             any = true;
         }
-        while let Some(t) = b.conn.poll_transmit(&mut eb, bbuf) {
-            a.conn.handle_datagram(&mut ea, PathId(1), &mut bbuf[..t.len]).ok();
+        while let Some(t) = b.conn.poll_transmit(&mut eb, &mut Lent { spill: &mut b.spill }, bbuf) {
+            a.conn
+                .handle_datagram(
+                    &mut ea,
+                    &mut Lent { spill: &mut a.spill },
+                    PathId(1),
+                    &mut bbuf[..t.len],
+                )
+                .ok();
             any = true;
         }
         while a.conn.poll_event().is_some() {}
         while b.conn.poll_event().is_some() {}
         while let Some(c) = b.conn.read_chunk(sid) {
             let n = c.len();
-            b.conn.consume(&mut eb, sid, n).ok();
+            b.conn.consume(&mut eb, &mut Lent { spill: &mut b.spill }, sid, n).ok();
         }
         if a.conn.poll_timeout().is_some_and(|t| t <= now) {
-            a.conn.handle_timeout(&mut ea);
+            a.conn.handle_timeout(&mut ea, &mut Lent { spill: &mut a.spill });
         }
         if b.conn.poll_timeout().is_some_and(|t| t <= now) {
-            b.conn.handle_timeout(&mut eb);
+            b.conn.handle_timeout(&mut eb, &mut Lent { spill: &mut b.spill });
         }
         if !any {
             break;
@@ -860,7 +882,7 @@ proptest! {
             let now = net.now;
             for j in &junk {
                 let mut d = j.clone();
-                let _ = net.b.with_env(now, |c, env| c.handle_datagram_with(env, &mut *net.stores, PathId(2), &mut d));
+                let _ = net.b.with_lent(now, |c, env, l| c.handle_datagram_with(env, l, &mut *net.stores, PathId(2), &mut d));
             }
             assert!(net.connect(net.now + 30 * SEC));
             let id = net.a.conn.open_bi().unwrap();
@@ -878,12 +900,12 @@ proptest! {
                 }
                 d.truncate(d.len().saturating_sub(cut % 8));
                 let mut d2 = d.clone();
-                let _ = net.a.with_env(now, |c, env| c.handle_datagram(env, PathId(1), &mut d));
-                let _ = net.b.with_env(now, |c, env| c.handle_datagram_with(env, &mut *net.stores, PathId(2), &mut d2));
+                let _ = net.a.with_lent(now, |c, env, l| c.handle_datagram(env, l, PathId(1), &mut d));
+                let _ = net.b.with_lent(now, |c, env, l| c.handle_datagram_with(env, l, &mut *net.stores, PathId(2), &mut d2));
             }
             for j in &junk {
                 let mut d = j.clone();
-                let _ = net.a.with_env(now, |c, env| c.handle_datagram(env, PathId(1), &mut d));
+                let _ = net.a.with_lent(now, |c, env, l| c.handle_datagram(env, l, PathId(1), &mut d));
             }
             net.run(net.now + 10 * SEC, |_| false);
             if net.a.closed().is_none() && net.b.closed().is_none() {

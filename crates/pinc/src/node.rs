@@ -87,8 +87,9 @@ macro_rules! define {
 
         impl AnyEp {
             /// The endpoint of the smallest rung that holds `connections` sessions, with ten connection id entries per
-            /// session and `pool_chunks` chunks for each; `None` above the ladder. It is not generic, so it is compiled
-            /// once, here, and optimised whatever the host's types: no host's build keeps a copy of a slot on the stack.
+            /// session, `pool_chunks` chunks for each and an arena of `spill_slots` spill slots; `None` above the ladder.
+            /// It is not generic, so it is compiled once, here, and optimised whatever the host's types: no host's build
+            /// keeps a copy of a slot on the stack.
             #[inline(never)]
             pub(crate) fn new(
                 connections: usize,
@@ -97,11 +98,12 @@ macro_rules! define {
                 identity: LocalIdentity,
                 cfg: EndpointConfig,
                 pool_chunks: usize,
+                spill_slots: usize,
             ) -> Option<Self> {
                 let pool = machines();
                 match rung(connections) {
                     $(Some($k) => Some(Self::$v({
-                        let mut ep = Ep::<$k, { $k * 10 }>::new_owned(now, Software, drbg, identity, cfg, pool_chunks);
+                        let mut ep = Ep::<$k, { $k * 10 }>::new_owned(now, Software, drbg, identity, cfg, pool_chunks, spill_slots);
                         ep.share_machines(&pool);
                         ep
                     })),)+
@@ -285,6 +287,7 @@ mod machines_trace {
             id.local().unwrap(),
             EndpointConfig::new(u64::from(k)),
             1,
+            pinc_transport::stream::spill::DEFAULT_SLOTS,
         )
         .unwrap()
     }

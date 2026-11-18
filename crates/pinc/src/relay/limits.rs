@@ -44,7 +44,8 @@ pub struct Limits {
     /// closed, so one slow reader never holds memory or time of the others.
     pub write_backlog: usize,
     /// The most members with a UDP session to the relay's hub, when a hub is configured. Memory for all of them is
-    /// reserved when the relay is built: about 360 KiB each plus their buffers.
+    /// reserved when the relay is built: about 360 KiB each plus their buffers, and one spill arena of 1 MiB the
+    /// sessions share, committed only as their range sets spill into it.
     pub hub_sessions: usize,
     /// The 16 KiB buffers each hub session may hold (at least 8).
     pub hub_pool_chunks: usize,

@@ -16,6 +16,7 @@ use super::lazy::{Blank, Lazy};
 use super::pool::{BufferPool, CHUNK_SIZE};
 use super::recv::Recv;
 use super::send::Send;
+use super::spill::SpillArena;
 use super::{
     Config, DEFAULT_URGENCY, FIRST_CHARGE, NoSource, PeerLimits, RecvStatus, StreamError, StreamId, StreamSource,
     StreamStats, is_uni,
@@ -668,15 +669,22 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
     }
 
     /// The stored bytes of a stream from absolute offset `at` (up to the end of one chunk), borrowed from the pool.
-    /// They may lie beyond a hole: the stream's readable bytes are only the contiguous prefix.
-    pub fn read_at<'a>(&self, pool: &'a BufferPool<'_>, id: StreamId, at: u64) -> Option<&'a [u8]> {
-        self.slot(self.find(id)?)?.recv.read_at(pool, at)
+    /// They may lie beyond a hole: the stream's readable bytes are only the contiguous prefix. `arena` is the
+    /// endpoint's spill arena, which holds the stream's received ranges if they spilled.
+    pub fn read_at<'a>(
+        &self,
+        pool: &'a BufferPool<'_>,
+        arena: &SpillArena<'_>,
+        id: StreamId,
+        at: u64,
+    ) -> Option<&'a [u8]> {
+        self.slot(self.find(id)?)?.recv.read_at(pool, arena, at)
     }
 
     /// The first run of stored bytes of a stream that reaches past `from` (and the read position), cut to begin at
     /// `from` or later. Bytes beyond the first hole show up here before they are readable.
-    pub fn stored_after(&self, pool: &BufferPool<'_>, id: StreamId, from: u64) -> Option<core::ops::Range<u64>> {
-        self.slot(self.find(id)?)?.recv.stored_after(pool, from)
+    pub fn stored_after(&self, arena: &SpillArena<'_>, id: StreamId, from: u64) -> Option<core::ops::Range<u64>> {
+        self.slot(self.find(id)?)?.recv.stored_after(arena, from)
     }
 
     /// The state of a stream's send half; `None` if the stream is unknown or closed.
@@ -895,6 +903,15 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         self.remote_live = 0;
         self.released = false;
         self.stalled = false;
+    }
+
+    /// Return every spill slot the streams' range sets hold to the endpoint's arena, leaving their chunks to the pool's
+    /// reset: the connection is handing its memory back, closed or not.
+    pub fn release_spills(&mut self, pool: &mut BufferPool<'_>) {
+        for slot in self.slots.written_iter_mut() {
+            slot.recv.release_sets(pool);
+            slot.send.release_sets(pool);
+        }
     }
 
     /// The peer raised the number of streams we may have opened in all (`MAX_STREAMS`).

@@ -42,7 +42,7 @@ pub fn poll(log: &mut Log, n: usize, node: &mut Node<'_>, now: u64) -> Option<u6
 }
 
 pub fn timeout(log: &mut Log, n: usize, node: &mut Node<'_>, now: u64) -> Vec<&'static str> {
-    node.with_env(now, Conn::handle_timeout);
+    node.with_lent(now, Conn::handle_timeout);
     let probe = node.conn.trace_carrier_take();
     let extra = probe_json(probe.as_ref());
     let ev = log.line(n, node, now, "timeout", &extra);
@@ -93,7 +93,7 @@ pub fn timeout(log: &mut Log, n: usize, node: &mut Node<'_>, now: u64) -> Vec<&'
 }
 
 pub fn close(log: &mut Log, n: usize, node: &mut Node<'_>, now: u64, err: u64) {
-    node.with_env(now, |c, env| c.close(env, err));
+    node.with_lent(now, |c, env, l| c.close(env, l, err));
     log.line(n, node, now, "close", &format!(r#","err":{err}"#));
 }
 
@@ -150,7 +150,9 @@ pub fn inject(log: &mut Log, n: usize, node: &mut Node<'_>, now: u64, path: Path
         pinc_transport::frame::write_ack(&mut w, core::iter::once(1_000_000u64..=1_000_000)).unwrap();
         w.written().len()
     };
-    let _ = node.with_env(now, |c, env| c.inject_payload(env, path, now, 1 << 40, &buf[..len]));
+    let _ = node.with_lent(now, |c, env, l| {
+        c.inject_payload(env, l, path, now, 1 << 40, &buf[..len])
+    });
     let (kind, err) = if bad {
         ("bad", code::FRAME_ENCODING)
     } else {
@@ -182,7 +184,7 @@ impl Duo<'_, '_> {
             let phase = self.nodes[n].conn.trace_timers().phase;
             let (closing, was_closed) = (phase == 2, phase == 3);
             let buf = &mut self.buf;
-            let r = self.nodes[n].with_env(now, |c, env| c.poll_transmit(env, buf));
+            let r = self.nodes[n].with_lent(now, |c, env, l| c.poll_transmit(env, l, buf));
             let len = r.map_or(0, |t| t.len);
             log.line(n, &mut self.nodes[n], now, "tx", &format!(r#","len":{len}"#));
             let Some(t) = r else { break };
@@ -211,10 +213,12 @@ impl Duo<'_, '_> {
         let now = self.now;
         let was_closed = self.nodes[to].conn.is_closed();
         let r = if to == 0 {
-            self.nodes[0].with_env(now, |c, env| c.handle_datagram(env, PathId(1), &mut bytes))
+            self.nodes[0].with_lent(now, |c, env, l| c.handle_datagram(env, l, PathId(1), &mut bytes))
         } else {
             let stores = &mut *self.stores;
-            self.nodes[1].with_env(now, |c, env| c.handle_datagram_with(env, stores, PathId(2), &mut bytes))
+            self.nodes[1].with_lent(now, |c, env, l| {
+                c.handle_datagram_with(env, l, stores, PathId(2), &mut bytes)
+            })
         };
         let res = match r {
             Ok(()) => "ok",

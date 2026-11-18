@@ -99,10 +99,10 @@ fn run_case(seed: u64, delay_ms: u64, kind: u64, lost: u32, seen: &mut Seen) -> 
             break;
         }
         at = at.max(t);
-        net.a.with_env(at, |c, env| {
-            c.handle_timeout(env);
+        net.a.with_lent(at, |c, env, l| {
+            c.handle_timeout(env, l);
             for _ in 0..64 {
-                if c.poll_transmit(env, &mut buf).is_none() {
+                if c.poll_transmit(env, l, &mut buf).is_none() {
                     break;
                 }
             }

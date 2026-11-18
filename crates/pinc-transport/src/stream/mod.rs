@@ -44,6 +44,7 @@ mod table;
 pub mod datagram;
 pub mod pool;
 mod ranges;
+pub mod spill;
 #[cfg(feature = "trace")]
 pub mod trace;
 #[cfg(all(feature = "trace", feature = "alloc"))]
@@ -69,15 +70,16 @@ pub const DEFAULT_MAX_STREAM_WINDOW: u64 = 16 * 1024 * 1024;
 pub const FIRST_CHARGE: u64 = 4 * pool::CHUNK_SIZE as u64;
 /// The urgency a stream starts with; a lower number is served first.
 pub const DEFAULT_URGENCY: u8 = 3;
-/// The disjoint ranges a stream tracks inline of what it declared lost; past them the set moves into one pool chunk
-/// (1,024 ranges), so a loss burst no longer widens a range over bytes that were not lost.
+/// The disjoint ranges a stream tracks inline of what it declared lost; past them the set moves into a slot of the
+/// endpoint's spill arena ([`spill::SLOT_RANGES`] ranges), so a loss burst no longer widens a range over bytes that were
+/// not lost. With no slot free it widens, as it did before the arena.
 pub const RANGES: usize = 16;
-/// The disjoint ranges a stream tracks inline of what the peer acknowledged; past them the set moves into one pool
-/// chunk. Only past that chunk, or with no chunk free, is a range sent again so the acknowledgement can be taken in order.
+/// The disjoint ranges a stream tracks inline of what the peer acknowledged; past them the set moves into a spill slot.
+/// Only past that slot, or with no slot free, is a range sent again so the acknowledgement can be taken in order.
 pub const ACKED_RANGES: usize = 64;
-/// The disjoint ranges a stream tracks inline of what it received; past them the set moves into one pool chunk. A packet
-/// that fits neither is dropped unacknowledged (or held back when no chunk is free), so the sender repeats it. Inline,
-/// the deepest reordering scenario measured needed 65 at 128 packet ranges; scattered drops at a large window need more.
+/// The disjoint ranges a stream tracks inline of what it received; past them the set moves into a spill slot. A packet
+/// that fits neither is dropped unacknowledged (`Fragmented`), so the sender repeats it. Inline, the deepest reordering
+/// scenario measured needed 65 at 128 packet ranges; scattered drops at a large window need more.
 pub const RECV_RANGES: usize = 96;
 
 /// What the send half of a stream knows, for a host that paces work on it.
@@ -284,11 +286,12 @@ impl Config {
 /// Counters for events the layer absorbed instead of failing.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct StreamStats {
-    /// Range maps that were full even spilled, so a lost range was widened, an acknowledgement turned back into a
-    /// retransmission, or a received frame was refused (`Fragmented`; its packet went unacknowledged).
+    /// Range maps that were full (inline with no spill slot to take, or in their slot), so a lost range was widened, an
+    /// acknowledgement turned back into a retransmission, or a received frame was refused (`Fragmented`; its packet went
+    /// unacknowledged). A spill refused for want of an arena slot is counted by the pool (`spill_refused`).
     pub range_overflows: u64,
-    /// Times a range map outgrew its inline array and moved into a pool chunk (received, lost or acknowledged ranges).
-    /// A map that holds at most half its inline capacity again moves back and returns the chunk, so a stream can count
+    /// Times a range map outgrew its inline array and moved into an arena slot (received, lost or acknowledged ranges).
+    /// A map that holds at most half its inline capacity again moves back and returns the slot, so a stream can count
     /// more than once.
     pub range_spills: u64,
     /// Peer stream frames held back for want of a slot or of a free chunk in the pool (their packet went

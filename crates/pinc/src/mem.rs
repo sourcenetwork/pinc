@@ -22,7 +22,7 @@
 //! the ladder, which doubles at each step: ask for what you need, not for a round number above it.
 //!
 //! The most the limits allow an endpoint to come to hold is the number of sessions of the shape, each with a full pool
-//! and every table of its slot written, plus every topic's log full. [`Limits::check`] refuses limits whose most
+//! and every table of its slot written, plus every topic's log full and every slot of the spill arena written. [`Limits::check`] refuses limits whose most
 //! exceeds half the target's address space, which is as much as one allocation can be; a 64-bit target accepts every
 //! limit in range, a 32-bit one needs fewer sessions or a smaller pool ([`Limits::wasm`]). The measured memory of an
 //! endpoint and of a session without `std` is in the crate's own docs, with the platform it was measured on.
@@ -74,6 +74,13 @@ pub struct Limits {
     /// ceiling. Streams that move data at once are charged
     /// their whole window, so a path whose bandwidth times round trip is above half the pool needs more.
     pub pool_chunks: usize,
+    /// The slots of the endpoint's spill arena (0 to 65,536; default 128, 1 MiB): when a stream's ranges (received,
+    /// lost or acknowledged) outgrow the few it keeps inline, under scattered loss, they move into one 8 KiB slot until
+    /// they shrink to half of inline again. The arena is allocated once with the endpoint, commits a slot's memory the
+    /// first time it is used, and is shared by every session, each holding at most half of it. With no slot free a
+    /// received frame that needs one more range is refused and sent again by the peer, and a lost range is widened or
+    /// sent again; 0 turns spilling off.
+    pub spill_slots: usize,
     /// The receive window a stream starts with, in bytes (default 1,310,720, 1.25 MiB). It grows toward twice what the
     /// stream's own reader drains per round trip, up to half the pool and `(RING - 1) * 16 KiB` (4 MiB): a stream moves at
     /// most one window per round trip. The pool is charged the window of a stream from its first byte, so a raised
@@ -117,6 +124,7 @@ impl Limits {
     const BASE: Self = Self {
         connections: 1024,
         pool_chunks: 1024,
+        spill_slots: pinc_transport::stream::spill::DEFAULT_SLOTS,
         stream_window: 1_310_720,
         // vertexia: the transport's own default is the reference's 1,310,720 bytes, a figure sized for its test
         // links; at the facade a session of one stream or many would be held to 8.7 MiB/s on a 150 ms path
@@ -159,6 +167,7 @@ impl Limits {
     fn check_for(&self, pointer_bytes: usize) -> Result<()> {
         let ok = (1..=MAX_CONNECTIONS).contains(&self.connections)
             && (8..=65_535).contains(&self.pool_chunks)
+            && self.spill_slots <= 65_536
             && (16 * 1024..=16 * 1024 * 1024).contains(&self.stream_window)
             && (16 * 1024..=1 << 30).contains(&self.send_window)
             && (1..=STREAMS / 2).contains(&usize::from(self.streams))
@@ -187,7 +196,8 @@ impl Default for Limits {
 }
 
 /// The most memory the limits allow the endpoint to come to hold, in bytes: every session of the shape with a full pool
-/// and every table of its slot written, and every topic's log full. `None` if the sum does not fit 128 bits.
+/// and every table of its slot written, every topic's log full and every slot of the spill arena written. `None` if the
+/// sum does not fit 128 bits.
 fn worst_case(limits: &Limits) -> Option<u128> {
     let sessions = u128::try_from(crate::node::rung(limits.connections)?).ok()?;
     let pool = u128::try_from(limits.pool_chunks)
@@ -197,7 +207,10 @@ fn worst_case(limits: &Limits) -> Option<u128> {
     let logs = u128::try_from(limits.topics)
         .ok()?
         .checked_mul(u128::try_from(limits.topic_log).ok()?)?;
-    sessions.checked_mul(slot)?.checked_add(logs)
+    let spill = u128::try_from(limits.spill_slots)
+        .ok()?
+        .checked_mul(size_of::<pinc_transport::stream::spill::SpillSlot>() as u128)?;
+    sessions.checked_mul(slot)?.checked_add(logs)?.checked_add(spill)
 }
 
 /// Whether the most memory the limits allow is at most half the address space of a target with `pointer_bytes`-wide
@@ -224,6 +237,7 @@ mod tests {
         Limits {
             connections: MAX_CONNECTIONS,
             pool_chunks: 65_535,
+            spill_slots: 65_536,
             stream_window: 16 * 1024 * 1024,
             send_window: 1 << 30,
             streams: 100,

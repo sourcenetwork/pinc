@@ -13,6 +13,7 @@
 use pinc_crypto::IdentityAlg;
 use pinc_security::Env;
 use pinc_tests::*;
+use pinc_transport::conn::Lent;
 
 pinc_tests::install_counting_allocator!();
 
@@ -26,7 +27,13 @@ fn send_a<const F: usize>(net: &mut Net<'_, '_, RING, F>) -> Option<usize> {
         now: net.now,
         drbg: &mut net.a.drbg,
     };
-    let t = net.a.conn.poll_transmit(&mut env, &mut net.buf)?;
+    let t = net.a.conn.poll_transmit(
+        &mut env,
+        &mut Lent {
+            spill: &mut net.a.spill,
+        },
+        &mut net.buf,
+    )?;
     net.link.send_a(net.now, t.path, &net.buf[..t.len]);
     Some(t.len)
 }

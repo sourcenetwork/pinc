@@ -1,7 +1,7 @@
 //! Test-only observation of the stream table, for trace validation (cargo feature `trace`, off by default).
 //!
 //! [`Streams::trace_view`](super::Streams::trace_view) shows the state the receive and credit path works on: per
-//! slot the held chunk numbers, the stored ranges and whether they spilled into a pool chunk, the read position, the
+//! slot the held chunk numbers, the stored ranges and whether they spilled into an arena slot, the read position, the
 //! credit, the delivery meter, the send half's state that
 //! frees the slot, the stop request and the ordinal of a stream we opened; per table the counters,
 //! the pool chunks the others hold and whether opens may pass the peer's limit. Nothing here is

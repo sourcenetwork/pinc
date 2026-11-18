@@ -10,6 +10,7 @@ use super::path::CTRL_SMALL;
 use super::{Connection, MIN_MTU, Phase};
 use crate::packet::PN_LEN_WIDE;
 use crate::stream::datagram::DatagramError;
+use crate::stream::spill::SpillArena;
 use crate::stream::{PeerLimits, RecvStatus, StreamError, StreamId, StreamSource};
 
 /// A DATAGRAM frame spends its type and a two-byte length besides the data.
@@ -232,8 +233,8 @@ conn_impl! {
     ///
     /// # Errors
     /// The errors of [`Streams::reset`](crate::stream::Streams::reset).
-    pub fn reset(&mut self, id: StreamId, error: u64) -> Result<(), StreamError> {
-        self.streams.reset(&mut self.pool, id, error)
+    pub fn reset(&mut self, lent: &mut super::Lent<'_, 'a>, id: StreamId, error: u64) -> Result<(), StreamError> {
+        self.with_lent(lent, |c| c.streams.reset(&mut c.pool, id, error))
     }
 
     /// Ask the peer to stop sending on a stream; it resets the stream with `error`, which arrives as a reset. The
@@ -253,14 +254,15 @@ conn_impl! {
 
     /// The stored bytes of a stream from absolute offset `at`, up to the end of the run holding them or of one chunk,
     /// borrowed from the pool. The run may lie beyond a hole, so a host can check bytes as they arrive out of order.
-    /// Release bytes only through [`consume`](Self::consume), which moves through the contiguous prefix.
-    pub fn read_at(&self, id: StreamId, at: u64) -> Option<&[u8]> {
-        self.streams.read_at(&self.pool, id, at)
+    /// Release bytes only through [`consume`](Self::consume), which moves through the contiguous prefix. `spill` is
+    /// the endpoint's arena, read only: a read changes nothing, so it needs no [`Lent`](super::Lent).
+    pub fn read_at(&self, spill: &SpillArena<'_>, id: StreamId, at: u64) -> Option<&[u8]> {
+        self.streams.read_at(&self.pool, spill, id, at)
     }
 
     /// The first run of stored bytes of a stream that reaches past `from`, cut to begin at `from` or later.
-    pub fn stored_after(&self, id: StreamId, from: u64) -> Option<core::ops::Range<u64>> {
-        self.streams.stored_after(&self.pool, id, from)
+    pub fn stored_after(&self, spill: &SpillArena<'_>, id: StreamId, from: u64) -> Option<core::ops::Range<u64>> {
+        self.streams.stored_after(spill, id, from)
     }
 
     /// The urgency of a stream; `None` if it is unknown.
@@ -278,9 +280,15 @@ conn_impl! {
     ///
     /// # Errors
     /// The errors of [`Streams::consume`](crate::stream::Streams::consume).
-    pub fn consume(&mut self, env: &mut Env<'_, P>, id: StreamId, n: usize) -> Result<RecvStatus, StreamError> {
+    pub fn consume(
+        &mut self,
+        env: &mut Env<'_, P>,
+        lent: &mut super::Lent<'_, 'a>,
+        id: StreamId,
+        n: usize,
+    ) -> Result<RecvStatus, StreamError> {
         let srtt = self.rec.rtt().smoothed();
-        self.streams.consume(&mut self.pool, id, n, env.now, srtt)
+        self.with_lent(lent, |c| c.streams.consume(&mut c.pool, id, n, env.now, srtt))
     }
 
     /// The state of a stream's receive side.

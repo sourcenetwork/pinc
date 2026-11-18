@@ -167,6 +167,8 @@ pub struct BufferPool<'p> {
     free_head: u32,
     used: u32,
     budget: u32,
+    /// The session's use of its endpoint's spill arena, which is not part of the chunks or the budget.
+    pub(super) spill: super::spill::SpillUse<'p>,
 }
 
 impl fmt::Debug for BufferPool<'_> {
@@ -216,6 +218,7 @@ impl<'p> BufferPool<'p> {
             free_head: 0,
             used: 0,
             budget: total,
+            spill: super::spill::SpillUse::default(),
         }
     }
 
@@ -234,6 +237,7 @@ impl<'p> BufferPool<'p> {
         self.fresh = 0;
         self.free_head = 0;
         self.used = 0;
+        self.reset_spill_counts();
         #[cfg(feature = "alloc")]
         if let Slab::Grown(g) = &mut self.slab {
             g.reset();

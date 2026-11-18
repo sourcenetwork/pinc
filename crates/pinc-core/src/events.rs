@@ -29,7 +29,7 @@ use pinc_transport::frame::ext;
 
 use crate::acp::Release;
 use crate::api::{ConnectFailure, EndReason, Event, PathState};
-use crate::endpoint::{env, ep_impl};
+use crate::endpoint::{env, ep_impl, lent};
 use crate::slot::{HeldEvent, State};
 use crate::trace::trace;
 
@@ -420,7 +420,7 @@ ep_impl! {
                 s.m.orphaned = true;
                 if let Some(conn) = s.conn.as_mut() {
                     let mut env = env!(self, now);
-                    conn.close(&mut env, code::NO_ERROR);
+                    conn.close(&mut env, &mut lent!(self), code::NO_ERROR);
                 }
             }
             self.settle(c, now);
@@ -433,7 +433,7 @@ ep_impl! {
             s.m.redial = true;
             if let Some(conn) = s.conn.as_mut() {
                 let mut env = env!(self, now);
-                conn.close(&mut env, code::NO_ERROR);
+                conn.close(&mut env, &mut lent!(self), code::NO_ERROR);
             }
         }
         self.settle(i, now);

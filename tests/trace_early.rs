@@ -246,12 +246,12 @@ impl Side<'_, '_, '_> {
         if self.client {
             self.net
                 .a
-                .with_env(now, |c, env| c.handle_datagram(env, PathId(1), &mut d))
+                .with_lent(now, |c, env, l| c.handle_datagram(env, l, PathId(1), &mut d))
         } else {
             let stores = &mut *self.net.stores;
-            self.net
-                .b
-                .with_env(now, |c, env| c.handle_datagram_with(env, stores, PathId(2), &mut d))
+            self.net.b.with_lent(now, |c, env, l| {
+                c.handle_datagram_with(env, l, stores, PathId(2), &mut d)
+            })
         }
     }
 }
@@ -401,9 +401,9 @@ fn conn_run(rng: &mut SplitMix64, out: &mut String, run: u32, client: bool) {
     if rng.next_u64().is_multiple_of(2) {
         let now = side.net.now;
         if client {
-            side.net.a.with_env(now, |c, env| c.close(env, 0));
+            side.net.a.with_lent(now, |c, env, l| c.close(env, l, 0));
         } else {
-            side.net.b.with_env(now, |c, env| c.close(env, 0));
+            side.net.b.with_lent(now, |c, env, l| c.close(env, l, 0));
         }
         let after = side.snap();
         assert!(after.ph >= 2 && after.n == 0);
@@ -485,7 +485,7 @@ fn resumed_run(out: &mut String, run: u32, name: &str, raw: &[u8], refuse: bool)
     let mut buf = vec![0u8; 65_536];
     let len = net
         .a
-        .with_env(now, |conn, env| conn.poll_transmit(env, &mut buf))
+        .with_lent(now, |conn, env, l| conn.poll_transmit(env, l, &mut buf))
         .unwrap()
         .len;
     let dgram = &buf[..len];

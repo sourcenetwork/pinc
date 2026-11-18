@@ -28,7 +28,7 @@ use crate::api::{
     Answer, Command, CommandError, ConnectFailure, Event, Events, PeerInfo, Query, Reply, SendState, SessionId,
     SessionStats, Value,
 };
-use crate::endpoint::{env, ep_impl};
+use crate::endpoint::{env, ep_impl, lent};
 use crate::keepalive::{LATE_START, MTU_PROBE_DELAY, Role};
 use crate::relay_net::is_relay_addr;
 use crate::slot::{NIL, State};
@@ -160,7 +160,11 @@ ep_impl! {
                 self.with_conn(session, now, |c| c.finish(stream).map_err(CommandError::Stream))
             }
             Command::Reset { session, stream, error } => {
-                self.with_conn(session, now, |c| c.reset(stream, error).map_err(CommandError::Stream))
+                let i = self.live(session)?;
+                let conn = self.slots.get_mut(i).and_then(|s| s.conn.as_mut()).ok_or(CommandError::NoSession)?;
+                conn.reset(&mut lent!(self), stream, error).map_err(CommandError::Stream)?;
+                self.settle(i, now);
+                Ok(Value::None)
             }
             Command::StopSending { session, stream, error } => {
                 self.with_conn(session, now, |c| c.stop_sending(stream, error).map_err(CommandError::Stream))
@@ -169,7 +173,7 @@ ep_impl! {
                 let i = self.live(session)?;
                 let conn = self.slots.get_mut(i).and_then(|s| s.conn.as_mut()).ok_or(CommandError::NoSession)?;
                 let mut env = env!(self, now);
-                let st = conn.consume(&mut env, stream, n).map_err(CommandError::Stream)?;
+                let st = conn.consume(&mut env, &mut lent!(self), stream, n).map_err(CommandError::Stream)?;
                 self.settle(i, now);
                 Ok(Value::Recv(st))
             }
@@ -188,7 +192,7 @@ ep_impl! {
                 let i = self.live(session)?;
                 let conn = self.slots.get_mut(i).and_then(|s| s.conn.as_mut()).ok_or(CommandError::NoSession)?;
                 let mut env = env!(self, now);
-                conn.close(&mut env, error);
+                conn.close(&mut env, &mut lent!(self), error);
                 self.settle(i, now);
                 Ok(Value::None)
             }
@@ -200,7 +204,7 @@ ep_impl! {
                     }
                     if let Some(conn) = slot.conn.as_mut() {
                         let mut env = env!(self, now);
-                        conn.close(&mut env, code::LEAVE);
+                        conn.close(&mut env, &mut lent!(self), code::LEAVE);
                     }
                     self.settle(i, now);
                 }
@@ -548,11 +552,11 @@ ep_impl! {
                 .map_or(Answer::None, Answer::Chunk),
             Query::ReadAt { session, stream, offset } => self
                 .conn_of(session)
-                .and_then(|c| c.read_at(stream, offset))
+                .and_then(|c| c.read_at(&self.spill, stream, offset))
                 .map_or(Answer::None, Answer::Chunk),
             Query::StoredAfter { session, stream, from } => self
                 .conn_of(session)
-                .and_then(|c| c.stored_after(stream, from))
+                .and_then(|c| c.stored_after(&self.spill, stream, from))
                 .map_or(Answer::None, Answer::Stored),
             Query::SendState { session, stream } => self.conn_of(session).map_or(Answer::None, |c| {
                 let v = c.send_view(stream);

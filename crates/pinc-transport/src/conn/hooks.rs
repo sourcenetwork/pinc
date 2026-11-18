@@ -72,8 +72,10 @@ pub struct SubWait {
 }
 
 conn_impl! {
-    /// Give back the memory this connection used, for the next one. The pool is not reset here.
-    pub fn into_resources(self) -> Resources<'a, S, N, C, F> {
+    /// Give back the memory this connection used, for the next one. The pool is not reset here; the spill slots its
+    /// streams hold go back to the endpoint's arena, however the connection ended.
+    pub fn into_resources(mut self, lent: &mut super::Lent<'_, 'a>) -> Resources<'a, S, N, C, F> {
+        self.with_lent(lent, |c| c.streams.release_spills(&mut c.pool));
         Resources {
             pool: self.pool,
             streams: self.streams,

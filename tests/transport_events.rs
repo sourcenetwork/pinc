@@ -107,7 +107,7 @@ proptest! {
             for (k, fs) in packets.iter().enumerate() {
                 let mut buf = vec![0u8; 9000];
                 let n = encode(fs, &mut buf);
-                let _ = net.b.with_env(now, |c, env| c.inject_payload(env, PathId(1), now, 5000 + k as u64, &buf[..n]));
+                let _ = net.b.with_lent(now, |c, env, l| c.inject_payload(env, l, PathId(1), now, 5000 + k as u64, &buf[..n]));
             }
             let lost = net.b.conn.stats().events_lost;
             let (mut opened, mut reset) = (HashSet::new(), HashSet::new());
@@ -181,7 +181,7 @@ fn a_gated_connection_still_takes_acknowledgements_and_a_close() {
         );
         // A close from B reaches the gated A.
         let now = net.now;
-        net.b.with_env(now, |c, env| c.close(env, 0));
+        net.b.with_lent(now, |c, env, l| c.close(env, l, 0));
         let t = net.now + 2 * SEC;
         net.run(t, |_| false);
         assert!(net.a.conn.is_closed(), "the close was refused by the gate");
@@ -198,7 +198,7 @@ fn opened_by(net: &mut Net<'_, '_, RING>, pn: u64, frames: &[Frame<'_>]) -> Vec<
     let n = w.written().len();
     let now = net.now;
     net.b
-        .with_env(now, |c, env| c.inject_payload(env, PathId(1), now, pn, &buf[..n]))
+        .with_lent(now, |c, env, l| c.inject_payload(env, l, PathId(1), now, pn, &buf[..n]))
         .unwrap();
     let mut opened = Vec::new();
     while let Some(ev) = net.b.conn.poll_event() {
@@ -308,18 +308,19 @@ fn a_stop_request_for_a_stream_the_peer_cannot_send_on_is_a_violation() {
         let n = w.written().len();
         let now = net.now;
         // Id 2 is a client-initiated unidirectional stream: B, the server, has no send half on it.
-        let r = net
-            .b
-            .with_env(now, |c, env| c.inject_payload(env, PathId(1), now, 6000, &buf[..n]));
+        let r = net.b.with_lent(now, |c, env, l| {
+            c.inject_payload(env, l, PathId(1), now, 6000, &buf[..n])
+        });
         assert_eq!(r, Err(Drop::Closed));
     });
 }
 
 /// The connection's statistics show the stream layer's range counters: a peer stream whose received ranges outgrow the
-/// inline array moves them into a pool chunk, once.
+/// inline array moves them into a slot of the endpoint's arena, once.
 #[test]
 fn the_connection_statistics_count_a_stream_range_spill() {
     gated_pair(|net| {
+        net.b.spill = pinc_transport::stream::spill::SpillArena::new_boxed(2);
         while net.b.conn.poll_event().is_some() {}
         let stats = net.b.conn.stats();
         assert_eq!((stats.range_spills, stats.range_overflows), (0, 0));

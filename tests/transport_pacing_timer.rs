@@ -27,7 +27,11 @@ fn quiet_pair<'a>(w: &'a mut World, sa: &'a mut Store, sb: &'a mut Store) -> Net
 fn drain(net: &mut Net<'_, '_>, now: u64) -> usize {
     let mut buf = vec![0u8; 65_535];
     let mut n = 0;
-    while net.a.with_env(now, |c, env| c.poll_transmit(env, &mut buf)).is_some() {
+    while net
+        .a
+        .with_lent(now, |c, env, l| c.poll_transmit(env, l, &mut buf))
+        .is_some()
+    {
         n += 1;
     }
     n

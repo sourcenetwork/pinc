@@ -147,8 +147,14 @@ conn_impl! {
     ///
     /// # Errors
     /// A [`Drop`] naming why no packet of the datagram was used; none is fatal.
-    pub fn handle_datagram(&mut self, env: &mut Env<'_, P>, path: PathId, dgram: &mut [u8]) -> Result<(), Drop> {
-        self.handle_inner(env, None::<&mut ResponderStores<0, 0>>, path, dgram)
+    pub fn handle_datagram(
+        &mut self,
+        env: &mut Env<'_, P>,
+        lent: &mut super::Lent<'_, 'a>,
+        path: PathId,
+        dgram: &mut [u8],
+    ) -> Result<(), Drop> {
+        self.with_lent(lent, |c| c.handle_inner(env, None::<&mut ResponderStores<0, 0>>, path, dgram))
     }
 
     /// As [`handle_datagram`](Self::handle_datagram) for a server: `stores` are the prekey cache and ticket store
@@ -159,11 +165,12 @@ conn_impl! {
     pub fn handle_datagram_with<const PK: usize, const TK: usize>(
         &mut self,
         env: &mut Env<'_, P>,
+        lent: &mut super::Lent<'_, 'a>,
         stores: &mut ResponderStores<PK, TK>,
         path: PathId,
         dgram: &mut [u8],
     ) -> Result<(), Drop> {
-        self.handle_inner(env, Some(stores), path, dgram)
+        self.with_lent(lent, |c| c.handle_inner(env, Some(stores), path, dgram))
     }
 
     fn handle_inner<const PK: usize, const TK: usize>(
@@ -406,9 +413,17 @@ conn_impl! {
     /// # Errors
     /// The [`Drop`] reason if the packet is refused.
     #[cfg(feature = "inject")]
-    pub fn inject_payload(&mut self, env: &mut Env<'_, P>, path: PathId, now: u64, pn: u64, payload: &[u8]) -> Result<(), Drop> {
+    pub fn inject_payload(
+        &mut self,
+        env: &mut Env<'_, P>,
+        lent: &mut super::Lent<'_, 'a>,
+        path: PathId,
+        now: u64,
+        pn: u64,
+        payload: &[u8],
+    ) -> Result<(), Drop> {
         let mut ctx = Rx { path_id: path, path: None, dlen: payload.len(), now, old_key: false };
-        self.process_payload(env, &mut ctx, pn, payload, false)
+        self.with_lent(lent, |c| c.process_payload(env, &mut ctx, pn, payload, false))
     }
 
     /// Put the encoded frames `raw` (at most 1400 bytes) at the front of the next packet built (test hook: a packet

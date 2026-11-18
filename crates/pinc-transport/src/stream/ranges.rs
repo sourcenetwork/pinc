@@ -1,30 +1,25 @@
 //! A bounded set of disjoint byte ranges with insert and remove, held inline and, past its inline capacity, in one
-//! chunk of the session's buffer pool.
+//! slot of the endpoint's spill arena.
 //!
 //! Invariants: the intervals are sorted, disjoint and non-adjacent (adjacent ones merge), at most `N` are held inline
-//! and at most [`SPILL`] once spilled, and a failed insert or remove leaves the set unchanged. A set that does not fit
-//! its inline array takes one pool chunk and moves into it (spills); the chunk is charged to the pool's budget like any
-//! other, and it is returned as soon as the set holds at most half of what fits inline (the half is the hysteresis:
-//! a set at the boundary does not move on every edit), and by [`RangeSet::clear`], which every owner calls when its
-//! stream ends. A set that holds nothing holds no chunk. With no chunk left
-//! the operation fails as it would at `N`, so the set's owner falls back to what it did before the spill existed. While
-//! spilled, the first inline entry mirrors the lowest interval, so [`RangeSet::first`] needs no pool. It tracks the
-//! received ranges of a stream, the acknowledged ranges of a send buffer and the lost ranges waiting to be sent again.
+//! and at most [`SLOT_RANGES`] once spilled, and a failed insert or remove leaves the set unchanged and holds no slot it
+//! did not hold before. A set that does not fit its inline array takes a slot of the arena and moves into it (spills);
+//! a spilled set that holds at most `N / 2` intervals after a change moves back inline and returns its slot in the same
+//! call, and [`RangeSet::clear`] returns it too. With no slot to take the operation fails as it would at `N`, so the
+//! set's owner does what it did before the arena existed. While spilled, the first inline entry mirrors the lowest
+//! interval, so [`RangeSet::first`] reads no slot. It tracks the received ranges of a stream, the acknowledged ranges
+//! of a send buffer and the lost ranges waiting to be sent again.
 
 use core::ops::Range;
 
-use super::pool::{BufferPool, CHUNK_SIZE, Chunk};
+use super::pool::BufferPool;
+use super::spill::{SLOT_RANGES, SpillArena, SpillRef};
 
 /// The set would need more than its capacity of intervals.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct RangeFull;
 
 type Interval = (u64, u64);
-
-/// The bytes of one interval in a spill chunk: start and end, little-endian.
-const IV: usize = 16;
-/// The intervals a spill chunk holds.
-pub(super) const SPILL: usize = CHUNK_SIZE / IV;
 
 /// Read access to a sorted run of intervals.
 trait Get {
@@ -67,43 +62,37 @@ impl Store for Inline<'_> {
     }
 }
 
-/// A spill chunk read as intervals.
-struct Bytes<'a>(&'a [u8]);
-/// A spill chunk written as intervals.
-struct BytesMut<'a>(&'a mut [u8]);
+/// A spill slot read as intervals: a start and an end word each.
+struct Words<'a>(&'a [u64]);
+/// A spill slot written as intervals.
+struct WordsMut<'a>(&'a mut [u64]);
 
-fn decode(b: &[u8], i: usize) -> Interval {
-    let word = |k: usize| {
-        b.get(k..k + 8)
-            .and_then(|w| <[u8; 8]>::try_from(w).ok())
-            .map_or(0, u64::from_le_bytes)
-    };
-    (word(i * IV), word(i * IV + 8))
+fn decode(w: &[u64], i: usize) -> Interval {
+    let word = |k: usize| w.get(k).copied().unwrap_or(0);
+    (word(2 * i), word(2 * i + 1))
 }
 
-impl Get for Bytes<'_> {
+impl Get for Words<'_> {
     fn at(&self, i: usize) -> Interval {
         decode(self.0, i)
     }
 }
 
-impl Get for BytesMut<'_> {
+impl Get for WordsMut<'_> {
     fn at(&self, i: usize) -> Interval {
         decode(self.0, i)
     }
 }
 
-impl Store for BytesMut<'_> {
+impl Store for WordsMut<'_> {
     fn put(&mut self, i: usize, iv: Interval) {
-        if let Some(b) = self.0.get_mut(i * IV..i * IV + IV) {
-            let (s, e) = b.split_at_mut(8);
-            s.copy_from_slice(&iv.0.to_le_bytes());
-            e.copy_from_slice(&iv.1.to_le_bytes());
+        if let Some([s, e]) = self.0.get_mut(2 * i..2 * i + 2) {
+            (*s, *e) = iv;
         }
     }
 
     fn shift(&mut self, src: Range<usize>, dest: usize) {
-        let (from, to) = (src.start * IV..src.end * IV, dest * IV);
+        let (from, to) = (2 * src.start..2 * src.end, 2 * dest);
         if from.end <= self.0.len() && to + from.len() <= self.0.len() {
             self.0.copy_within(from, to);
         }
@@ -182,34 +171,33 @@ fn take_front_in<S: Store + ?Sized>(s: &mut S, len: usize, max: u64) -> Option<(
 }
 
 /// The intervals of a set, wherever they are held.
-#[derive(Clone, Copy)]
 enum View<'a> {
     Inline(&'a [Interval]),
-    Spilled(&'a [u8]),
+    Spilled(&'a [u64]),
 }
 
 impl View<'_> {
     fn at(&self, i: usize) -> Interval {
         match self {
             Self::Inline(s) => s.at(i),
-            Self::Spilled(b) => decode(b, i),
+            Self::Spilled(w) => decode(w, i),
         }
     }
 
     fn partition(&self, len: usize, pred: impl Fn(Interval) -> bool) -> usize {
         match self {
             Self::Inline(s) => partition(*s, len, pred),
-            Self::Spilled(b) => partition(&Bytes(b), len, pred),
+            Self::Spilled(w) => partition(&Words(w), len, pred),
         }
     }
 }
 
-/// At most `N` disjoint intervals of `u64` offsets inline, or [`SPILL`] in one pool chunk.
+/// At most `N` disjoint intervals of `u64` offsets inline, or [`SLOT_RANGES`] in one spill slot.
 #[derive(Debug)]
 pub(super) struct RangeSet<const N: usize> {
     items: [Interval; N],
     len: usize,
-    spill: Option<Chunk>,
+    spill: Option<SpillRef>,
     /// Spills since the owner last read the count.
     spills: u32,
 }
@@ -222,25 +210,37 @@ impl<const N: usize> RangeSet<N> {
         spills: 0,
     };
 
-    fn view<'a>(&'a self, pool: &'a BufferPool<'_>) -> View<'a> {
-        match &self.spill {
-            Some(c) => View::Spilled(pool.bytes(c)),
-            None => View::Inline(self.items.get(..self.len).unwrap_or(&[])),
+    /// The intervals and how many there are. A spilled set whose slot cannot be read (never: see the arena's module
+    /// docs) reads as empty.
+    fn view<'a>(&'a self, pool: &'a BufferPool<'_>) -> (View<'a>, usize) {
+        self.view_of(self.spill.as_ref().map(|r| pool.spill_read(r)))
+    }
+
+    /// As [`view`](Self::view), reading a spilled set from `arena` while it is not lent to the pool.
+    fn view_in<'a>(&'a self, arena: &'a SpillArena<'_>) -> (View<'a>, usize) {
+        self.view_of(self.spill.as_ref().map(|r| arena.read(r)))
+    }
+
+    fn view_of<'a>(&'a self, spilled: Option<Option<&'a [u64]>>) -> (View<'a>, usize) {
+        match spilled {
+            Some(Some(w)) => (View::Spilled(w), self.len),
+            Some(None) => (View::Inline(&[]), 0),
+            None => (View::Inline(self.items.get(..self.len).unwrap_or(&[])), self.len),
         }
     }
 
     /// The stored intervals, ascending.
-    #[cfg(feature = "trace")]
+    #[cfg(any(test, feature = "trace"))]
     pub(super) fn to_vec(&self, pool: &BufferPool<'_>) -> alloc::vec::Vec<Interval> {
-        let v = self.view(pool);
-        (0..self.len).map(|i| v.at(i)).collect()
+        let (v, len) = self.view(pool);
+        (0..len).map(|i| v.at(i)).collect()
     }
 
     pub(super) const fn is_empty(&self) -> bool {
         self.len == 0
     }
 
-    /// Whether the set holds a pool chunk.
+    /// Whether the set holds a spill slot.
     #[cfg(any(test, feature = "trace"))]
     pub(super) const fn is_spilled(&self) -> bool {
         self.spill.is_some()
@@ -251,11 +251,11 @@ impl<const N: usize> RangeSet<N> {
         u64::from(core::mem::take(&mut self.spills))
     }
 
-    /// Empty the set and give its spill chunk back to the pool.
+    /// Empty the set and return its spill slot.
     pub(super) fn clear(&mut self, pool: &mut BufferPool<'_>) {
         self.len = 0;
-        if let Some(c) = self.spill.take() {
-            pool.free_chunk(c);
+        if let Some(r) = self.spill.take() {
+            pool.spill_give(r);
         }
     }
 
@@ -266,8 +266,9 @@ impl<const N: usize> RangeSet<N> {
             .flatten()
     }
 
-    /// Run `op` on the intervals, spilling into a pool chunk when the inline array cannot hold the result. `op` gets the
-    /// storage, the length and the capacity, and returns the new length; on `Err` it must have changed nothing.
+    /// Run `op` on the intervals, spilling into an arena slot when the inline array cannot hold the result and moving
+    /// back when the result holds at most `N / 2`. `op` gets the storage, the length and the capacity, and returns the
+    /// new length; on `Err` it must have changed nothing.
     fn edit<R>(
         &mut self,
         pool: &mut BufferPool<'_>,
@@ -279,52 +280,56 @@ impl<const N: usize> RangeSet<N> {
                     self.len = len;
                     return Ok(r);
                 }
-                Err(RangeFull) if N >= SPILL => return Err(RangeFull),
+                Err(RangeFull) if N >= SLOT_RANGES => return Err(RangeFull),
                 Err(RangeFull) => {}
             }
-            let chunk = pool.alloc_chunk().map_err(|_| RangeFull)?;
-            let mut b = BytesMut(pool.bytes_mut(&chunk));
-            for i in 0..self.len {
-                b.put(i, self.items.at(i));
+            let r = pool.spill_take().ok_or(RangeFull)?;
+            let result = self.edit_spilled(pool, &r, true, op);
+            if result.is_ok() && self.len > N / 2 {
+                self.spill = Some(r);
+                self.spills = self.spills.saturating_add(1);
+            } else {
+                pool.spill_give(r);
             }
-            self.spill = Some(chunk);
-            self.spills = self.spills.saturating_add(1);
+            return result;
         }
-        let Some(chunk) = &self.spill else {
+        let Some(r) = self.spill.take() else {
             return Err(RangeFull);
         };
-        let mut b = BytesMut(pool.bytes_mut(chunk));
-        let (len, r) = op(&mut b, self.len, SPILL)?;
-        let head = (len > 0).then(|| b.at(0));
+        let result = self.edit_spilled(pool, &r, false, op);
+        if self.len > N / 2 {
+            self.spill = Some(r);
+        } else {
+            pool.spill_give(r);
+        }
+        result
+    }
+
+    /// Run `op` in slot `r`, first copying the inline intervals in when `fill`; a result that fits in `N / 2` is copied
+    /// back inline. On failure the set keeps its intervals where they were.
+    fn edit_spilled<R>(
+        &mut self,
+        pool: &mut BufferPool<'_>,
+        r: &SpillRef,
+        fill: bool,
+        op: impl Fn(&mut dyn Store, usize, usize) -> Result<(usize, R), RangeFull>,
+    ) -> Result<R, RangeFull> {
+        let Some(w) = pool.spill_write(r) else {
+            return Err(RangeFull);
+        };
+        let mut s = WordsMut(w);
+        if fill {
+            for i in 0..self.len {
+                s.put(i, self.items.at(i));
+            }
+        }
+        let (len, out) = op(&mut s, self.len, SLOT_RANGES)?;
         self.len = len;
-        if len <= N / 2 {
-            self.unspill(pool);
-        } else if let (Some(h), Some(slot)) = (head, self.items.first_mut()) {
-            *slot = h;
+        let keep = if len > N / 2 { 1.min(len) } else { len };
+        for (i, item) in self.items.iter_mut().enumerate().take(keep) {
+            *item = s.at(i);
         }
-        Ok(r)
-    }
-
-    /// Move the intervals back into the inline array and return the chunk to the pool; they fit, as the caller holds
-    /// at most `N / 2` of them.
-    fn unspill(&mut self, pool: &mut BufferPool<'_>) {
-        let Some(chunk) = self.spill.take() else { return };
-        let b = Bytes(pool.bytes(&chunk));
-        for (i, slot) in self.items.iter_mut().enumerate().take(self.len) {
-            *slot = b.at(i);
-        }
-        pool.free_chunk(chunk);
-    }
-
-    /// The pool chunks merging `range` in would take: 1 when it needs a new interval the inline array has no room for.
-    pub(super) fn insert_cost(&self, pool: &BufferPool<'_>, range: &Range<u64>) -> usize {
-        if self.spill.is_some() || self.len < N || range.start >= range.end {
-            return 0;
-        }
-        let v = self.view(pool);
-        let from = v.partition(self.len, |iv| iv.1 < range.start);
-        let to = v.partition(self.len, |iv| iv.0 <= range.end);
-        usize::from(from == to)
+        Ok(out)
     }
 
     /// Merge `range` in.
@@ -341,16 +346,18 @@ impl<const N: usize> RangeSet<N> {
         if self.insert(pool, range.clone()).is_ok() {
             return false;
         }
-        let v = self.view(pool);
-        let at = v.partition(self.len, |iv| iv.0 < range.start);
-        let near = if at < self.len {
-            Some(v.at(at))
-        } else {
-            self.len.checked_sub(1).map(|i| v.at(i))
+        let (lo, hi) = {
+            let (v, len) = self.view(pool);
+            let at = v.partition(len, |iv| iv.0 < range.start);
+            let near = if at < len {
+                Some(v.at(at))
+            } else {
+                len.checked_sub(1).map(|i| v.at(i))
+            };
+            near.map_or((range.start, range.end), |iv| {
+                (iv.0.min(range.start), iv.1.max(range.end))
+            })
         };
-        let (lo, hi) = near.map_or((range.start, range.end), |iv| {
-            (iv.0.min(range.start), iv.1.max(range.end))
-        });
         // The widened range now touches `near`, so it replaces at least one interval and fits.
         let _fits = self.insert(pool, lo..hi);
         true
@@ -373,21 +380,18 @@ impl<const N: usize> RangeSet<N> {
             .ok()
     }
 
-    /// The interval that holds `at`.
-    pub(super) fn containing(&self, pool: &BufferPool<'_>, at: u64) -> Option<Range<u64>> {
-        let v = self.view(pool);
-        let i = v.partition(self.len, |iv| iv.1 <= at);
-        (i < self.len)
-            .then(|| v.at(i))
-            .filter(|iv| iv.0 <= at)
-            .map(|iv| iv.0..iv.1)
+    /// The interval that holds `at`, reading a spilled set from `arena` (the endpoint's, between calls).
+    pub(super) fn containing(&self, arena: &SpillArena<'_>, at: u64) -> Option<Range<u64>> {
+        let (v, len) = self.view_in(arena);
+        let i = v.partition(len, |iv| iv.1 <= at);
+        (i < len).then(|| v.at(i)).filter(|iv| iv.0 <= at).map(|iv| iv.0..iv.1)
     }
 
-    /// The lowest interval that ends after `from`.
-    pub(super) fn first_ending_after(&self, pool: &BufferPool<'_>, from: u64) -> Option<Range<u64>> {
-        let v = self.view(pool);
-        let i = v.partition(self.len, |iv| iv.1 <= from);
-        (i < self.len).then(|| v.at(i)).map(|iv| iv.0..iv.1)
+    /// The lowest interval that ends after `from`, reading a spilled set from `arena`.
+    pub(super) fn first_ending_after(&self, arena: &SpillArena<'_>, from: u64) -> Option<Range<u64>> {
+        let (v, len) = self.view_in(arena);
+        let i = v.partition(len, |iv| iv.1 <= from);
+        (i < len).then(|| v.at(i)).map(|iv| iv.0..iv.1)
     }
 
     /// The parts of the stored intervals that fall inside `range`, ascending.
@@ -396,9 +400,9 @@ impl<const N: usize> RangeSet<N> {
         pool: &'a BufferPool<'_>,
         range: Range<u64>,
     ) -> impl Iterator<Item = Range<u64>> + 'a {
-        let v = self.view(pool);
-        let from = v.partition(self.len, |iv| iv.1 <= range.start);
-        (from..self.len)
+        let (v, len) = self.view(pool);
+        let from = v.partition(len, |iv| iv.1 <= range.start);
+        (from..len)
             .map(move |i| v.at(i))
             .take_while(move |iv| iv.0 < range.end)
             .map(move |iv| iv.0.max(range.start)..iv.1.min(range.end))
@@ -406,9 +410,10 @@ impl<const N: usize> RangeSet<N> {
 
     /// The parts of `range` that no stored interval covers, ascending.
     pub(super) fn gaps<'a>(&'a self, pool: &'a BufferPool<'_>, range: Range<u64>) -> Gaps<'a> {
+        let (items, len) = self.view(pool);
         Gaps {
-            items: self.view(pool),
-            len: self.len,
+            items,
+            len,
             at: range.start,
             end: range.end,
         }
@@ -450,10 +455,5 @@ impl Iterator for Gaps<'_> {
 }
 
 #[cfg(all(test, feature = "alloc"))]
-#[allow(
-    clippy::unwrap_used,
-    clippy::indexing_slicing,
-    clippy::cast_possible_truncation,
-    reason = "tests assert"
-)]
+#[allow(clippy::unwrap_used, reason = "tests assert")]
 mod tests;

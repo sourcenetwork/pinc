@@ -404,7 +404,7 @@ impl<'t> PmRun<'t> {
         let mut r: &'static str = "ok";
         let recorded = self.ev(net, op, false, |n, now| {
             let res =
-                n.a.with_env(now, |c, env| c.inject_payload(env, PathId(on), now, pn.n, payload));
+                n.a.with_lent(now, |c, env, l| c.inject_payload(env, l, PathId(on), now, pn.n, payload));
             n.a.service(now);
             r = match res {
                 Ok(()) => "ok",
@@ -555,7 +555,7 @@ impl<'t> PmRun<'t> {
     pub fn send(&mut self, net: &mut Net<'_, '_>) -> bool {
         self.ev(net, "send", true, |n, now| {
             let mut buf = vec![0u8; 65_536];
-            n.a.with_env(now, |c, env| c.poll_transmit(env, &mut buf))
+            n.a.with_lent(now, |c, env, l| c.poll_transmit(env, l, &mut buf))
                 .map(|_| String::new())
         })
     }
@@ -574,7 +574,7 @@ impl<'t> PmRun<'t> {
         assert!(t >= self.now, "a timer before the last instant");
         self.now = t;
         self.ev(net, "timer", true, |n, now| {
-            n.a.with_env(now, |c, env| c.handle_timeout(env));
+            n.a.with_lent(now, |c, env, l| c.handle_timeout(env, l));
             Some(String::new())
         });
     }

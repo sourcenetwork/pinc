@@ -165,22 +165,36 @@ impl TNode {
 
     /// A node whose identity uses `alg` and whose interface carries datagrams of up to `mtu` bytes.
     pub fn with_mtu(tag: u8, addr: SocketAddr, now: u64, alg: IdentityAlg, mtu: u16) -> Self {
-        Self::build(tag, addr, now, alg, mtu, false)
+        Self::build(tag, addr, now, alg, mtu, false, None)
     }
 
     /// A node whose identity uses `alg` and that sends a first flight that fits whole in one datagram, as the default
     /// configuration does.
     pub fn with_whole_flights(tag: u8, addr: SocketAddr, now: u64, alg: IdentityAlg) -> Self {
-        Self::build(tag, addr, now, alg, 1500, true)
+        Self::build(tag, addr, now, alg, 1500, true, None)
     }
 
     /// A node at `addr` on an interface of `mtu` bytes that sends a first flight whole when it fits, as the default
     /// configuration does.
     pub fn with_whole_flights_at(tag: u8, addr: SocketAddr, now: u64, mtu: u16) -> Self {
-        Self::build(tag, addr, now, IdentityAlg::Ed25519, mtu, true)
+        Self::build(tag, addr, now, IdentityAlg::Ed25519, mtu, true, None)
     }
 
-    fn build(tag: u8, addr: SocketAddr, now: u64, alg: IdentityAlg, mtu: u16, flight_split: bool) -> Self {
+    /// A node whose endpoint owns its memory ([`Endpoint::new_owned`]): grown pools of `CHUNKS_PER_CONN` chunks and one
+    /// spill arena of `spill_slots` slots, all made at setup or on a slot's first session.
+    pub fn owned(tag: u8, addr: SocketAddr, now: u64, spill_slots: usize) -> Self {
+        Self::build(tag, addr, now, IdentityAlg::Ed25519, 1500, false, Some(spill_slots))
+    }
+
+    fn build(
+        tag: u8,
+        addr: SocketAddr,
+        now: u64,
+        alg: IdentityAlg,
+        mtu: u16,
+        flight_split: bool,
+        owned: Option<usize>,
+    ) -> Self {
         let kp = Keypair::from_seed(alg, &vec![tag; alg.seed_len()]).unwrap();
         let identity = LocalIdentity::from_keypair(&kp, KeyHandle(1)).unwrap();
         let prov = Caps(Software, true);
@@ -191,7 +205,10 @@ impl TNode {
         cfg.conn.flight_split = flight_split;
         cfg.conn.interface_mtu = mtu;
         let ep_drbg = Drbg::new(&[tag ^ 0xa5; 32]);
-        let mut ep = Box::new(Endpoint::new(now, prov, ep_drbg, identity, cfg, slots()));
+        let mut ep = match owned {
+            Some(spill) => Endpoint::new_owned(now, prov, ep_drbg, identity, cfg, CHUNKS_PER_CONN, spill),
+            None => Box::new(Endpoint::new(now, prov, ep_drbg, identity, cfg, slots())),
+        };
         let mut env = Env {
             provider: &prov,
             now,
@@ -522,6 +539,13 @@ impl CoreNet {
 
     pub fn add(&mut self, tag: u8) -> usize {
         self.add_with_alg(tag, IdentityAlg::Ed25519)
+    }
+
+    /// A node whose endpoint owns its memory, with a spill arena of `spill_slots` slots ([`TNode::owned`]).
+    pub fn add_owned(&mut self, tag: u8, spill_slots: usize) -> usize {
+        let addr: SocketAddr = ([10, 0, 0, tag], 4433).into();
+        self.nodes.push(TNode::owned(tag, addr, self.now, spill_slots));
+        self.nodes.len() - 1
     }
 
     pub fn add_with_alg(&mut self, tag: u8, alg: IdentityAlg) -> usize {

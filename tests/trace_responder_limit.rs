@@ -35,7 +35,7 @@ const TICKS: i64 = 12;
 fn drain(n: &mut Node<'_>, now: u64) -> Vec<Vec<u8>> {
     let mut out = Vec::new();
     let mut buf = vec![0u8; 65536];
-    while let Some(t) = n.with_env(now, |c, env| c.poll_transmit(env, &mut buf)) {
+    while let Some(t) = n.with_lent(now, |c, env, l| c.poll_transmit(env, l, &mut buf)) {
         out.extend(buf[..t.len].chunks(t.segment_size).map(<[u8]>::to_vec));
     }
     out
@@ -45,7 +45,7 @@ fn drain(n: &mut Node<'_>, now: u64) -> Vec<Vec<u8>> {
 /// business, not the test's: the observation shows what became of the handshake.
 fn to_server(s: &mut Node<'_>, stores: &mut Stores, now: u64, dgrams: Vec<Vec<u8>>) {
     for mut d in dgrams {
-        let _ = s.with_env(now, |c, env| c.handle_datagram_with(env, stores, PathId(2), &mut d));
+        let _ = s.with_lent(now, |c, env, l| c.handle_datagram_with(env, l, stores, PathId(2), &mut d));
     }
     s.service(now);
 }
@@ -73,7 +73,7 @@ fn run_case(out: &mut String, rtt: i64, ans: i64, rej: i64, fin: i64) {
             to_server(&mut server, &mut w.stores, now, first);
             let answer = drain(&mut server, now);
             for mut d in answer {
-                let _ = client.with_env(now, |c, env| c.handle_datagram(env, PathId(1), &mut d));
+                let _ = client.with_lent(now, |c, env, l| c.handle_datagram(env, l, PathId(1), &mut d));
             }
             client.service(now);
             held.extend(drain(&mut client, now));
@@ -91,7 +91,7 @@ fn run_case(out: &mut String, rtt: i64, ans: i64, rej: i64, fin: i64) {
             if d > now {
                 break;
             }
-            server.with_env(d.max(T0), |c, env| c.handle_timeout(env));
+            server.with_lent(d.max(T0), |c, env, l| c.handle_timeout(env, l));
             server.service(now);
             drain(&mut server, now);
         }

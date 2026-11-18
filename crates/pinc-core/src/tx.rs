@@ -22,7 +22,7 @@ use core::net::SocketAddr;
 
 use pinc_transport::conn::PathId;
 
-use crate::endpoint::{MAX_DATAGRAM, StashMeta, env, ep_impl};
+use crate::endpoint::{MAX_DATAGRAM, StashMeta, env, ep_impl, lent};
 use crate::slot::NIL;
 use crate::trace::trace;
 
@@ -71,7 +71,7 @@ ep_impl! {
                 continue;
             };
             let mut env = env!(self, now);
-            let Some(tx) = conn.poll_transmit(&mut env, out) else {
+            let Some(tx) = conn.poll_transmit(&mut env, &mut lent!(self), out) else {
                 trace!(self, now, TxConn {
                     slot: i as u64,
                     room: out.len() as u64,
@@ -230,7 +230,7 @@ ep_impl! {
             let room = (out.len() - first.len).min(MAX_DATAGRAM);
             let Some(window) = out.get_mut(first.len..first.len + room) else { return };
             let mut env = env!(self, now);
-            let Some(tx) = conn.poll_transmit(&mut env, window) else {
+            let Some(tx) = conn.poll_transmit(&mut env, &mut lent!(self), window) else {
                 trace!(self, now, TxConn {
                     slot: j as u64,
                     room: room as u64,

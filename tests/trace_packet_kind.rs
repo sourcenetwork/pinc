@@ -193,7 +193,7 @@ fn give(net: &mut Net<'_, '_>, mut d: Vec<u8>) -> Result<(), RxDrop> {
     let now = net.now;
     let stores = &mut *net.stores;
     net.b
-        .with_env(now, |c, env| c.handle_datagram_with(env, stores, PathId(2), &mut d))
+        .with_lent(now, |c, env, l| c.handle_datagram_with(env, l, stores, PathId(2), &mut d))
 }
 
 /// A result as text for the `res` field, which the model ignores (no quote or backslash to escape).
@@ -236,7 +236,7 @@ fn early_event(out: &mut String, run: u32, raw: &[u8]) {
         let mut buf = vec![0u8; 65_536];
         let len = net
             .a
-            .with_env(now, |conn, env| conn.poll_transmit(env, &mut buf))
+            .with_lent(now, |conn, env, l| conn.poll_transmit(env, l, &mut buf))
             .unwrap()
             .len;
         let dgram = &buf[..len];
@@ -292,7 +292,7 @@ fn short_event(out: &mut String, k: u32, payload: &[u8]) {
     let now = net.now;
     let result = net
         .b
-        .with_env(now, |c, env| c.inject_payload(env, id, now, 1_000_000, payload));
+        .with_lent(now, |c, env, l| c.inject_payload(env, l, id, now, 1_000_000, payload));
     assert!(
         !matches!(result, Err(RxDrop::EarlyFrame)),
         "a 1-RTT packet was refused for its frames"
@@ -362,8 +362,8 @@ fn move_events(out: &mut String) {
             }
         }
         net.b.conn.set_active(PathId(77)).unwrap();
-        let result = net.b.with_env(now, |c, env| {
-            c.inject_payload(env, d, now, 1_000_000 + k as u64, &payload)
+        let result = net.b.with_lent(now, |c, env, l| {
+            c.inject_payload(env, l, d, now, 1_000_000 + k as u64, &payload)
         });
         assert_eq!(result, Ok(()), "{input:?}");
         net.b.service(now);

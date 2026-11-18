@@ -23,7 +23,7 @@
 use pinc_transport::conn::{Config, PathId, RJ_THIN_GAP};
 use pinc_transport::recovery::deadline_after;
 
-use crate::endpoint::{CLOSE_GRACE, env, ep_impl};
+use crate::endpoint::{CLOSE_GRACE, env, ep_impl, lent};
 #[cfg(feature = "trace")]
 use crate::keepalive::Role;
 use crate::keepalive::{ACTIVE_KEEP, Inputs, standby_due};
@@ -386,7 +386,7 @@ ep_impl! {
         }
         // A resend of a dial reads whether UDP was heard lately now, not as of the dial.
         conn.set_short_until(short_until);
-        conn.handle_timeout(&mut env);
+        conn.handle_timeout(&mut env, &mut lent!(self));
         let mut fired: [Option<PathId>; NP] = [None; NP];
         if rejoining {
             for f in &mut fired {

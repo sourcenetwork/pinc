@@ -38,11 +38,12 @@ use pinc_security::{
     TicketBatch,
 };
 use pinc_transport::conn::{
-    ClientParams, CloseReason, Config, Connection, Drop, Event, PathId, PathInfo, Resources, ServerParams, Tables,
-    Transmit,
+    ClientParams, CloseReason, Config, Connection, Drop, Event, Lent, PathId, PathInfo, Resources, ServerParams,
+    Tables, Transmit,
 };
 use pinc_transport::recovery::LossEstimate;
 use pinc_transport::stream::pool::BufferPool;
+use pinc_transport::stream::spill::SpillArena;
 use pinc_transport::stream::{self, NoSource, RecvStatus, Streams};
 
 use crate::{Link, Params, SplitMix64};
@@ -247,6 +248,8 @@ pub struct Node<'a, const C: usize = RING, const F: usize = 512> {
     pub deferred: Option<Deferred>,
     /// Compute a failure instead of the real answer when deferring.
     pub fail_keys: bool,
+    /// The arena this node lends its connection; empty unless a test gives it slots.
+    pub spill: SpillArena<'a>,
 }
 
 impl<'a, const C: usize, const F: usize> Node<'a, C, F> {
@@ -356,11 +359,21 @@ impl<'a, const C: usize, const F: usize> Node<'a, C, F> {
         while let Some(chunk) = self.conn.read_chunk(id) {
             let n = chunk.len();
             self.read.entry(id).or_default().extend_from_slice(chunk);
-            if self.conn.consume(&mut env, id, n).unwrap() == RecvStatus::Finished {
+            if self
+                .conn
+                .consume(&mut env, &mut Lent { spill: &mut self.spill }, id, n)
+                .unwrap()
+                == RecvStatus::Finished
+            {
                 self.fin.insert(id);
             }
         }
-        if self.conn.consume(&mut env, id, 0).ok() == Some(RecvStatus::Finished) {
+        if self
+            .conn
+            .consume(&mut env, &mut Lent { spill: &mut self.spill }, id, 0)
+            .ok()
+            == Some(RecvStatus::Finished)
+        {
             self.fin.insert(id);
         }
     }
@@ -373,6 +386,20 @@ impl<'a, const C: usize, const F: usize> Node<'a, C, F> {
             drbg: &mut self.drbg,
         };
         f(&mut self.conn, &mut env)
+    }
+
+    /// As [`with_env`](Self::with_env), also lending the node's arena, for a call that can spill or free a range set.
+    pub fn with_lent<R>(
+        &mut self,
+        now: u64,
+        f: impl FnOnce(&mut Conn<'a, C, F>, &mut Env<'_, Caps>, &mut Lent<'_, 'a>) -> R,
+    ) -> R {
+        let mut env = Env {
+            provider: &self.prov,
+            now,
+            drbg: &mut self.drbg,
+        };
+        f(&mut self.conn, &mut env, &mut Lent { spill: &mut self.spill })
     }
 
     /// Deliver the held key answer.
@@ -493,6 +520,7 @@ impl World {
             auto_keys: true,
             deferred: None,
             fail_keys: false,
+            spill: SpillArena::default(),
         }
     }
 
@@ -533,6 +561,7 @@ impl World {
             auto_keys: true,
             deferred: None,
             fail_keys: false,
+            spill: SpillArena::default(),
         }
     }
 }
@@ -598,7 +627,15 @@ impl<'a, 'b, const C: usize, const F: usize> Net<'a, 'b, C, F> {
                     now,
                     drbg: &mut self.b.drbg,
                 };
-                if let Err(e) = self.b.conn.handle_datagram_with(&mut env, self.stores, p, &mut d) {
+                if let Err(e) = self.b.conn.handle_datagram_with(
+                    &mut env,
+                    &mut Lent {
+                        spill: &mut self.b.spill,
+                    },
+                    self.stores,
+                    p,
+                    &mut d,
+                ) {
                     self.rx_drops.push((false, e));
                 }
                 progress = true;
@@ -613,7 +650,14 @@ impl<'a, 'b, const C: usize, const F: usize> Net<'a, 'b, C, F> {
                     now,
                     drbg: &mut self.a.drbg,
                 };
-                if let Err(e) = self.a.conn.handle_datagram(&mut env, p, &mut d) {
+                if let Err(e) = self.a.conn.handle_datagram(
+                    &mut env,
+                    &mut Lent {
+                        spill: &mut self.a.spill,
+                    },
+                    p,
+                    &mut d,
+                ) {
                     self.rx_drops.push((true, e));
                 }
                 progress = true;
@@ -634,7 +678,10 @@ impl<'a, 'b, const C: usize, const F: usize> Net<'a, 'b, C, F> {
                         now,
                         drbg: &mut node.drbg,
                     };
-                    let Some(t) = node.conn.poll_transmit(&mut env, &mut self.buf) else {
+                    let Some(t) =
+                        node.conn
+                            .poll_transmit(&mut env, &mut Lent { spill: &mut node.spill }, &mut self.buf)
+                    else {
                         break;
                     };
                     progress = true;
@@ -710,7 +757,7 @@ impl<'a, 'b, const C: usize, const F: usize> Net<'a, 'b, C, F> {
                     now,
                     drbg: &mut node.drbg,
                 };
-                node.conn.handle_timeout(&mut env);
+                node.conn.handle_timeout(&mut env, &mut Lent { spill: &mut node.spill });
             }
         }
         true

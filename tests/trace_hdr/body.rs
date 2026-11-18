@@ -152,11 +152,11 @@ pub fn hs_run(seed: u64, runs: u32) -> String {
             for (round, ms) in [0u64, 600, 2000, 5000].into_iter().enumerate() {
                 if round > 0 {
                     now += ms * 1_000_000;
-                    client.with_env(now, |c, env| c.handle_timeout(env));
+                    client.with_lent(now, |c, env, l| c.handle_timeout(env, l));
                 }
                 for _ in 0..60 {
                     let mut buf = vec![0u8; win];
-                    let Some(tx) = client.with_env(now, |c, env| c.poll_transmit(env, &mut buf)) else {
+                    let Some(tx) = client.with_lent(now, |c, env, l| c.poll_transmit(env, l, &mut buf)) else {
                         break;
                     };
                     hw_event(&mut out, &buf[..tx.len], win, &mut server);

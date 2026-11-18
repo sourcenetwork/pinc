@@ -40,7 +40,9 @@ fn deliver_on(net: &mut Net<'_, '_>, path: PathId, datagrams: &[Vec<u8>]) {
     let now = net.now;
     for d in datagrams {
         let mut d = d.clone();
-        let _ = net.a.with_env(now, |c, env| c.handle_datagram(env, path, &mut d));
+        let _ = net
+            .a
+            .with_lent(now, |c, env, l| c.handle_datagram(env, l, path, &mut d));
     }
     net.a.service(now);
 }

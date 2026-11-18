@@ -17,7 +17,7 @@
 use pinc_crypto::IdentityAlg;
 use pinc_security::{Rekey, TicketBatch, TicketEntry};
 use pinc_tests::*;
-use pinc_transport::conn::{CloseReason, Drop, PathId};
+use pinc_transport::conn::{CloseReason, Drop, Lent, PathId};
 use pinc_transport::frame::{Frame, ext, write_ack};
 use pinc_transport::stream::datagram::DatagramError;
 use pinc_wire::Writer;
@@ -471,7 +471,16 @@ fn a_reset_drops_the_buffers_of_the_stream() {
         let id = net.a.conn.open_bi().unwrap();
         net.a.conn.write(id, &[1; 10_000]).unwrap();
         net.run(net.now + 100 * MS, |_| false);
-        net.a.conn.reset(id, 77).unwrap();
+        net.a
+            .conn
+            .reset(
+                &mut Lent {
+                    spill: &mut net.a.spill,
+                },
+                id,
+                77,
+            )
+            .unwrap();
         assert!(net.run(net.now + 2 * SEC, |n| n.b.saw(|r| *r == Rec::Reset(id, 77))));
     });
 }
@@ -768,8 +777,8 @@ fn zero_rtt_replay_is_rejected() {
         let mut sb = Store::new(false);
         let mut b = w.server(&mut sb);
         for mut d in flight {
-            let _ = b.with_env(T0 + 5 * SEC, |c, env| {
-                c.handle_datagram_with(env, &mut w.stores, PathId(2), &mut d)
+            let _ = b.with_lent(T0 + 5 * SEC, |c, env, l| {
+                c.handle_datagram_with(env, l, &mut w.stores, PathId(2), &mut d)
             });
         }
         b.service(T0 + 5 * SEC);
@@ -778,7 +787,7 @@ fn zero_rtt_replay_is_rejected() {
         assert!(!b.saw(|r| matches!(r, Rec::Opened(_) | Rec::Readable(_))));
         // The server answered the replay with a rejection, not a session.
         let mut out = vec![0u8; 2048];
-        let reply = b.with_env(T0 + 5 * SEC, |c, env| c.poll_transmit(env, &mut out));
+        let reply = b.with_lent(T0 + 5 * SEC, |c, env, l| c.poll_transmit(env, l, &mut out));
         assert!(
             reply.is_some_and(|t| t.len < 400),
             "a short reject, not a handshake reply"
@@ -810,7 +819,7 @@ fn a_lost_middle_fragment_of_a_handshake_flight_is_all_that_is_missing() {
         let mut lost = flight[2].clone();
         let now = net.now;
         net.a
-            .with_env(now, |c, env| c.handle_datagram(env, PathId(1), &mut lost))
+            .with_lent(now, |c, env, l| c.handle_datagram(env, l, PathId(1), &mut lost))
             .unwrap();
         assert!(
             net.connect(net.now + 2 * SEC),
