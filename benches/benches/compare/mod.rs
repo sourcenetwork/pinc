@@ -827,7 +827,7 @@ static PER_CORE: AtomicBool = AtomicBool::new(false);
 
 /// Whether this process runs one endpoint on every worker of the runtime: the server serves on all of them and the
 /// many-connection test spreads its clients over them. Set by `--endpoints=per-core` or `VINC_BENCH_ENDPOINTS=per-core`
-/// for a library that can ([`Lib::PER_CORE`]); a runtime with no workers runs one either way.
+/// for a library that can ([`Lib::PER_CORE`]); a per-core server or client on a runtime with no workers fails.
 pub fn per_core() -> bool {
     PER_CORE.load(Relaxed)
 }

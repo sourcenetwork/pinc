@@ -221,7 +221,10 @@ async fn serve_per_core() -> io::Result<String> {
     let probe = socket(0, true)?;
     let port = probe.local_addr()?.port();
     let rt = nuclei::RuntimeHandle::current();
-    let workers = rt.workers().max(1);
+    let workers = rt.workers();
+    if workers == 0 {
+        return Err(io::Error::other("the runtime has no worker to run an endpoint on"));
+    }
     let (ready, mut started) = mpsc::unbounded::<io::Result<String>>();
     for w in 0..workers {
         let ready = ready.clone();
@@ -237,11 +240,7 @@ async fn serve_per_core() -> io::Result<String> {
                 }
             }
         };
-        if rt.workers() == 0 {
-            nuclei::spawn_local(job()).detach();
-        } else {
-            rt.spawn_local_on_worker(w, job)?.detach();
-        }
+        rt.spawn_local_on_worker(w, job)?.detach();
     }
     drop(ready);
     let mut addr = None;
@@ -313,10 +312,13 @@ impl Lib for Vinc1 {
         make: impl FnOnce() -> F + Send + 'static,
     ) -> io::Result<()> {
         let rt = nuclei::RuntimeHandle::current();
-        let workers = rt.workers();
-        if workers == 0 || !super::per_core() {
+        if !super::per_core() {
             Self::spawn(make());
             return Ok(());
+        }
+        let workers = rt.workers();
+        if workers == 0 {
+            return Err(io::Error::other("the runtime has no worker to run a client on"));
         }
         rt.spawn_local_on_worker(i % workers, make)?.detach();
         Ok(())
@@ -510,6 +512,17 @@ mod tests {
         });
         assert_eq!(reads, (Some(0), Some(0)), "the job stayed on worker 0 in both polls");
         assert_eq!(handoffs, 0, "the worker's shard was not handed off");
+    }
+
+    #[test]
+    fn a_per_core_server_or_client_on_a_runtime_without_workers_fails() {
+        let (served, started) = with_switches(true, false, || {
+            runtime(nuclei::Builder::new().worker_threads(0))
+                .unwrap()
+                .block_on(async { (serve_per_core().await, Vinc1::spawn_client(0, || async {})) })
+        });
+        assert!(served.is_err(), "a server with no worker to run on failed: {served:?}");
+        assert!(started.is_err(), "a client with no worker to run on failed");
     }
 
     #[test]
