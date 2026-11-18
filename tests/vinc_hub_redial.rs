@@ -1,21 +1,41 @@
-//! A dial to a peer that stopped fails within the early bound (the resend timer after 4 unanswered first flights: 3 s
-//! for a resume, 7.5 s for a full handshake), and a redial reaches it once it restarted on the same address, with and
-//! without a hub named as relay.
+//! A dial to a peer that stopped fails within the bound of the path the dialing node takes, and a redial reaches the
+//! peer once it restarted on the same address, with and without a hub named as relay. On a node that is not thin the
+//! connection handed over early ends when the resend timer fires after 4 unanswered first flights: 6 first delays for
+//! a resume, 15 for a full handshake, the first delay being 500 ms unless the round trip remembered for the peer or
+//! the node's handshake floor is longer (3 s and 7.5 s on a quiet host). A thin node (one that measured a round trip
+//! of 250 ms or more, as one first handshake slowed by a stalled host makes it) keeps its 60 s handshake limit. Each
+//! resend is scheduled from the moment its timer ran, so time in which the test's thread could not run moves the end
+//! by as much: the test measures that time and adds it to the bound.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::needless_continue)]
 
 #[macro_use]
 mod vinc_common;
 
+use std::cell::Cell;
 use std::net::SocketAddr;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use vinc::{NodeAddr, Relay};
 use vinc_common::{ECHO, echo_stream, eventually, within};
+use vinc_transport::conn::connect_limit;
 
-/// The longer early bound at the 500 ms first delay, a full handshake's (flights at 0, 0.5, 1.5 and 3.5 s, the end at
-/// 7.5 s; a resume ends at 3 s), plus slack for a loaded host.
-const EARLY_BOUND: Duration = Duration::from_millis(7_500);
+/// The shortest first resend delay of a dial.
+const FIRST_DELAY: Duration = Duration::from_millis(500);
+/// Slack for a loaded host.
 const SLACK: Duration = Duration::from_millis(1_500);
+/// How often the stall meter reads the clock.
+const TICK: Duration = Duration::from_millis(10);
+
+/// When a connection handed over early to a peer that stopped ends on a node that is not thin: 15 first delays (a
+/// full handshake's flights go at 0, 1, 3 and 7 first delays and it ends at 15; a resume ends at 6), never past the
+/// handshake limit. The first delay is `max(500 ms, 2 x r, floor)`, `r` the peer's remembered round trip, else the
+/// node average; on a node that is not thin the average is under 250 ms, so only the peer's can raise the delay, and
+/// that is the first dial's own handshake sample, which the first dial's time bounds from above.
+fn early_bound(first_dial: Duration, floor: Duration) -> Duration {
+    let first = FIRST_DELAY.max(first_dial.saturating_mul(2)).max(floor);
+    first.saturating_mul(15).min(Duration::from_nanos(connect_limit(false)))
+}
 
 /// An endpoint bound at `addr`, so a restarted peer can come back on the same address.
 macro_rules! endpoint_at {
@@ -114,7 +134,9 @@ async fn redial_after_restart(hub: bool) -> bool {
     let mut to = NodeAddr::new(b_id);
     to.direct = vec![b_addr];
     // As a node does: a topic both joined.
+    let t = Instant::now();
     assert!(echoes!(a, to.clone()), "the first dial echoes");
+    let first_dial = t.elapsed();
     if hub {
         a.join(b"t", &[]).await.unwrap();
         b.join(b"t", &[]).await.unwrap();
@@ -125,9 +147,24 @@ async fn redial_after_restart(hub: bool) -> bool {
     drop(b_task);
     drop(b);
     // A dial while the peer is down, as a replicator's retry makes. It fails, or the connection it hands back (reported
-    // early, with a cached allow) ends within the early bound and fails what was written on it.
+    // early, with a cached allow) ends within the bound of the node's path and fails what was written on it.
+    let st = a.node_stats().await.unwrap();
+    let early = early_bound(first_dial, Duration::from_nanos(st.hs_floor));
+    // How long this thread could not run while the dial was pending: every endpoint of the test runs on it.
+    let stalled = Rc::new(Cell::new(Duration::ZERO));
+    let meter = nuclei::spawn_local({
+        let stalled = Rc::clone(&stalled);
+        async move {
+            loop {
+                let due = Instant::now() + TICK;
+                nuclei::time::sleep_until_precise(due).await;
+                stalled.set(stalled.get() + due.elapsed());
+            }
+        }
+    });
     let at = Instant::now();
-    let down = nuclei::time::timeout(EARLY_BOUND + SLACK, async {
+    // The test's own limit stops a dial that never ends.
+    let down = async {
         let conn = a.connect(to.clone(), ECHO).await?;
         let (mut tx, mut rx) = conn.open_bi().await?;
         tx.write_all(b"ping").await?;
@@ -138,13 +175,36 @@ async fn redial_after_restart(hub: bool) -> bool {
             assert!(tx.finish().await.is_err(), "the stream of a failed connection finished");
         }
         read
-    })
+    }
     .await;
-    eprintln!("down: {down:?} after {:?}", at.elapsed());
+    let took = at.elapsed();
+    // A stall that ended as the dial did is counted once the meter has run.
+    nuclei::time::sleep(TICK * 2).await;
+    drop(meter);
+    // The limit follows the node's round trips while the dial runs: a node thin at its start, or thin by its end,
+    // keeps the thin limit.
+    let thin = st.thin || a.node_stats().await.unwrap().thin;
+    let (path, limit) = if thin {
+        ("thin", Duration::from_nanos(connect_limit(true)))
+    } else {
+        ("early", early)
+    };
+    let bound = limit + SLACK + stalled.get();
+    eprintln!(
+        "down: {down:?} after {took:?} on the {path} path (bound {bound:?}, stalled {:?}, first dial {first_dial:?}, \
+         lrtt {} us, tgr {} us, floor {} us)",
+        stalled.get(),
+        st.lrtt / 1_000,
+        st.tgr / 1_000,
+        st.hs_floor / 1_000
+    );
     assert!(
-        matches!(&down, Ok(Err(e)) if matches!(e.kind(), vinc::ErrorKind::TimedOut | vinc::ErrorKind::Unreachable)),
-        "a dial to a peer that stopped did not fail with TimedOut or Unreachable within {:?}: {down:?}",
-        EARLY_BOUND + SLACK
+        matches!(&down, Err(e) if matches!(e.kind(), vinc::ErrorKind::TimedOut | vinc::ErrorKind::Unreachable)),
+        "a dial to a peer that stopped did not fail with TimedOut or Unreachable: {down:?}"
+    );
+    assert!(
+        took <= bound,
+        "a dial to a peer that stopped failed after {took:?}, past the bound of the {path} path, {bound:?}"
     );
     // The same peer comes back on the same address.
     let b = endpoint_at!(
@@ -168,12 +228,12 @@ async fn redial_after_restart(hub: bool) -> bool {
 
 #[nuclei::test]
 async fn a_redial_reaches_a_restarted_peer_without_a_hub() {
-    within(90, async { assert!(redial_after_restart(false).await) }).await;
+    within(120, async { assert!(redial_after_restart(false).await) }).await;
 }
 
 #[nuclei::test]
 async fn a_redial_reaches_a_restarted_peer_with_a_hub_named() {
-    within(90, async {
+    within(120, async {
         assert!(
             redial_after_restart(true).await,
             "the redial did not reach the restarted peer"
