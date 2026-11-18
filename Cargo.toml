@@ -88,6 +88,19 @@ panic = "abort"
 inherits = "release"
 debug = true
 
+# An application's debug build: every crate at opt-level 0, with none of the dev profile's per-package optimisation
+# below (a profile that inherits `dev` would keep it). `just unoptimised` runs the stack tests in it.
+[profile.unoptimised]
+inherits = "release"
+opt-level = 0
+debug = true
+debug-assertions = true
+overflow-checks = true
+lto = false
+codegen-units = 256
+incremental = true
+panic = "unwind"
+
 # Tests hash gigabytes, sign thousands of messages and run real endpoints for minutes of virtual time, which the
 # unoptimised build of the dependencies and of the hot crates makes an order of magnitude too slow. Debug assertions
 # and overflow checks stay on.

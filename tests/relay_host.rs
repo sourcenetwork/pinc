@@ -20,14 +20,14 @@ mod vinc_common;
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
-use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
+use std::net::{SocketAddr, UdpSocket};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use nuclei::Handle;
-use relay_members::{Member, decode, on_big_stack, wall_ns};
-use vinc::relay::{CarrierFns, Clock, Event, Limits, MemStore, Peer, Reason, Relay, Stats, Store, Udp};
-use vinc::{CarrierKind, Error, ErrorKind, Identity};
+use relay_members::{Member, Ports, bind_ports, build_relay, decode, on_big_stack, wall_ns};
+use vinc::relay::{Event, Limits, MemStore, Peer, Reason, Relay, Stats, Store};
+use vinc::{CarrierKind, Identity};
 use vinc_common::{client, eventually, within};
 use vinc_connect::carrier::session::{ALPN, PEER_ALPN};
 use vinc_connect::carrier::{DnsAnswer, Frame};
@@ -37,34 +37,6 @@ use vinc_connect::relay::{Quota, sleep};
 use vinc_crypto::{IdentityAlg, Keypair, NodeId};
 
 const HUB: &[u8] = b"t/hub";
-
-fn io_err(_: std::io::Error) -> Error {
-    Error::new(ErrorKind::Unreachable, "the socket failed")
-}
-
-/// The sockets of a relay on loopback; a restarted relay is built on the same ones, so its address stays.
-#[derive(Clone)]
-struct Ports {
-    listener: Rc<Handle<TcpListener>>,
-    sock: Rc<Handle<UdpSocket>>,
-    addr: SocketAddr,
-}
-
-async fn bind_ports() -> Ports {
-    // the UDP port of the same number may be taken by another test process: try another number
-    for _ in 0..50 {
-        let listener = Rc::new(Handle::<TcpListener>::bind(vinc_common::lo()).await.unwrap());
-        let addr = listener.get_ref().local_addr().unwrap();
-        if let Ok(sock) = Handle::<UdpSocket>::bind(addr).await {
-            return Ports {
-                listener,
-                sock: Rc::new(sock),
-                addr,
-            };
-        }
-    }
-    panic!("no port is free for both TCP and UDP");
-}
 
 /// A relay on loopback, run as a local task; dropping `task` drops the run.
 struct TestRelay {
@@ -88,54 +60,13 @@ async fn start_with(seed: u8, limits: Limits, store: MemStore, peers: &[Peer]) -
 fn start_on(ports: &Ports, seed: u8, limits: Limits, store: MemStore, peers: &[Peer]) -> TestRelay {
     let addr = ports.addr;
     let kinds = Rc::new(RefCell::new(VecDeque::new()));
-    let t0 = Instant::now();
-    let base = wall_ns();
-    let (k, l) = (Rc::clone(&kinds), Rc::clone(&ports.listener));
-    let (s1, s2) = (Rc::clone(&ports.sock), Rc::clone(&ports.sock));
     let mut builder = Relay::builder()
         .identity(Identity::from_seed(&[seed; 32]).unwrap())
         .limits(limits);
     for p in peers {
         builder = builder.peer(*p);
     }
-    let relay = builder
-        .store(store)
-        .hub(addr, &[HUB])
-        .build(
-            Udp::new(
-                async move |buf: &mut [u8]| s1.recv_from(buf).await.map_err(io_err),
-                async move |pkt: &[u8], to| s2.send_to(pkt, to).await.map_err(io_err),
-            ),
-            CarrierFns::new(
-                async move || {
-                    let (s, _) = l.accept().await.map_err(io_err)?;
-                    let kind = k.borrow_mut().pop_front().unwrap_or(CarrierKind::Tcp);
-                    Ok((s, kind))
-                },
-                async |p: &Peer, _kind: CarrierKind| {
-                    let to = p
-                        .tcp
-                        .ok_or_else(|| Error::new(ErrorKind::Unreachable, "the peer has no address"))?;
-                    Handle::<TcpStream>::connect(to).await.map_err(io_err)
-                },
-                async |s: &Handle<TcpStream>, mut buf: Vec<u8>| {
-                    let r = s.recv(&mut buf).await.map_err(io_err);
-                    (r, buf)
-                },
-                async |s: &Handle<TcpStream>, buf: Vec<u8>, from: usize| {
-                    let r = s.send(&buf[from..]).await.map_err(io_err);
-                    (r, buf)
-                },
-                async |_s: Handle<TcpStream>| {},
-            ),
-            Clock::new(
-                move || base + u64::try_from(t0.elapsed().as_nanos()).unwrap(),
-                async move |at: u64| {
-                    nuclei::time::sleep_until_precise(t0 + Duration::from_nanos(at.saturating_sub(base))).await;
-                },
-            ),
-        )
-        .unwrap();
+    let relay = build_relay(ports, &kinds, builder.store(store).hub(addr, &[HUB]));
     let (r1, r2, r3, r4) = (relay.clone(), relay.clone(), relay.clone(), relay.clone());
     let task = nuclei::spawn_local(async move { r1.run().await });
     TestRelay {

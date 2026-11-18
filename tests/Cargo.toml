@@ -1436,3 +1436,7 @@ path = "layers_dtn_wake.rs"
 [[test]]
 name = "broadcast_subs"
 path = "broadcast_subs.rs"
+
+[[test]]
+name = "relay_stack"
+path = "relay_stack.rs"

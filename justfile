@@ -85,7 +85,7 @@ _lean:
     (cd proofs/lean && lake --version)
 
 # Everything a change must pass before it is pushed.
-gate: checks test test-distributed doctest proofs
+gate: checks test unoptimised test-distributed doctest proofs
     @echo "gate: ok"
 
 # Every static check: dependency rules, format, lints, docs, no_std builds, pure Rust.
@@ -160,6 +160,11 @@ compare *args:
 # Every test, hwenc included (the TPM tests need `swtpm`). Extra arguments go to nextest.
 test *args:
     cargo nextest run --workspace --all-features --profile ci {{args}}
+
+# The stack tests in an application's debug build: every crate at opt-level 0 (`--cargo-profile` is cargo's profile,
+# nextest's own `--profile` is its configuration).
+unoptimised *args:
+    cargo nextest run --cargo-profile unoptimised -p vinc-tests --test relay_stack {{args}}
 
 # The distributed harness's own tests (the orchestration logic; no root, no Docker).
 test-distributed *args:

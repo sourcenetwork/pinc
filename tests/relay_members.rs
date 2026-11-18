@@ -12,11 +12,15 @@
     missing_docs
 )]
 
-use std::net::{SocketAddr, TcpStream};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::cell::RefCell;
+use std::collections::VecDeque;
+use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
+use std::rc::Rc;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use nuclei::Handle;
-use vinc::CarrierKind;
+use vinc::relay::{CarrierFns, Clock, Hosted, Peer, Relay, Udp};
+use vinc::{CarrierKind, Error, ErrorKind};
 use vinc_connect::carrier::session::Poll;
 use vinc_connect::carrier::ws::{self, Decoder, Opcode, Role, WsFrame};
 use vinc_connect::carrier::{Frame, MAX_FRAME_LEN, ProtectedCarrier};
@@ -294,10 +298,92 @@ pub fn decode(bytes: &[u8]) -> Frame<'_> {
 /// Run `make`'s future on the nuclei runtime in a thread with a large stack: the handshake types of the dialing side
 /// are generic over the provider and so are built unoptimised here, with frames far larger than a test thread's.
 pub fn on_big_stack<F: Future<Output = ()> + 'static>(make: impl FnOnce() -> F + Send + 'static) {
+    on_stack(256 << 20, make);
+}
+
+/// Run `make`'s future on the nuclei runtime in a thread of `bytes` of stack, and fail the test if it panics.
+pub fn on_stack<F: Future<Output = ()> + 'static>(bytes: usize, make: impl FnOnce() -> F + Send + 'static) {
     std::thread::Builder::new()
-        .stack_size(256 << 20)
+        .stack_size(bytes)
         .spawn(move || nuclei::block_on(make()))
         .unwrap()
         .join()
         .unwrap();
+}
+
+pub fn io_err(_: std::io::Error) -> Error {
+    Error::new(ErrorKind::Unreachable, "the socket failed")
+}
+
+/// The sockets of a relay on loopback; a restarted relay is built on the same ones, so its address stays.
+#[derive(Clone)]
+pub struct Ports {
+    pub listener: Rc<Handle<TcpListener>>,
+    pub sock: Rc<Handle<UdpSocket>>,
+    pub addr: SocketAddr,
+}
+
+pub async fn bind_ports() -> Ports {
+    // the UDP port of the same number may be taken by another test process: try another number
+    for _ in 0..50 {
+        let listener = Rc::new(Handle::<TcpListener>::bind(crate::vinc_common::lo()).await.unwrap());
+        let addr = listener.get_ref().local_addr().unwrap();
+        if let Ok(sock) = Handle::<UdpSocket>::bind(addr).await {
+            return Ports {
+                listener,
+                sock: Rc::new(sock),
+                addr,
+            };
+        }
+    }
+    panic!("no port is free for both TCP and UDP");
+}
+
+/// Build the relay `builder` describes over `ports`: its members' carriers arrive on the listener with the kind
+/// taken from the front of `kinds` (TCP when it is empty), and its clock starts at the wall clock.
+pub fn build_relay(
+    ports: &Ports,
+    kinds: &Rc<RefCell<VecDeque<CarrierKind>>>,
+    builder: vinc::relay::Builder,
+) -> Relay<impl Hosted + use<>> {
+    let t0 = Instant::now();
+    let base = wall_ns();
+    let (k, l) = (Rc::clone(kinds), Rc::clone(&ports.listener));
+    let (s1, s2) = (Rc::clone(&ports.sock), Rc::clone(&ports.sock));
+    builder
+        .build(
+            Udp::new(
+                async move |buf: &mut [u8]| s1.recv_from(buf).await.map_err(io_err),
+                async move |pkt: &[u8], to| s2.send_to(pkt, to).await.map_err(io_err),
+            ),
+            CarrierFns::new(
+                async move || {
+                    let (s, _) = l.accept().await.map_err(io_err)?;
+                    let kind = k.borrow_mut().pop_front().unwrap_or(CarrierKind::Tcp);
+                    Ok((s, kind))
+                },
+                async |p: &Peer, _kind: CarrierKind| {
+                    let to = p
+                        .tcp
+                        .ok_or_else(|| Error::new(ErrorKind::Unreachable, "the peer has no address"))?;
+                    Handle::<TcpStream>::connect(to).await.map_err(io_err)
+                },
+                async |s: &Handle<TcpStream>, mut buf: Vec<u8>| {
+                    let r = s.recv(&mut buf).await.map_err(io_err);
+                    (r, buf)
+                },
+                async |s: &Handle<TcpStream>, buf: Vec<u8>, from: usize| {
+                    let r = s.send(&buf[from..]).await.map_err(io_err);
+                    (r, buf)
+                },
+                async |_s: Handle<TcpStream>| {},
+            ),
+            Clock::new(
+                move || base + u64::try_from(t0.elapsed().as_nanos()).unwrap(),
+                async move |at: u64| {
+                    nuclei::time::sleep_until_precise(t0 + Duration::from_nanos(at.saturating_sub(base))).await;
+                },
+            ),
+        )
+        .unwrap()
 }
