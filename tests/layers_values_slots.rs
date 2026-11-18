@@ -11,7 +11,7 @@
 
 mod layers_common;
 
-use layers_common::{LWorld, big, data, ids, secs, values_on};
+use layers_common::{LWorld, big, completes, data, ids, secs, values_on};
 use vinc_node::trace::Body;
 use vinc_sim::NodeId as SimId;
 use vinc_tests::NCmd;
@@ -105,5 +105,24 @@ fn the_request_a_full_server_refuses_as_busy_gives_its_provider_back() {
             assert_eq!(in_use(&w, *requester), 0, "requester {k} holds a provider");
         }
         assert_eq!(in_use(&w, m[0]), 0, "the provider holds a requester");
+    });
+}
+
+#[test]
+fn a_request_the_provider_resets_gives_its_provider_back_when_the_fetch_completes() {
+    // Node 1 serves the value and node 2 does not hold it, so it refuses every request. The fetch completes from node
+    // 1 with no cancel and no stall redial: only the resets give the refused streams' uses of node 2's number back.
+    big(|| {
+        let seed = 312u64;
+        let mut w = LWorld::build_with(seed, 2, 3, 8_000_000, true, values_on);
+        let m = w.members.clone();
+        let value = data(seed, 1 << 20);
+        let root = w.provide(m[1], value.clone());
+        w.sim
+            .command(secs(30), m[0], fetch(root, value.len(), ids(&w, &m[1..3])));
+        w.run(secs(36));
+        assert_eq!(completes(&w, m[0]), 1, "the fetch did not complete");
+        assert!(refused(&w, m[2], code::UNAVAILABLE) >= 1, "node 2 refused no request");
+        assert_eq!(in_use(&w, m[0]), 0, "the fetching node holds a provider");
     });
 }
