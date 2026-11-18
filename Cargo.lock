@@ -1555,6 +1555,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "vinc-noalloc"
+version = "0.1.0"
+dependencies = [
+ "vinc-core",
+ "vinc-crypto",
+ "vinc-security",
+ "vinc-transport",
+]
+
+[[package]]
 name = "vinc-node"
 version = "0.1.0"
 dependencies = [

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*", "tests"]
+members = ["crates/*", "tests", "tests/noalloc"]
 # The benchmarks and the distributed harness are workspaces of their own: the libraries they measure VINC against, their
 # runtimes and their C code stay out of the library's graph and lockfile.
 exclude = ["benches", "distributed"]

@@ -4,6 +4,8 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 
 tla_home := env_var_or_default("TLA_HOME", env_var("HOME") / ".local/share/tla")
 no_std_targets := "thumbv7em-none-eabihf wasm32-unknown-unknown"
+# Targets without 32-bit compare-and-swap (the Cortex-M0 class): only the program's crates build there.
+cas_less_targets := "thumbv6m-none-eabi"
 # The benchmarks and the distributed harness are workspaces of their own (the libraries they measure VINC against,
 # their runtime and their C code stay out of the library's graph). They build into one directory beside the library's,
 # so the library's build output, which `pure` scans, never holds the comparators' C code.
@@ -131,11 +133,16 @@ doc:
     RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features
     RUSTDOCFLAGS="-D warnings" cargo doc {{dist}} --no-deps
 
-# Build every no_std crate for a microcontroller and for wasm.
+# Build every no_std crate for a microcontroller and for wasm, then link a program with no allocator for each target.
+# The program (tests/noalloc) runs an endpoint from caller storage, a handshake and a stream between two endpoints in
+# one program, so a crate it reaches that asks for the heap fails the link. It does not cover membership, broadcast,
+# reconcile, the node crate, the keystore or the facade, which still need an allocator (vinc#640). The targets without
+# compare-and-swap build only the program's crates (wire, crypto, security, transport, core).
 no-std:
     for c in $(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(" ".join(p["name"] for p in json.load(sys.stdin)["packages"] if "no_std" in (p.get("keywords") or [])))'); do \
         for t in {{no_std_targets}}; do cargo build -q -p "$c" --no-default-features --target "$t"; done; \
     done
+    for t in {{no_std_targets}} {{cas_less_targets}}; do cargo build -q -p vinc-noalloc --target "$t"; done
 
 # Fail if any build script of the library's workspace compiled C (run after a build; checks cargo's real target
 # directory). The comparators' C code builds in the benchmarks' own workspace and directory, never here.

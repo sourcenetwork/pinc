@@ -1,0 +1,17 @@
+[package]
+name = "vinc-noalloc"
+description = "A program that links for the bare-metal targets with no allocator: two endpoints set up from static storage, a handshake and one stream between them"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+vinc-core = { workspace = true }
+vinc-crypto = { workspace = true }
+vinc-security = { workspace = true }
+vinc-transport = { workspace = true }
+
+[lints]
+workspace = true
