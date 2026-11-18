@@ -40,10 +40,17 @@
 (* (the sum of the streams' rates), that earlier behaviour (a witness).    *)
 (*                                                                         *)
 (* Spill. A stream's stored ranges fit RR intervals inline; a frame that   *)
-(* needs one more takes one pool chunk (r.sp), which holds SPR, and is     *)
-(* refused Fragmented only beyond that. The chunk is charged to the pool   *)
-(* (Used) and returned when the ranges are cleared: the stream read to its *)
-(* end, reset, or freed. Without a chunk free the frame is Exhausted.      *)
+(* needs one more takes one slot of the endpoint's spill arena (r.sp),     *)
+(* which holds SPR, and is refused Fragmented only beyond that. The arena  *)
+(* is not the pool: a slot is never charged to the pool (Used), so a spill *)
+(* never makes a frame Exhausted. This session may hold at most ARENA      *)
+(* slots (its half of the arena, or what the other sessions left): with    *)
+(* none free the frame is refused Fragmented, as before the arena, and is  *)
+(* sent again. The slot goes back the moment the ranges shrink to RR / 2   *)
+(* or fewer (MOVEBACK; FALSE is the RED Streams_spill_mb_w, which keeps it *)
+(* until the stream ends) and when the ranges are cleared: the stream read *)
+(* to its end, reset, or freed. BOUND = FALSE takes a slot whatever the    *)
+(* session holds (the RED Streams_spill_arena_w).                          *)
 (* Before #478 there was no spill (SPR = RR, a witness): the frame was     *)
 (* refused with the pool idle, its packet went unacknowledged and the      *)
 (* sender sent it again though it had arrived.                             *)
@@ -106,7 +113,7 @@
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
 
-CONSTANTS CH, RING, RR, N, MAXREM, B, SWC, MSWC, PM, MAXOFF, RETRY, RemIds, LocIds, FIRSTK, RELEASE, PERSTREAM, SPR
+CONSTANTS CH, RING, RR, N, MAXREM, B, SWC, MSWC, PM, MAXOFF, RETRY, RemIds, LocIds, FIRSTK, RELEASE, PERSTREAM, SPR, ARENA, MOVEBACK, BOUND
 \* the table's max_remote is config.max_streams.min(N), and Streams::adopt only lowers it: never more than the slots
 ASSUME MAXREM \in 0..N
 
@@ -168,7 +175,7 @@ InsertRC(rs, s, e, cap) ==
              newlen == n - (to - from) + 1
          IN IF newlen > cap THEN [ok |-> FALSE, rs |-> rs]
             ELSE [ok |-> TRUE, rs |-> SubSeq(rs, 1, from) \o <<merged>> \o SubSeq(rs, to + 1, n)]
-\* how many intervals a stream may hold: RR inline, SPR once its ranges spilled into a pool chunk
+\* how many intervals a stream may hold: RR inline, SPR once its ranges spilled into an arena slot
 Cap(r) == IF r.sp THEN SPR ELSE RR
 
 Overlaps(rs, lo, e) == \E k \in 1..Len(rs) : rs[k][1] < e /\ rs[k][2] > lo
@@ -201,9 +208,10 @@ Due(r) == IF r.stop # 0 THEN -1 ELSE DueOld(r)
 
 (* ---- the pool ---- *)
 HeldTotal(T) == LET f[i \in 0..N] == IF i = 0 THEN 0 ELSE f[i - 1] + Cardinality(T.slots[i].held) IN f[N]
-\* a stream whose ranges spilled holds one pool chunk for them
+\* the arena slots this session holds: one for each stream whose ranges spilled (SpillUse::held)
 SpillTotal(T) == Cardinality({i \in 1..N : T.slots[i].sp})
-Used(T) == HeldTotal(T) + SpillTotal(T) + T.ext
+\* the pool holds the rings' chunks and the other users' (T.ext); an arena slot is no pool chunk
+Used(T) == HeldTotal(T) + T.ext
 AvailC(T) == B - Used(T)
 Avail(T) == AvailC(T) * CH
 GU(T) == LET f[i \in 0..N] == IF i = 0 THEN 0 ELSE f[i - 1] + Unreceived(T.slots[i]) IN f[N]
@@ -346,16 +354,20 @@ OnDataWith(T, r, off, len, fin, diff, End(_)) ==
         first == lo \div CH
         last == (e - 1) \div CH
         missing == {k \in first..last : k \notin r.held}
-        \* RangeSet::insert_cost: the frame needs one more interval than the inline array holds, so it takes a chunk
+        \* RangeSet::insert: the frame needs one more interval than the inline array holds, so it asks for a slot
         spill == SPR > RR /\ ~r.sp /\ ~InsertRC(r.rs, lo, e, RR).ok
-        ins == InsertRC(r.rs, lo, e, IF r.sp \/ spill THEN SPR ELSE RR)
+        \* SpillUse::take: a slot is given while this session holds fewer than ARENA (any slot, with BOUND off)
+        slot == ~BOUND \/ SpillTotal(T) < ARENA
+        ins == InsertRC(r.rs, lo, e, IF r.sp \/ (spill /\ slot) THEN SPR ELSE RR)
+        \* RangeSet::edit_spilled: a spilled set left with RR / 2 intervals or fewer moves back inline in the same call
+        back == MOVEBACK /\ Len(ins.rs) <= RR \div 2
         stored == [r EXCEPT !.held = r.held \cup (first..last), !.rs = ins.rs, !.contig = First0(ins.rs),
-                            !.sp = r.sp \/ spill]
+                            !.sp = (r.sp \/ spill) /\ ~back]
         store == IF lo >= e THEN [r |-> r, err |-> "ok"]
                  ELSE IF last - r.read \div CH >= RING THEN [r |-> r, err |-> "FlowControl"]
                  ELSE IF lo < r.hi /\ diff /\ Overlaps(r.rs, lo, e) THEN [r |-> r, err |-> "Conflict"]
-                 \* the ring's new chunks and, when it spills, the range set's chunk must all be free
-                 ELSE IF Cardinality(missing) + (IF spill THEN 1 ELSE 0) > AvailC(T) THEN [r |-> r, err |-> "Exhausted"]
+                 \* only the ring's new chunks must be free: a spill takes an arena slot, not a chunk
+                 ELSE IF Cardinality(missing) > AvailC(T) THEN [r |-> r, err |-> "Exhausted"]
                  ELSE IF ~ins.ok THEN [r |-> r, err |-> "Fragmented"]
                  ELSE [r |-> stored, err |-> "ok"]
         done0 == [store.r EXCEPT !.hi = Max(@, e), !.fin = IF fin THEN e ELSE @]

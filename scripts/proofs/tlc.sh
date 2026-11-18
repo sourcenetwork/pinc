@@ -390,8 +390,17 @@ par run_tlc streams_ledger Streams Streams_ledger
 par run_tlc streams_two Streams Streams_two
 par run_tlc streams_meter Streams Streams_meter
 par run_tlc streams_spill Streams Streams_spill
+par run_tlc streams_spill_nomb Streams Streams_spill_nomb
+par run_tlc streams_spill_one Streams Streams_spill_one
+par run_tlc streams_spill_live Streams Streams_spill_live
+par witness_tlc streams_spill_live_cover Streams Streams_spill_live_cover NoSpillWhileBlocked
+par witness_live_tlc streams_spill_live_noapp Streams Streams_spill_live_noapp
+par witness_live_tlc streams_spill_live_nohole Streams Streams_spill_live_nohole
+par witness_live_tlc streams_spill_live_nocredit Streams Streams_spill_live_nocredit
 par witness_tlc streams_meter_w Streams Streams_meter_w SizeFollowsOwnRate
 par witness_tlc streams_spill_w Streams Streams_spill_w NoNeedlessFragmented
+par witness_tlc streams_spill_mb_w Streams Streams_spill_mb_w MovedBack
+par witness_tlc streams_spill_arena_w Streams Streams_spill_arena_w ArenaBound
 par run_tlc streams_held Streams Streams_held
 par witness_live_tlc streams_held_w Streams Streams_held_w
 par witness_tlc streams_two_w Streams Streams_two_w NoJump
