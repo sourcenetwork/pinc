@@ -22,9 +22,12 @@ structure P where
   ch : Nat
   ring : Nat
   rr : Nat
-  /-- The intervals a stream's ranges hold once they spilled into a pool chunk (`SPILL`, 1024 in the code); `rr` turns the
-  spill off, the behaviour before #478. -/
+  /-- The intervals a stream's ranges hold once they spilled into a slot of the endpoint's spill arena (`SLOT_RANGES`,
+  256 in the code); `rr` turns the spill off, the behaviour before #478. -/
   spr : Nat
+  /-- The arena slots the session may hold (`SpillUse::cap`, or fewer when the other sessions hold the rest). A slot is
+  no pool chunk: the pool never counts it. -/
+  arena : Nat
   n : Nat
   maxrem : Nat
   b : Nat
@@ -87,7 +90,7 @@ structure Slot where
   ms : Option Nat
   mb : Nat
   mr : Nat
-  /-- The stream's stored ranges spilled into a pool chunk (`RangeSet::is_spilled`). -/
+  /-- The stream's stored ranges spilled into an arena slot (`RangeSet::is_spilled`). -/
   sp : Bool
   deriving DecidableEq, Repr, Inhabited
 
@@ -176,9 +179,9 @@ def Slot.due (p : P) (r : Slot) : Option Nat :=
     if cand > r.limit && cand ≥ r.limit + r.size / 8 then some cand else none
 
 /-! ### The pool -/
-/-- The pool chunks a slot holds: its ring's, and one more when its ranges spilled. -/
-def Slot.chunks (r : Slot) : Nat := r.held.length + if r.sp then 1 else 0
-def heldTotal (T : Tab) : Nat := (T.slots.map (·.chunks)).sum
+def heldTotal (T : Tab) : Nat := (T.slots.map (·.held.length)).sum
+/-- The arena slots the session holds: one for each stream whose ranges spilled. -/
+def spillTotal (T : Tab) : Nat := (T.slots.filter (·.sp)).length
 def used (T : Tab) : Nat := heldTotal T + T.ext
 def availC (p : P) (T : Tab) : Nat := p.b - used T
 def avail (p : P) (T : Tab) : Nat := availC p T * p.ch
@@ -320,16 +323,20 @@ def storeStep (p : P) (T : Tab) (r : Slot) (off len : Nat) (diff : Bool) : Slot 
   if lo ≥ e then (r, "ok")
   else if last - r.read / p.ch ≥ p.ring then (r, "FlowControl")
   else if lo < r.hi && diff && overlaps r.rs lo e then (r, "Conflict")
-  -- `RangeSet::insert_cost`: a frame that needs one more interval than the inline ranges hold spills them into a chunk
+  -- only the ring's new chunks must be free: a spill takes an arena slot, not a pool chunk
+  else if missing.length > availC p T then (r, "Exhausted")
   else
+    -- `RangeSet::insert`: a frame that needs one more interval than the inline ranges hold asks for a slot, given
+    -- while the session holds fewer than its share (`SpillUse::take`)
     let spill := p.spr > p.rr && !r.sp && (insertR p.rr r.rs lo e).isNone
-    if missing.length + (if spill then 1 else 0) > availC p T then (r, "Exhausted")
-    else match insertR (if r.sp || spill then p.spr else p.rr) r.rs lo e with
+    let slot := spillTotal T < p.arena
+    match insertR (if r.sp || (spill && slot) then p.spr else p.rr) r.rs lo e with
     | none => (r, "Fragmented")
     | some rs' =>
+      -- `RangeSet::edit_spilled`: a spilled set left with `rr / 2` intervals or fewer moves back inline at once
       ({ r with held := r.held.filter (· < first) ++ (List.range (last + 1 - first)).map (first + ·) ++
                         r.held.filter (· > last),
-                rs := rs', contig := first0 rs', sp := r.sp || spill }, "ok")
+                rs := rs', contig := first0 rs', sp := (r.sp || spill) && rs'.length > p.rr / 2 }, "ok")
 
 def onData (p : P) (T : Tab) (r : Slot) (off len : Nat) (fin diff : Bool) : Slot × String :=
   let e := off + len
@@ -359,7 +366,7 @@ def onReset (p : P) (r : Slot) (code fs : Nat) : Slot × String :=
   else if fs > r.limit then (r, "FlowControl")
   else if r.rst.isSome then (r, "ok")
   else
-    -- a reset frees the ranges with everything else, the spill chunk too
+    -- a reset frees the ranges with everything else, and gives the arena slot back
     let r1 := { r with hi := fs, fin := some fs, rst := some code, read := fs, contig := fs, held := [], rs := [] }
     ({ r1 with sp := false }, "ok")
 

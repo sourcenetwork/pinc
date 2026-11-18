@@ -32,12 +32,17 @@
 (*    twice what its own reader drained per round trip                     *)
 (*    (SizeFollowsOwnRate; Streams_meter, and the witness Streams_meter_w, *)
 (*    the connection-wide meter before #159, which breaks it);             *)
-(*  - SPILL: a stream's stored ranges fit RR inline and SPR in one pool    *)
-(*    chunk; a frame is refused Fragmented only beyond SPR or when the     *)
-(*    pool has no chunk for the spill, and the chunk counts in the pool    *)
-(*    (Pool) until the ranges are cleared (NoNeedlessFragmented, SpillHeld; *)
-(*    Streams_spill, and the witness Streams_spill_w, no spill as before   *)
-(*    #478, which breaks it);                                              *)
+(*  - SPILL: a stream's stored ranges fit RR inline and SPR in one slot of *)
+(*    the endpoint's spill arena, which is not the pool; a frame is        *)
+(*    refused Fragmented only beyond SPR or when this session holds all    *)
+(*    the slots it may (NoNeedlessFragmented), the session never holds     *)
+(*    more (ArenaBound), a slot is held only by a live stream              *)
+(*    (SpillHeld) and only while its ranges are more than RR / 2           *)
+(*    (MovedBack); Streams_spill and Streams_spill_nomb check the ledger   *)
+(*    and progress with two streams with and without the move back, the    *)
+(*    witness Streams_spill_w (no spill, as before #478) breaks            *)
+(*    NoNeedlessFragmented, Streams_spill_mb_w (no move back) MovedBack    *)
+(*    and Streams_spill_arena_w (no session bound) ArenaBound;             *)
 (*  - flow-control updates: a limit moves only by at least 1/8 of   *)
 (*    the window, never down, and a window due to move is moved or         *)
 (*    deferred (NoMissedGrant); a deferred grant is retried after every     *)
@@ -81,7 +86,7 @@
 (* Lean counterpart: proofs/lean/Pinc/TransportStreams.lean.               *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
-CONSTANTS CH, RING, RR, N, MAXREM, B, SWC, MSWC, PM, MAXOFF, RETRY, RemIds, LocIds, FIRSTK, RELEASE, PERSTREAM, SPR
+CONSTANTS CH, RING, RR, N, MAXREM, B, SWC, MSWC, PM, MAXOFF, RETRY, RemIds, LocIds, FIRSTK, RELEASE, PERSTREAM, SPR, ARENA, MOVEBACK, BOUND
 CONSTANTS HOR, LMAX, EXTMAX, SRTTS, DT
 \* STOPS = FALSE leaves out the stop requests and our own resets (configs that check the credit only)
 CONSTANT STOPS
@@ -130,10 +135,48 @@ Spec == Init /\ [][Next]_vars
 \* The bound of the EARLY configs (a CONSTRAINT): while early opens are on, a close frees the slots and keeps the
 \* counters, so opens past the limit go on without end; the configs stop at one round of the slots and one more.
 OpenBound == T.lo[0] + T.lo[1] <= N + 1
+\* The bound of the two-stream spill configs (a CONSTRAINT): no stream has its final size or a reset yet and none has
+\* read past its first byte, so the streams stay open and an arena slot comes back only by the move back; the
+\* one-stream config Streams_spill_one checks the slot going back as a stream ends (SpillHeld).
+SpillBound == \A i \in 1..N : T.slots[i].fin = -1 /\ T.slots[i].rst = -1 /\ T.slots[i].read <= 1
+\* The bound of the two-stream spill liveness config (a CONSTRAINT): as SpillBound, with the reads free, so a stream
+\* can read all it was granted and wait at its limit.
+SpillLiveBound == \A i \in 1..N : T.slots[i].fin = -1 /\ T.slots[i].rst = -1
 
 \* the other users of the pool eventually let go (the liveness config only)
 ExtRelease == T.ext > 0 /\ T' = ExtTo(T, 0) /\ UNCHANGED <<clock, elo>>
 LSpec == Spec /\ WF_vars(ExtRelease)
+\* Two assumptions, about the application and the peer, not properties of the transport. Both streams belong to one
+\* connection and one peer, so whoever breaks them starves only that connection's own streams; other sessions keep
+\* their own pools, so no other peer is harmed.
+\* The application reads, sooner or later, every stream that has bytes for it. Without it one stream left unread keeps
+\* the chunks its siblings wait on through connection credit, and they stay blocked (Streams_spill_live_noapp.cfg),
+\* which master shows too.
+\* Drained(i): the stream in slot i has nothing left to read (or there is no stream there).
+Drained(i) == Readable(T.slots[i]) = 0
+\* AppReads: every stream is drained again and again: whatever arrives is read sooner or later.
+AppReads == \A i \in 1..N : []<>Drained(i)
+\* The peer is live: it fills its holes, and on each stream it eventually uses its granted credit or ends the stream.
+\* Without the first a stream with a hole keeps its chunks (Streams_spill_live_nohole.cfg); without the second a
+\* stream the peer leaves idle keeps pool room reserved for its unused credit (Streams_spill_live_nocredit.cfg).
+\* Either way the sibling's deferred grant never fits, on master too; the second is #690 (reclaim or cap unused credit).
+\* Filled(i): the stream in slot i has no hole: everything up to the highest byte received has arrived (or a reset).
+Filled(i) == LET r == T.slots[i] IN r.rst # -1 \/ r.contig >= r.hi
+\* CreditSpent(i): the peer has sent up to the limit it was granted on the stream in slot i, or ended the stream (or
+\* there is no stream there).
+CreditSpent(i) == LET r == T.slots[i] IN r.id = -1 \/ r.rst # -1 \/ r.fin # -1 \/ r.hi >= Min(r.limit, HOR)
+\* HolesFilled and CreditUsed: the two parts of the peer's liveness, each holding again and again on every stream.
+HolesFilled == \A i \in 1..N : []<>Filled(i)
+CreditUsed == \A i \in 1..N : []<>CreditSpent(i)
+\* PeerLive: both parts.
+PeerLive == HolesFilled /\ CreditUsed
+\* LSpec2: LSpec under both assumptions, stated over states, not as fairness on read or send actions, so TLC need not
+\* work out at every step whether such an action is possible.
+LSpec2 == LSpec /\ AppReads /\ PeerLive
+\* The specs of the REDs, each LSpec2 with one part dropped: no application reads, no hole filled, no credit used.
+LSpecNoApp == LSpec /\ PeerLive
+LSpecNoHole == LSpec /\ AppReads /\ CreditUsed
+LSpecNoCredit == LSpec /\ AppReads /\ HolesFilled
 \* The state without the meters, for configs whose clock never moves (DT = 0, VIEW MeterFree). There a meter's epoch
 \* never closes (no consume is ever a round trip after the epoch's start), so its rate stays 0 and no window grows from
 \* it: two states that differ only in their meters behave alike, and fingerprinting them as one keeps the per-stream
@@ -269,6 +312,10 @@ NeedCovered == \A i \in Live : T.slots[i].open =>
 Blocked(i) == LET r == T.slots[i] IN
     r.id # -1 /\ r.open /\ r.fin = -1 /\ r.rst = -1 /\ r.read = r.limit /\ r.limit < MAXOFF
 Progress == \A i \in 1..N : [](Blocked(i) => <>~Blocked(i))
+\* A cover check, expected to fail (Streams_spill_live_cover.cfg): no state has one stream's ranges spilled while another
+\* waits at its limit with its grant deferred. TLC reaching such a state shows the live config explores the case Progress
+\* is about, so a constraint or bound that pruned it would make the cover check pass and the proof script fail.
+NoSpillWhileBlocked == ~\E i, j \in 1..N : T.slots[i].sp /\ Blocked(j) /\ T.slots[j].defer
 
 (* ---- transition properties ---- *)
 SameInc(i) == T.slots[i].id # -1 /\ T'.slots[i].id = T.slots[i].id
@@ -280,14 +327,21 @@ FinalFixed == [][\A i \in 1..N : (SameInc(i) /\ T.slots[i].fin # -1) => T'.slots
 \* nothing yet takes twice the other streams' rate, and Streams_meter_w finds it.
 SizeFollowsOwnRate == [][\A i \in 1..N : (SameInc(i) /\ T'.slots[i].size > T.slots[i].size)
                             => T'.slots[i].size <= Target(T'.slots[i].m.rate)]_vars
-\* SPILL: a frame is refused Fragmented only by a stream whose ranges already spilled into a pool chunk and fill it;
-\* one whose inline ranges are full takes a chunk instead, or is Exhausted when the pool has none. Without the spill
-\* (SPR = RR) the frame is refused with the pool idle, and Streams_spill_w finds it.
+\* SPILL: a frame is refused Fragmented only by a stream whose ranges already spilled into an arena slot and fill it,
+\* or when this session holds every slot it may; one whose inline ranges are full takes a slot instead. Without the
+\* spill (SPR = RR) the frame is refused with slots free, and Streams_spill_w finds it.
 NoNeedlessFragmented == \A id \in Ids, off \in 0..HOR, len \in 1..Max(LMAX, 1) :
     (off + len <= HOR /\ Frame(T, id, off, len, FALSE, FALSE).err = "Fragmented")
-        => (FindSlot(T, id) # 0 /\ T.slots[FindSlot(T, id)].sp)
-\* SPILL: a spill chunk is held only by a live stream that was not reset; the chunk goes back with the ranges
+        => \/ FindSlot(T, id) # 0 /\ T.slots[FindSlot(T, id)].sp
+           \/ SpillTotal(T) >= ARENA
+\* SPILL: a slot is held only by a live stream that was not reset; the slot goes back with the ranges
 SpillHeld == \A i \in 1..N : T.slots[i].sp => (T.slots[i].id # -1 /\ T.slots[i].rst = -1)
+\* SPILL: the session never holds more arena slots than it may; with no bound (BOUND = FALSE) Streams_spill_arena_w
+\* finds a third
+ArenaBound == SpillTotal(T) <= ARENA
+\* SPILL: a stream holds a slot only while its ranges are more than half of inline: the call that leaves them at
+\* RR / 2 or fewer gives it back; keeping it until the stream ends (MOVEBACK = FALSE) fails in Streams_spill_mb_w
+MovedBack == \A i \in 1..N : T.slots[i].sp => Len(T.slots[i].rs) > RR \div 2
 \* a limit moves only by at least an eighth of the window
 EighthRule == [][\A i \in 1..N : (SameInc(i) /\ T'.slots[i].limit > T.slots[i].limit) =>
                     T'.slots[i].limit >= T.slots[i].limit + T'.slots[i].size \div 8]_vars
