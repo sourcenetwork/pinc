@@ -119,7 +119,10 @@ ep_impl! {
     }
 
     /// Write the oldest queued reject into `out`, if any, and count it as sent. When `out` is shorter than the reject
-    /// the reject is lost and counted in `dropped_out` instead.
+    /// the reject is lost and counted in `dropped_out` instead. Out of line and cold: the transmit poll of an
+    /// established session tests the queue and calls this only when a reject waits.
+    #[cold]
+    #[inline(never)]
     pub(crate) fn send_reject(&mut self, out: &mut [u8]) -> Option<Transmit> {
         let p = self.rejects.pop()?;
         let (Some(dst), Some(src)) = (out.get_mut(..p.len), p.bytes.get(..p.len)) else {

@@ -45,7 +45,9 @@ ep_impl! {
         {
             return Some(t);
         }
-        if let Some(t) = self.send_reject(out) {
+        if !self.rejects.is_empty()
+            && let Some(t) = self.send_reject(out)
+        {
             return Some(t);
         }
         loop {
