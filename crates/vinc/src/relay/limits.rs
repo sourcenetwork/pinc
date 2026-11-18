@@ -14,7 +14,12 @@ pub const MAILBOX_MEMBERS: usize = 256;
 pub const MAILBOX_BYTES: usize = 16_384;
 
 /// The state machine, in the shape the relay runs. Its tables live on the heap (the `alloc` feature of `vinc-connect`),
-/// so a relay of any of these sizes builds on a 1 MiB stack (see the test below).
+/// each made entry by entry, so no array of a table's size is ever on the stack at any optimisation level. At these
+/// sizes the tables reserve about 12.6 MB at build (clients 2.26 MB, records 5.90 MB, mailbox 4.21 MB, the four small
+/// tables 0.25 MB); the machine itself is 1.5 KiB and the future of `run` 240 bytes. The relay builds on a 2 MiB stack
+/// in an unoptimised build (measured on `x86_64` Linux; the identity's key pair, 64 KiB, is moved a few times by
+/// value in such a build and sets the floor: a build plus one poll of `run` needs 1 MiB there and 512 KiB in the
+/// workspace's `dev` profile).
 pub(crate) type Machine = vinc_connect::relay::Relay<CARRIERS, RECORDS, MAILBOX_MEMBERS, MAILBOX_BYTES>;
 
 /// The sizes and rates a relay runs with; each has a default.
@@ -97,7 +102,7 @@ impl Limits {
 mod tests {
     use super::*;
 
-    /// The machine is built by value before it moves to the heap: a 1 MiB stack builds and drops a relay with a hub.
+    /// A 1 MiB stack builds and drops a relay with a hub.
     #[test]
     fn a_relay_builds_and_drops_on_a_one_mebibyte_stack() {
         use vinc_keystore::SoftwareStore;
