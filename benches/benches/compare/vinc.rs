@@ -483,6 +483,36 @@ mod tests {
     }
 
     #[test]
+    fn a_per_core_runtime_keeps_a_worker_held_past_the_handoff_threshold_and_its_tasks() {
+        let (reads, handoffs) = with_switches(true, false, || {
+            on_two_workers(async {
+                let rt = nuclei::RuntimeHandle::current();
+                let (tx, mut rx) = mpsc::unbounded::<(Option<usize>, Option<usize>)>();
+                rt.spawn_local_on_worker(0, move || async move {
+                    let first = nuclei::runtime::worker_index();
+                    // The stimulus: a poll held past the default threshold of 10 ms.
+                    std::thread::sleep(Duration::from_millis(50));
+                    nuclei::task::yield_now().await;
+                    let _ = tx.unbounded_send((first, nuclei::runtime::worker_index()));
+                })
+                .unwrap()
+                .detach();
+                let limit = Box::pin(nuclei::time::sleep(Duration::from_secs(30)));
+                let futures::future::Either::Left((Some(reads), _)) =
+                    futures::future::select(Box::pin(rx.next()), limit).await
+                else {
+                    panic!("the job did not report in 30 s");
+                };
+                let stats = rt.stats();
+                let shard = stats.shards.iter().find(|s| s.worker == Some(0)).unwrap();
+                (reads, shard.handoffs)
+            })
+        });
+        assert_eq!(reads, (Some(0), Some(0)), "the job stayed on worker 0 in both polls");
+        assert_eq!(handoffs, 0, "the worker's shard was not handed off");
+    }
+
+    #[test]
     fn the_per_core_server_serves_every_dial_from_both_workers() {
         use std::sync::atomic::Ordering::Relaxed;
         let served = with_switches(true, false, || {
