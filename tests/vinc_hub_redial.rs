@@ -6,7 +6,13 @@
 //! of 250 ms or more, as one first handshake slowed by a stalled host makes it) keeps its 60 s handshake limit. Each
 //! resend is scheduled from the moment its timer ran, so time in which the test's thread could not run moves the end
 //! by as much: the test measures that time and adds it to the bound.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::needless_continue)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::needless_continue,
+    clippy::too_many_lines
+)]
 
 #[macro_use]
 mod vinc_common;
