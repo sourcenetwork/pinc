@@ -212,8 +212,6 @@ pub struct Endpoint<
     pub(crate) capture: Option<Events>,
     pub(crate) scratch: [u8; MAX_DATAGRAM],
     pub(crate) orphans: crate::orphan::Orphans,
-    /// The rejects the endpoint answers first messages with, without a session, that wait to be sent.
-    pub(crate) rejects: crate::stateless::Rejects,
     pub(crate) stash: [u8; MAX_DATAGRAM],
     pub(crate) stash_meta: Option<StashMeta>,
     pub(crate) udp_heard: Option<u64>,
@@ -236,6 +234,9 @@ pub struct Endpoint<
     pub(crate) rejoin_sent: Table<SocketAddr, u64, REJOIN_ADDRS>,
     pub(crate) counters: Counters,
     pub(crate) trace: TraceLog,
+    /// The rejects the endpoint answers first messages with, without a session, that wait to be sent. Declared last:
+    /// it is touched only when a first message is rejected, and placed here it moves no field a packet touches.
+    pub(crate) rejects: crate::stateless::Rejects,
 }
 
 /// The connection table: lent by the caller, or (with `alloc`) owned by the endpoint. An owned table has room for
@@ -476,7 +477,6 @@ ep_impl! {
             capture: None,
             scratch: [0; MAX_DATAGRAM],
             orphans: crate::orphan::Orphans::new(),
-            rejects: crate::stateless::Rejects::new(),
             stash: [0; MAX_DATAGRAM],
             stash_meta: None,
             udp_heard: None,
@@ -492,6 +492,7 @@ ep_impl! {
             rejoin_sent: Table::new(seed ^ 0x0B),
             counters: Counters::default(),
             trace: TraceLog::new(),
+            rejects: crate::stateless::Rejects::new(),
         }
     }
 
