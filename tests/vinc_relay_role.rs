@@ -501,9 +501,11 @@ async fn settle<R: Hosted + 'static>(relay: &Endpoint<R>, secs: u64, what: &str,
     }
 }
 
-/// A message held for a sleeping member goes out when the member's route validates after its return.
+/// A message held for a sleeping member is handed over when the member's route validates after its return. The
+/// rig has no way to read what member B receives from the relay, so this checks the relay's own counters (held and
+/// handed over), not the arrival.
 #[nuclei::test]
-async fn mail_held_for_a_member_that_returns_on_an_unvalidated_route_arrives_when_the_route_validates() {
+async fn mail_held_for_a_member_that_returns_on_an_unvalidated_route_is_handed_over_when_the_route_validates() {
     let rig = rig(true);
     within(120, async {
         both_carriers_open(&rig).await;
