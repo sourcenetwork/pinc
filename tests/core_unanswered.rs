@@ -1,6 +1,7 @@
 //! A dial reported before its handshake (a cached allow) ends once its 4th first flight goes unanswered: a peer that
 //! stopped is told within 15 first delays (7.5 s), while a running peer is reached whatever the round trip, a lost
-//! flight, a held flight or a rejected ticket does to the schedule, and the node's handshake floor stays where it was.
+//! flight, a held flight or a rejected ticket does to the schedule, and the node's handshake floor stays where it was. A
+//! thin node keeps its 60 s handshake limit for such a dial.
 #![allow(
     clippy::many_single_char_names,
     clippy::unwrap_used,
@@ -26,6 +27,15 @@ fn unanswered(e: &Event) -> bool {
         e,
         Event::Closed {
             reason: EndReason::Transport(CloseReason::Unanswered),
+            ..
+        }
+    )
+}
+fn handshake_timeout(e: &Event) -> bool {
+    matches!(
+        e,
+        Event::Closed {
+            reason: EndReason::Transport(CloseReason::HandshakeTimeout),
             ..
         }
     )
@@ -229,5 +239,56 @@ fn an_early_dial_whose_ticket_the_peer_refused_tells_that_it_did_not_resume() {
             "never answered"
         );
         assert!(net.nodes[a].saw(|e| matches!(e, Event::Answered { session, resumed: false } if *session == s)));
+    });
+}
+
+/// One first handshake that took 400 ms (a host that stalled while it ran, on a link of 30 ms) makes the node thin: its
+/// next early dial to a peer that stopped is not ended after 4 unanswered flights but at a thin node's 60 s handshake
+/// limit, as a handshake timeout, which raises the floor.
+#[test]
+fn a_node_whose_first_handshake_took_400_ms_keeps_the_thin_limit_for_an_early_dial_to_a_stopped_peer() {
+    big_stack(|| {
+        let mut net = CoreNet::new(200 * MS_NS);
+        let (a, b) = (net.add(1), net.add(2));
+        let (sa, _) = net.connect_pair(a, b, ALPN_A, Role::Other);
+        net.delay = 15 * MS_NS;
+        net.run_for(S);
+        let t = net.now;
+        net.nodes[a].cmd(t, Command::Close { session: sa, error: 0 }).unwrap();
+        net.run_for(2 * S);
+        let st = net.nodes[a].ep.node_stats();
+        assert!(
+            st.thin,
+            "the node is not thin after a 400 ms handshake: lrtt {} ns",
+            st.lrtt
+        );
+        net.nodes[a].events.clear();
+        net.loss = Some(Box::new(|_, _, _| true));
+        let t0 = net.now;
+        early_dial(&mut net, a, b);
+        assert!(
+            net.run(t0 + 61 * S, |n| n.nodes[a].saw(handshake_timeout)
+                || n.nodes[a].saw(unanswered)),
+            "no end by 61 s"
+        );
+        let (at, e) = net.nodes[a]
+            .events
+            .iter()
+            .find(|(_, e)| handshake_timeout(e) || unanswered(e))
+            .unwrap();
+        let at = *at - t0;
+        assert!(
+            handshake_timeout(e),
+            "ended as unanswered at {at} ns, not at the thin node's 60 s limit"
+        );
+        assert!(
+            at.abs_diff(60 * S) < 100 * MS_NS,
+            "ended at {at} ns, not at the 60 s limit"
+        );
+        assert_eq!(
+            net.nodes[a].ep.node_stats().hs_floor,
+            500 * MS_NS,
+            "the floor did not rise"
+        );
     });
 }
