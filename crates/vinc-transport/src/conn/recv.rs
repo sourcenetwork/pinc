@@ -548,7 +548,7 @@ conn_impl! {
         match f {
             // WAKE is acted on once the whole packet is known (see `process_payload`): it moves the path first.
             Frame::Padding { .. } | Frame::Ping | Frame::Wake => {}
-            Frame::Ack(ack) => self.on_ack(pi, now, &ack)?,
+            Frame::Ack(ack) => self.on_ack(now, &ack)?,
             Frame::ResetStream { id, error, final_size } => {
                 let first = self.first_unopened(id);
                 match self.streams.on_reset_stream(&mut self.pool, id, error, final_size) {
@@ -643,7 +643,7 @@ conn_impl! {
         }
     }
 
-    fn on_ack(&mut self, pi: usize, now: u64, ack: &Ack<'_>) -> Result<(), Fault> {
+    fn on_ack(&mut self, now: u64, ack: &Ack<'_>) -> Result<(), Fault> {
         let mut out = Outcome::default();
         let (streams, pool, ctl) = (&mut *self.streams, &mut self.pool, &mut self.ctl);
         let result = self.rec.on_ack_received(now, ack.ranges(), |ev| apply(&ev, streams, pool, ctl, &mut out));
@@ -651,16 +651,18 @@ conn_impl! {
             Ok(summary) => {
                 self.rx.on_peer_ack(now, &ack.ranges());
                 self.stats.packets_acked += u64::from(summary.acked_packets);
-                if let Some(b) = out.big_acked
-                    && let Some(p) = self.paths.get_mut(pi)
-                {
-                    p.mtu.big_acked = p.mtu.big_acked.max(Some(b));
+                for (slot, big) in out.big_acked.iter().enumerate() {
+                    if let Some(b) = *big
+                        && let Some(p) = self.paths.get_mut(slot)
+                    {
+                        p.mtu.big_acked = p.mtu.big_acked.max(Some(b));
+                    }
                 }
-                if let Some(ping) = self.life.small_ping
+                if let Some((ping, slot)) = self.life.small_ping
                     && ack.ranges().any(|r| r.contains(&ping))
                 {
                     self.life.small_ping = None;
-                    self.mtu_black_hole(now);
+                    self.mtu_black_hole(slot, now);
                 }
                 self.mtu_black_hole_check(now);
                 self.after_feedback(&out, now);
@@ -674,6 +676,7 @@ conn_impl! {
     /// Fold recovery feedback into the loss average, the path MTU state and the counters.
     pub(super) fn after_feedback(&mut self, out: &Outcome, now: u64) {
         self.stats.packets_lost += u64::from(out.lost_packets);
+        self.stats.probe_outcomes_dropped += u64::from(out.probes_passed);
         self.loss.record(out.loss_lost, out.loss_acked);
         for (slot, probe) in out.probe_acked.iter().enumerate() {
             if let Some((size, pn)) = *probe {

@@ -49,13 +49,12 @@ pub(crate) struct ExtSlot {
 /// What a batch of recovery events turned up for the connection.
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct Outcome {
-    /// Per path slot, the size and packet number of a size probe acknowledged on it. vertexia: one per slot and batch,
-    /// the newest probe; an older one of a refilled slot in the same batch is passed over without being counted.
+    /// Per path slot, the size and packet number of a size probe acknowledged on it: the newest of the batch.
     pub(crate) probe_acked: [Option<(u32, u64)>; crate::recovery::MAX_PATHS],
     /// Per path slot, the size and packet number of a size probe lost on it.
     pub(crate) probe_lost: [Option<(u32, u64)>; crate::recovery::MAX_PATHS],
-    /// The newest acknowledged packet larger than the minimum datagram size.
-    pub(crate) big_acked: Option<u64>,
+    /// Per path slot, the newest acknowledged packet larger than the minimum datagram size that left on it.
+    pub(crate) big_acked: [Option<u64>; crate::recovery::MAX_PATHS],
     /// A REKEY answer was lost.
     pub(crate) rekey_answer_lost: bool,
     /// A REKEY request was lost.
@@ -69,6 +68,8 @@ pub(crate) struct Outcome {
     pub(crate) loss_lost: u32,
     /// Per path slot, the highest packet number acknowledged on it.
     pub(crate) acked_pn: [Option<u64>; crate::recovery::MAX_PATHS],
+    /// Probe outcomes of the batch that an older one of the same slot lost to; counted as dropped.
+    pub(crate) probes_passed: u32,
 }
 
 /// Pending control state and the table of frames in flight.
@@ -189,15 +190,14 @@ pub(crate) fn apply<S: StreamSource, const N: usize, const C: usize>(
             if let Some(s) = out.acked_pn.get_mut(usize::from(path)) {
                 *s = (*s).max(Some(pn));
             }
-            if size > u32::from(super::config::MIN_MTU) {
-                out.big_acked = out.big_acked.max(Some(pn));
+            if size > u32::from(super::config::MIN_MTU)
+                && let Some(s) = out.big_acked.get_mut(usize::from(path))
+            {
+                *s = (*s).max(Some(pn));
             }
             out.loss_acked += u32::from(!repair);
-            if mtu_probe
-                && let Some(s) = out.probe_acked.get_mut(usize::from(path))
-                && s.is_none_or(|(_, q)| q < pn)
-            {
-                *s = Some((size, pn));
+            if mtu_probe {
+                out.probes_passed += keep_newest(out.probe_acked.get_mut(usize::from(path)), size, pn);
             }
             for f in frames {
                 match *f {
@@ -228,11 +228,8 @@ pub(crate) fn apply<S: StreamSource, const N: usize, const C: usize>(
         } => {
             out.lost_packets += 1;
             out.loss_lost += u32::from(requeue);
-            if mtu_probe
-                && let Some(s) = out.probe_lost.get_mut(usize::from(path))
-                && s.is_none_or(|(_, q)| q < pn)
-            {
-                *s = Some((size, pn));
+            if mtu_probe {
+                out.probes_passed += keep_newest(out.probe_lost.get_mut(usize::from(path)), size, pn);
             }
             if !requeue {
                 return;
@@ -243,6 +240,19 @@ pub(crate) fn apply<S: StreamSource, const N: usize, const C: usize>(
                     FrameRef::Control { kind, id } => lost(kind, id, streams, ctl, out),
                 }
             }
+        }
+    }
+}
+
+/// Keep the newest probe outcome of a slot. Returns 1 when an outcome was passed over (the older of the two, or one
+/// for a slot that does not exist): it can never match the live probe, which holds the newest packet number.
+fn keep_newest(slot: Option<&mut Option<(u32, u64)>>, size: u32, pn: u64) -> u32 {
+    let Some(cell) = slot else { return 1 };
+    match *cell {
+        Some((_, q)) if q >= pn => 1,
+        old => {
+            *cell = Some((size, pn));
+            u32::from(old.is_some())
         }
     }
 }
@@ -310,6 +320,8 @@ fn lost<S: StreamSource, const N: usize, const C: usize>(
 #[allow(clippy::unwrap_used, reason = "tests assert")]
 mod tests {
     use super::*;
+    use crate::recovery::FrameRefs;
+    use crate::stream::{Config, NoSource};
 
     /// A held extension frame keeps its body in exactly one pool chunk, read back intact, and gives it back when its
     /// slot is freed; with no chunk to spare the frame is not held (it stays queued), and a closing connection gives
@@ -342,5 +354,64 @@ mod tests {
         ctl.release_ext(&mut pool);
         assert_eq!(pool.used_chunks(), 0);
         assert!(ctl.ext.iter().all(Option::is_none));
+    }
+
+    /// Run `events` through [`apply`] into one fresh [`Outcome`].
+    fn batch(events: &[Event<'_>]) -> Outcome {
+        let mut pool = BufferPool::new_boxed(8);
+        let mut streams: Streams<NoSource, 2, 2> = Streams::new(&Config::new(true), &pool);
+        let mut ctl = Ctl::new();
+        let mut out = Outcome::default();
+        for ev in events {
+            apply(ev, &mut streams, &mut pool, &mut ctl, &mut out);
+        }
+        out
+    }
+
+    /// One acknowledgement can cover the probe of a path that is gone and the probe of the path that took its slot.
+    /// Only the newer one can match a probe in flight; the older one is passed over, in either order, and counted, and
+    /// the outcomes of other slots and of the other kind are not touched.
+    #[test]
+    fn a_probe_outcome_passed_over_in_a_batch_is_counted() {
+        let refs = FrameRefs::new();
+        let acked = |pn, path| Event::Acked {
+            pn,
+            size: 1452,
+            frames: &refs,
+            mtu_probe: true,
+            repair: false,
+            path,
+        };
+        let lost = |pn, path| Event::Lost {
+            pn,
+            size: 1452,
+            path,
+            frames: &refs,
+            requeue: false,
+            mtu_probe: true,
+        };
+        for order in [[7, 9], [9, 7]] {
+            let out = batch(&[acked(order[0], 1), acked(order[1], 1)]);
+            assert_eq!(out.probe_acked[1], Some((1452, 9)), "order {order:?}");
+            assert_eq!(out.probes_passed, 1, "order {order:?}");
+            let out = batch(&[lost(order[0], 2), lost(order[1], 2)]);
+            assert_eq!(out.probe_lost[2], Some((1452, 9)), "order {order:?}");
+            assert_eq!(out.probes_passed, 1, "order {order:?}");
+        }
+        // Other slots, an acknowledgement next to a loss and a packet that is no probe pass nothing over.
+        let plain = Event::Acked {
+            pn: 3,
+            size: 1452,
+            frames: &refs,
+            mtu_probe: false,
+            repair: false,
+            path: 1,
+        };
+        let out = batch(&[acked(7, 1), acked(9, 2), lost(8, 1), lost(6, 2), plain]);
+        assert_eq!(out.probes_passed, 0);
+        assert_eq!(out.probe_acked[1], Some((1452, 7)));
+        assert_eq!(out.probe_acked[2], Some((1452, 9)));
+        assert_eq!(out.probe_lost[1], Some((1452, 8)));
+        assert_eq!(out.probe_lost[2], Some((1452, 6)));
     }
 }

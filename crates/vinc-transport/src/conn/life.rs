@@ -59,8 +59,9 @@ pub(crate) struct Life {
     pub(crate) ping_owed: bool,
     /// An acknowledgement must leave in the next packet.
     pub(crate) ack_now: bool,
-    /// The packet number of the last probe-timeout PING, while a black-hole check waits for its acknowledgement.
-    pub(crate) small_ping: Option<u64>,
+    /// The packet number of the last probe-timeout PING and the path slot it left on, while a black-hole check waits
+    /// for its acknowledgement.
+    pub(crate) small_ping: Option<(u64, usize)>,
     /// The session counts as carrying application data until this time (the endpoint's last application activity,
     /// either way, plus 20 s); always, until the endpoint says ([`Connection::set_app_until`](super::Connection)).
     pub(crate) app_until: u64,

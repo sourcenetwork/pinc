@@ -558,7 +558,7 @@ conn_impl! {
         }
         self.life.ack_now = false;
         if fill.ping_only && self.paths.get(ti).is_some_and(|p| p.mtu.current > MIN_MTU) {
-            self.life.small_ping = Some(pn);
+            self.life.small_ping = Some((pn, ti));
             if let Some(p) = self.paths.get_mut(ti) {
                 p.mtu.ping_big = p.mtu.last_big;
             }

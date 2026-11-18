@@ -9,8 +9,9 @@
 //! probed once the address has answered. A path is not probed while the oldest packet in flight left on another path:
 //! that recovery is timed first, and the probe's lone acknowledgement, held for the ack delay, would stretch its round
 //! trip; the probe goes once those packets are acknowledged or declared lost. When a probe-timeout PING is
-//! acknowledged while a full-size packet sent before it still is not one round trip later, the path drops to 1200,
-//! because the signature is a path that carries small packets only.
+//! acknowledged while a full-size packet sent before it on the path the PING left on still is not one round trip
+//! later, that path drops to 1200, because the signature is a path that carries small packets only. A large packet
+//! counts as acknowledged for the path it left on, whichever path the acknowledgement arrived on.
 //!
 //! Invariants: at most one probe is in flight per path, and the path remembers its size and the packet number it left
 //! in; the outcome of a probe (its acknowledgement or its loss) is applied to the path it left on, and only while that
@@ -257,28 +258,30 @@ conn_impl! {
         }
     }
 
-    /// The last probe-timeout PING was acknowledged. If a full-size packet sent before it is still unacknowledged
-    /// the path is suspect, and [`mtu_black_hole_check`](Self::mtu_black_hole_check) decides one round trip later.
-    /// The full-size retransmission that follows the PING does not matter: the evidence is the packet that preceded it.
-    pub(super) fn mtu_black_hole(&mut self, now: u64) {
+    /// The last probe-timeout PING, which left on path slot `i`, was acknowledged. If a full-size packet that left on
+    /// that path before it is still unacknowledged the path is suspect, and
+    /// [`mtu_black_hole_check`](Self::mtu_black_hole_check) decides one round trip later. The full-size retransmission
+    /// that follows the PING does not matter: the evidence is the packet that preceded it.
+    pub(super) fn mtu_black_hole(&mut self, i: usize, now: u64) {
         let rtt = if self.rec.rtt().has_sample() { self.rec.rtt().smoothed() } else { 0 };
-        let Some(p) = self.paths.active_mut() else { return };
+        let Some(p) = self.paths.get_mut(i) else { return };
         p.mtu.black_hole(now, rtt);
     }
 
-    /// Settle a black-hole suspicion once its round trip has passed: if no full-size packet at or after the suspect one
-    /// was acknowledged, the path carries small packets only. Drop the active path to the minimum size.
+    /// Settle every black-hole suspicion whose round trip has passed, on the path that carried the PING whichever path
+    /// is active: if no full-size packet at or after the suspect one was acknowledged, that path carries small packets
+    /// only and drops to the minimum size. The connection's datagram size follows only when it is the active path.
     pub(super) fn mtu_black_hole_check(&mut self, now: u64) {
-        // A suspicion belongs to the path that carried the PING; once the connection has left that path nothing settles
-        // it, and its deadline would stay in the past and keep the driver spinning.
         let active = self.paths.active;
+        let mut dropped = false;
         for (i, slot) in self.paths.slots.iter_mut().enumerate() {
-            if let Some(p) = slot.as_mut().filter(|_| i != active) {
-                p.mtu.suspect = None;
+            if let Some(p) = slot.as_mut()
+                && p.mtu.black_hole_check(now)
+            {
+                dropped |= i == active;
             }
         }
-        let Some(p) = self.paths.active_mut() else { return };
-        if p.mtu.black_hole_check(now) {
+        if dropped {
             self.rec.set_max_datagram_size(u64::from(MIN_MTU));
             self.shed_extensions();
         }
