@@ -1392,6 +1392,14 @@ name = "trace_ctl"
 path = "trace_ctl.rs"
 
 [[test]]
+name = "trace_dgram_queue"
+path = "trace_dgram_queue.rs"
+
+[[test]]
+name = "trace_evqueue"
+path = "trace_evqueue.rs"
+
+[[test]]
 name = "trace_frame_refs"
 path = "trace_frame_refs.rs"
 
@@ -1544,6 +1552,10 @@ name = "mbt_facade_open"
 path = "mbt_facade_open.rs"
 
 [[test]]
+name = "mbt_endpoint"
+path = "mbt_endpoint.rs"
+
+[[test]]
 name = "mbt_outbox"
 path = "mbt_outbox.rs"
 
@@ -1570,6 +1582,10 @@ path = "trace_dag_cid.rs"
 [[test]]
 name = "trace_dag_sizes"
 path = "trace_dag_sizes.rs"
+
+[[test]]
+name = "trace_iface"
+path = "trace_iface.rs"
 
 [[test]]
 name = "trace_ledger"
@@ -1604,6 +1620,10 @@ name = "trace_sec_ids"
 path = "trace_sec_ids.rs"
 
 [[test]]
+name = "trace_settle"
+path = "trace_settle.rs"
+
+[[test]]
 name = "trace_stream_send"
 path = "trace_stream_send.rs"
 
@@ -1626,6 +1646,10 @@ path = "trace_table_ring.rs"
 [[test]]
 name = "trace_table_slab"
 path = "trace_table_slab.rs"
+
+[[test]]
+name = "trace_tx"
+path = "trace_tx.rs"
 
 [[test]]
 name = "trace_wire_cbor"

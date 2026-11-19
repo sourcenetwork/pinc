@@ -129,6 +129,68 @@ pub enum TraceEvent {
         /// 1 if this side dialed.
         dialer: u64,
     },
+    /// A connection was asked for a datagram with a window of `room` bytes (`len`, `seg` and `dest` are `u64::MAX`
+    /// when it gave none).
+    TxConn {
+        /// The session slot asked.
+        slot: u64,
+        /// The window in bytes.
+        room: u64,
+        /// The datagram's length.
+        len: u64,
+        /// The datagram's segment size.
+        seg: u64,
+        /// The remote of the datagram's path, hashed to a number; `u64::MAX - 1` when the path has no address.
+        dest: u64,
+    },
+    /// The first waiting slot was not in use or had no connection, and was taken off its queue.
+    TxGone {
+        /// The session slot.
+        slot: u64,
+    },
+    /// The gate asked the ledger for `n` bytes for `segments` datagrams of `len` bytes in total.
+    TxGate {
+        /// The destination, hashed to a number.
+        dest: u64,
+        /// The bytes of the datagrams.
+        len: u64,
+        /// How many datagrams.
+        segments: u64,
+        /// The bytes the ledger was asked for.
+        n: u64,
+        /// 1 if the ledger let them out, 0 if it held them.
+        allowed: u64,
+    },
+    /// A datagram was dropped: `slot` for the loop's path with no address, `u64::MAX` for the kept datagram.
+    TxDrop {
+        /// The session slot, or `u64::MAX`.
+        slot: u64,
+    },
+    /// A session was put at the back of a send queue (0 ordinary, 1 broadcast).
+    TxMark {
+        /// The session slot.
+        slot: u64,
+        /// The queue.
+        queue: u64,
+    },
+    /// A reject of the endpoint's own was returned for sending.
+    TxReject {
+        /// The destination, hashed to a number.
+        dest: u64,
+        /// The datagram's length.
+        len: u64,
+        /// The datagram's segment size.
+        seg: u64,
+    },
+    /// The endpoint made call `call` on the connection of session `slot` for an interface event or a suspension: 1
+    /// link down, 2 link back, 3 sleep, 4 wake, 5 closed for a redial, 6 a path rebound to the new address, 7 a path
+    /// replaced (added from the new address, the old one lost).
+    Iface {
+        /// The session slot.
+        slot: u64,
+        /// The call.
+        call: u64,
+    },
 }
 
 impl TraceEvent {
@@ -148,6 +210,13 @@ impl TraceEvent {
             Self::Keepalive { .. } => "keepalive",
             Self::Rtt { .. } => "rtt",
             Self::Session { .. } => "session",
+            Self::TxConn { .. } => "tx_conn",
+            Self::TxGone { .. } => "tx_gone",
+            Self::TxGate { .. } => "tx_gate",
+            Self::TxDrop { .. } => "tx_drop",
+            Self::TxMark { .. } => "tx_mark",
+            Self::TxReject { .. } => "tx_reject",
+            Self::Iface { .. } => "iface",
         }
     }
 
@@ -177,7 +246,9 @@ impl TraceEvent {
                 ],
                 5,
             ),
-            Self::HalfOpenExpired { slot } => ([("slot", slot), NONE, NONE, NONE, NONE], 1),
+            Self::HalfOpenExpired { slot } | Self::TxGone { slot } | Self::TxDrop { slot } => {
+                ([("slot", slot), NONE, NONE, NONE, NONE], 1)
+            }
             Self::Acp { slot, step } => ([("slot", slot), ("step", step), NONE, NONE, NONE], 2),
             Self::Gate { slot, release, held } => {
                 ([("slot", slot), ("release", release), ("held", held), NONE, NONE], 3)
@@ -206,6 +277,41 @@ impl TraceEvent {
             Self::Session { slot, step, dialer } => {
                 ([("slot", slot), ("step", step), ("dialer", dialer), NONE, NONE], 3)
             }
+            Self::TxConn {
+                slot,
+                room,
+                len,
+                seg,
+                dest,
+            } => (
+                [
+                    ("slot", slot),
+                    ("room", room),
+                    ("len", len),
+                    ("seg", seg),
+                    ("dest", dest),
+                ],
+                5,
+            ),
+            Self::TxGate {
+                dest,
+                len,
+                segments,
+                n,
+                allowed,
+            } => (
+                [
+                    ("dest", dest),
+                    ("len", len),
+                    ("segments", segments),
+                    ("n", n),
+                    ("allowed", allowed),
+                ],
+                5,
+            ),
+            Self::TxMark { slot, queue } => ([("slot", slot), ("queue", queue), NONE, NONE, NONE], 2),
+            Self::TxReject { dest, len, seg } => ([("dest", dest), ("len", len), ("seg", seg), NONE, NONE], 3),
+            Self::Iface { slot, call } => ([("slot", slot), ("call", call), NONE, NONE, NONE], 2),
         }
     }
 }
@@ -242,6 +348,8 @@ pub(crate) struct TraceLog {
     head: usize,
     len: usize,
     dropped: u64,
+    /// The settle records, kept beside the trace records.
+    pub(crate) settles: crate::timers::SettleLog,
 }
 
 #[cfg(feature = "trace")]
@@ -252,6 +360,7 @@ impl TraceLog {
             head: 0,
             len: 0,
             dropped: 0,
+            settles: crate::timers::SettleLog::new(),
         }
     }
 

@@ -963,40 +963,6 @@ ep_impl! {
         if let Some(t) = self.dirty_tail.get_mut(q) {
             *t = idx;
         }
-    }
-
-    /// The first session waiting to send: ordinary sessions before broadcast ones.
-    pub(crate) fn dirty_front(&self) -> Option<(usize, usize)> {
-        (0..2).find_map(|q| {
-            let h = self.dirty_head.get(q).copied()?;
-            (h != NIL).then_some((q, h as usize))
-        })
-    }
-
-    /// Take the first session of queue `q` off it.
-    pub(crate) fn dirty_pop(&mut self, q: usize) {
-        let Some(h) = self.dirty_head.get(q).copied().filter(|h| *h != NIL) else { return };
-        let Some(s) = self.slots.get_mut(h as usize) else { return };
-        let next = s.m.dirty_next;
-        s.m.dirty = 0;
-        s.m.dirty_next = NIL;
-        if let Some(x) = self.dirty_head.get_mut(q) {
-            *x = next;
-        }
-        if next == NIL
-            && let Some(t) = self.dirty_tail.get_mut(q)
-        {
-            *t = NIL;
-        }
-    }
-
-    /// Move the first session of queue `q` to its end, so the others get a turn.
-    pub(crate) fn dirty_rotate(&mut self, q: usize) {
-        let Some(h) = self.dirty_head.get(q).copied().filter(|h| *h != NIL) else { return };
-        if self.dirty_head.get(q) == self.dirty_tail.get(q) {
-            return;
-        }
-        self.dirty_pop(q);
-        self.mark_dirty(h as usize);
+        crate::trace::trace!(self, self.last_now, TxMark { slot: i as u64, queue: q as u64 });
     }
 }

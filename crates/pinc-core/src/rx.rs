@@ -562,6 +562,39 @@ ep_impl! {
     }
 }
 
+#[cfg(feature = "trace")]
+ep_impl! {
+    /// The deadline slot `i` holds in the heap, in use or not (cargo feature `trace`).
+    #[must_use]
+    pub fn slot_deadline(&self, i: usize) -> Option<u64> {
+        self.heap.deadline(i)
+    }
+
+    /// The id the session in slot `i` was first dialed under, `None` for a slot not in use (cargo feature `trace`).
+    #[must_use]
+    pub fn slot_odcid(&self, i: usize) -> Option<ConnId> {
+        self.slots.get(i).filter(|s| s.m.in_use).and_then(|s| s.m.odcid)
+    }
+
+    /// How many routing entries point at slot `i` (cargo feature `trace`).
+    #[must_use]
+    pub fn slot_routes(&self, i: usize) -> usize {
+        self.demux.iter().filter(|(_, v)| **v as usize == i).count()
+    }
+
+    /// The slots the routing table lists for `cid` (up to 4) and how many it holds (cargo feature `trace`).
+    #[must_use]
+    pub fn routes_of(&self, cid: &ConnId) -> ([Option<u32>; 4], usize) {
+        self.demux.matches::<4>(cid)
+    }
+
+    /// Entry `k` of the table of held fragments (cargo feature `trace`).
+    #[must_use]
+    pub fn held_fragment(&self, k: usize) -> Option<crate::OrphanEntry> {
+        self.orphans.entry(k)
+    }
+}
+
 /// A number standing for an address in a trace line.
 #[cfg(feature = "trace")]
 pub(crate) fn addr_key(a: &SocketAddr) -> u64 {

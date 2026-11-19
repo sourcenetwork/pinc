@@ -190,6 +190,22 @@ pub(crate) mod trace {
         pub len: usize,
     }
 
+    impl Orphans {
+        /// Entry `k` of the table, beside the bytes (cargo feature `trace`).
+        pub(crate) fn entry(&self, k: usize) -> Option<OrphanEntry> {
+            let h = self.held.get(k).copied().flatten()?;
+            Some(OrphanEntry {
+                at: h.at,
+                order: h.order,
+                dcid: h.dcid,
+                total: h.total,
+                local: h.local,
+                remote: h.remote,
+                len: h.len,
+            })
+        }
+    }
+
     /// A table of held datagrams of its own, with its state readable after every call.
     pub struct OrphanProbe {
         o: Orphans,
@@ -248,16 +264,7 @@ pub(crate) mod trace {
         /// Entry `k` of the table.
         #[must_use]
         pub fn slot(&self, k: usize) -> Option<OrphanEntry> {
-            let h = self.o.held.get(k).copied().flatten()?;
-            Some(OrphanEntry {
-                at: h.at,
-                order: h.order,
-                dcid: h.dcid,
-                total: h.total,
-                local: h.local,
-                remote: h.remote,
-                len: h.len,
-            })
+            self.o.entry(k)
         }
 
         /// The bytes entry `k` holds, empty for a free entry.

@@ -113,5 +113,7 @@ pub use slot::trace::HeldProbe;
 pub use slot::{HELD_EVENTS, Slot};
 pub use state::{Restored, STATE_VERSION, StateError, state_len};
 pub use table::Table;
+#[cfg(feature = "trace")]
+pub use timers::{SETTLE_CAPACITY, SettleRecord};
 pub use trace::{TRACE_CAPACITY, TraceEvent, TraceRecord};
 pub use tx::Transmit;

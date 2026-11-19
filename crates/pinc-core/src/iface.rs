@@ -23,6 +23,7 @@ use pinc_transport::conn::PathId;
 use crate::endpoint::{MAX_IFACES, env, ep_impl};
 use crate::keepalive::RESUME_QUIET;
 use crate::slot::State;
+use crate::trace::trace;
 
 /// The name of a local interface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -92,6 +93,7 @@ ep_impl! {
                 continue;
             }
             if let Some(conn) = self.slots.get_mut(i).and_then(|s| s.conn.as_mut()) {
+                trace!(self, now, Iface { slot: i as u64, call: if down { 1 } else { 2 } });
                 let mut env = env!(self, now);
                 conn.set_link_down(&mut env, down);
             }
@@ -144,6 +146,7 @@ ep_impl! {
                     if let Some(st) = slot.m.paths.iter_mut().flatten().find(|st| st.id == lost) {
                         st.id = pid;
                     }
+                    trace!(self, now, Iface { slot: i as u64, call: 6 });
                     continue;
                 }
                 // The session already tracks a path to this peer from the new address: the old one is gone, and the
@@ -151,9 +154,12 @@ ep_impl! {
                 let mut env = env!(self, now);
                 let _ = conn.add_path(&mut env, pid, crate::commands::path_info(&remote, self.cfg.conn.interface_mtu));
                 let _ = conn.path_lost(lost);
+                trace!(self, now, Iface { slot: i as u64, call: 7 });
             }
             if wake && let Some(conn) = self.slots.get_mut(i).and_then(|s| s.conn.as_mut()) {
                 // The link went away and came back on the new address: the peer is woken on the new path.
+                trace!(self, now, Iface { slot: i as u64, call: 1 });
+                trace!(self, now, Iface { slot: i as u64, call: 2 });
                 let mut env = env!(self, now);
                 conn.set_link_down(&mut env, true);
                 conn.set_link_down(&mut env, false);
@@ -173,6 +179,7 @@ ep_impl! {
             let Some(conn) = slot.conn.as_mut() else { continue };
             slot.m.sleep_doubt = conn.recovery().pto_count() > 0 || self.dark;
             let mut env = env!(self, now);
+            trace!(self, now, Iface { slot: i as u64, call: 3 });
             conn.sleep(&mut env);
             self.settle(i, now);
         }
@@ -192,15 +199,71 @@ ep_impl! {
             }
             if moved || slot.m.sleep_doubt {
                 slot.m.sleep_doubt = false;
+                #[cfg(feature = "trace")]
+                {
+                    if slot.conn.is_some() {
+                        trace!(self, now, Iface { slot: i as u64, call: 5 });
+                    }
+                }
                 self.redial(i, now);
                 continue;
             }
             if let Some(conn) = slot.conn.as_mut() {
+                trace!(self, now, Iface { slot: i as u64, call: 4 });
                 let mut env = env!(self, now);
                 conn.wake(&mut env);
             }
             self.settle(i, now);
         }
+    }
+
+    /// The local address interface `id` names, if any.
+    #[cfg(feature = "trace")]
+    pub fn trace_iface(&self, id: usize) -> Option<SocketAddr> {
+        self.ifaces.get(id).copied().flatten()
+    }
+
+    /// The node's flags: lost its link (dark), suspended, moved while suspended, and the time keepalives stay quiet
+    /// until.
+    #[cfg(feature = "trace")]
+    pub const fn trace_iface_flags(&self) -> (bool, bool, bool, u64) {
+        (self.dark, self.suspended, self.moved, self.quiet_until)
+    }
+
+    /// Session slot `i`: its state (0 free, 1 handshaking, 2 established, 3 closing; 0 when not in use), its
+    /// generation, its sleep doubt, whether a probe timeout runs (`pto_count() > 0`; false without a connection) and
+    /// the addresses of its active path (None without one).
+    #[cfg(feature = "trace")]
+    #[allow(clippy::type_complexity, reason = "a probe for the trace test, read as one tuple")]
+    pub fn trace_iface_slot(&self, i: usize) -> Option<(u8, u32, bool, bool, Option<(SocketAddr, SocketAddr)>)> {
+        let s = self.slots.get(i)?;
+        let state = match (s.m.in_use, s.m.state) {
+            (false, _) => 0,
+            (true, State::Handshaking) => 1,
+            (true, State::Established) => 2,
+            (true, State::Closing) => 3,
+        };
+        let conn = s.conn.as_ref();
+        Some((
+            state,
+            s.m.generation,
+            s.m.sleep_doubt,
+            conn.is_some_and(|c| c.recovery().pto_count() > 0),
+            conn.and_then(pinc_transport::conn::Connection::active_path)
+                .and_then(|p| self.path_addrs(p)),
+        ))
+    }
+
+    /// The addresses of every path the connection of slot `i` holds: each entry `j` of the path table whose id
+    /// (`generation << 32 | j`) the connection has (`has_path`), in table order.
+    #[cfg(feature = "trace")]
+    pub fn trace_slot_paths(&self, i: usize) -> impl Iterator<Item = (SocketAddr, SocketAddr)> + '_ {
+        let conn = self.slots.get(i).and_then(|s| s.conn.as_ref());
+        (0..D).filter_map(move |j| {
+            let (key, generation) = self.paths.at_index(j)?;
+            let id = PathId(u64::from(*generation) << 32 | j as u64);
+            conn.is_some_and(|c| c.has_path(id)).then_some(*key)
+        })
     }
 }
 
