@@ -114,10 +114,10 @@ pub use path_trace::{PathsView, SlotView};
 pub use reasm::trace::{FragmentView, ReasmProbe, ReasmView};
 pub use send::Transmit;
 #[cfg(feature = "trace")]
-pub use send::trace::{PackKind, PackMode, PackProbe, PackRecord};
+pub use send::trace::{DgramRecord, PackKind, PackMode, PackProbe, PackRecord};
 pub use tables::Tables;
 #[cfg(feature = "trace")]
-pub use timer::trace::{CarrierView, TimerView};
+pub use timer::trace::{CarrierView, FinishView, TimerView};
 
 use self::cid::Cids;
 use self::ctl::Ctl;
@@ -234,6 +234,9 @@ pub struct Connection<
     /// The log of the packet builder (trace validation only).
     #[cfg(feature = "trace")]
     pack: send::trace::PackLog,
+    /// The log of the datagram builder (trace validation only).
+    #[cfg(feature = "trace")]
+    dgram: send::trace::DgramLog,
 }
 
 impl<'a, P, S, const N: usize, const C: usize, const F: usize, const NP: usize> Connection<'a, P, S, N, C, F, NP>
@@ -335,6 +338,8 @@ where
             fan_skip: false,
             #[cfg(feature = "trace")]
             pack: send::trace::PackLog::new(),
+            #[cfg(feature = "trace")]
+            dgram: send::trace::DgramLog::new(),
         })
     }
 

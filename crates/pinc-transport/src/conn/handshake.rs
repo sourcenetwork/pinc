@@ -163,35 +163,9 @@ impl Timing {
     }
 }
 
-/// How long an unestablished handshake lasts, on either side: 30 s, twice that on a thin node. An endpoint keeps a
-/// session whose peer is not authenticated yet for the same time, so a responder on a slow link still holds the session
-/// when the dialer's Finish arrives late.
-#[must_use]
-pub const fn connect_limit(thin: bool) -> u64 {
-    if thin { CONNECT_TIMEOUT * 2 } else { CONNECT_TIMEOUT }
-}
-
-/// How long an unestablished handshake lasts for a node that is thin or not and a responder that has answered or not:
-/// the connect limit, and at least [`RESPONDER_HOLD`] once the responder's flight went out. Nothing exceeds 60 s.
-#[must_use]
-pub const fn handshake_limit(thin: bool, answered: bool) -> u64 {
-    let base = connect_limit(thin);
-    if answered && base < RESPONDER_HOLD {
-        RESPONDER_HOLD
-    } else {
-        base
-    }
-}
-
-/// The first instant at which an unestablished handshake begun at `created` has run out: the limit is exceeded, not
-/// reached, so a session is still there at `created + limit` and gone one tick past it. The transport's own deadline
-/// and the endpoint's half-open sweep both ask this, so they cannot disagree.
-#[must_use]
-pub const fn handshake_end(created: u64, thin: bool, answered: bool) -> u64 {
-    created
-        .saturating_add(handshake_limit(thin, answered))
-        .saturating_add(1)
-}
+#[path = "handshake_limit.rs"]
+mod limit;
+pub use limit::{connect_limit, handshake_end, handshake_limit};
 
 /// One of the two state machines.
 #[allow(
@@ -302,7 +276,7 @@ impl Drop for Handshake {
     }
 }
 
-#[cfg(all(feature = "trace", feature = "alloc"))]
+#[cfg(feature = "trace")]
 #[path = "handshake_trace.rs"]
 mod trace;
 
@@ -384,6 +358,9 @@ pub(crate) struct Handshake {
     srtt: u64,
     /// The first wait before the Finish is resent: the probe timeout, at most [`FINISH_FIRST`].
     finish_first: u64,
+    /// The probe timeout `finish_sent` was given (trace validation only).
+    #[cfg(feature = "trace")]
+    finish_pto: u64,
     /// The first instant at which the unestablished handshake has run out (see [`Timing::connect_deadline`]).
     connect_at: Option<u64>,
     timed_out: bool,
@@ -451,6 +428,8 @@ impl Handshake {
             sends,
             srtt: 0,
             finish_first: FINISH_FIRST,
+            #[cfg(feature = "trace")]
+            finish_pto: 0,
             connect_at: Some(timing.connect_deadline(now)),
             timed_out: false,
             early: false,
@@ -610,12 +589,23 @@ impl Handshake {
         if self.client && self.stage == Stage::Finish {
             self.srtt = srtt;
             self.finish_first = FINISH_FIRST.min(pto);
+            #[cfg(feature = "trace")]
+            {
+                self.finish_pto = pto;
+            }
             self.retx_at = Some(now.saturating_add(self.finish_first));
             // The wait for the peer's confirmation counts from this instant too: the key answer that established the
             // session can come long after the last datagram or timer the handshake took.
             self.established = now;
             self.confirm_at = Some(self.timing.connect_deadline(now));
         }
+    }
+
+    /// The round trip a thin node waits on before it resends the Finish.
+    fn finish_rtt(&self) -> u64 {
+        self.srtt
+            .max(self.timing.node_peak_rtt.unwrap_or(0))
+            .max(self.timing.node_rtt.unwrap_or(0))
     }
 
     /// Update the node-level timing inputs. An unestablished handshake takes the connect limit they give, counted
@@ -749,16 +739,22 @@ impl Handshake {
     pub(crate) fn account(&mut self, len: usize, room: usize) -> usize {
         let done = self.tx_off >= self.tx_seg_end && self.tx_wrap.is_none();
         let before = self.tx_total_sent;
-        let pad = if done {
-            self.tx_min.saturating_sub(before + len).min(room)
-        } else {
-            0
-        };
+        let pad = self.pad_due(len).min(room);
         self.tx_total_sent = before + len + pad;
         if done && self.tx_total_sent >= self.tx_min {
             self.tx_active = false;
         }
         pad
+    }
+
+    /// The zero padding a datagram that carried `len` bytes of this flight owes before the room cuts it.
+    pub(crate) fn pad_due(&self, len: usize) -> usize {
+        let done = self.tx_off >= self.tx_seg_end && self.tx_wrap.is_none();
+        if done {
+            self.tx_min.saturating_sub(self.tx_total_sent + len)
+        } else {
+            0
+        }
     }
 
     /// Zero bytes still owed after the last fragment went out (a flight padded across datagrams).
@@ -922,11 +918,7 @@ impl Handshake {
                     .min(FINISH_CAP);
                 if self.timing.is_thin() {
                     // On a thin uplink the Finish is resent only after its answer could have arrived.
-                    let rtt = self
-                        .srtt
-                        .max(self.timing.node_peak_rtt.unwrap_or(0))
-                        .max(self.timing.node_rtt.unwrap_or(0));
-                    backoff.max(THIN_FINISH_MAX.min(rtt.saturating_mul(2)))
+                    backoff.max(THIN_FINISH_MAX.min(self.finish_rtt().saturating_mul(2)))
                 } else {
                     backoff
                 }

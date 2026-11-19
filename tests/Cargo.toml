@@ -1738,3 +1738,16 @@ path = "trace_wire_cbor.rs"
 [[test]]
 name = "trace_wire_cursor"
 path = "trace_wire_cursor.rs"
+
+[[test]]
+name = "trace_dgram_size"
+path = "trace_dgram_size.rs"
+
+[[test]]
+name = "trace_finish_resend"
+path = "trace_finish_resend.rs"
+
+[[test]]
+name = "trace_responder_limit"
+path = "trace_responder_limit.rs"
+

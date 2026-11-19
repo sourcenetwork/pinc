@@ -251,7 +251,31 @@ pub(super) mod trace {
         pub node: u64,
     }
 
+    /// The Finish resend state of a dialing handshake (cargo feature `trace`).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct FinishView {
+        /// The handshake is a dialer's in its Finish stage.
+        pub finish: bool,
+        /// The flights sent so far, the Finish's resends included.
+        pub sends: u32,
+        /// The first wait before the Finish is resent (ns).
+        pub first: u64,
+        /// The next resend (ns).
+        pub retx_at: Option<u64>,
+        /// The node is thin.
+        pub thin: bool,
+        /// The round trip a thin node waits on (ns).
+        pub rtt: u64,
+        /// The probe timeout `finish_sent` was given (ns), 0 before.
+        pub pto: u64,
+    }
+
     conn_impl! {
+        /// The Finish resend state of the handshake.
+        pub fn trace_finish(&self) -> FinishView {
+            self.hs.finish_view()
+        }
+
         /// What the last recovery timer read for the carrier rule, taken: `None` when no recovery timer ran since.
         pub fn trace_carrier_take(&mut self) -> Option<CarrierView> {
             self.life.carrier_probe.take()

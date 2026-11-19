@@ -105,7 +105,68 @@ impl PackMode {
     }
 }
 
+/// One call of `build_datagram`: its inputs and what it wrote (cargo feature `trace`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "independent observations of one datagram, recorded as the code holds them"
+)]
+pub struct DgramRecord {
+    /// The path's datagram size (`path_mtu`).
+    pub path_mtu: u16,
+    /// The interface MTU of the path; 1228 when the path is gone (the code's room is then `MIN_MTU`).
+    pub interface_mtu: u16,
+    /// Whether the path is IPv6 (false when the path is gone).
+    pub v6: bool,
+    /// The caller's buffer (`out.len()`).
+    pub out: usize,
+    /// `amp_room(ti)`, saturated at 1_000_000.
+    pub amp: usize,
+    /// The probe size, 0 for none.
+    pub probe: usize,
+    /// `whole_len() + FLIGHT_OVERHEAD` when the flight may leave split and whole, else 0.
+    pub flight: usize,
+    /// The zero padding the handshake owed this datagram: `padding_owed()` when no fragment was written, else
+    /// `pad_due(hs_len)`, read before the accounting.
+    pub pad_owed: usize,
+    /// The handshake fragment written.
+    pub hs: usize,
+    /// The application packet written.
+    pub app: usize,
+    /// The padding written.
+    pub pad: usize,
+    /// The length returned (0 for none).
+    pub len: usize,
+}
+
+/// The log of `build_datagram`.
+#[derive(Debug)]
+pub(crate) struct DgramLog {
+    /// Whether calls are recorded; off until [`Connection::trace_dgram_enable`].
+    pub(crate) on: bool,
+    pub(crate) log: Vec<DgramRecord>,
+}
+
+impl DgramLog {
+    pub(crate) const fn new() -> Self {
+        Self {
+            on: false,
+            log: Vec::new(),
+        }
+    }
+}
+
 conn_impl! {
+    /// Start recording the datagrams `build_datagram` writes (they are not recorded by default).
+    pub fn trace_dgram_enable(&mut self) {
+        self.dgram.on = true;
+    }
+
+    /// The calls recorded since the last call.
+    pub fn trace_dgram_take(&mut self) -> Vec<DgramRecord> {
+        core::mem::take(&mut self.dgram.log)
+    }
+
     /// Start recording the packets the builder seals (they are not recorded by default).
     pub fn trace_pack_enable(&mut self) {
         self.pack.on = true;

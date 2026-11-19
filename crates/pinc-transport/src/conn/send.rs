@@ -38,6 +38,7 @@ use crate::stream::{ControlFrame, StreamSource};
 pub(super) mod trace;
 
 mod close;
+mod dgram;
 mod repair;
 
 /// The datagram a [`Connection::poll_transmit`] call wrote into the caller's buffer.
@@ -227,6 +228,7 @@ conn_impl! {
         let now = env.now;
         let probe = self.probe_size(ti, now, out.len());
         let path_mtu = self.paths.get(ti).map_or(MIN_MTU, |p| p.mtu.current);
+        let mut note = self.dgram_note(ti, out.len(), probe, path_mtu);
         // A first flight that fits 1452 bytes with its framing (`FLIGHT_OVERHEAD`) and the interface's payload on this
         // path leaves whole, above the path's datagram size: a path that drops it costs one handshake resend, and the
         // resend is cut to the path's size. A longer flight is cut at the path's size from the start. A relay path
@@ -246,7 +248,7 @@ conn_impl! {
         let mtu = probe.unwrap_or(base).min(out.len());
         let max_len = mtu.min(self.amp_room(ti));
         if max_len < MIN_ROOM {
-            return None;
+            return self.dgram_end(note, [0; 3], None);
         }
         let window = out.get_mut(..max_len)?;
         let mut used = 0;
@@ -259,7 +261,8 @@ conn_impl! {
             let n = self.hs.padding_owed().min(max_len);
             window.get_mut(..n)?.fill(0);
             self.hs.account(0, n);
-            return self.finish_datagram(ti, n, now);
+            let r = self.finish_datagram(ti, n, now);
+            return self.dgram_end(note, [0, 0, n], r);
         }
         let can_app = self.can_build_app();
         // The packet behind the handshake ends at the path's datagram size; only an MTU probe is built larger.
@@ -271,18 +274,21 @@ conn_impl! {
             used += n;
         }
         if used == 0 {
-            return None;
+            return self.dgram_end(note, [0; 3], None);
         }
+        let mut pad = 0;
         if hs_len > 0 {
             let app = used - hs_len;
             let room = if app == 0 { max_len - used } else { 0 };
-            let pad = self.hs.account(hs_len, room);
+            self.dgram_owed(&mut note, hs_len);
+            pad = self.hs.account(hs_len, room);
             if pad > 0 {
                 window.get_mut(used..used + pad)?.fill(0);
                 used += pad;
             }
         }
-        self.finish_datagram(ti, used, now)
+        let r = self.finish_datagram(ti, used, now);
+        self.dgram_end(note, [hs_len, used - hs_len - pad, pad], r)
     }
 
     /// Count a datagram against both amplification budgets (its size and 48 bytes of overhead) and note the send.
