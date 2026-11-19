@@ -214,6 +214,15 @@ impl KeyStore for SoftwareStore {
             _ => Err(KeyStoreError::InvalidSealed),
         }
     }
+
+    fn refresh(&mut self, fresh: &mut dyn FnMut(&mut [u8; 32]) -> bool) {
+        if matches!(self.source, Source::Drbg(_)) {
+            let mut bytes = Zeroizing::new([0u8; 32]);
+            if fresh(&mut bytes) {
+                self.reseed(&bytes);
+            }
+        }
+    }
 }
 
 /// The first byte of a software-sealed value.

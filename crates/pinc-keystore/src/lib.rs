@@ -143,4 +143,8 @@ pub trait KeyStore: Send {
     /// # Errors
     /// [`KeyStoreError::InvalidSealed`] if the bytes are malformed or were altered; a backend failure otherwise.
     fn unseal(&mut self, sealed: &[u8]) -> Result<Zeroizing<Vec<u8>>>;
+
+    /// The caller offers fresh entropy. A store that draws from a generator the host seeded calls `fresh` once and,
+    /// if it returns true, mixes the 32 bytes in; a store with a source of its own does not call it.
+    fn refresh(&mut self, _fresh: &mut dyn FnMut(&mut [u8; 32]) -> bool) {}
 }

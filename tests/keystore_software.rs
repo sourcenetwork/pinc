@@ -239,3 +239,50 @@ fn os_random_fills_and_differs() {
     assert_ne!(a, b);
     assert_ne!(a, [0; 32]);
 }
+
+/// The 32 bytes the next draw of `store` gives.
+fn next_draw(store: &mut SoftwareStore) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    store.random(&mut out).unwrap();
+    out
+}
+
+#[test]
+fn refresh_changes_what_a_generator_store_gives_next() {
+    let (mut plain, mut a, mut b) = (seeded(7), seeded(7), seeded(7));
+    a.refresh(&mut |out| {
+        *out = [1; 32];
+        true
+    });
+    b.refresh(&mut |out| {
+        *out = [1; 32];
+        true
+    });
+    let plain = next_draw(&mut plain);
+    assert_ne!(next_draw(&mut a), plain, "the refreshed store left its stream");
+    assert_eq!(next_draw(&mut seeded_refreshed(1)), next_draw(&mut b), "the same bytes agree");
+    // A refusal mixes nothing in.
+    let mut c = seeded(7);
+    c.refresh(&mut |_| false);
+    assert_eq!(next_draw(&mut c), plain);
+}
+
+fn seeded_refreshed(fresh: u8) -> SoftwareStore {
+    let mut s = seeded(7);
+    s.refresh(&mut |out| {
+        *out = [fresh; 32];
+        true
+    });
+    s
+}
+
+#[test]
+fn refresh_never_asks_for_bytes_for_an_operating_system_store() {
+    let mut store = SoftwareStore::new().unwrap();
+    let mut calls = 0;
+    store.refresh(&mut |_| {
+        calls += 1;
+        true
+    });
+    assert_eq!(calls, 0);
+}
