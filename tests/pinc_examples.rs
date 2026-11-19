@@ -16,6 +16,8 @@
 mod defradb_backend;
 #[path = "../crates/pinc/examples/echo.rs"]
 mod echo;
+#[path = "../crates/pinc/examples/platform.rs"]
+mod platform;
 #[path = "../crates/pinc/examples/transfer.rs"]
 mod transfer;
 
@@ -34,4 +36,9 @@ async fn transfer_example() {
 #[nuclei::test]
 async fn defradb_backend_example() {
     assert_eq!(defradb_backend::run().await.unwrap(), b"pushlog/payload");
+}
+
+#[test]
+fn platform_example() {
+    assert_eq!(platform::run(b"hello, pinc").unwrap(), b"hello, pinc");
 }

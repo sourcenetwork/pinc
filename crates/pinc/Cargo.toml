@@ -57,3 +57,7 @@ required-features = ["std"]
 [[example]]
 name = "relay"
 required-features = ["std"]
+
+[[example]]
+name = "platform"
+required-features = ["std"]
