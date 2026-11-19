@@ -42,6 +42,8 @@ pub use initiator::{Initiator, InitiatorParams};
 pub use keyroll::{Answered, Completed, Rekey, Roll};
 pub use keys::{KeyRequest, KeyResponse, PrekeyInfo, PrekeyPolicy, SoftKeys, SoftPrekeys, prekey_hash};
 pub use message::{InitialForm, min_initial_len, reply_len};
+#[cfg(feature = "trace")]
+pub use outbox::{OutboxProbe, OutboxView};
 pub use record::{HeaderKey, Limits, PacketKey, RecordError};
 pub use responder::{Responder, ResponderConfig, ResponderStores};
 pub use schedule::{roll_secret, sub_session_secret};

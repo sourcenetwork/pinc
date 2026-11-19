@@ -1508,8 +1508,16 @@ name = "mbt_facade_open"
 path = "mbt_facade_open.rs"
 
 [[test]]
+name = "mbt_outbox"
+path = "mbt_outbox.rs"
+
+[[test]]
 name = "mbt_portmap_fallback"
 path = "mbt_portmap_fallback.rs"
+
+[[test]]
+name = "mbt_soft_prekeys"
+path = "mbt_soft_prekeys.rs"
 
 [[test]]
 name = "trace_dag_block"
@@ -1546,6 +1554,10 @@ path = "trace_portmap_text.rs"
 [[test]]
 name = "trace_portmap_upnp"
 path = "trace_portmap_upnp.rs"
+
+[[test]]
+name = "trace_sec_ids"
+path = "trace_sec_ids.rs"
 
 [[test]]
 name = "trace_table_array"

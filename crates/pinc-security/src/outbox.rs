@@ -175,3 +175,155 @@ impl Outbox {
         self.failed.take().map(|f| Output::Event(Event::Failed(f)))
     }
 }
+
+/// A test handle on an [`Outbox`], for the model-based tests of the output queue (`MbtOutbox.tla`).
+#[cfg(feature = "trace")]
+pub struct OutboxProbe(Outbox);
+
+/// What an [`Outbox`] holds, as the model's state reads it.
+#[cfg(feature = "trace")]
+#[derive(Debug, Clone)]
+pub struct OutboxView {
+    /// The length of the message in the buffer.
+    pub len: usize,
+    /// The first two bytes of the buffer, whatever the length.
+    pub head: [u8; 2],
+    /// The least size of the datagrams of the message.
+    pub min_len: usize,
+    /// Whether the message is queued.
+    pub send: bool,
+    /// The outstanding request: whether it is a decapsulation, and its key handle.
+    pub request: Option<(bool, KeyHandle)>,
+    /// Whether the request was handed out.
+    pub announced: bool,
+    /// The early keys queued.
+    pub early: Option<EarlyKeys>,
+    /// The established event queued.
+    pub established: Option<Established>,
+    /// Whether the resume rejection is queued.
+    pub resume_rejected: bool,
+    /// The failure queued.
+    pub failed: Option<Failure>,
+}
+
+#[cfg(feature = "trace")]
+const fn key_of(p: &Pending) -> KeyHandle {
+    match p {
+        Pending::Sign { key, .. } | Pending::Decap { key, .. } => *key,
+    }
+}
+
+#[cfg(feature = "trace")]
+impl Default for OutboxProbe {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(feature = "trace")]
+impl OutboxProbe {
+    /// An empty queue.
+    pub const fn new() -> Self {
+        Self(Outbox::new())
+    }
+
+    /// Build a message of `bytes`; with `fail` the closure fails after writing them, as a write that fails midway does.
+    ///
+    /// # Errors
+    /// [`Failure::BadPayload`] when `fail` is set.
+    pub fn build(&mut self, min_len: usize, bytes: &[u8], fail: bool) -> Result<(), Failure> {
+        self.0.build(min_len, |w| {
+            w.put_slice(bytes)?;
+            if fail {
+                Err(WireError::Unexpected("probe"))
+            } else {
+                Ok(())
+            }
+        })
+    }
+
+    /// Forget the message in the buffer.
+    pub const fn clear_message(&mut self) {
+        self.0.clear_message();
+    }
+
+    /// Queue the message in the buffer again.
+    pub const fn resend(&mut self) {
+        self.0.resend();
+    }
+
+    /// Queue the resume rejection.
+    pub const fn set_resume_rejected(&mut self) {
+        self.0.set_resume_rejected();
+    }
+
+    /// Replace everything queued with `failure`.
+    pub fn fail(&mut self, failure: Failure) {
+        self.0.fail(failure);
+    }
+
+    /// Set the outstanding request: a decapsulation when `decap`, else a signature of Ed25519, under `key`.
+    pub fn set_request(&mut self, decap: bool, key: KeyHandle) {
+        self.0.set_request(if decap {
+            Pending::Decap {
+                key,
+                ct: [0; KEM_CIPHERTEXT_LEN],
+            }
+        } else {
+            Pending::Sign {
+                key,
+                alg: IdentityAlg::Ed25519,
+                msg: [0; SIGNATURE_MESSAGE_LEN],
+            }
+        });
+    }
+
+    /// Take the outstanding request; its key handle.
+    pub fn take_request(&mut self) -> Option<KeyHandle> {
+        self.0.take_request().as_ref().map(key_of)
+    }
+
+    /// The key handle of the outstanding request.
+    pub fn pending(&self) -> Option<KeyHandle> {
+        self.0.pending().map(key_of)
+    }
+
+    /// Queue early keys.
+    pub fn set_early(&mut self, keys: EarlyKeys) {
+        self.0.early = Some(keys);
+    }
+
+    /// Queue the established event.
+    pub fn set_established(&mut self, e: Established) {
+        self.0.established = Some(e);
+    }
+
+    /// The next output of the queue.
+    pub fn poll(&mut self) -> Option<Output<'_>> {
+        self.0.poll()
+    }
+
+    /// What the queue holds.
+    pub fn view(&self) -> OutboxView {
+        let o = &self.0;
+        OutboxView {
+            len: o.len,
+            head: o
+                .msg
+                .get(..2)
+                .and_then(|h| <[u8; 2]>::try_from(h).ok())
+                .unwrap_or([0; 2]),
+            min_len: o.min_len,
+            send: o.send,
+            request: o
+                .request
+                .as_ref()
+                .map(|p| (matches!(p, Pending::Decap { .. }), key_of(p))),
+            announced: o.announced,
+            early: o.early.clone(),
+            established: o.established.clone(),
+            resume_rejected: o.resume_rejected,
+            failed: o.failed,
+        }
+    }
+}
