@@ -164,7 +164,7 @@ fn write(net: &mut CoreNet, k: usize, session: SessionId, n: usize) -> bool {
         return false;
     };
     let Value::Stream(stream) = rep.value else { return false };
-    net.nodes[k]
+    let wrote = net.nodes[k]
         .cmd(
             now,
             Command::Write {
@@ -173,7 +173,9 @@ fn write(net: &mut CoreNet, k: usize, session: SessionId, n: usize) -> bool {
                 data: &data,
             },
         )
-        .is_ok()
+        .is_ok();
+    // End the stream so its slot is free for the next write.
+    wrote && net.nodes[k].cmd(now, Command::Finish { session, stream }).is_ok()
 }
 
 fn command(net: &mut CoreNet, k: usize, c: Command<'_, pinc_transport::stream::NoSource>) -> bool {

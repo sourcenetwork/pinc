@@ -1751,3 +1751,11 @@ path = "trace_finish_resend.rs"
 name = "trace_responder_limit"
 path = "trace_responder_limit.rs"
 
+[[test]]
+name = "trace_core_route_index"
+path = "trace_core_route_index.rs"
+
+[[test]]
+name = "trace_core_backlog"
+path = "trace_core_backlog.rs"
+

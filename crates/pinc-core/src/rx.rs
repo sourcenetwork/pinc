@@ -537,6 +537,8 @@ pub struct HalfOpenSlot {
     pub counted: bool,
     /// The deadline the session holds in the endpoint's heap.
     pub deadline: Option<u64>,
+    /// A server session the host has not taken yet (`session_taken`), counted in `NodeStats::owed`.
+    pub owed: bool,
 }
 
 #[cfg(feature = "trace")]
@@ -551,6 +553,7 @@ ep_impl! {
             life: s.half_open_life(self.rtt.thin_node()),
             counted: s.m.half_open,
             deadline: self.heap.deadline(i),
+            owed: s.m.owed,
         })
     }
 
@@ -612,5 +615,36 @@ pub(crate) fn addr_key(a: &SocketAddr) -> u64 {
             }
             x
         }
+    }
+}
+
+/// The route-table bookkeeping of one slot, for trace validation (cargo feature `trace`).
+#[cfg(feature = "trace")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RouteView {
+    /// The slot holds a session.
+    pub live: bool,
+    /// The remote address of the session's active path when it is validated and direct.
+    pub direct: Option<core::net::SocketAddr>,
+    /// The address the slot's entry in the table is under.
+    pub route: Option<core::net::SocketAddr>,
+}
+
+#[cfg(feature = "trace")]
+ep_impl! {
+    /// The route-table view of slot `i`, `None` past the last slot (cargo feature `trace`).
+    #[must_use]
+    pub fn route_view(&self, i: usize) -> Option<RouteView> {
+        let s = self.slots.get(i)?;
+        Some(RouteView {
+            live: s.m.in_use,
+            direct: self.direct_remote(i),
+            route: s.m.route,
+        })
+    }
+
+    /// The entries of the table of sessions by address, oldest first, as (address, slot) (cargo feature `trace`).
+    pub fn route_entries(&self) -> impl Iterator<Item = (core::net::SocketAddr, usize)> + '_ {
+        self.by_route.iter().map(|(a, i)| (*a, *i as usize))
     }
 }
