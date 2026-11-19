@@ -23,10 +23,10 @@ where
     /// Run `f` with the arena and the store moved into the connection's pool, and move them back after.
     pub(super) fn with_lent<R>(&mut self, lent: &mut Lent<'_, 'a>, f: impl FnOnce(&mut Self) -> R) -> R {
         self.pool.lend_spill(core::mem::take(lent.spill));
-        self.pool.lend_store(core::mem::take(lent.store));
+        self.pool.swap_store(lent.store);
         let r = f(self);
         *lent.spill = self.pool.return_spill();
-        *lent.store = self.pool.return_store();
+        self.pool.swap_store(lent.store);
         r
     }
 }

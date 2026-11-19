@@ -64,9 +64,14 @@ const NONE: u32 = u32::MAX;
 #[derive(Debug, Default)]
 pub struct ChunkStore;
 
-/// The chunks of one endpoint, owned by it and lent to its sessions' calls.
+/// The chunks of one endpoint, owned by it and lent to its sessions' calls. One pointer, so lending it for every call
+/// moves a word, and the empty store a pool holds between calls is nothing at all.
 #[cfg(feature = "alloc")]
-pub struct ChunkStore {
+#[derive(Default)]
+pub struct ChunkStore(Option<alloc::boxed::Box<Store>>);
+
+#[cfg(feature = "alloc")]
+struct Store {
     memory: alloc::boxed::Box<[u8]>,
     /// The mark of the session that last held each chunk; 0 for one never handed out.
     marks: alloc::boxed::Box<[u64]>,
@@ -99,26 +104,137 @@ pub struct ChunkStore {
 impl core::fmt::Debug for ChunkStore {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ChunkStore")
-            .field("stats", &self.stats)
+            .field("stats", &self.stats())
             .finish_non_exhaustive()
     }
 }
 
-/// An empty store, which allocates nothing: what a pool holds between calls, and what an endpoint whose slots are lent
-/// to it lends.
-#[cfg(feature = "alloc")]
-impl Default for ChunkStore {
-    fn default() -> Self {
-        Self::new(0, 0, 0)
-    }
-}
-
+/// The empty store ([`ChunkStore::default`]), which allocates nothing: what a pool holds between calls, and what an
+/// endpoint whose slots are lent to it lends. It has no chunk, reserves nothing and hands out no mark (0, so a pool
+/// lent it takes its mark from the real store later).
 #[cfg(feature = "alloc")]
 impl ChunkStore {
     /// A store of `chunks` chunks for `slots` slots whose pools hold up to `pool_chunks` each: one zeroed allocation
     /// of `chunks * CHUNK_SIZE` bytes, which the system commits only as it is used, and every table at its full size.
     /// The floors of all the slots are set aside now; `chunks` below them leaves the slots past what fits with none.
     pub fn new(chunks: usize, slots: usize, pool_chunks: usize) -> Self {
+        Self(Some(alloc::boxed::Box::new(Store::new(chunks, slots, pool_chunks))))
+    }
+
+    /// What the store holds now.
+    pub fn stats(&self) -> StoreStats {
+        self.0.as_ref().map_or_else(StoreStats::default, |s| s.stats)
+    }
+
+    /// Count a frame a pool over the store held back for want of a chunk: the first bytes of a peer stream on soft
+    /// credit when `first`, inside a reserved window otherwise.
+    pub fn note_shortage(&mut self, first: bool) {
+        if let Some(s) = &mut self.0 {
+            s.note_shortage(first);
+        }
+    }
+
+    /// The floor every slot keeps.
+    pub fn floor(&self) -> u32 {
+        self.0.as_ref().map_or(0, |s| s.floor)
+    }
+
+    /// Slot `slot`'s reservation: its floor and what it reserved above it.
+    pub fn reserved(&self, slot: usize) -> u32 {
+        self.0.as_ref().map_or(0, |s| s.reserved(slot))
+    }
+
+    /// The burst room no slot has reserved, in chunks.
+    pub fn burst_left(&self) -> u64 {
+        self.0.as_ref().map_or(0, |s| s.burst_left)
+    }
+
+    /// The burst room slot `slot` may still reserve: all of it while no slot waits or when it is the oldest waiter,
+    /// none otherwise.
+    pub fn burst_for(&self, slot: usize) -> u64 {
+        self.0.as_ref().map_or(0, |s| s.burst_for(slot))
+    }
+
+    /// Grow slot `slot`'s reservation toward `want` chunks, as far as the burst room allows; its reservation after.
+    /// While slots wait, only the oldest may grow, so no slot passes the queue. A growth that is not covered in full
+    /// counts as full.
+    pub fn grow(&mut self, slot: usize, want: u32) -> u32 {
+        self.0.as_mut().map_or(0, |s| s.grow(slot, want))
+    }
+
+    /// Lower slot `slot`'s reservation to `keep` chunks, never below its floor, and give the room to the waiters.
+    pub fn shrink(&mut self, slot: usize, keep: u32) {
+        if let Some(s) = &mut self.0 {
+            s.shrink(slot, keep);
+        }
+    }
+
+    /// Give back everything slot `slot` reserved above its floor and take it out of the queue: its session ended.
+    pub fn release(&mut self, slot: usize) {
+        if let Some(s) = &mut self.0 {
+            s.release(slot);
+        }
+    }
+
+    /// Queue slot `slot` until its reservation can reach `want` chunks.
+    pub fn wait(&mut self, slot: usize, want: u32) {
+        if let Some(s) = &mut self.0 {
+            s.wait(slot, want);
+        }
+    }
+
+    /// Take slot `slot` out of the queue.
+    pub fn leave(&mut self, slot: usize) {
+        if let Some(s) = &mut self.0 {
+            s.leave(slot);
+        }
+    }
+
+    /// Whether slot `slot` waits for room.
+    pub fn queued(&self, slot: usize) -> bool {
+        self.0.as_ref().is_some_and(|s| s.queued(slot))
+    }
+
+    /// The next slot given the room it waited for, oldest first, to be told to grant again.
+    pub fn pop_ready(&mut self) -> Option<usize> {
+        self.0.as_mut()?.pop_ready()
+    }
+
+    /// A mark no session of this store has had; 0 from the empty store.
+    pub fn new_mark(&mut self) -> u64 {
+        self.0.as_mut().map_or(0, |s| s.new_mark())
+    }
+
+    /// Hand out a chunk to the session marked `mark`, zeroed when another session held it last. The caller holds a
+    /// reservation for it, so the store has one.
+    pub fn take(&mut self, mark: u64) -> Option<u32> {
+        self.0.as_mut()?.take(mark)
+    }
+
+    /// Take chunk `id` back; false for a chunk this store did not hand out (an empty store, lent where none was, or a
+    /// number past every chunk taken so far). Crate-private: only a pool gives back, and it clears its own copy of the
+    /// number first, so a chunk comes back once.
+    pub(crate) fn give(&mut self, id: u32) -> bool {
+        self.0.as_mut().is_some_and(|s| s.give(id))
+    }
+
+    /// The bytes of chunk `id`.
+    pub fn chunk(&self, id: u32) -> Option<&RawChunk> {
+        self.0.as_ref()?.chunk(id)
+    }
+
+    /// The bytes of chunk `id`, writable.
+    pub fn chunk_mut(&mut self, id: u32) -> Option<&mut RawChunk> {
+        self.0.as_mut()?.chunk_mut(id)
+    }
+}
+
+#[cfg(feature = "alloc")]
+impl Store {
+    /// A store of `chunks` chunks for `slots` slots whose pools hold up to `pool_chunks` each: one zeroed allocation
+    /// of `chunks * CHUNK_SIZE` bytes, which the system commits only as it is used, and every table at its full size.
+    /// The floors of all the slots are set aside now; `chunks` below them leaves the slots past what fits with none.
+    fn new(chunks: usize, slots: usize, pool_chunks: usize) -> Self {
         let chunks = chunks.min(NONE as usize - 1);
         let slots = slots.min(NONE as usize - 1);
         let floor = u32::try_from(floor_chunks(pool_chunks)).unwrap_or(NONE);
@@ -150,14 +266,9 @@ impl ChunkStore {
         }
     }
 
-    /// What the store holds now.
-    pub const fn stats(&self) -> StoreStats {
-        self.stats
-    }
-
     /// Count a frame a pool over the store held back for want of a chunk: the first bytes of a peer stream on soft
     /// credit when `first`, inside a reserved window otherwise.
-    pub const fn note_shortage(&mut self, first: bool) {
+    const fn note_shortage(&mut self, first: bool) {
         if first {
             self.stats.shortage_first += 1;
         } else {
@@ -165,24 +276,14 @@ impl ChunkStore {
         }
     }
 
-    /// The floor every slot keeps.
-    pub const fn floor(&self) -> u32 {
-        self.floor
-    }
-
     /// Slot `slot`'s reservation: its floor and what it reserved above it.
-    pub fn reserved(&self, slot: usize) -> u32 {
+    fn reserved(&self, slot: usize) -> u32 {
         self.above.get(slot).map_or(0, |a| self.floor.saturating_add(*a))
-    }
-
-    /// The burst room no slot has reserved, in chunks.
-    pub const fn burst_left(&self) -> u64 {
-        self.burst_left
     }
 
     /// The burst room slot `slot` may still reserve: all of it while no slot waits or when it is the oldest waiter,
     /// none otherwise.
-    pub fn burst_for(&self, slot: usize) -> u64 {
+    fn burst_for(&self, slot: usize) -> u64 {
         if self.head == NONE || self.head as usize == slot {
             self.burst_left
         } else {
@@ -193,7 +294,7 @@ impl ChunkStore {
     /// Grow slot `slot`'s reservation toward `want` chunks, as far as the burst room allows; its reservation after.
     /// While slots wait, only the oldest may grow, so no slot passes the queue. A growth that is not covered in full
     /// counts as full.
-    pub fn grow(&mut self, slot: usize, want: u32) -> u32 {
+    fn grow(&mut self, slot: usize, want: u32) -> u32 {
         let have = self.reserved(slot);
         if want > have {
             let more = u64::from(want - have);
@@ -208,7 +309,7 @@ impl ChunkStore {
     }
 
     /// Lower slot `slot`'s reservation to `keep` chunks, never below its floor, and give the room to the waiters.
-    pub fn shrink(&mut self, slot: usize, keep: u32) {
+    fn shrink(&mut self, slot: usize, keep: u32) {
         let keep = keep.max(self.floor);
         let have = self.reserved(slot);
         if keep < have
@@ -222,7 +323,7 @@ impl ChunkStore {
     }
 
     /// Give back everything slot `slot` reserved above its floor and take it out of the queue: its session ended.
-    pub fn release(&mut self, slot: usize) {
+    fn release(&mut self, slot: usize) {
         self.leave(slot);
         self.shrink(slot, 0);
     }
@@ -231,7 +332,7 @@ impl ChunkStore {
     /// A slot already queued keeps its place and takes the new want. A slot whose reservation already covers the want
     /// waits only for its own chunks to come back, which its own packets see, so it leaves the queue: the store would
     /// otherwise hand it nothing and wake it, over and over.
-    pub fn wait(&mut self, slot: usize, want: u32) {
+    fn wait(&mut self, slot: usize, want: u32) {
         let s = slot as u32;
         let cap = u32::try_from(u64::from(self.floor) + self.burst_total).unwrap_or(NONE);
         let want = want.min(cap);
@@ -255,7 +356,7 @@ impl ChunkStore {
     }
 
     /// Take slot `slot` out of the queue, if it is in it.
-    pub fn leave(&mut self, slot: usize) {
+    fn leave(&mut self, slot: usize) {
         if !self.queued(slot) {
             return;
         }
@@ -272,12 +373,12 @@ impl ChunkStore {
     }
 
     /// Whether slot `slot` waits for room.
-    pub fn queued(&self, slot: usize) -> bool {
+    fn queued(&self, slot: usize) -> bool {
         self.head as usize == slot || self.prev.get(slot).is_some_and(|p| *p != NONE)
     }
 
     /// The next slot whose wanted room was reserved for it while it waited; the endpoint has its session grant again.
-    pub fn pop_ready(&mut self) -> Option<usize> {
+    fn pop_ready(&mut self) -> Option<usize> {
         if self.ready_len == 0 {
             return None;
         }
@@ -314,7 +415,7 @@ impl ChunkStore {
     }
 
     /// A mark no session of this store has had.
-    pub fn new_mark(&mut self) -> u64 {
+    fn new_mark(&mut self) -> u64 {
         let m = self.next_mark;
         self.next_mark = self.next_mark.wrapping_add(1).max(1);
         m
@@ -322,7 +423,7 @@ impl ChunkStore {
 
     /// Hand out a chunk to the session marked `mark`, zeroed when another session held it last. The caller holds a
     /// reservation for it, so the store has one.
-    pub fn take(&mut self, mark: u64) -> Option<u32> {
+    fn take(&mut self, mark: u64) -> Option<u32> {
         let id = if let Some(id) = self.free.pop() {
             id
         } else if (self.fresh as usize) < self.marks.len() {
@@ -344,7 +445,7 @@ impl ChunkStore {
     /// number past every chunk taken so far). Crate-private: only a pool gives back, and it clears its own copy of the
     /// number first, so a chunk comes back once. A debug build also checks that the chunk is not already free.
     // vertexia: the double-give check is debug-only (an O(free) scan); a per-chunk held bit if it must hold in release.
-    pub(crate) fn give(&mut self, id: u32) -> bool {
+    fn give(&mut self, id: u32) -> bool {
         debug_assert!(!self.free.contains(&id), "chunk {id} given back twice");
         let ok = id < self.fresh && self.free.len() < self.free.capacity();
         if ok {
@@ -355,12 +456,12 @@ impl ChunkStore {
     }
 
     /// The bytes of chunk `id`.
-    pub fn chunk(&self, id: u32) -> Option<&RawChunk> {
+    fn chunk(&self, id: u32) -> Option<&RawChunk> {
         self.memory.as_chunks().0.get(id as usize)
     }
 
     /// The bytes of chunk `id`, writable.
-    pub fn chunk_mut(&mut self, id: u32) -> Option<&mut RawChunk> {
+    fn chunk_mut(&mut self, id: u32) -> Option<&mut RawChunk> {
         self.memory.as_chunks_mut().0.get_mut(id as usize)
     }
 }

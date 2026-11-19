@@ -24,12 +24,17 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
     /// many first charges as [`admit_fit`] allows of those that fit in the pool bytes left beside a first charge for
     /// each open stream ([`Streams::admitted_charge`]).
     pub(super) fn admit_room(&self, mem: Mem<'_, '_>) -> u64 {
+        self.admit_room_beside(mem, self.admitted_charge())
+    }
+
+    /// [`admit_room`](Self::admit_room) with the open streams' [`admitted_charge`](Self::admitted_charge) already summed.
+    fn admit_room_beside(&self, mem: Mem<'_, '_>, charge: u64) -> u64 {
         let free = self.free();
         let cap = self.max_remote.min((N as u64 / 2).max(1));
         // The credit is a soft promise, measured against what the store could still give: a credited stream takes no
         // chunk until its data arrives, and data that finds none is held back and sent again, so a quiet session
         // reserves only its floor and leaves the rest of the store to others.
-        let fit = mem.room_bytes().saturating_sub(self.admitted_charge()) / self.first_charge();
+        let fit = mem.room_bytes().saturating_sub(charge) / self.first_charge();
         cap.saturating_sub(self.remote_live).min(free).min(admit_fit(fit))
     }
 
@@ -38,8 +43,10 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
     // changed pool or slot count if a profile shows it with many streams.
     pub(super) fn refresh_admit(&mut self, pool: &mut BufferPool<'_>) {
         // The open streams' first charges are reserved; the credit beside them is only measured (`admit_room`).
-        pool.make_room(self.admitted_charge());
-        let (admitted, room) = (self.admitted(), self.admit_room(pool.mem()));
+        // One scan of the open streams: this runs for every datagram the connection writes.
+        let charge = self.admitted_charge();
+        pool.make_room(charge);
+        let (admitted, room) = (self.admitted(), self.admit_room_beside(pool.mem(), charge));
         self.admit.update(admitted, room);
     }
 

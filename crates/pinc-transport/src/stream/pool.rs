@@ -199,13 +199,20 @@ impl<'p> BufferPool<'p> {
     /// session takes its mark the first time.
     #[cfg_attr(not(feature = "alloc"), allow(unused_mut))]
     pub fn lend_store(&mut self, mut store: ChunkStore) {
+        self.swap_store(&mut store);
+    }
+
+    /// Exchange the store the pool holds with `store`: lend the endpoint's store for a call, and exchange again to take
+    /// it back. Cheaper than [`lend_store`](Self::lend_store) and [`return_store`](Self::return_store) on a path that
+    /// runs for every datagram: nothing is built or dropped. A pool's session takes its mark the first time.
+    pub fn swap_store(&mut self, store: &mut ChunkStore) {
+        core::mem::swap(&mut self.store, store);
         #[cfg(feature = "alloc")]
         if let Slab::Store(s) = &mut self.slab
             && s.mark == 0
         {
-            s.mark = store.new_mark();
+            s.mark = self.store.new_mark();
         }
-        self.store = store;
     }
 
     /// The store [`lend_store`](Self::lend_store) handed in, or an empty one if none was.
