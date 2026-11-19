@@ -1,5 +1,5 @@
 //! Trace generation for the relay: seeded random runs of the real `Relay` through its public API, recorded as ndjson
-//! (`connect.ndjson`) for the TLA+ trace check (`TraceConnect.tla`) and the Lean replay (`Vinc/TraceConnect.lean`).
+//! (`connect.ndjson`) for the TLA+ trace check (`TraceConnect.tla`) and the Lean replay (`Pinc/TraceConnect.lean`).
 //!
 //! A run is one relay of three session slots, four record slots and a mailbox of two members, with six nodes that open
 //! carriers (four of them hold keys, so they sign records and sleep notices), three peer relays and an unknown
@@ -20,7 +20,7 @@
 //! What is not covered: a record or notice that is malformed (the record and notice codecs have their own checks), the
 //! lookup and address discovery answers, the relay's own record and its republish timer. Signatures are an oracle: the
 //! trace says whether a record or notice was validly signed for this relay by its node.
-//! The trace is written to the directory in `VINC_TRACE_DIR` when it is set; otherwise nothing is written.
+//! The trace is written to the directory in `PINC_TRACE_DIR` when it is set; otherwise nothing is written.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -43,15 +43,15 @@ mod connect_common;
 use std::fmt::Write as _;
 
 use connect_common::{addr, ed, id, nid, notice, record_bytes};
-use vinc_connect::carrier::Frame;
-use vinc_connect::relay::datagram::Datagram;
-use vinc_connect::relay::sleep::SleepError;
-use vinc_connect::relay::table::Table;
-use vinc_connect::relay::{
+use pinc_connect::carrier::Frame;
+use pinc_connect::relay::datagram::Datagram;
+use pinc_connect::relay::sleep::SleepError;
+use pinc_connect::relay::table::Table;
+use pinc_connect::relay::{
     CloseReason, Config, Effect, Quota, RecordOrigin, Reject, Relay, Route, SessionId, Sink, Trace, UdpTarget,
 };
-use vinc_crypto::{Keypair, NodeId};
-use vinc_tests::SplitMix64;
+use pinc_crypto::{Keypair, NodeId};
+use pinc_tests::SplitMix64;
 
 const SEC: u64 = 1_000_000_000;
 
@@ -753,31 +753,31 @@ fn the_relay_records_its_trace() {
         (11, 0, 0, 0, 1, 0),
     ];
     run::<4096>(24, 100_000, &STEP_OVER, &mut out, &mut cov, &mut cache);
-    assert!(vinc_tests::soaking() || cov.forwarded > 0, "no forward");
-    assert!(vinc_tests::soaking() || cov.mailboxed > 0, "nothing mailboxed");
-    assert!(vinc_tests::soaking() || cov.quota > 0, "no quota drop");
-    assert!(vinc_tests::soaking() || cov.expired > 0, "no session expiry");
-    assert!(vinc_tests::soaking() || cov.fwdback > 0, "no reply route learnt");
-    assert!(vinc_tests::soaking() || cov.wake > 0, "no wake-up");
-    assert!(vinc_tests::soaking() || cov.held_out > 0, "no held packet delivered");
-    assert!(vinc_tests::soaking() || cov.stale_copy > 0, "no tunnel packet");
+    assert!(pinc_tests::soaking() || cov.forwarded > 0, "no forward");
+    assert!(pinc_tests::soaking() || cov.mailboxed > 0, "nothing mailboxed");
+    assert!(pinc_tests::soaking() || cov.quota > 0, "no quota drop");
+    assert!(pinc_tests::soaking() || cov.expired > 0, "no session expiry");
+    assert!(pinc_tests::soaking() || cov.fwdback > 0, "no reply route learnt");
+    assert!(pinc_tests::soaking() || cov.wake > 0, "no wake-up");
+    assert!(pinc_tests::soaking() || cov.held_out > 0, "no held packet delivered");
+    assert!(pinc_tests::soaking() || cov.stale_copy > 0, "no tunnel packet");
     assert!(
-        vinc_tests::soaking() || cov.heard_deliv > 0,
+        pinc_tests::soaking() || cov.heard_deliv > 0,
         "no held packet delivered by a heard packet"
     );
     assert!(
-        vinc_tests::soaking() || cov.tunnel_held > 0,
+        pinc_tests::soaking() || cov.tunnel_held > 0,
         "no held packet delivered down the tunnel"
     );
     assert!(
-        vinc_tests::soaking() || cov.refused_held > 0,
+        pinc_tests::soaking() || cov.refused_held > 0,
         "no held packet kept for a tunnel that was not ready"
     );
     assert!(
-        vinc_tests::soaking() || cov.stepped_over > 0,
+        pinc_tests::soaking() || cov.stepped_over > 0,
         "no release stepped over a held message too long for the route"
     );
-    let Some(dir) = std::env::var_os("VINC_TRACE_DIR") else {
+    let Some(dir) = std::env::var_os("PINC_TRACE_DIR") else {
         return;
     };
     let dir = std::path::PathBuf::from(dir);

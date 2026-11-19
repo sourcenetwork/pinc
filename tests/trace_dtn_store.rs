@@ -1,6 +1,6 @@
 //! Trace generation for the charged store: seeded random runs of the real `Ledger` through its public API (`admit`,
 //! `expire`, `release`, `reclass`, `iter`, `used`), recorded as ndjson for the TLA+ trace check (`TraceDtnStore.tla`)
-//! and the Lean replay (`Vinc/TraceDtnStore.lean`).
+//! and the Lean replay (`Pinc/TraceDtnStore.lean`).
 //!
 //! The world is small so that every branch is met: ledgers of one to four slots, a budget of ten bytes, two spaces
 //! (bundles and mailbox items) with five ids each, sizes of 0 to 12 bytes, both classes, lifetimes and clocks of 0 to
@@ -20,7 +20,7 @@
 //! met, so it is meaningful without the proof tools. The main world goes to `dtn_store.ndjson` and is checked by both
 //! TLA+ and Lean; `dtn_store_edge.ndjson` holds budgets and sizes around `u64::MAX` (the saturating sums) and is
 //! replayed by Lean only, because the TLA+ check uses a small saturation maximum. The trace is written to the
-//! directory in `VINC_TRACE_DIR` when it is set; otherwise nothing is written.
+//! directory in `PINC_TRACE_DIR` when it is set; otherwise nothing is written.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -39,8 +39,8 @@
 mod dtn_ledger_oracle;
 
 use dtn_ledger_oracle::{Ent, Oracle, Refusal, ents_json};
-use vinc_dtn::store::{Class, Entry, Key, Ledger, Space, StoreError};
-use vinc_tests::SplitMix64;
+use pinc_dtn::store::{Class, Entry, Key, Ledger, Space, StoreError};
+use pinc_tests::SplitMix64;
 
 const SPACES: [u8; 2] = [1, 2];
 
@@ -222,7 +222,7 @@ fn run<const N: usize>(
 }
 
 fn write(name: &str, lines: &[String]) {
-    if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
+    if let Ok(dir) = std::env::var("PINC_TRACE_DIR") {
         std::fs::create_dir_all(&dir).unwrap();
         let mut text = lines.join("\n");
         text.push('\n');
@@ -259,7 +259,7 @@ fn ledger_runs_match_the_reference_and_are_recorded() {
         ("reclasses of nothing", seen.reclass_unknown),
         ("cross-space evictions", seen.cross_space),
     ] {
-        assert!(vinc_tests::soaking() || n > 0, "the world never met: {name}");
+        assert!(pinc_tests::soaking() || n > 0, "the world never met: {name}");
     }
     write("dtn_store.ndjson", &out);
 
@@ -275,7 +275,7 @@ fn ledger_runs_match_the_reference_and_are_recorded() {
         run::<4>(seed + 200, big / 2 + 1, &sizes, &times, 40, &mut edge, &mut seen);
     }
     assert!(
-        vinc_tests::soaking() || seen.ok > 0 && seen.transit_evicted > 0 && seen.custody_refused > 0 && seen.full > 0
+        pinc_tests::soaking() || seen.ok > 0 && seen.transit_evicted > 0 && seen.custody_refused > 0 && seen.full > 0
     );
     write("dtn_store_edge.ndjson", &edge);
 }

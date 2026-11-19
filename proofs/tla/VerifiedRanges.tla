@@ -1,6 +1,6 @@
 ------------------------------ MODULE VerifiedRanges ------------------------------
 (***************************************************************************)
-(* Model of vinc-dag VerifiedRanges<N>: a sorted list of disjoint          *)
+(* Model of pinc-dag VerifiedRanges<N>: a sorted list of disjoint          *)
 (* half-open intervals with fixed capacity N. Insert mirrors the Rust      *)
 (* insert, including the capacity failure that changes nothing.            *)
 (*                                                                         *)

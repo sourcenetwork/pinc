@@ -17,9 +17,9 @@
 mod layers_common;
 
 use layers_common::{LWorld, big, secs};
-use vinc_node::{Body, DtnPlan, Enabled, NodeEvent, NodeTrace};
-use vinc_sim::{NodeId as SimId, Time};
-use vinc_tests::{LayerApps, NCmd, SplitMix64};
+use pinc_node::{Body, DtnPlan, Enabled, NodeEvent, NodeTrace};
+use pinc_sim::{NodeId as SimId, Time};
+use pinc_tests::{LayerApps, NCmd, SplitMix64};
 
 /// The bytes of one symbol at `slice_log` 2.
 const SLICE: usize = 4096;

@@ -13,12 +13,12 @@ mod connect_rig;
 
 use connect_common::{SEC, big_stack, nid};
 use connect_rig::{Ans, Custody, Rig};
-use vinc_connect::carrier::Frame;
-use vinc_crypto::Software;
-use vinc_security::{Env, KeyRequest};
-use vinc_tests::{Answer, Host};
+use pinc_connect::carrier::Frame;
+use pinc_crypto::Software;
+use pinc_security::{Env, KeyRequest};
+use pinc_tests::{Answer, Host};
 
-vinc_tests::install_counting_allocator!();
+pinc_tests::install_counting_allocator!();
 
 struct Soft(Box<Host>);
 
@@ -105,7 +105,7 @@ fn the_client_allocates_nothing_in_steady_state() {
             );
         };
         one(&mut rig, &mut keys, 0, now, &mut out, &mut seen);
-        let stats = vinc_tests::measure(|| {
+        let stats = pinc_tests::measure(|| {
             for i in 1..200 {
                 one(&mut rig, &mut keys, i, now + (i as u64) * 1_000, &mut out, &mut seen);
             }

@@ -11,16 +11,16 @@
 mod connect_sim_common;
 
 use connect_sim_common::*;
-use vinc_core::Event;
-use vinc_sim::{LanConfig, LinkConfig, MS, Time};
-use vinc_tests::{Cmd, Ev};
+use pinc_core::Event;
+use pinc_sim::{LanConfig, LinkConfig, MS, Time};
+use pinc_tests::{Cmd, Ev};
 
 fn reach_out(e: &Ev) -> bool {
     matches!(e, Ev::Ep(Event::ReachOut { .. }))
 }
 
 /// Reach-out messages `n` received between `from` and `to`.
-fn reach_outs(w: &World, n: vinc_sim::NodeId, from: Time, to: Time) -> usize {
+fn reach_outs(w: &World, n: pinc_sim::NodeId, from: Time, to: Time) -> usize {
     w.sim
         .events(n)
         .iter()
@@ -30,14 +30,14 @@ fn reach_outs(w: &World, n: vinc_sim::NodeId, from: Time, to: Time) -> usize {
 
 /// A and B public on links with a 120 ms round trip (too slow for a direct path to count as good), one relay; both
 /// have started and found their home.
-fn pair(seed: u64) -> (World, vinc_sim::NodeId, vinc_sim::NodeId, vinc_sim::NodeId) {
+fn pair(seed: u64) -> (World, pinc_sim::NodeId, pinc_sim::NodeId, pinc_sim::NodeId) {
     let mut w = World {
-        sim: vinc_sim::Sim::with_config(
+        sim: pinc_sim::Sim::with_config(
             seed,
-            vinc_sim::SimConfig {
+            pinc_sim::SimConfig {
                 default_link: Some(link(60 * MS)),
                 trace: true,
-                ..vinc_sim::SimConfig::default()
+                ..pinc_sim::SimConfig::default()
             },
         ),
     };
@@ -53,10 +53,10 @@ fn pair_lans(
     seed: u64,
 ) -> (
     World,
-    vinc_sim::NodeId,
-    vinc_sim::NodeId,
-    vinc_sim::NodeId,
-    [vinc_sim::LanId; 2],
+    pinc_sim::NodeId,
+    pinc_sim::NodeId,
+    pinc_sim::NodeId,
+    [pinc_sim::LanId; 2],
 ) {
     let mut w = World::new(seed);
     let (r, rs) = w.relay(1, relay_ip(10));
@@ -111,12 +111,12 @@ fn a_session_with_no_application_data_for_twenty_seconds_skips_its_punch_round()
         // A and the hub on links with a 120 ms round trip: too slow for a direct path to count as good, so the
         // punching goes on every minute unless the idle rule stops it.
         let mut w = World {
-            sim: vinc_sim::Sim::with_config(
+            sim: pinc_sim::Sim::with_config(
                 92,
-                vinc_sim::SimConfig {
+                pinc_sim::SimConfig {
                     default_link: Some(link(60 * MS)),
                     trace: true,
-                    ..vinc_sim::SimConfig::default()
+                    ..pinc_sim::SimConfig::default()
                 },
             ),
         };
@@ -129,7 +129,7 @@ fn a_session_with_no_application_data_for_twenty_seconds_skips_its_punch_round()
             Cmd::Dial {
                 node: hub,
                 hints: vec![rs.udp.unwrap()],
-                role: vinc_core::Role::Hub,
+                role: pinc_core::Role::Hub,
             },
         );
         w.run(secs(10));
@@ -137,7 +137,7 @@ fn a_session_with_no_application_data_for_twenty_seconds_skips_its_punch_round()
         assert!(
             w.client(a)
                 .session_stats(sa)
-                .is_some_and(|s| s.route.is_some_and(|(_, r)| !vinc_core::is_relay_addr(&r))),
+                .is_some_and(|s| s.route.is_some_and(|(_, r)| !pinc_core::is_relay_addr(&r))),
             "the session runs on the direct path: {:?}",
             w.client(a).session_stats(sa)
         );
@@ -146,7 +146,7 @@ fn a_session_with_no_application_data_for_twenty_seconds_skips_its_punch_round()
         assert!(
             w.client(a)
                 .session_stats(sa)
-                .is_some_and(|s| s.route.is_some_and(|(_, r)| vinc_core::is_relay_addr(&r))),
+                .is_some_and(|s| s.route.is_some_and(|(_, r)| pinc_core::is_relay_addr(&r))),
             "the idle session lapsed onto its relay path: {:?}",
             w.client(a).session_stats(sa)
         );
@@ -172,7 +172,7 @@ fn a_late_start_hub_session_on_a_direct_path_punches_three_seconds_after_it_came
             Cmd::Dial {
                 node: hub,
                 hints: vec![rs.udp.unwrap()],
-                role: vinc_core::Role::Hub,
+                role: pinc_core::Role::Hub,
             },
         );
         w.run(secs(25));
@@ -247,7 +247,7 @@ fn a_session_of_the_broadcast_protocol_is_marked_so_it_is_flushed_last() {
     big(|| {
         let (mut w, a, b, _r) = pair(96);
         for n in [a, b] {
-            w.sim.node_mut(n).client_mut().conn.set_gossip_alpn(b"vinc/a");
+            w.sim.node_mut(n).client_mut().conn.set_gossip_alpn(b"pinc/a");
         }
         let baddr = w.client(b).addr;
         w.dial(secs(20), a, b, vec![baddr]);
@@ -261,9 +261,9 @@ fn a_session_of_the_broadcast_protocol_is_marked_so_it_is_flushed_last() {
 
 #[test]
 fn a_carrier_that_comes_back_makes_the_sessions_riding_it_ping_at_once() {
-    use vinc_connect::client::Notice;
-    use vinc_core::is_relay_addr;
-    use vinc_sim::{NatConfig, NatKind, PortPolicy, SEC};
+    use pinc_connect::client::Notice;
+    use pinc_core::is_relay_addr;
+    use pinc_sim::{NatConfig, NatKind, PortPolicy, SEC};
     big(|| {
         let mut w = World::new(97);
         let (_r, rs) = w.relay(1, relay_ip(10));
@@ -296,7 +296,7 @@ fn a_carrier_that_comes_back_makes_the_sessions_riding_it_ping_at_once() {
             Cmd::Dial {
                 node: peer,
                 hints: vec![],
-                role: vinc_core::Role::Hub,
+                role: pinc_core::Role::Hub,
             },
         );
         w.run(secs(40));
@@ -329,7 +329,7 @@ fn a_carrier_that_comes_back_makes_the_sessions_riding_it_ping_at_once() {
 
 #[test]
 fn a_session_on_a_relay_path_that_carries_data_keeps_punching_every_minute() {
-    use vinc_sim::{NatConfig, NatKind, PortPolicy, SEC};
+    use pinc_sim::{NatConfig, NatKind, PortPolicy, SEC};
     big(|| {
         let mut w = World::new(98);
         let (_r, rs) = w.relay(1, relay_ip(10));
@@ -374,7 +374,7 @@ fn a_session_on_a_relay_path_that_carries_data_keeps_punching_every_minute() {
         assert!(
             w.client(a)
                 .session_stats(sa)
-                .is_some_and(|s| s.route.is_some_and(|(_, r)| vinc_core::is_relay_addr(&r))),
+                .is_some_and(|s| s.route.is_some_and(|(_, r)| pinc_core::is_relay_addr(&r))),
             "the session rides the relay"
         );
         // A round goes out a minute after the last.

@@ -1,6 +1,6 @@
 name = "dtn-ledger"
-about = "The store ledger and bundle lifetime: three 30-second updates for a phone that never comes into contact before they expire. The cloud carrier's budget holds two bundles, so it refuses the third for lack of room rather than evict live custody, never holds more than its budget, and every holder ends the bundles at their lifetime. VINC only: iroh and libp2p keep no bounded bundle store."
-stacks = ["vinc"]
+about = "The store ledger and bundle lifetime: three 30-second updates for a phone that never comes into contact before they expire. The cloud carrier's budget holds two bundles, so it refuses the third for lack of room rather than evict live custody, never holds more than its budget, and every holder ends the bundles at their lifetime. PINC only: iroh and libp2p keep no bounded bundle store."
+stacks = ["pinc"]
 repetitions = 3
 
 [resources]

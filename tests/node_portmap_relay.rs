@@ -20,20 +20,20 @@ use std::ops::Range;
 
 use connect_common::{Collect, Rec, ed, id};
 use connect_rig::{R, RELAY_UDP};
-use vinc_broadcast::Limits;
-use vinc_connect::client::{Config as ConnCfg, Port, RelayCfg};
-use vinc_connect::record::MAX_ADDRS;
-use vinc_connect::record::Reach;
-use vinc_core::{
+use pinc_broadcast::Limits;
+use pinc_connect::client::{Config as ConnCfg, Port, RelayCfg};
+use pinc_connect::record::MAX_ADDRS;
+use pinc_connect::record::Reach;
+use pinc_core::{
     Command, CommandError, Event, Events, IfaceEvent, IfaceId, NodeStats, Reply, SendState, SessionId, SessionStats,
     TraceRecord, Transmit, Value,
 };
-use vinc_crypto::{Drbg, IdentityAlg, Keypair, NodeId};
-use vinc_node::{Config as NodeConfig, Ep, HUB_ALPN, Node};
-use vinc_portmap::{natpmp, pcp};
-use vinc_security::{Env, KeyHandle, LocalIdentity, PrekeyPolicy, SoftPrekeys};
-use vinc_tests::Caps;
-use vinc_transport::stream::{NoSource, StreamId};
+use pinc_crypto::{Drbg, IdentityAlg, Keypair, NodeId};
+use pinc_node::{Config as NodeConfig, Ep, HUB_ALPN, Node};
+use pinc_portmap::{natpmp, pcp};
+use pinc_security::{Env, KeyHandle, LocalIdentity, PrekeyPolicy, SoftPrekeys};
+use pinc_tests::Caps;
+use pinc_transport::stream::{NoSource, StreamId};
 
 #[derive(Default)]
 struct Script {
@@ -54,13 +54,13 @@ impl Port for Script {
     fn node(&self) -> Option<NodeStats> {
         None
     }
-    fn peer(&self, _node: &NodeId) -> Option<vinc_core::PeerInfo> {
+    fn peer(&self, _node: &NodeId) -> Option<pinc_core::PeerInfo> {
         None
     }
-    fn reach_body(&self, _session: SessionId, _out: &mut [u8; vinc_core::REACH_BODY_MAX]) -> usize {
+    fn reach_body(&self, _session: SessionId, _out: &mut [u8; pinc_core::REACH_BODY_MAX]) -> usize {
         0
     }
-    fn by_conn_id(&self, _cid: &vinc_security::ConnId) -> Option<SessionStats> {
+    fn by_conn_id(&self, _cid: &pinc_security::ConnId) -> Option<SessionStats> {
         None
     }
 }
@@ -145,7 +145,7 @@ fn world() -> World {
     let alg = IdentityAlg::Ed25519;
     let kp = Keypair::from_seed(alg, &[0x12; 32]).unwrap();
     let identity = LocalIdentity::from_keypair(&kp, KeyHandle(1)).unwrap();
-    let prov = Caps(vinc_crypto::Software, true);
+    let prov = Caps(pinc_crypto::Software, true);
     let mut drbg = Drbg::new(&[0x22; 32]);
     let mut env = Env {
         provider: &prov,
@@ -178,7 +178,7 @@ fn world() -> World {
         version: 1,
         alpn: HUB_ALPN,
         limits: Limits::default(),
-        map_keys: vinc_tests::id_key(0x5eed),
+        map_keys: pinc_tests::id_key(0x5eed),
         wall_ms: 1_700_000_000_000,
         local: local(),
         trace: false,
@@ -200,7 +200,7 @@ fn world() -> World {
     node.set_local(&[local()]);
     World {
         node,
-        relay: Box::new(R::new(vinc_connect::relay::Config::new(relay_id, 3))),
+        relay: Box::new(R::new(pinc_connect::relay::Config::new(relay_id, 3))),
         sink: Collect::default(),
         to_gw: Vec::new(),
     }

@@ -1,5 +1,5 @@
 //! The time rules of the fetch at the deadline: what `on_timeout` does once the deadline has passed, which failure is
-//! reported, and the stall wait never leaving the caps the proofs state (`ValuesTime*.tla`, `Vinc/ValuesTime*.lean`).
+//! reported, and the stall wait never leaving the caps the proofs state (`ValuesTime*.tla`, `Pinc/ValuesTime*.lean`).
 #![allow(
     clippy::unwrap_used,
     clippy::indexing_slicing,
@@ -17,8 +17,8 @@
 mod values_support;
 
 use values_support::*;
-use vinc_values::fetch::Io;
-use vinc_values::trace::{Event, FailReason, Trace};
+use pinc_values::fetch::Io;
+use pinc_values::trace::{Event, FailReason, Trace};
 
 fn silent_sim(seed: u64, after: u64) -> Sim {
     let store = PStore::random(seed, 2 << 20);
@@ -170,11 +170,11 @@ fn the_stall_wait_never_falls_below_the_first_wait_and_follows_the_caps() {
     sim.run_until(300 * SEC, |s| {
         let t = s.fetch.timers();
         assert!(
-            t.sw >= vinc_values::knobs::STALL_WAIT,
+            t.sw >= pinc_values::knobs::STALL_WAIT,
             "sw {} ms fell below the first wait",
             t.sw / MS
         );
-        assert!(t.sw <= vinc_values::knobs::STALL_RTT_CAP.max(vinc_values::knobs::LIVE_CAP));
+        assert!(t.sw <= pinc_values::knobs::STALL_RTT_CAP.max(pinc_values::knobs::LIVE_CAP));
         seen += 1;
         false
     });

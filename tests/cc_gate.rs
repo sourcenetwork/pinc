@@ -1,7 +1,7 @@
 //! Tests of the delivery-rate estimate, the rate gate and the pacer. Part of the `transport_cc` test target.
 #![allow(clippy::unwrap_used, clippy::cast_possible_truncation)]
 
-use vinc_transport::recovery::{
+use pinc_transport::recovery::{
     AckInput, BURST_PACKETS, Cubic, GATE_SLACK_FAST, GATE_SLACK_MID, INITIAL_CWND, MS, Pacer, SECOND,
 };
 

@@ -14,15 +14,15 @@
 )]
 
 mod relay_members;
-mod vinc_common;
+mod pinc_common;
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
 
 use relay_members::{bind_ports, build_relay, on_stack};
-use vinc::Identity;
-use vinc::relay::Relay;
+use pinc::Identity;
+use pinc::relay::Relay;
 
 #[test]
 fn a_relay_builds_on_a_two_mebibyte_stack_in_an_unoptimised_build() {

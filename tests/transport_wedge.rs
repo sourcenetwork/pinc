@@ -10,9 +10,9 @@
     clippy::similar_names
 )]
 
-use vinc_crypto::IdentityAlg;
-use vinc_tests::*;
-use vinc_transport::conn::PathId;
+use pinc_crypto::IdentityAlg;
+use pinc_tests::*;
+use pinc_transport::conn::PathId;
 
 const STREAMS: usize = 16;
 const PER_STREAM: usize = 1024 * 1024;

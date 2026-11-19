@@ -11,8 +11,8 @@
     unreachable_pub
 )]
 
-use vinc_crypto::IdentityAlg;
-use vinc_security::{Env, Output, ResponderStores};
+use pinc_crypto::IdentityAlg;
+use pinc_security::{Env, Output, ResponderStores};
 
 mod sec_common;
 use sec_common::{ALPN, World, big_stack};
@@ -61,7 +61,7 @@ fn a_resend_after_a_full_initial_is_short_while_the_host_allows_it() {
 }
 
 /// An initiator that sent the short Initial to a responder that never saw its prekey, and that responder's reject.
-fn short_initial_and_its_reject(w: &mut World) -> (vinc_security::Initiator, Vec<u8>) {
+fn short_initial_and_its_reject(w: &mut World) -> (pinc_security::Initiator, Vec<u8>) {
     let dial = w.dial();
     let mut i = w.initiator_with(dial, ALPN, true, false);
     let mut r = w.responder();
@@ -91,7 +91,7 @@ fn a_prekey_reject_gets_the_full_initial_once_and_the_resends_stay_short() {
         let t0 = w.now;
         let ms = |n: u64| t0 + n * 1_000_000;
         // What the initiator queues when `reject` arrives at `now`, and for each loss timer at `now`.
-        let mut next = |i: &mut vinc_security::Initiator, now: u64, retx: bool| {
+        let mut next = |i: &mut pinc_security::Initiator, now: u64, retx: bool| {
             let mut env = Env {
                 provider: &w.i_prov,
                 now,
@@ -128,7 +128,7 @@ fn the_host_sets_the_gap_between_full_initials_for_rejects_and_hears_of_each_rej
         let ms = |n: u64| t0 + n * 1_000_000;
         assert!(!i.take_prekey_rejected(), "no reject yet");
         i.set_reject_gap(2_000 * 1_000_000);
-        let mut sent_at = |i: &mut vinc_security::Initiator, now: u64| {
+        let mut sent_at = |i: &mut pinc_security::Initiator, now: u64| {
             let mut env = Env {
                 provider: &w.i_prov,
                 now,

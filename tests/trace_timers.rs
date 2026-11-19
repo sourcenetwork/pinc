@@ -1,6 +1,6 @@
-//! Trace generation for the timers and the closing state of the VINCER connection: scripted pairs of real connections
-//! (`vinc-transport`, built with the `trace` feature) driven call by call, recorded as ndjson (`timers.ndjson`) for
-//! the TLA+ trace check (`TraceTimers.tla`) and the Lean replay (`Vinc/TraceTimers.lean`).
+//! Trace generation for the timers and the closing state of the PINCER connection: scripted pairs of real connections
+//! (`pinc-transport`, built with the `trace` feature) driven call by call, recorded as ndjson (`timers.ndjson`) for
+//! the TLA+ trace check (`TraceTimers.tla`) and the Lean replay (`Pinc/TraceTimers.lean`).
 //!
 //! Two connections are connected over the in-memory link, then the test takes over: every datagram either side writes
 //! goes to a pool, and the script decides which reaches the other side, when, again (a duplicate) or altered (it
@@ -60,7 +60,7 @@ mod relay;
 #[path = "trace_timers/unconfirmed.rs"]
 mod unconfirmed;
 
-use vinc_tests::*;
+use pinc_tests::*;
 
 use lifecycle::{close_run, dead_run, idle_run, link_run, sleep_hold_run, violation_run, wake_run};
 use random::random_run;
@@ -195,7 +195,7 @@ fn timers_match_the_models() {
             );
         }
         eprintln!("timers: {} events {:?}", log.out.lines().count(), log.seen);
-        if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
+        if let Ok(dir) = std::env::var("PINC_TRACE_DIR") {
             std::fs::create_dir_all(&dir).unwrap();
             std::fs::write(std::path::Path::new(&dir).join("timers.ndjson"), &log.out).unwrap();
         }

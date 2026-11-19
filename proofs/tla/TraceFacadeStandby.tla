@@ -1,6 +1,6 @@
 -------------------------- MODULE TraceFacadeStandby --------------------------
 (***************************************************************************)
-(* Trace validation of the facade's standby slab: crates/vinc/src/standby.rs. *)
+(* Trace validation of the facade's standby slab: crates/pinc/src/standby.rs. *)
 (*                                                                         *)
 (* The Rust test tests/trace_standby.rs drives real slabs (the facade      *)
 (* built with the cargo feature `trace`, StandbyProbe) with seeded calls:  *)
@@ -23,7 +23,7 @@
 (* 2^32 times is out of a trace test's reach.                              *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds standby.ndjson.       *)
+(* variable PINC_TRACE_DIR, the directory that holds standby.ndjson.       *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, TLC, Json, IOUtils
 VARIABLES i, sb, ord
@@ -31,7 +31,7 @@ vars == <<i, sb, ord>>
 INSTANCE StandbyOps
 
 TGENS == 2147483647
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/standby.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/standby.ndjson")
 Ev == Trace[i]
 \* the recorded slab: each slot as [generation, waker (0 for none), queued, live]; the queue as [slot, generation]
 Slots(v) == [k \in 1..Len(v.slots) |->

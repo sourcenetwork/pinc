@@ -1,6 +1,6 @@
-//! Trace generation for loss recovery: seeded random runs of a real `Recovery` engine (`vinc-transport`, built with
+//! Trace generation for loss recovery: seeded random runs of a real `Recovery` engine (`pinc-transport`, built with
 //! the `trace` feature) driven through the calls a connection makes, recorded as ndjson (`recovery.ndjson`) for the
-//! TLA+ trace check (`TraceRecovery.tla`) and the Lean replay (`Vinc/TraceRecovery.lean`).
+//! TLA+ trace check (`TraceRecovery.tla`) and the Lean replay (`Pinc/TraceRecovery.lean`).
 //!
 //! A run sends packets (some repair packets, some path MTU probes, with data frames or none) on several paths,
 //! acknowledges ranges (cumulative, out of order, with gaps, reversed and past the largest sent number), fires the
@@ -8,12 +8,12 @@
 //! puts the peer to sleep and the link down, and, in a few runs, waits past the ghost retention. After every call
 //! the engine shows its state (`trace_view`): the ring slot by slot, the byte accounts, the round-trip estimate, the
 //! probe timer, the paths and the reorder lens. The checkers replay each call with the operators of the model
-//! (`RecoveryOps.tla`, `Vinc.TransportRecovery`) and require the state they compute, the events the call reported
+//! (`RecoveryOps.tla`, `Pinc.TransportRecovery`) and require the state they compute, the events the call reported
 //! and the error it returned to be the ones recorded. The tail repair tracker is traced on its own.
 //!
 //! The test asserts what it can itself (the accounts balance, a packet is reported at most once as acknowledged, lost
 //! and late-acknowledged, never lost after it was acknowledged) so it is meaningful without the proof tools. Times are
-//! nanoseconds below 2^31 (the checker has 32-bit integers). The trace is written to `VINC_TRACE_DIR` when it is set.
+//! nanoseconds below 2^31 (the checker has 32-bit integers). The trace is written to `PINC_TRACE_DIR` when it is set.
 #![allow(
     clippy::unwrap_used,
     clippy::indexing_slicing,
@@ -29,9 +29,9 @@
 use std::collections::HashSet;
 use std::fmt::Write as _;
 
-use vinc_tests::SplitMix64;
-use vinc_transport::recovery::trace::RecoveryView;
-use vinc_transport::recovery::{
+use pinc_tests::SplitMix64;
+use pinc_transport::recovery::trace::RecoveryView;
+use pinc_transport::recovery::{
     Event, FrameRef, FrameRefs, Health, MS, PathKind, Recovery, RecoveryError, Sent, TailRepair,
 };
 
@@ -238,7 +238,7 @@ impl Run<'_> {
         self.log(&format!(r#"{head},"evs":[{evs}]"#));
     }
 
-    fn sum(s: &vinc_transport::recovery::Summary) -> String {
+    fn sum(s: &pinc_transport::recovery::Summary) -> String {
         format!(
             "[{},{},{},{},{}]",
             s.acked_packets, s.acked_bytes, s.late_acked_packets, s.lost_packets, s.lost_bytes
@@ -358,7 +358,7 @@ impl Run<'_> {
         let rgs: Vec<String> = ranges.iter().map(|(a, z)| format!("[{a},{z}]")).collect();
         let (s, e) = match res {
             Ok(s) => (s, "ok"),
-            Err(e) => (vinc_transport::recovery::Summary::default(), err_name(Err(e))),
+            Err(e) => (pinc_transport::recovery::Summary::default(), err_name(Err(e))),
         };
         // the summary of a refused acknowledgement is not returned; the checker compares the events instead
         let sum = if e == "ok" { Self::sum(&s) } else { "[]".to_string() };
@@ -643,11 +643,11 @@ fn recovery_runs_match_the_models() {
         r#""h":"Degraded""#,
     ] {
         assert!(
-            vinc_tests::soaking() || out.contains(needle),
+            pinc_tests::soaking() || out.contains(needle),
             "the runs never reach {needle}"
         );
     }
-    if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
+    if let Ok(dir) = std::env::var("PINC_TRACE_DIR") {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(std::path::Path::new(&dir).join("recovery.ndjson"), &out).unwrap();
     }

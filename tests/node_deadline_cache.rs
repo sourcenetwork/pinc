@@ -7,8 +7,8 @@
 mod node_script;
 
 use node_script::{ScriptNode, node_with};
-use vinc_core::{Command, SessionId};
-use vinc_node::{HUB_ALPN, NoApps};
+use pinc_core::{Command, SessionId};
+use pinc_node::{HUB_ALPN, NoApps};
 
 const SEC: u64 = 1_000_000_000;
 
@@ -139,7 +139,7 @@ fn a_call_that_lets_the_layers_run_clears_their_deadline() {
         // A command that raised an event lets them run too.
         n.endpoint_mut()
             .events
-            .push_back(vinc_core::Event::DatagramReceived { session: SessionId(1) });
+            .push_back(pinc_core::Event::DatagramReceived { session: SessionId(1) });
         let _ = n.poll_timeout();
         assert!(n.layers_deadline_cached());
         move_data(&mut n, 3 * SEC);

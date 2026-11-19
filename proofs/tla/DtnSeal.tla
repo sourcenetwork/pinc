@@ -1,7 +1,7 @@
 ------------------------------ MODULE DtnSeal ------------------------------
 (***************************************************************************)
-(* The one-shot encryption of a bundle (vinc-dtn seal.rs, head.rs,         *)
-(* endorse.rs): the bounded Dolev-Yao twin of Vinc/DtnSeal.lean.           *)
+(* The one-shot encryption of a bundle (pinc-dtn seal.rs, head.rs,         *)
+(* endorse.rs): the bounded Dolev-Yao twin of Pinc/DtnSeal.lean.           *)
 (*                                                                         *)
 (* Terms are tuples; the algebra is free (perfect primitives), so two      *)
 (* terms are equal iff their constructors and arguments are. Known(L, t)   *)
@@ -115,7 +115,7 @@ Heads(b) ==
     \cup {[BHead(b) EXCEPT !.ctr = c] : c \in {1}}
     \cup {[BHead(b) EXCEPT !.id = Junk(1)], [BHead(b) EXCEPT !.lo = TRUE]}
 
-(* ---- the slice AEAD: the nonce is injective in the index (Vinc.DtnSeal.nonce_inj) ---- *)
+(* ---- the slice AEAD: the nonce is injective in the index (Pinc.DtnSeal.nonce_inj) ---- *)
 Nonce(i) == <<"nonce", i>>
 SealSlice(k, i, p) == Sealed(k, Nonce(i), p)
 OpenSlice(k, j, c) == IF c[1] = "sealed" /\ c[2] = k /\ c[3] = Nonce(j) THEN [ok |-> TRUE, p |-> c[4]] ELSE [ok |-> FALSE]

@@ -1,8 +1,8 @@
 ---------------------------- MODULE ReconcileCore ----------------------------
 (***************************************************************************)
-(* The part rules and the handlers of vinc-reconcile (core.rs, session.rs) *)
+(* The part rules and the handlers of pinc-reconcile (core.rs, session.rs) *)
 (* on the byte operators of ReconcileOps.tla; the TLA+ counterpart of      *)
-(* Vinc/ReconcileParts.lean and Vinc/ReconcileSession.lean, written to be  *)
+(* Pinc/ReconcileParts.lean and Pinc/ReconcileSession.lean, written to be  *)
 (* read against both and against the Rust code.                            *)
 (*                                                                         *)
 (* A core is a record with the fields of `Core`; a handler takes the bytes *)

@@ -1,6 +1,6 @@
 ------------------------------- MODULE AmpOps -------------------------------
 (***************************************************************************)
-(* The operations of vinc-security amp.rs (AmpBudget), over an abstract    *)
+(* The operations of pinc-security amp.rs (AmpBudget), over an abstract    *)
 (* number type so that one definition serves two uses: Amp.tla instantiates*)
 (* it with TLC integers and a small saturation maximum (exhaustive model   *)
 (* checking), TraceSecurity.tla with the 80-bit words of U64.tla and the   *)

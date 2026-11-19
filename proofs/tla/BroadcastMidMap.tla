@@ -1,6 +1,6 @@
 ----------------------------- MODULE BroadcastMidMap -----------------------------
 (***************************************************************************)
-(* The open-addressing map of vinc-broadcast table.rs (MidMap), slot for   *)
+(* The open-addressing map of pinc-broadcast table.rs (MidMap), slot for   *)
 (* slot: linear probing, a stored value held as value + 1 so that zero     *)
 (* marks an empty slot, no tombstones, and backward-shift deletion. Slots  *)
 (* is the (power of two) size of the arrays, Cap the capacity (the code    *)
@@ -29,7 +29,7 @@
 (* home and a walk for any id, present or absent, reads at most len + 1    *)
 (* slots; NoneRefused: no insert within Cap is refused.                    *)
 (*                                                                         *)
-(* Lean counterpart: proofs/lean/Vinc/BroadcastTable.lean (the map is the  *)
+(* Lean counterpart: proofs/lean/Pinc/BroadcastTable.lean (the map is the  *)
 (* association it implements; the table theorems there are about that      *)
 (* association, and this model is the link from the slot arrays to it).    *)
 (***************************************************************************)

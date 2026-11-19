@@ -13,11 +13,11 @@ mod connect_rig;
 
 use connect_common::{SEC, big_stack, nid};
 use connect_rig::{Ans, Custody, Rig};
-use vinc_connect::carrier::frame::MAX_PACKET_LEN;
-use vinc_connect::client::queue::{HeldQueue, QUEUE_BYTES, QUEUED};
-use vinc_crypto::Software;
-use vinc_security::{Env, KeyRequest};
-use vinc_tests::{Answer, Host};
+use pinc_connect::carrier::frame::MAX_PACKET_LEN;
+use pinc_connect::client::queue::{HeldQueue, QUEUE_BYTES, QUEUED};
+use pinc_crypto::Software;
+use pinc_security::{Env, KeyRequest};
+use pinc_tests::{Answer, Host};
 
 const MS: u64 = 1_000_000;
 
@@ -132,8 +132,8 @@ fn a_slow_node_drops_all_but_the_newest_eight_short_packets_when_its_carrier_ope
 }
 
 fn long_packet(scid: u8, len: usize) -> Vec<u8> {
-    use vinc_security::ConnId;
-    use vinc_transport::packet::{LongHeader, LongType};
+    use pinc_security::ConnId;
+    use pinc_transport::packet::{LongHeader, LongType};
     let (dcid, scid) = (ConnId::new(&[1; 8]).unwrap(), ConnId::new(&[scid; 8]).unwrap());
     let mut h = LongHeader {
         ty: LongType::Handshake,
@@ -143,15 +143,15 @@ fn long_packet(scid: u8, len: usize) -> Vec<u8> {
     };
     h.body_len = len - h.header_len() - 1;
     let mut p = vec![0u8; len];
-    let mut w = vinc_wire::Writer::new(&mut p);
+    let mut w = pinc_wire::Writer::new(&mut p);
     h.write(&mut w, 0).unwrap();
     p
 }
 
 #[test]
 fn a_very_slow_node_drops_held_first_flights_of_established_sessions_and_collapses_identical_copies() {
-    use vinc_core::Role;
-    use vinc_tests::{ALPN_A, CoreNet};
+    use pinc_core::Role;
+    use pinc_tests::{ALPN_A, CoreNet};
     big_stack(|| {
         let mut net = CoreNet::new(1_900 * MS);
         net.capture = true;

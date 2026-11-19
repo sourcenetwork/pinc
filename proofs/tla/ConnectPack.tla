@@ -8,7 +8,7 @@
 (* one whose encoder fails, offered in every order; the bounds are small   *)
 (* so that every refusal is reached.                                       *)
 (*                                                                         *)
-(* Properties (Lean: Vinc/ConnectPackThm.lean):                            *)
+(* Properties (Lean: Pinc/ConnectPackThm.lean):                            *)
 (*  Inv       at most F frames and B bytes of frames, the bytes are the    *)
 (*            sum of the lengths and the concatenation of the frames, they *)
 (*            lie in the buffer, and no member is a long-header packet, a  *)

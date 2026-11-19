@@ -1,6 +1,6 @@
 name = "dtn-store-forward"
-about = "Store and forward: a DefraDB document update for a phone that is unreachable when it is sent. The laptop reaches only the cloud carrier, hands it a copy and custody, and the carrier delivers when the phone comes into contact later. VINC carries the update across the gap; iroh and libp2p run the same send as one pubsub publication, with no store and forward, while the phone is paused and resumed."
-stacks = ["vinc", "iroh", "libp2p"]
+about = "Store and forward: a DefraDB document update for a phone that is unreachable when it is sent. The laptop reaches only the cloud carrier, hands it a copy and custody, and the carrier delivers when the phone comes into contact later. PINC carries the update across the gap; iroh and libp2p run the same send as one pubsub publication, with no store and forward, while the phone is paused and resumed."
+stacks = ["pinc", "iroh", "libp2p"]
 repetitions = 3
 
 [resources]

@@ -1,7 +1,7 @@
-//! Trace generation for the VINCER frame codecs: seeded calls of the real `Frame::decode`, `Frame::write`,
+//! Trace generation for the PINCER frame codecs: seeded calls of the real `Frame::decode`, `Frame::write`,
 //! `Frame::encoded_len`, `FrameIter`, `write_ack`, `ack_len`, `Ack::ranges`, `stream_overhead` and
-//! `datagram_overhead` (`vinc-transport`), recorded as ndjson for the TLA+ trace check (`TraceFrame.tla`) and the
-//! Lean replay (`Vinc/TraceFrame.lean`).
+//! `datagram_overhead` (`pinc-transport`), recorded as ndjson for the TLA+ trace check (`TraceFrame.tla`) and the
+//! Lean replay (`Pinc/TraceFrame.lean`).
 //!
 //! Every frame kind is built with its fields at the varint boundaries, written into buffers with room, exactly
 //! enough, one byte short and none, read back followed by nothing, by a nonzero byte, by zeros and by the start of
@@ -32,13 +32,13 @@
     unreachable_pub
 )]
 
-use vinc_security::{Rekey, TicketBatch, TicketEntry};
-use vinc_tests::SplitMix64;
-use vinc_transport::frame::{
+use pinc_security::{Rekey, TicketBatch, TicketEntry};
+use pinc_tests::SplitMix64;
+use pinc_transport::frame::{
     Frame, FrameError, FrameIter, MAX_ACK_RANGES, MAX_STREAM_END, ack_len, datagram_overhead, stream_overhead,
     write_ack,
 };
-use vinc_wire::{Reader, WireError, Writer, varint};
+use pinc_wire::{Reader, WireError, Writer, varint};
 
 /// Numbers below this fit the TLA+ checker with room for its arithmetic.
 const NARROW: u64 = 1 << 28;
@@ -911,7 +911,7 @@ fn frame_codecs_match_the_models() {
     }
     assert!(out.narrow_events > 20_000 && out.events > out.narrow_events);
     println!("trace_frame: {} events, {} narrow", out.events, out.narrow_events);
-    if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
+    if let Ok(dir) = std::env::var("PINC_TRACE_DIR") {
         std::fs::create_dir_all(&dir).unwrap();
         let dir = std::path::Path::new(&dir);
         std::fs::write(dir.join("frame.ndjson"), &out.narrow).unwrap();

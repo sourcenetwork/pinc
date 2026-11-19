@@ -13,9 +13,9 @@
 mod node_common;
 
 use node_common::{World, big, secs};
-use vinc_node::NodeEvent;
-use vinc_sim::{LinkChange, MS, NodeId as SimId};
-use vinc_tests::{NCmd, NEv};
+use pinc_node::NodeEvent;
+use pinc_sim::{LinkChange, MS, NodeId as SimId};
+use pinc_tests::{NCmd, NEv};
 
 const TOPIC: &[u8] = b"news";
 

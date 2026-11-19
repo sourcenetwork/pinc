@@ -22,15 +22,15 @@ use core::net::SocketAddr;
 
 use connect_common::{big_stack, ed, enc, id, keypair, nid};
 use proptest::prelude::*;
-use vinc_connect::carrier::frame::{MAX_NOTICE_LEN, kind};
-use vinc_connect::carrier::{
+use pinc_connect::carrier::frame::{MAX_NOTICE_LEN, kind};
+use pinc_connect::carrier::{
     ALIAS_MAX, AliasTable, Assigned, BATCH_MAX_BYTES, BATCH_MAX_FRAMES, BatchBuilder, DnsAnswer, Frame, FrameError,
     MAX_FRAME_LEN, MAX_PACKET_LEN, Offer,
 };
-use vinc_connect::record::{MAX_ADDRS, MAX_HINT_LEN, MAX_RECORD_LEN, Reach, Record, RecordError, RecordFields, sign};
-use vinc_connect::relay::datagram::{Datagram, DatagramError, MAX_TUNNEL_DATAGRAM};
-use vinc_connect::relay::sleep::{self, Notice, SleepError};
-use vinc_crypto::{IdentityAlg, NodeId};
+use pinc_connect::record::{MAX_ADDRS, MAX_HINT_LEN, MAX_RECORD_LEN, Reach, Record, RecordError, RecordFields, sign};
+use pinc_connect::relay::datagram::{Datagram, DatagramError, MAX_TUNNEL_DATAGRAM};
+use pinc_connect::relay::sleep::{self, Notice, SleepError};
+use pinc_crypto::{IdentityAlg, NodeId};
 
 fn round_trip(f: &Frame<'_>) {
     let bytes = enc(f);
@@ -150,7 +150,7 @@ fn strict_decoding_refuses_what_it_should() {
     // unknown and removed types
     assert_eq!(
         Frame::decode(&[]).unwrap_err(),
-        FrameError::Wire(vinc_wire::WireError::Truncated { needed: 1 })
+        FrameError::Wire(pinc_wire::WireError::Truncated { needed: 1 })
     );
     assert_eq!(Frame::decode(&[1]).unwrap_err(), FrameError::UnknownType(1));
     assert_eq!(Frame::decode(&[19]).unwrap_err(), FrameError::UnknownType(19));
@@ -789,7 +789,7 @@ fn a_sleep_notice_is_signed_for_one_relay_and_one_sender() {
 
 #[test]
 fn a_record_notice_and_beacon_signed_in_two_steps_equal_the_one_step_form_and_refuse_a_short_buffer() {
-    use vinc_connect::local;
+    use pinc_connect::local;
     let kp = ed(0x44);
     let me = id(&kp);
     let mut pk = [0u8; 2000];
@@ -807,14 +807,14 @@ fn a_record_notice_and_beacon_signed_in_two_steps_equal_the_one_step_form_and_re
     let mut one = vec![0u8; MAX_RECORD_LEN];
     let one_len = sign(&kp, &fields, &mut one).unwrap();
     let mut two = vec![0u8; MAX_RECORD_LEN];
-    let signed = vinc_connect::record::prepare(&me, pk, &fields, &mut two).unwrap();
+    let signed = pinc_connect::record::prepare(&me, pk, &fields, &mut two).unwrap();
     let mut sig = [0u8; 200];
     let s = kp.sign(&two[..signed], &mut sig).unwrap();
-    let two_len = vinc_connect::record::finish(&mut two, signed, &sig[..s]).unwrap();
+    let two_len = pinc_connect::record::finish(&mut two, signed, &sig[..s]).unwrap();
     assert_eq!(one[..one_len], two[..two_len]);
     assert!(Record::parse_verified(&two[..two_len]).is_ok());
-    assert!(vinc_connect::record::prepare(&me, pk, &fields, &mut [0u8; 20]).is_err());
-    assert!(vinc_connect::record::finish(&mut two[..signed + 3], signed, &sig[..s]).is_err());
+    assert!(pinc_connect::record::prepare(&me, pk, &fields, &mut [0u8; 20]).is_err());
+    assert!(pinc_connect::record::finish(&mut two[..signed + 3], signed, &sig[..s]).is_err());
     // Sleep notice.
     let relay = nid(5);
     let mut one = vec![0u8; sleep::MAX_LEN];
@@ -839,7 +839,7 @@ fn a_record_notice_and_beacon_signed_in_two_steps_equal_the_one_step_form_and_re
 
 #[test]
 fn a_batch_resumes_from_its_state_and_keeps_its_limits() {
-    use vinc_connect::carrier::BatchState;
+    use pinc_connect::carrier::BatchState;
     let mut buf = vec![0u8; MAX_FRAME_LEN + 64];
     let pkt = [0x41u8; 100];
     let f = Frame::Send {

@@ -1,6 +1,6 @@
 name = "partition-heal"
 about = "Publish and subscribe while a site is cut off and rejoined: three sites with a hub and two peers each, a publisher in the first, the third cut off from 10 s to 25 s of a 40 s run at 50 messages a second."
-stacks = ["vinc", "iroh", "libp2p"]
+stacks = ["pinc", "iroh", "libp2p"]
 repetitions = 3
 
 [resources]

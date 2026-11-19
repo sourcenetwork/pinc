@@ -1,6 +1,6 @@
 name = "dtn-parity"
-about = "A data slice with no live holder is rebuilt from parity: the laptop hands its bundle to the cloud and leaves contact for good; the cloud's store corrupts the first data slice of what it keeps, so the cloud is the only holder left and cannot prove that slice. The phone asks the cloud for data, the corrupt slice fails its proof, and the phone asks for one parity symbol of that erasure block in its place; finish rebuilds the slice from any k of the block's symbols and the phone opens the bundle intact. Before, the phone asked only for data and refused the bundle as a bad proof, so it was never delivered. VINC only."
-stacks = ["vinc"]
+about = "A data slice with no live holder is rebuilt from parity: the laptop hands its bundle to the cloud and leaves contact for good; the cloud's store corrupts the first data slice of what it keeps, so the cloud is the only holder left and cannot prove that slice. The phone asks the cloud for data, the corrupt slice fails its proof, and the phone asks for one parity symbol of that erasure block in its place; finish rebuilds the slice from any k of the block's symbols and the phone opens the bundle intact. Before, the phone asked only for data and refused the bundle as a bad proof, so it was never delivered. PINC only."
+stacks = ["pinc"]
 repetitions = 3
 
 [resources]

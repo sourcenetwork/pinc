@@ -19,8 +19,8 @@
 mod connect_common;
 
 use connect_common::*;
-use vinc_connect::carrier::{DnsAnswer, Frame};
-use vinc_connect::relay::{CloseReason, NodeState, Quota, Reject, Route, SessionId, Trace, rule};
+use pinc_connect::carrier::{DnsAnswer, Frame};
+use pinc_connect::relay::{CloseReason, NodeState, Quota, Reject, Route, SessionId, Trace, rule};
 
 #[test]
 fn a_packet_to_a_node_on_this_relay_is_received_with_aliases() {
@@ -256,7 +256,7 @@ fn a_batch_is_routed_frame_by_frame() {
     fx.open(T0, b);
     fx.fx();
     let mut buf = vec![0u8; 20_000];
-    let mut bb = vinc_connect::carrier::BatchBuilder::new(&mut buf);
+    let mut bb = pinc_connect::carrier::BatchBuilder::new(&mut buf);
     let p = [0x41u8; 30];
     for f in [
         Frame::Send {

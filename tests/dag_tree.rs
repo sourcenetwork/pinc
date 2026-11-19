@@ -1,4 +1,4 @@
-//! Tests of vinc-dag's BLAKE3 tree and verified ranges.
+//! Tests of pinc-dag's BLAKE3 tree and verified ranges.
 #![allow(
     clippy::unwrap_used,
     clippy::indexing_slicing,
@@ -10,13 +10,13 @@ use std::collections::BTreeSet;
 use std::ops::Range;
 
 use proptest::prelude::*;
-use vinc_dag::ranges::{VerifiedRanges, VerifiedRangesVec};
-use vinc_dag::tree::{
+use pinc_dag::ranges::{VerifiedRanges, VerifiedRangesVec};
+use pinc_dag::tree::{
     Layout, OutboardBuilder, RangeVerifier, TreeError, build_outboard, build_outboard_vec, encode_range, encoded_len,
 };
-use vinc_tests::SplitMix64;
+use pinc_tests::SplitMix64;
 
-vinc_tests::install_counting_allocator!();
+pinc_tests::install_counting_allocator!();
 
 fn data(seed: u64, len: usize) -> Vec<u8> {
     let mut v = vec![0; len];
@@ -449,7 +449,7 @@ fn verifier_and_ranges_do_not_allocate() {
     let s = stream(&v, &ob, 4, &range);
     let len = v.len() as u64;
 
-    let info = vinc_tests::measure(|| {
+    let info = pinc_tests::measure(|| {
         let mut ver = RangeVerifier::<16384>::new(root, len, &range).unwrap();
         let mut rest = &s[..];
         let mut total = 0;
@@ -462,7 +462,7 @@ fn verifier_and_ranges_do_not_allocate() {
     });
     assert_eq!(info.count(), 0);
 
-    let info = vinc_tests::measure(|| {
+    let info = pinc_tests::measure(|| {
         let mut set = VerifiedRanges::<4>::new();
         for i in 0..50u64 {
             let _ = set.insert(i * 10..i * 10 + 5);

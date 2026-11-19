@@ -1,6 +1,6 @@
 //! Trace generation for the key roll: seeded random runs of the real `Roll`, `Rekey`, `PacketKey`, `roll_secret` and
 //! `keyroll::due` through the public API, recorded as ndjson (`keyroll.ndjson`) for the TLA+ trace check
-//! (`TraceKeyRoll.tla`) and the Lean replay (`Vinc/TraceKeyRoll.lean`).
+//! (`TraceKeyRoll.tla`) and the Lean replay (`Pinc/TraceKeyRoll.lean`).
 //!
 //! A run is two connections' worth of state: a dialing and an accepting `Roll`, each with its own generator, and four
 //! packet keys (the sending and the receiving key of each node, the pair of one direction sharing a secret). A run
@@ -9,7 +9,7 @@
 //! and in any order (a request or an answer to the method of its kind, and in one case in five to the method of the
 //! other kind), a message whose share was changed by an attacker or is the all-zero value, a stale answer, a
 //! duplicate request. Every completed roll rolls both packet keys of the node with the Diffie-Hellman value it
-//! computed, as `vinc_transport::conn::keys` does; traffic is sealed on a node's sending key (packet numbers offered
+//! computed, as `pinc_transport::conn::keys` does; traffic is sealed on a node's sending key (packet numbers offered
 //! in order, repeated, lower, and above 2^62) and opened at the peer's receiving key, with packets that are tampered
 //! or opened under another number or another key. Keys run with small limits so the AEAD limits fire.
 //!
@@ -24,10 +24,10 @@
 //! The test asserts everything itself (the real code against a plain tracker written here: the two sides of a roll
 //! hold the same Diffie-Hellman value, an open succeeds iff the key chains and the number agree, ...), so it is
 //! meaningful without the proof tools. `GenerationExhausted` is not reachable (it needs 2^32 - 1 rolls of one key):
-//! that refusal is covered by the Lean and TLA+ models only. The flip/hold layer lives in `vinc-transport`
+//! that refusal is covered by the Lean and TLA+ models only. The flip/hold layer lives in `pinc-transport`
 //! (`pub(crate)`), whose REKEY bodies the public `Connection` API moves but whose key state it does not expose, so
 //! that layer is validated by model checking only, not by this trace.
-//! The trace is written to the directory in `VINC_TRACE_DIR` when it is set; otherwise nothing is written.
+//! The trace is written to the directory in `PINC_TRACE_DIR` when it is set; otherwise nothing is written.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -46,11 +46,11 @@
 use std::collections::HashMap;
 use std::fmt::Write as _;
 
-use vinc_crypto::{Aead, Drbg, Provider, Secret, Software};
-use vinc_security::keyroll::{ECHO_LEN, MAX_KEY_AGE_NS, MAX_REKEY_LEN, due, request_id};
-use vinc_security::{Env, Failure, Limits, PacketKey, RecordError, Rekey, Roll, roll_secret};
-use vinc_tests::SplitMix64;
-use vinc_wire::WireError;
+use pinc_crypto::{Aead, Drbg, Provider, Secret, Software};
+use pinc_security::keyroll::{ECHO_LEN, MAX_KEY_AGE_NS, MAX_REKEY_LEN, due, request_id};
+use pinc_security::{Env, Failure, Limits, PacketKey, RecordError, Rekey, Roll, roll_secret};
+use pinc_tests::SplitMix64;
+use pinc_wire::WireError;
 
 type Key = PacketKey<Software>;
 
@@ -164,7 +164,7 @@ struct Run {
     answered: HashMap<[u8; 32], ([u8; 32], [u8; 32])>,
 }
 
-const PLAIN: &[u8; 8] = b"VINCroll";
+const PLAIN: &[u8; 8] = b"PINCroll";
 const AAD: &[u8] = b"hdr";
 
 fn new_run(rng: &mut SplitMix64, tr: &mut Trace, id: u32) -> Run {
@@ -638,7 +638,7 @@ fn codec_events(rng: &mut SplitMix64, tr: &mut Trace) {
                     assert_eq!(
                         n,
                         if answer {
-                            33 + ECHO_LEN + vinc_wire::varint::encoded_len(spn)
+                            33 + ECHO_LEN + pinc_wire::varint::encoded_len(spn)
                         } else {
                             33
                         }
@@ -718,7 +718,7 @@ fn key_roll_runs_match_the_models() {
     let (s, d1, d2) = (Secret::new([5; 32]), Secret::new([6; 32]), Secret::new([7; 32]));
     assert_ne!(roll_secret(&s, &d1).expose(), roll_secret(&s, &d2).expose());
     assert_ne!(tr.0, "");
-    if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
+    if let Ok(dir) = std::env::var("PINC_TRACE_DIR") {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(std::path::Path::new(&dir).join("keyroll.ndjson"), &tr.0).unwrap();
     }

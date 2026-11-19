@@ -14,7 +14,7 @@
     clippy::many_single_char_names
 )]
 
-use vinc_connect::client::tunnel::{
+use pinc_connect::client::tunnel::{
     HUB_TUNNEL_FRESH, HubSession, Rides, SPL_LIVE, SPLICE_SPAN, Splices, THIN_SPLICE_FRESH, TUNNEL_STALE, ThinSplice,
     Via, decide, hub_ok, thin_splice,
 };
@@ -94,9 +94,9 @@ fn splice_live_keeps_the_hub_path_for_30s_or_twice_the_rtt() {
     assert_eq!(s.age(12 * S, 0, &p), None);
 }
 
-fn connect_node(tag: u8) -> vinc_crypto::NodeId {
-    vinc_crypto::NodeId {
-        alg: vinc_crypto::IdentityAlg::Ed25519,
+fn connect_node(tag: u8) -> pinc_crypto::NodeId {
+    pinc_crypto::NodeId {
+        alg: pinc_crypto::IdentityAlg::Ed25519,
         bytes: [tag; 32],
     }
 }

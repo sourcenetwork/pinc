@@ -206,7 +206,7 @@ impl<'a> AppSet<'a> {
         self.call(i, cmd, wait).await
     }
 
-    /// Have every node record its trace and packet log, when `on` (VINC nodes only act on it).
+    /// Have every node record its trace and packet log, when `on` (PINC nodes only act on it).
     pub(crate) fn with_trace(mut self, on: bool) -> Self {
         for i in &mut self.inits {
             i.trace = on;

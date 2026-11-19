@@ -6,8 +6,8 @@
 mod common;
 
 use common::{MIB, NO_CAP, pattern};
-use vinc_transport::stream::pool::{BufferPool, CHUNK_SIZE};
-use vinc_transport::stream::{Config, NoSource, PeerLimits, StreamError, Streams};
+use pinc_transport::stream::pool::{BufferPool, CHUNK_SIZE};
+use pinc_transport::stream::{Config, NoSource, PeerLimits, StreamError, Streams};
 
 const FRAME: usize = 256;
 

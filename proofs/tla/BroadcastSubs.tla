@@ -1,6 +1,6 @@
 ------------------------------ MODULE BroadcastSubs ------------------------------
 (***************************************************************************)
-(* Subscriptions on a hub across a member's absence, vinc-broadcast        *)
+(* Subscriptions on a hub across a member's absence, pinc-broadcast        *)
 (* subs.rs and gap.rs (on_sub, on_unsub): SUB makes a member's entry live, *)
 (* UNSUB removes it, hold keeps every live entry of a member but marks it  *)
 (* held (nothing is pushed to it), restore makes the held entries live and *)
@@ -17,7 +17,7 @@
 (* TableBound (entries per topic stay within TableMax; past it a SUB is    *)
 (* ignored, as in the code).                                               *)
 (*                                                                         *)
-(* Lean counterpart: proofs/lean/Vinc/BroadcastSubs.lean.                  *)
+(* Lean counterpart: proofs/lean/Pinc/BroadcastSubs.lean.                  *)
 (***************************************************************************)
 EXTENDS Integers, FiniteSets
 

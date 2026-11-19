@@ -1,6 +1,6 @@
 name = "defra-pubsub-large"
 about = "Topic pubsub with DefraDB-sized documents above iroh gossip's 4 KiB default: one publisher sends 500 messages of 16 KiB at 20 a second to 10 peers across a WAN (20 ms round trip), iroh capped at the 4096-byte gossip message defradb.rs runs with."
-stacks = ["vinc", "iroh", "libp2p"]
+stacks = ["pinc", "iroh", "libp2p"]
 repetitions = 3
 
 [resources]

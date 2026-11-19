@@ -13,8 +13,8 @@ use std::cell::Cell;
 use std::net::SocketAddr;
 use std::rc::Rc;
 
-use vinc_core::{Answer, Command, LedgerEntry, Query, Role, SessionId};
-use vinc_tests::*;
+use pinc_core::{Answer, Command, LedgerEntry, Query, Role, SessionId};
+use pinc_tests::*;
 
 fn ledger_of(net: &mut CoreNet, node: usize, a: SocketAddr) -> Option<LedgerEntry> {
     match net.nodes[node].ep.query(Query::Ledger(a)) {
@@ -26,7 +26,7 @@ fn ledger_of(net: &mut CoreNet, node: usize, a: SocketAddr) -> Option<LedgerEntr
 /// Open a stream on `session` of `node` and write what it takes of `data`. Returns the stream and the bytes taken.
 fn open_and_write(net: &mut CoreNet, node: usize, session: SessionId, data: &[u8]) -> (u64, usize) {
     let now = net.now;
-    let Ok(vinc_core::Value::Stream(stream)) = net.nodes[node]
+    let Ok(pinc_core::Value::Stream(stream)) = net.nodes[node]
         .cmd(now, Command::OpenStream { session, bidi: true })
         .map(|r| r.value)
     else {
@@ -42,7 +42,7 @@ fn write_more(net: &mut CoreNet, node: usize, session: SessionId, stream: u64, d
         .cmd(now, Command::Write { session, stream, data })
         .map(|r| r.value)
     {
-        Ok(vinc_core::Value::Written(n)) => n,
+        Ok(pinc_core::Value::Written(n)) => n,
         other => panic!("write refused: {other:?}"),
     };
     net.pump(node);

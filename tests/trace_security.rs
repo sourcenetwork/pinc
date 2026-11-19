@@ -2,7 +2,7 @@
 //! budget and the padding sizes, driven through the public API and recorded as ndjson (`security.ndjson`) for the
 //! TLA+ trace checks (`TraceLabels`, `TraceCredit`, `TraceAmp`, `TracePadding`) and the Lean replay.
 //!
-//! * `lbl`: every label of `labels::ALL`, the prefix and the labels of `vinc-crypto`, as strings.
+//! * `lbl`: every label of `labels::ALL`, the prefix and the labels of `pinc-crypto`, as strings.
 //! * `cred`: `CreditRecord::new` (the window request as four 16-bit limbs, since it is a `u64`) with the record it
 //!   builds, its `window_bytes` and its 6 bytes; `decode` of random 6-byte strings with the re-encoded bytes; and
 //!   `covers` of pairs of records. Every result is also asserted here against an independent computation.
@@ -12,7 +12,7 @@
 //!   with the key and signature lengths of the algorithm, and the public size constants with the connection id lengths
 //!   of the transport's default and of the endpoint.
 //!
-//! The trace is written to the directory in `VINC_TRACE_DIR` when it is set; otherwise nothing is written.
+//! The trace is written to the directory in `PINC_TRACE_DIR` when it is set; otherwise nothing is written.
 #![allow(
     clippy::unwrap_used,
     clippy::indexing_slicing,
@@ -22,18 +22,18 @@
 
 use std::fmt::Write as _;
 
-use vinc_crypto::provider::KEM_CIPHERTEXT_LEN;
-use vinc_crypto::{Aead, IdentityAlg};
-use vinc_security::AmpBudget;
-use vinc_security::amp::{FACTOR, OVERHEAD};
-use vinc_security::credit::{CREDIT_RECORD_LEN, CreditRecord, WINDOW_UNIT};
-use vinc_security::ids::MAX_CID_LEN;
-use vinc_security::labels;
-use vinc_security::message::{
+use pinc_crypto::provider::KEM_CIPHERTEXT_LEN;
+use pinc_crypto::{Aead, IdentityAlg};
+use pinc_security::AmpBudget;
+use pinc_security::amp::{FACTOR, OVERHEAD};
+use pinc_security::credit::{CREDIT_RECORD_LEN, CreditRecord, WINDOW_UNIT};
+use pinc_security::ids::MAX_CID_LEN;
+use pinc_security::labels;
+use pinc_security::message::{
     FRAGMENT_HEADER, FULL_INITIAL_MIN, InitialForm, MAX_ID_SIG_LEN, MAX_MESSAGE_LEN, MAX_SEALED_LEN, MIN_DATAGRAM,
     SHORT_INITIAL_MIN, SPLIT_CID_MAX, WHOLE_REPLY_MAX, min_initial_len, reply_datagrams, reply_len,
 };
-use vinc_tests::SplitMix64;
+use pinc_tests::SplitMix64;
 
 /// A `u64` as the four 16-bit limbs the TLA+ `U64` module reads, least significant first.
 fn limbs(v: u64) -> String {
@@ -60,15 +60,15 @@ fn labels_trace(out: &mut String) {
         out,
         r#"{{"t":"lbl","prefix":"{}","all":[{all}],"crypto":["{}","{}"]}}"#,
         labels::PREFIX,
-        vinc_crypto::labels::NODE_ID,
-        vinc_crypto::labels::HYBRID_SIGNATURE
+        pinc_crypto::labels::NODE_ID,
+        pinc_crypto::labels::HYBRID_SIGNATURE
     );
     // the facts the model proves, asserted on the real constants
     assert_eq!(labels::ALL.len(), 23);
     for (i, a) in labels::ALL.iter().enumerate() {
         assert!(a.starts_with(labels::PREFIX) && a.len() > labels::PREFIX.len() && a.is_ascii());
         assert!(!labels::ALL[..i].contains(a), "label {a} repeats");
-        assert!(*a != vinc_crypto::labels::NODE_ID && *a != vinc_crypto::labels::HYBRID_SIGNATURE);
+        assert!(*a != pinc_crypto::labels::NODE_ID && *a != pinc_crypto::labels::HYBRID_SIGNATURE);
     }
     assert_eq!(labels::SIGNATURE_RESPONDER.len(), labels::SIGNATURE_INITIATOR.len());
 }
@@ -315,10 +315,10 @@ fn pad_trace(out: &mut String) {
     let _ = writeln!(
         out,
         r#"{{"t":"pad","op":"const","full":{FULL_INITIAL_MIN},"short":{SHORT_INITIAL_MIN},"dg":{MIN_DATAGRAM},"frag":{FRAGMENT_HEADER},"whole":{WHOLE_REPLY_MAX},"splitcid":{SPLIT_CID_MAX},"txcid":{},"epcid":{},"idsig":{MAX_ID_SIG_LEN},"sealed":{MAX_SEALED_LEN},"msg":{MAX_MESSAGE_LEN},"overhead":{OVERHEAD},"factor":{FACTOR},"maxpk":{},"maxsig":{},"kemct":{KEM_CIPHERTEXT_LEN},"tag":{},"credit":{CREDIT_RECORD_LEN},"cid":{MAX_CID_LEN}}}"#,
-        vinc_transport::conn::Config::new().cid_len,
-        vinc_core::CID_LEN,
-        vinc_crypto::identity::MAX_PUBLIC_KEY_LEN,
-        vinc_crypto::identity::MAX_SIGNATURE_LEN,
+        pinc_transport::conn::Config::new().cid_len,
+        pinc_core::CID_LEN,
+        pinc_crypto::identity::MAX_PUBLIC_KEY_LEN,
+        pinc_crypto::identity::MAX_SIGNATURE_LEN,
         Aead::TAG_LEN
     );
 }
@@ -342,12 +342,12 @@ fn security_traces() {
         r#""op":"can","n""#,
     ] {
         assert!(
-            vinc_tests::soaking() || out.contains(needle),
+            pinc_tests::soaking() || out.contains(needle),
             "the runs never produce {needle}"
         );
     }
     assert!(out.contains(r#""can":true"#) && out.contains(r#""can":false"#));
-    let Some(dir) = std::env::var_os("VINC_TRACE_DIR") else {
+    let Some(dir) = std::env::var_os("PINC_TRACE_DIR") else {
         return;
     };
     let dir = std::path::PathBuf::from(dir);

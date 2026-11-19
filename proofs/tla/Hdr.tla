@@ -1,6 +1,6 @@
 -------------------------------- MODULE Hdr ---------------------------------
 (***************************************************************************)
-(* The packet header codecs of vinc-transport (packet/header.rs,           *)
+(* The packet header codecs of pinc-transport (packet/header.rs,           *)
 (* packet/datagram.rs and the associated data of packet/protect.rs),       *)
 (* checked over the operators of HdrOps.tla.                               *)
 (*                                                                         *)
@@ -56,7 +56,7 @@
 (* WriteAtomic; Hdr_coalesced.cfg must violate NotCoalesced (a datagram of *)
 (* two long packets and a short one is reached).                           *)
 (*                                                                         *)
-(* Lean counterparts (proofs/lean/Vinc/TransportHdrThm.lean and            *)
+(* Lean counterparts (proofs/lean/Pinc/TransportHdrThm.lean and            *)
 (* TransportHdrSplit.lean): writeLong_refused_nothing, writeLong_ok, the   *)
 (* writeLong_err theorems, late_writes, parse_write, parse_canonical,      *)
 (* parse_cut, the parse_err theorems, writeShort_refused_nothing,          *)

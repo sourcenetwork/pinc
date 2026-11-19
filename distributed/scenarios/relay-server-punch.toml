@@ -1,6 +1,6 @@
 name = "relay-server-punch"
-about = "relay-server-no-punch with a punch possible: the consumer behind a port-restricted NAT, the provider on a routed site. The pair starts on the vinc_relay server and moves to a direct path; the relay forwards only the first packets."
-stacks = ["vinc"]
+about = "relay-server-no-punch with a punch possible: the consumer behind a port-restricted NAT, the provider on a routed site. The pair starts on the pinc_relay server and moves to a direct path; the relay forwards only the first packets."
+stacks = ["pinc"]
 repetitions = 3
 
 [[sites]]

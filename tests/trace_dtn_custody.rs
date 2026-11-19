@@ -1,7 +1,7 @@
 //! Trace generation for custody: seeded random runs of the real `CustodyBook` on a shared `Ledger` through the public
 //! API (`accept`, `offer`, `on_ack`, `delivered`, `expire`, `holds`, `owed_to`, `len`) and of the host's direct calls
 //! on the ledger, recorded as ndjson for the TLA+ trace check (`TraceDtnCustody.tla`) and the Lean replay
-//! (`Vinc/TraceDtnStore.lean`).
+//! (`Pinc/TraceDtnStore.lean`).
 //!
 //! The world is small so that every branch is met: books of one to three records, ledgers of two to four slots, a
 //! budget of ten bytes, four bundles, three custodian nodes (real Ed25519 keys), sizes of 1 to 6 bytes, lifetimes and
@@ -23,7 +23,7 @@
 //!
 //! The test asserts everything itself against a tracker written here that does not share code with the book
 //! (`dtn_ledger_oracle` for the ledger), and that every outcome was met, so it is meaningful without the proof tools.
-//! The trace is written to `dtn_custody.ndjson` in the directory in `VINC_TRACE_DIR` when it is set; otherwise nothing
+//! The trace is written to `dtn_custody.ndjson` in the directory in `PINC_TRACE_DIR` when it is set; otherwise nothing
 //! is written.
 #![allow(
     clippy::unwrap_used,
@@ -45,12 +45,12 @@ mod dtn_ledger_oracle;
 use std::collections::BTreeMap;
 
 use dtn_ledger_oracle::{Ent, Oracle, Refusal, ents_json};
-use vinc_crypto::{IdentityAlg, Keypair, NodeId};
-use vinc_dtn::custody::{CustodyAck, CustodyBook, CustodyError, Incoming};
-use vinc_dtn::head::BundleId;
-use vinc_dtn::hlc::Hlc;
-use vinc_dtn::store::{Class, Entry, Key, Ledger, Space, StoreError};
-use vinc_tests::SplitMix64;
+use pinc_crypto::{IdentityAlg, Keypair, NodeId};
+use pinc_dtn::custody::{CustodyAck, CustodyBook, CustodyError, Incoming};
+use pinc_dtn::head::BundleId;
+use pinc_dtn::hlc::Hlc;
+use pinc_dtn::store::{Class, Entry, Key, Ledger, Space, StoreError};
+use pinc_tests::SplitMix64;
 
 const BUNDLES: u8 = 4;
 const NODES: u8 = 3;
@@ -558,12 +558,12 @@ fn custody_runs_match_the_tracker_and_are_recorded() {
         "stale record after a host expiry",
     ] {
         assert!(
-            vinc_tests::soaking() || seen.0.get(what).copied().unwrap_or(0) > 0,
+            pinc_tests::soaking() || seen.0.get(what).copied().unwrap_or(0) > 0,
             "the world never met: {what}: {:?}",
             seen.0
         );
     }
-    if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
+    if let Ok(dir) = std::env::var("PINC_TRACE_DIR") {
         std::fs::create_dir_all(&dir).unwrap();
         let mut text = out.join("\n");
         text.push('\n');

@@ -1,9 +1,9 @@
 //! Tests of `SoftwareStore`: signing for every identity algorithm, ML-KEM decapsulation, sealing and randomness.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
 
-use vinc_crypto::identity::verify;
-use vinc_crypto::{CryptoError, IdentityAlg, Keypair, NodeId, Provider, Software};
-use vinc_keystore::{KeyStore, KeyStoreError, SoftwareStore};
+use pinc_crypto::identity::verify;
+use pinc_crypto::{CryptoError, IdentityAlg, Keypair, NodeId, Provider, Software};
+use pinc_keystore::{KeyStore, KeyStoreError, SoftwareStore};
 
 const ALGS: [IdentityAlg; 4] = [
     IdentityAlg::Ed25519,
@@ -234,8 +234,8 @@ fn reseed_with_equal_entropy_keeps_stores_in_step() {
 #[test]
 fn os_random_fills_and_differs() {
     let (mut a, mut b) = ([0u8; 32], [0u8; 32]);
-    vinc_keystore::os_random(&mut a).unwrap();
-    vinc_keystore::os_random(&mut b).unwrap();
+    pinc_keystore::os_random(&mut a).unwrap();
+    pinc_keystore::os_random(&mut b).unwrap();
     assert_ne!(a, b);
     assert_ne!(a, [0; 32]);
 }

@@ -1,7 +1,7 @@
 ------------------------------- MODULE Orphan -------------------------------
 (***************************************************************************)
 (* The endpoint's table of handshake fragments held until the start of     *)
-(* their message arrives (vinc-core orphan.rs), over every interleaving of *)
+(* their message arrives (pinc-core orphan.rs), over every interleaving of *)
 (* hold, take and expire at any times (a clock that steps back included),  *)
 (* at small sizes (OrphanOps.tla has the operators).                       *)
 (*                                                                         *)
@@ -28,7 +28,7 @@
 (* witness Orphan_stale sets it past every time, a take that forgot to     *)
 (* expire, and GivenRight fails. Orphan_evict is a reachability witness:   *)
 (* an eviction happens.                                                    *)
-(* Lean counterpart: proofs/lean/Vinc/CoreOrphan*.lean.                    *)
+(* Lean counterpart: proofs/lean/Pinc/CoreOrphan*.lean.                    *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
 CONSTANTS N, MAX, LIFE, TAKE_LIFE, TMAX, KEYS, HMAX

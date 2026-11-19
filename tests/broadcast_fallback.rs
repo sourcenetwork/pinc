@@ -14,8 +14,8 @@
 mod common;
 
 use common::{Ev, Net, SEC, ty};
-use vinc_broadcast::consts::FALLBACK_BATCH;
-use vinc_crypto::IdentityAlg;
+use pinc_broadcast::consts::FALLBACK_BATCH;
+use pinc_crypto::IdentityAlg;
 
 const T: &[u8] = b"cloud";
 

@@ -15,11 +15,11 @@ mod common;
 use std::thread;
 
 use common::{Dir, End, assert_exact, fixed_set, index, mutate, pair, run_with};
-use vinc_reconcile::wire::{frame_body, tag};
-use vinc_reconcile::{
+use pinc_reconcile::wire::{frame_body, tag};
+use pinc_reconcile::{
     Error, Fingerprint, Initiator, ItemIndex, Limits, MemError, MemIndex, Reason, Responder, RunError, item_id,
 };
-use vinc_tests::SplitMix64;
+use pinc_tests::SplitMix64;
 
 /// Replace `from` by `to` in `msg` (an id inside an ids part), and fix nothing else: the lengths do not change.
 fn swap_bytes(msg: &mut [u8], from: &[u8], to: &[u8]) -> bool {

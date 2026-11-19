@@ -17,16 +17,16 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use vinc_broadcast::{Config, Event, Host, Lane, Topics};
-use vinc_crypto::{IdentityAlg, Keypair};
-use vinc_membership::NodeId;
+use pinc_broadcast::{Config, Event, Host, Lane, Topics};
+use pinc_crypto::{IdentityAlg, Keypair};
+use pinc_membership::NodeId;
 
 pub const SEC: u64 = 1_000_000_000;
 pub const WALL0: u64 = 1_700_000_000_000;
 
 /// The id key of node `i`.
-pub fn map_key(i: usize) -> vinc_broadcast::IdKey {
-    vinc_tests::id_key(0x5eed + i as u64)
+pub fn map_key(i: usize) -> pinc_broadcast::IdKey {
+    pinc_tests::id_key(0x5eed + i as u64)
 }
 
 pub const ALGS: [IdentityAlg; 4] = [
@@ -223,7 +223,7 @@ pub struct Node {
 pub struct Net {
     pub now: u64,
     pub algs: Vec<IdentityAlg>,
-    pub limits: vinc_broadcast::Limits,
+    pub limits: pinc_broadcast::Limits,
     pub hubs: usize,
     /// Whether the nodes queue trace records.
     pub trace: bool,
@@ -277,10 +277,10 @@ impl Net {
     }
 
     pub fn with_algs(algs: &[IdentityAlg], hubs: usize, start: u64) -> Self {
-        Self::with_limits(algs, hubs, start, vinc_broadcast::Limits::default())
+        Self::with_limits(algs, hubs, start, pinc_broadcast::Limits::default())
     }
 
-    pub fn with_limits(algs: &[IdentityAlg], hubs: usize, start: u64, limits: vinc_broadcast::Limits) -> Self {
+    pub fn with_limits(algs: &[IdentityAlg], hubs: usize, start: u64, limits: pinc_broadcast::Limits) -> Self {
         Self::with_trace(algs, hubs, start, limits, true)
     }
 
@@ -289,7 +289,7 @@ impl Net {
         algs: &[IdentityAlg],
         hubs: usize,
         start: u64,
-        limits: vinc_broadcast::Limits,
+        limits: pinc_broadcast::Limits,
         trace: bool,
     ) -> Self {
         let keys: Vec<Keypair> = algs
@@ -554,4 +554,4 @@ impl Net {
     }
 }
 
-pub use vinc_broadcast::wire::ty;
+pub use pinc_broadcast::wire::ty;

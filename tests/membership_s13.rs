@@ -31,8 +31,8 @@ mod world;
 
 use std::collections::BTreeSet;
 
-use vinc_membership::codec::{Frame, ty};
-use vinc_membership::{Carrier, Event, NodeId, Trace};
+use pinc_membership::codec::{Frame, ty};
+use pinc_membership::{Carrier, Event, NodeId, Trace};
 use world::{Bc, LEAVE, MS, SEC, World, id};
 
 const START: u64 = 100 * SEC;
@@ -247,7 +247,7 @@ fn another_hubs_down_is_refused_while_our_lease_is_fresh() {
         traces(&w, 1, |t| matches!(
             t,
             Trace::DownRefused {
-                why: vinc_membership::event::Refusal::LeaseFresh,
+                why: pinc_membership::event::Refusal::LeaseFresh,
                 ..
             }
         )),
@@ -361,7 +361,7 @@ fn a_leave_is_reported_at_every_node() {
 
 fn crash_scenario(seed: u64, carrier: bool) -> (u64, World) {
     let mut w = World::new(2, 6, START);
-    w.rng = vinc_tests::SplitMix64::new(seed);
+    w.rng = pinc_tests::SplitMix64::new(seed);
     w.loss_pct = 20;
     w.attach_all();
     w.run(120 * SEC);
@@ -416,7 +416,7 @@ fn a_failed_member_is_confirmed_within_the_awareness_bound_under_loss() {
 #[test]
 fn live_members_are_never_confirmed_down_over_a_long_run_with_churn_and_carrier_drops() {
     let mut w = World::new(2, 5, START);
-    w.rng = vinc_tests::SplitMix64::new(99);
+    w.rng = pinc_tests::SplitMix64::new(99);
     w.loss_pct = 15;
     w.attach_all();
     w.run(10 * SEC);

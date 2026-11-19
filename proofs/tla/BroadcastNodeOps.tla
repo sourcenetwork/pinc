@@ -1,6 +1,6 @@
 ---------------------------- MODULE BroadcastNodeOps ----------------------------
 (***************************************************************************)
-(* The receive path of one vinc-broadcast node, as pure operators: the     *)
+(* The receive path of one pinc-broadcast node, as pure operators: the     *)
 (* functions of msg.rs (on_msg, hub_store, offer, offer_held, deliver,     *)
 (* acp_answer), floors.rs (is_old, hold_for_floor, floor_check), timers.rs *)
 (* (sweep, poll_timeout) and table.rs (Seen) over one topic. A node state  *)

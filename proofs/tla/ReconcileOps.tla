@@ -1,9 +1,9 @@
 ---------------------------- MODULE ReconcileOps ----------------------------
 (***************************************************************************)
-(* The byte-level building blocks of vinc-reconcile (wire.rs, the index    *)
+(* The byte-level building blocks of pinc-reconcile (wire.rs, the index    *)
 (* queries of index.rs/mem.rs and the Out buffer of core.rs), written step *)
-(* for step as the Lean model Vinc/ReconcileWire.lean and                  *)
-(* Vinc/ReconcileMachine.lean. ReconcileCore.tla builds the part rules and *)
+(* for step as the Lean model Pinc/ReconcileWire.lean and                  *)
+(* Pinc/ReconcileMachine.lean. ReconcileCore.tla builds the part rules and *)
 (* the handlers on it; Reconcile.tla is the system.                        *)
 (*                                                                         *)
 (* Conventions. Bytes are ints below 256; an item, a bound and a message   *)
@@ -26,7 +26,7 @@
 (* independence of the item hashes is an assumption of the properties, not *)
 (* of the model; the one-hot oracle of Reconcile.tla states it exactly.    *)
 (*                                                                         *)
-(* Lean: Vinc/ReconcileWire.lean (Reconcile.readBound, putBound, ...),     *)
+(* Lean: Pinc/ReconcileWire.lean (Reconcile.readBound, putBound, ...),     *)
 (* ReconcileWireProofs (round trip and canonical form).                    *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC

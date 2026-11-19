@@ -19,9 +19,9 @@ mod common;
 use std::net::SocketAddr;
 
 use common::{S, dial, flights, is_connected, message_type, sends};
-use vinc_core::{Answer, Command, ConnectFailure, EndReason, Event, IfaceEvent, IfaceId, Query, Role, Value};
-use vinc_tests::*;
-use vinc_transport::conn::CloseReason;
+use pinc_core::{Answer, Command, ConnectFailure, EndReason, Event, IfaceEvent, IfaceId, Query, Role, Value};
+use pinc_tests::*;
+use pinc_transport::conn::CloseReason;
 
 #[test]
 fn a_quiet_dialer_holds_a_direct_path_every_fourteen_seconds_and_only_the_dialer_pings() {
@@ -690,5 +690,5 @@ fn a_dialed_hub_session_acknowledges_every_fourth_packet() {
 
 #[test]
 fn an_endpoint_sends_the_first_handshake_flight_whole_by_default() {
-    assert!(vinc_core::EndpointConfig::new(1).conn.flight_split);
+    assert!(pinc_core::EndpointConfig::new(1).conn.flight_split);
 }

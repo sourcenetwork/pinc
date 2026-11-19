@@ -1,4 +1,4 @@
-//! Benchmark of the `vinc-sim` engine: events per second with 1,000 nodes.
+//! Benchmark of the `pinc-sim` engine: events per second with 1,000 nodes.
 //!
 //! 500 client and server pairs of toy echo nodes run to completion over links with delay, jitter and 1% loss. The
 //! reported throughput is engine events (timers, arrivals, commands) per second, including the toy nodes' own work.
@@ -9,9 +9,9 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main};
-use vinc_sim::toy::{Toy, ToyCmd, ToyConfig};
-use vinc_sim::toy_stream::{StreamCmd, StreamProbe};
-use vinc_sim::{LinkConfig, Loss, MS, SEC, Sim, SimConfig, StreamId, StreamKind};
+use pinc_sim::toy::{Toy, ToyCmd, ToyConfig};
+use pinc_sim::toy_stream::{StreamCmd, StreamProbe};
+use pinc_sim::{LinkConfig, Loss, MS, SEC, Sim, SimConfig, StreamId, StreamKind};
 
 const PAIRS: u32 = 500;
 

@@ -10,7 +10,7 @@
 (* clock that was set back); with Spaced a record is built only once the   *)
 (* clock passed the last record's number.                                  *)
 (*                                                                         *)
-(* Properties (Lean: Vinc/ConnectOwnThm.lean):                             *)
+(* Properties (Lean: Pinc/ConnectOwnThm.lean):                             *)
 (*  CandCap      the record lists at most cap addresses (MAX_ADDRS)        *)
 (*  CandPrefix   the distinct reflexive addresses come first, in relay     *)
 (*               order                                                     *)

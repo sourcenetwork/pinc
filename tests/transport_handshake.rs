@@ -13,9 +13,9 @@
     clippy::similar_names
 )]
 
-use vinc_crypto::IdentityAlg;
-use vinc_tests::*;
-use vinc_transport::conn::{CloseReason, PathId, PathInfo};
+use pinc_crypto::IdentityAlg;
+use pinc_tests::*;
+use pinc_transport::conn::{CloseReason, PathId, PathInfo};
 
 /// The dialing side's resend counts at `(offset, expected count)` checkpoints, on a link that delivers nothing.
 fn dial_schedule(w: &mut World, checks: &[(u64, u64)]) -> Vec<(u64, u64)> {
@@ -188,7 +188,7 @@ fn a_responder_resends_its_flight_at_999_ms_then_every_4_s() {
             net.run(t0 + at, |_| false);
             assert_eq!(net.b.conn.stats().handshake_retransmits, want, "at {} ms", at / MS);
         }
-        // A responder that answered but is never established holds the handshake 60 s (`RESPONDER_HOLD`, vinc#387), not
+        // A responder that answered but is never established holds the handshake 60 s (`RESPONDER_HOLD`, pinc#387), not
         // the 30 s connect limit, then gives up.
         net.run(t0 + 59_900 * MS, |_| false);
         assert_eq!(net.b.closed(), None, "an answered responder holds its handshake 60 s");
@@ -254,7 +254,7 @@ fn a_lost_resume_reply_is_sent_again_when_the_hello_is() {
         let mut tickets = first_session(&mut w);
         let ticket = tickets.take(&w.rp.id.node_id(), ALPN, T0).unwrap();
         let (mut sa, mut sb) = (Store::new(true), Store::new(false));
-        let a = w.client(&mut sa, Some(ticket), vinc_security::ClientTickets::new());
+        let a = w.client(&mut sa, Some(ticket), pinc_security::ClientTickets::new());
         let b = w.server(&mut sb);
         let mut link = Link::new(49, Params::new(10 * MS));
         link.route(PathId(1)).ba.drop_next(1);
@@ -278,7 +278,7 @@ fn an_unanswered_hello_falls_back_after_three_tries_and_a_late_reply_still_resum
         let mut tickets = first_session(&mut w);
         let ticket = tickets.take(&w.rp.id.node_id(), ALPN, T0).unwrap();
         let (mut sa, mut sb) = (Store::new(true), Store::new(false));
-        let a = w.client(&mut sa, Some(ticket), vinc_security::ClientTickets::new());
+        let a = w.client(&mut sa, Some(ticket), pinc_security::ClientTickets::new());
         let b = w.server(&mut sb);
         // Replies take 2 s: the Hello is sent at 0, 0.5 s, and the third send at 1.5 s is a full Initial.
         let mut link = Link::new(48, Params::new(10 * MS));
@@ -329,7 +329,7 @@ fn a_resumed_responder_returns_its_buffers_at_the_first_1_rtt_packet() {
         let mut tickets = first_session(&mut w);
         let ticket = tickets.take(&w.rp.id.node_id(), ALPN, T0).unwrap();
         let (mut sa, mut sb) = (Store::new(true), Store::new(false));
-        let a = w.client(&mut sa, Some(ticket), vinc_security::ClientTickets::new());
+        let a = w.client(&mut sa, Some(ticket), pinc_security::ClientTickets::new());
         let b = w.server(&mut sb);
         let mut net = Net::new(a, b, Link::new(46, Params::new(10 * MS)), &mut w.stores);
         assert!(net.connect(net.now + 5 * SEC));
@@ -346,7 +346,7 @@ fn the_dialing_side_gives_the_responder_a_ticket_to_resume_towards_it() {
         let (mut sa, mut sb) = (Store::new(true), Store::new(false));
         let mut net = setup(&mut w, &mut sa, &mut sb, Link::new(45, Params::new(10 * MS)));
         assert!(net.connect(net.now + 5 * SEC));
-        let mut issued: vinc_security::ServerTickets<4> = vinc_security::ServerTickets::new();
+        let mut issued: pinc_security::ServerTickets<4> = pinc_security::ServerTickets::new();
         let now = net.now;
         net.a
             .with_env(now, |c, env| c.issue_tickets(env, &mut issued, 1, 3600))
@@ -367,11 +367,11 @@ fn the_dialing_side_gives_the_responder_a_ticket_to_resume_towards_it() {
         let r = fresh
             .a
             .with_env(now, |c, env| c.issue_tickets(env, &mut issued, 1, 3600));
-        assert_eq!(r, Err(vinc_security::Failure::UnexpectedMessage));
+        assert_eq!(r, Err(pinc_security::Failure::UnexpectedMessage));
     });
 }
 
-fn dialer_id(net: &Net<'_, '_>) -> vinc_crypto::NodeId {
+fn dialer_id(net: &Net<'_, '_>) -> pinc_crypto::NodeId {
     net.b.conn.session().unwrap().peer
 }
 
@@ -529,7 +529,7 @@ fn a_dial_that_began_before_the_node_measured_itself_slow_keeps_the_longer_limit
 
 /// A dialing side that established but whose Finish never reaches the responder (the responder's own handshake runs
 /// out) ends the session as unconfirmed 30 s after it established, instead of holding it until the idle timeout:
-/// the layer above then dials again (vinc#385).
+/// the layer above then dials again (pinc#385).
 #[test]
 fn a_session_the_peer_never_confirms_ends_unconfirmed_after_the_connect_limit() {
     big_stack(|| {
@@ -554,7 +554,7 @@ fn a_session_the_peer_never_confirms_ends_unconfirmed_after_the_connect_limit() 
 }
 
 /// A dialing side whose key answers come late (a slow key host) establishes when its signature is answered, and its
-/// wait for the peer to confirm counts from that instant, not from the reply that came 5 s before it (vinc#385).
+/// wait for the peer to confirm counts from that instant, not from the reply that came 5 s before it (pinc#385).
 #[test]
 fn a_late_key_answer_does_not_shorten_the_wait_for_the_peer_to_confirm() {
     big_stack(|| {
@@ -606,7 +606,7 @@ fn a_responder_that_only_rejected_is_not_held_60_s() {
             };
             w.short = short;
             let (mut sa, mut sb) = (Store::new(true), Store::new(false));
-            let a = w.client(&mut sa, ticket, vinc_security::ClientTickets::new());
+            let a = w.client(&mut sa, ticket, pinc_security::ClientTickets::new());
             let b = w.server(&mut sb);
             let mut net = Net::new(a, b, Link::new(57, Params::new(10 * MS)), &mut w.stores);
             let t0 = net.now;

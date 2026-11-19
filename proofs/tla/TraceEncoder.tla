@@ -1,6 +1,6 @@
 ----------------------------- MODULE TraceEncoder -----------------------------
 (***************************************************************************)
-(* Trace validation of vinc-dag RangeEncoder, encoded_len and encode_range *)
+(* Trace validation of pinc-dag RangeEncoder, encoded_len and encode_range *)
 (* (tree/encode.rs).                                                       *)
 (*                                                                         *)
 (* The Rust test tests/trace_tla.rs records, for layouts from 0 to u64::MAX *)
@@ -17,7 +17,7 @@
 (* EncodeRange (on a 64-bit usize).                                        *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds tla/encoder.ndjson    *)
+(* variable PINC_TRACE_DIR, the directory that holds tla/encoder.ndjson    *)
 (* and tla/encout.ndjson.                                                  *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, TLC, Json, IOUtils
@@ -28,8 +28,8 @@ E == INSTANCE Encoder WITH WalkK <- 0, c <- 0
 U == INSTANCE U64
 L == INSTANCE Layout WITH SmallLen <- 0, PreN <- 0, c <- 0
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/tla/encoder.ndjson")
-         \o ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/tla/encout.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/tla/encoder.ndjson")
+         \o ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/tla/encout.ndjson")
 
 Init == c = [t |-> "root"]
 

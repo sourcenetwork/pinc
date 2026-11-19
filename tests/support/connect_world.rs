@@ -11,7 +11,7 @@
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-use vinc_sim::{IfaceEvent, Node, NodeId as SimNode, Sim, StreamEvent, StreamId, StreamKind, StreamOp, Time, Transmit};
+use pinc_sim::{IfaceEvent, Node, NodeId as SimNode, Sim, StreamEvent, StreamId, StreamKind, StreamOp, Time, Transmit};
 
 use crate::connect_client::{Client, ClientSpec, Cmd, RelaySpec};
 use crate::connect_host::Ev;

@@ -8,9 +8,9 @@
     clippy::too_many_lines
 )]
 
-use vinc_crypto::IdentityAlg;
-use vinc_tests::*;
-use vinc_transport::stream;
+use pinc_crypto::IdentityAlg;
+use pinc_tests::*;
+use pinc_transport::stream;
 
 const RING: usize = 2;
 const SEEDS: u64 = 24;

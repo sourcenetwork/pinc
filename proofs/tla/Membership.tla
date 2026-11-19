@@ -1,6 +1,6 @@
 ------------------------------ MODULE Membership ----------------------------
 (***************************************************************************)
-(* The membership machine of vinc-membership: the member view (view.rs)     *)
+(* The membership machine of pinc-membership: the member view (view.rs)     *)
 (* and the hub roster (hub.rs), operator for operator.                      *)
 (*                                                                         *)
 (* Every Rust function is an operator of the same name in CamelCase, from   *)
@@ -18,7 +18,7 @@
 (* run time because a hub's delta about itself returns at once.             *)
 (*                                                                         *)
 (* The timers, the dispatch of frames and the session events are in         *)
-(* MembershipOps.tla. Lean counterpart: Vinc/MembershipModel*.lean.         *)
+(* MembershipOps.tla. Lean counterpart: Pinc/MembershipModel*.lean.         *)
 (***************************************************************************)
 EXTENDS MemCore
 

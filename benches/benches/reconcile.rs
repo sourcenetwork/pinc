@@ -1,4 +1,4 @@
-//! Benchmarks of `vinc-reconcile`: the time and the bytes of a reconciliation against the size of the difference, on
+//! Benchmarks of `pinc-reconcile`: the time and the bytes of a reconciliation against the size of the difference, on
 //! sets of 10^6 items of 40 bytes. Each session runs both sides in one thread over in-memory indexes, so the time is
 //! the work of the protocol (fingerprints, splits, leaves, merges), without a network. Each difference runs under the
 //! default message limit and under a 16 KiB limit, where a round is spread over many messages. The bytes and messages
@@ -15,7 +15,7 @@ use std::collections::BTreeSet;
 use std::hint::black_box;
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use vinc_reconcile::{Initiator, Limits, MemIndex, Responder, Step};
+use pinc_reconcile::{Initiator, Limits, MemIndex, Responder, Step};
 
 const N: usize = 1_000_000;
 const ITEM: usize = 40;

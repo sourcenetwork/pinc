@@ -1,6 +1,6 @@
 ------------------------------ MODULE ValuesSys ------------------------------
 (***************************************************************************)
-(* System model of the multi-provider value fetch: vinc-values            *)
+(* System model of the multi-provider value fetch: pinc-values            *)
 (* fetch/{mod,sched,recv,rx,wt,stall}.rs at the granularity of whole       *)
 (* groups. Hashing is symbolic and collision free (as in                   *)
 (* RangeVerifier.tla): a group hashes to the root exactly when its bytes    *)

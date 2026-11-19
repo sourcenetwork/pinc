@@ -1,6 +1,6 @@
 //! Trace generation for the software key store and the key host: handles, the request and answer of every operation,
 //! the sealed format, recorded as ndjson (`keystore.ndjson`) for the TLA+ trace check (`TraceKeystore.tla`) and the
-//! Lean replay (`Vinc.TraceKeystore`).
+//! Lean replay (`Pinc.TraceKeystore`).
 //!
 //! Every event is `{"t":"ks","op":...}`. A handle is named by the index of its creation in the run; the test compares
 //! handles with `==` and records whether each new handle differs from every earlier one, in this store and in the
@@ -8,13 +8,13 @@
 //! * `new`: `generate`, `generate_kem` or `insert`, with the new handle's index and whether it is distinct from all
 //!   earlier handles;
 //! * `rm`, `sign`, `pub`, `nodeid`, `dec`: one call on a handle (possibly removed, or made by the other store, or of the
-//!   other kind) and its exact result; a signature is verified with `vinc_crypto::identity::verify`, a decapsulation is
+//!   other kind) and its exact result; a signature is verified with `pinc_crypto::identity::verify`, a decapsulation is
 //!   compared with the encapsulation;
 //! * `bind`, `ans`: a `KeyHost` over a store: the binding of a handshake handle and the answer to a request;
 //! * `seal`, `unseal`: the sealed blobs of two stores and what each store makes of genuine, altered, cut, extended and
 //!   foreign blobs.
 //!
-//! The trace is written to the directory in `VINC_TRACE_DIR` when it is set; otherwise nothing is written.
+//! The trace is written to the directory in `PINC_TRACE_DIR` when it is set; otherwise nothing is written.
 #![allow(
     clippy::unwrap_used,
     clippy::indexing_slicing,
@@ -24,11 +24,11 @@
 
 use std::fmt::Write as _;
 
-use vinc_crypto::identity::verify;
-use vinc_crypto::provider::KEM_CIPHERTEXT_LEN;
-use vinc_crypto::{IdentityAlg, Keypair, NodeId, Provider, Software};
-use vinc_keystore::{KeyHandle, KeyHost, KeyStore, SoftwareStore};
-use vinc_security::{KeyHandle as SecHandle, KeyRequest, KeyResponse};
+use pinc_crypto::identity::verify;
+use pinc_crypto::provider::KEM_CIPHERTEXT_LEN;
+use pinc_crypto::{IdentityAlg, Keypair, NodeId, Provider, Software};
+use pinc_keystore::{KeyHandle, KeyHost, KeyStore, SoftwareStore};
+use pinc_security::{KeyHandle as SecHandle, KeyRequest, KeyResponse};
 
 const ALGS: [IdentityAlg; 4] = [
     IdentityAlg::Ed25519,
@@ -367,7 +367,7 @@ fn keystore_traces() {
         run.out
     });
     assert!(out.lines().count() > 200);
-    if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
+    if let Ok(dir) = std::env::var("PINC_TRACE_DIR") {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(std::path::Path::new(&dir).join("keystore.ndjson"), out).unwrap();
     }

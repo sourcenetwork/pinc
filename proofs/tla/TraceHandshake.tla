@@ -1,6 +1,6 @@
 ---------------------------- MODULE TraceHandshake ----------------------------
 (***************************************************************************)
-(* Trace validation of vinc-security Initiator and Responder.              *)
+(* Trace validation of pinc-security Initiator and Responder.              *)
 (*                                                                         *)
 (* The Rust test tests/trace_handshake.rs drives real handshakes in        *)
 (* memory (full, short Initial with hit and miss and the full prekey on    *)
@@ -44,7 +44,7 @@
 (* are numbered by the test.                                               *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds handshake.ndjson.     *)
+(* variable PINC_TRACE_DIR, the directory that holds handshake.ndjson.     *)
 (***************************************************************************)
 EXTENDS HsOps, Json, IOUtils
 
@@ -54,7 +54,7 @@ MaxS == 40
 VARIABLES ist, rst, sto, cli, snap, msgs, om, i, inode, rts
 vars == <<ist, rst, sto, cli, snap, msgs, om, i, inode, rts>>
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/handshake.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/handshake.ndjson")
 
 RNode(rn) == CASE rn = 1 -> R1 [] rn = 2 -> R2 [] OTHER -> A
 PeerNode(c) == CASE c = "R1" -> R1 [] c = "R2" -> R2 [] OTHER -> A

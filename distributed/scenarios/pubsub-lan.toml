@@ -1,6 +1,6 @@
 name = "pubsub-lan"
 about = "Publish and subscribe on one LAN: a hub and eight peers, one publisher sending 2000 messages of 256 bytes at 200 a second, every peer subscribed."
-stacks = ["vinc", "iroh", "libp2p"]
+stacks = ["pinc", "iroh", "libp2p"]
 repetitions = 3
 
 [resources]

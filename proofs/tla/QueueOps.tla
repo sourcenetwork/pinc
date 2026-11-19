@@ -1,6 +1,6 @@
 ------------------------------ MODULE QueueOps ------------------------------
 (***************************************************************************)
-(* The operations of vinc-core queue.rs (EventRing), step for step: the    *)
+(* The operations of pinc-core queue.rs (EventRing), step for step: the    *)
 (* bounded ring of events waiting for the host. Queue.tla checks them over *)
 (* every interleaving at small sizes; TraceQueue.tla replays the recorded  *)
 (* calls of the real code.                                                 *)

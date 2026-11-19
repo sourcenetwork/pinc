@@ -35,8 +35,8 @@ command -v tlc >/dev/null || { echo "proofs: tlc not found; install TLC (a wrapp
 command -v lake >/dev/null || { echo "proofs: lake not found; install Lean 4 with elan (https://github.com/leanprover/elan)" >&2; exit 1; }
 
 echo "-- lean"
-if grep -rnE '\b(sorry|admit|axiom|native_decide|unsafe|implemented_by)\b' proofs/lean/Vinc proofs/lean/Replay.lean proofs/lean/Vinc.lean \
-    | grep -v '^proofs/lean/Vinc/Axioms.lean'; then
+if grep -rnE '\b(sorry|admit|axiom|native_decide|unsafe|implemented_by)\b' proofs/lean/Pinc proofs/lean/Replay.lean proofs/lean/Pinc.lean \
+    | grep -v '^proofs/lean/Pinc/Axioms.lean'; then
     echo "proofs: sorry, admit, axiom or native_decide in the Lean sources" >&2
     exit 1
 fi
@@ -834,11 +834,11 @@ while [ -n "$(jobs -rp)" ]; do wait -n || exit 1; done
 echo "-- trace"
 dir=$(mktemp -d)
 trap 'rm -rf "$dir" "$jtmp_root"' EXIT
-VINC_TRACE_DIR="$dir" cargo test -q -p vinc-tests --features hwenc --test trace_ranges --test trace_verifier --test trace_builder --test trace_tla --test trace_handshake --test trace_security --test trace_keyroll --test trace_keylayer --test trace_stores --test trace_values_sched --test trace_values_sys --test trace_values_verify --test trace_values_wire --test trace_values_time --test trace_values_plan --test trace_connect_mailbox --test trace_connect_pack --test trace_connect_table --test trace_connect --test trace_connect_records --test trace_connect_own --test trace_transcript --test trace_dtn_store --test trace_dtn_custody --test trace_dtn_forward --test trace_dtn_rs --test trace_dtn_layout --test trace_dtn_codec --test trace_dtn_reception --test trace_dtn_seal --test trace_dtn_scenario --test trace_membership --test trace_streams --test trace_recovery --test trace_broadcast --test trace_reconcile_wire --test trace_reconcile --test trace_crypto --test trace_keystore --test trace_keystore_tpm --test trace_connect_codec --test trace_connect_link --test trace_connect_client --test trace_rx --test trace_cid --test trace_cc --test trace_pn --test trace_reasm --test trace_early --test trace_hdr --test trace_frame --test trace_framepack --test trace_ext --test trace_orphan --test trace_keepalive --test trace_node_backoff --test trace_rtt --test trace_standby --test trace_halfopen --test trace_core_table --test trace_heap --test trace_core_state --test trace_queue --test trace_held --test trace_ext_in --test trace_reach --test trace_mtu --test trace_reply_path --test trace_timers --test trace_connect_carrier --test trace_connect_ws --test trace_integration_codecs
+PINC_TRACE_DIR="$dir" cargo test -q -p pinc-tests --features hwenc --test trace_ranges --test trace_verifier --test trace_builder --test trace_tla --test trace_handshake --test trace_security --test trace_keyroll --test trace_keylayer --test trace_stores --test trace_values_sched --test trace_values_sys --test trace_values_verify --test trace_values_wire --test trace_values_time --test trace_values_plan --test trace_connect_mailbox --test trace_connect_pack --test trace_connect_table --test trace_connect --test trace_connect_records --test trace_connect_own --test trace_transcript --test trace_dtn_store --test trace_dtn_custody --test trace_dtn_forward --test trace_dtn_rs --test trace_dtn_layout --test trace_dtn_codec --test trace_dtn_reception --test trace_dtn_seal --test trace_dtn_scenario --test trace_membership --test trace_streams --test trace_recovery --test trace_broadcast --test trace_reconcile_wire --test trace_reconcile --test trace_crypto --test trace_keystore --test trace_keystore_tpm --test trace_connect_codec --test trace_connect_link --test trace_connect_client --test trace_rx --test trace_cid --test trace_cc --test trace_pn --test trace_reasm --test trace_early --test trace_hdr --test trace_frame --test trace_framepack --test trace_ext --test trace_orphan --test trace_keepalive --test trace_node_backoff --test trace_rtt --test trace_standby --test trace_halfopen --test trace_core_table --test trace_heap --test trace_core_state --test trace_queue --test trace_held --test trace_ext_in --test trace_reach --test trace_mtu --test trace_reply_path --test trace_timers --test trace_connect_carrier --test trace_connect_ws --test trace_integration_codecs
 trace_tlc() { # trace_tlc <spec> <what> : TLC of the newer era over the recorded ndjson in $dir
     local out
     # -Xss: TLC's evaluator recurses deeply on the larger builder tables, which overflows the default thread stack.
-    out=$(JAVA_TOOL_OPTIONS="$(jopts)" VINC_TRACE_DIR="$dir" java -Xss256m -XX:+UseParallelGC -cp "$TRACE_TLC:$COMMUNITY" tlc2.TLC -workers auto \
+    out=$(JAVA_TOOL_OPTIONS="$(jopts)" PINC_TRACE_DIR="$dir" java -Xss256m -XX:+UseParallelGC -cp "$TRACE_TLC:$COMMUNITY" tlc2.TLC -workers auto \
         -metadir "proofs/tla/states/$1" -config "proofs/tla/$1.cfg" "proofs/tla/$1.tla" 2>&1) \
         || { echo "$out" >&2; echo "proofs: the recorded $2 trace is not a behaviour of its TLA+ model" >&2; exit 1; }
     echo "tlc $1: $(echo "$out" | grep -E 'states generated, ' | tail -1)"
@@ -937,7 +937,7 @@ mbt_cases MbtHalfOpen MbtHalfOpen halfopen.ndjson
 mbt_cases MbtHalfOpen MbtHalfOpen_back halfopen_back.ndjson
 mbt_cases MbtRanges MbtRanges ranges.ndjson
 mbt_cases MbtRanges MbtRanges_wide ranges_wide.ndjson
-VINC_MBT_DIR="$dir/mbt" cargo test -q -p vinc-tests --features hwenc --test mbt_orphan --test mbt_halfopen --test mbt_ranges -- --nocapture
+PINC_MBT_DIR="$dir/mbt" cargo test -q -p pinc-tests --features hwenc --test mbt_orphan --test mbt_halfopen --test mbt_ranges -- --nocapture
 mbt_cases MbtReasm MbtReasm reasm.ndjson
-VINC_MBT_DIR="$dir/mbt" cargo test -q -p vinc-tests --features hwenc --test mbt_orphan --test mbt_halfopen --test mbt_reasm -- --nocapture
+PINC_MBT_DIR="$dir/mbt" cargo test -q -p pinc-tests --features hwenc --test mbt_orphan --test mbt_halfopen --test mbt_reasm -- --nocapture
 echo "proofs: ok"

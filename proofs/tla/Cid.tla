@@ -1,6 +1,6 @@
 --------------------------------- MODULE Cid --------------------------------
 (***************************************************************************)
-(* Connection ids of vinc-transport conn/cid.rs over every interleaving of *)
+(* Connection ids of pinc-transport conn/cid.rs over every interleaving of *)
 (* the calls the connection makes, at small sizes (CidOps.tla has the      *)
 (* operators).                                                             *)
 (*                                                                         *)
@@ -77,7 +77,7 @@
 (* until a packet to index 3 arrives). Each needs a collision of derived   *)
 (* ids of four bytes, which a peer can search for and which harms only its *)
 (* own connection.                                                         *)
-(* Lean counterpart: proofs/lean/Vinc/TransportCid*.lean.                  *)
+(* Lean counterpart: proofs/lean/Pinc/TransportCid*.lean.                  *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
 CONSTANTS SLOTS, LOOK, FIXED, SKIP, BUMP, KMAX, IDXMAX,

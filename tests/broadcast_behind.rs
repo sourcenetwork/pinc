@@ -15,7 +15,7 @@
 mod common;
 
 use common::{Net, SEC};
-use vinc_crypto::IdentityAlg;
+use pinc_crypto::IdentityAlg;
 
 const T: &[u8] = b"burst";
 
@@ -127,10 +127,10 @@ fn a_subscriber_that_published_a_message_is_not_sent_it_back_from_the_log() {
 
 /// Hub 0, publisher 1 and subscriber 2, over a log of 64 KiB, so about sixty messages of 1 KiB fit.
 fn small_log_net() -> Net {
-    let limits = vinc_broadcast::Limits {
+    let limits = pinc_broadcast::Limits {
         max_body: 2048,
         log_bytes: 64 << 10,
-        ..vinc_broadcast::Limits::default()
+        ..pinc_broadcast::Limits::default()
     };
     let mut net = Net::with_limits(&[IdentityAlg::Ed25519; 3], 1, SEC, limits);
     net.attach(1);
@@ -280,7 +280,7 @@ fn a_publish_waits_behind_the_unsent_ones_and_one_past_the_tracked_ones_is_refus
         }
         assert!(taken <= 4096, "no publish was ever refused");
     };
-    assert_eq!(refused, vinc_broadcast::Refused::Backlog);
+    assert_eq!(refused, pinc_broadcast::Refused::Backlog);
     assert_eq!(taken, n.t.pending_len(), "every publish that was taken is tracked");
     assert_eq!(n.t.unsent_len(), taken);
 }
@@ -298,7 +298,7 @@ fn hub_publishes_until_refused(net: &mut Net) -> usize {
         }
         assert!(taken <= 4096, "no publish of the hub was ever refused");
     };
-    assert_eq!(refused, vinc_broadcast::Refused::Backlog);
+    assert_eq!(refused, pinc_broadcast::Refused::Backlog);
     net.pump();
     taken
 }

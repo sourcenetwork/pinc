@@ -1,6 +1,6 @@
-//! Trace generation for the ring of `REACH_OUT` bodies: seeded runs of a real ring (`vinc-core`, built with the
+//! Trace generation for the ring of `REACH_OUT` bodies: seeded runs of a real ring (`pinc-core`, built with the
 //! `trace` feature), recorded as ndjson (`reach.ndjson`) for the TLA+ trace check (`TraceReach.tla`) and the Lean
-//! replay (`Vinc/TraceReach.lean`).
+//! replay (`Pinc/TraceReach.lean`).
 //!
 //! A run puts bodies for a few sessions (more sessions than the ring has places, so it fills, refreshes bodies in
 //! place, overwrites and wraps), with bodies of every length that matters (empty, short, exactly the limit of 153
@@ -27,8 +27,8 @@
 
 use std::fmt::Write as _;
 
-use vinc_core::ReachProbe;
-use vinc_tests::SplitMix64;
+use pinc_core::ReachProbe;
+use pinc_tests::SplitMix64;
 
 const SLOTS: usize = ReachProbe::SLOTS;
 const MAX: usize = ReachProbe::BODY_MAX;
@@ -207,7 +207,7 @@ fn the_reach_ring_matches_the_models() {
     assert!(seen.at_limit > 0, "no body of exactly the limit was kept");
     assert!(seen.got > 0 && seen.got_none > 0, "get never found, or never missed");
     assert!(seen.zero_len > 0, "no empty body was kept");
-    if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
+    if let Ok(dir) = std::env::var("PINC_TRACE_DIR") {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(std::path::Path::new(&dir).join("reach.ndjson"), &out).unwrap();
     }

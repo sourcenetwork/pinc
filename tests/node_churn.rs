@@ -14,8 +14,8 @@
 mod node_common;
 
 use node_common::{World, big, secs};
-use vinc_sim::SEC;
-use vinc_tests::NCmd;
+use pinc_sim::SEC;
+use pinc_tests::NCmd;
 
 /// The awareness bound of the algorithm: a failure is known everywhere within this long.
 const AWARENESS: u64 = 145 * SEC;

@@ -1,6 +1,6 @@
 ----------------------------- MODULE PrekeyCache -----------------------------
 (***************************************************************************)
-(* The responder's prekey cache of vinc-security/src/cache.rs: a bounded   *)
+(* The responder's prekey cache of pinc-security/src/cache.rs: a bounded   *)
 (* LRU keyed by the prekey hash.                                           *)
 (*                                                                         *)
 (* The implementation is a sequence of N slots (an entry with its stamp,   *)

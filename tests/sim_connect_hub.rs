@@ -12,9 +12,9 @@
 mod connect_sim_common;
 
 use connect_sim_common::*;
-use vinc_connect::client::link::State;
-use vinc_sim::{NatKind, SEC};
-use vinc_tests::Cmd;
+use pinc_connect::client::link::State;
+use pinc_sim::{NatKind, SEC};
+use pinc_tests::Cmd;
 
 #[test]
 fn a_member_with_no_carrier_sends_and_receives_through_the_hub_tunnel() {
@@ -37,7 +37,7 @@ fn a_member_with_no_carrier_sends_and_receives_through_the_hub_tunnel() {
             Cmd::Dial {
                 node: hub,
                 hints: vec![rs.udp.unwrap()],
-                role: vinc_core::Role::Hub,
+                role: pinc_core::Role::Hub,
             },
         );
         w.run(secs(5));
@@ -90,8 +90,8 @@ fn a_member_with_no_carrier_sends_and_receives_through_the_hub_tunnel() {
 
 #[test]
 fn a_quiet_hub_session_on_its_own_carrier_is_kept_alive_by_the_carrier_ping_and_pong() {
-    use vinc_connect::relay::Trace;
-    use vinc_sim::LanConfig;
+    use pinc_connect::relay::Trace;
+    use pinc_sim::LanConfig;
     big(|| {
         let mut w = World::new(82);
         let (r, rs) = w.relay(1, relay_ip(10));
@@ -108,7 +108,7 @@ fn a_quiet_hub_session_on_its_own_carrier_is_kept_alive_by_the_carrier_ping_and_
             Cmd::Dial {
                 node: hub,
                 hints: vec![],
-                role: vinc_core::Role::Hub,
+                role: pinc_core::Role::Hub,
             },
         );
         w.run(secs(20));
@@ -158,7 +158,7 @@ fn frames_queued_back_to_back_share_one_carrier_record_and_a_handshake_packet_ne
             .client(a)
             .tx_log
             .iter()
-            .filter(|(_, r, l)| *l >= 1000 && vinc_core::is_relay_addr(r))
+            .filter(|(_, r, l)| *l >= 1000 && pinc_core::is_relay_addr(r))
             .count();
         assert!(handshake_packets >= 1);
         // The records the relay got while the handshake ran: one per handshake packet, none merged.

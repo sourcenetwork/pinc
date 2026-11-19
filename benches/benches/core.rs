@@ -1,4 +1,4 @@
-//! Benchmarks of the `vinc-core` endpoint: the cost of one datagram in (demultiplexing to its session, opening it and
+//! Benchmarks of the `pinc-core` endpoint: the cost of one datagram in (demultiplexing to its session, opening it and
 //! settling the session) and of one datagram out, with 1, 100 and 10,000 connections in the table, and the cost of one
 //! operation on the deadline heap.
 //!
@@ -26,15 +26,15 @@ use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
 use criterion::{Criterion, Throughput};
-use vinc_core::{Answer, Command, DeadlineHeap, Endpoint, EndpointConfig, Event, Query, Role, SessionId, Slot};
-use vinc_crypto::{Drbg, IdentityAlg, Keypair, Software};
-use vinc_security::{Env, KeyHandle, KeyResponse, LocalIdentity, PrekeyPolicy, SoftKeys, SoftPrekeys};
-use vinc_transport::conn::{Resources, Tables};
-use vinc_transport::recovery::LossEstimate;
-use vinc_transport::stream::pool::BufferPool;
-use vinc_transport::stream::{self, NoSource, Streams};
+use pinc_core::{Answer, Command, DeadlineHeap, Endpoint, EndpointConfig, Event, Query, Role, SessionId, Slot};
+use pinc_crypto::{Drbg, IdentityAlg, Keypair, Software};
+use pinc_security::{Env, KeyHandle, KeyResponse, LocalIdentity, PrekeyPolicy, SoftKeys, SoftPrekeys};
+use pinc_transport::conn::{Resources, Tables};
+use pinc_transport::recovery::LossEstimate;
+use pinc_transport::stream::pool::BufferPool;
+use pinc_transport::stream::{self, NoSource, Streams};
 
-const ALPN: &[u8] = b"vinc/1";
+const ALPN: &[u8] = b"pinc/1";
 const CHUNKS: usize = 3;
 
 type Ep<const K: usize, const D: usize> = Endpoint<'static, 'static, Software, NoSource, 2, 2, 16, 1, K, D, 4, 4, 2>;
@@ -57,7 +57,7 @@ struct Host<const K: usize, const D: usize> {
     drbg: Drbg,
     kp: Keypair,
     prekeys: SoftPrekeys<Software>,
-    node: vinc_crypto::NodeId,
+    node: pinc_crypto::NodeId,
 }
 
 impl<const K: usize, const D: usize> Host<K, D> {
@@ -114,7 +114,7 @@ impl<const K: usize, const D: usize> Host<K, D> {
                 now,
                 drbg: &mut self.drbg,
             };
-            let mut sig = [0u8; vinc_crypto::identity::MAX_SIGNATURE_LEN];
+            let mut sig = [0u8; pinc_crypto::identity::MAX_SIGNATURE_LEN];
             let answer = match self.ep.query(Query::KeyRequest(session)) {
                 Answer::KeyRequest(req) => match soft.answer(&mut env, &req, &mut sig) {
                     KeyResponse::Signature(s) => KeyResponse::Signature(s),
@@ -212,7 +212,7 @@ fn rig<const K: usize, const D: usize>(n: usize) -> Rig<K, D> {
             )
             .unwrap();
         match rep.value {
-            vinc_core::Value::Session(id) => id,
+            pinc_core::Value::Session(id) => id,
             v => panic!("{v:?}"),
         }
     };
@@ -234,7 +234,7 @@ fn rig<const K: usize, const D: usize>(n: usize) -> Rig<K, D> {
                     },
                 )
                 .unwrap();
-            if let vinc_core::Value::Session(id) = rep.value {
+            if let pinc_core::Value::Session(id) = rep.value {
                 sessions.push(id);
             }
         }

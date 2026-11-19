@@ -1,6 +1,6 @@
 ------------------------------- MODULE ExtInOps -------------------------------
 (***************************************************************************)
-(* The operations of vinc-core ext_in.rs (ExtRing), step for step: the     *)
+(* The operations of pinc-core ext_in.rs (ExtRing), step for step: the     *)
 (* extension frames received for the application, in a ring of CAP         *)
 (* (EXT_SLOTS = 8) places, read oldest first. The ring is its head, its    *)
 (* length and the frames in order (the cells from the head on; the code    *)

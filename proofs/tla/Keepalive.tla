@@ -1,6 +1,6 @@
 ------------------------------ MODULE Keepalive ------------------------------
 (***************************************************************************)
-(* The keepalive schedule of vinc-core keepalive.rs, checked over every    *)
+(* The keepalive schedule of pinc-core keepalive.rs, checked over every    *)
 (* combination of a role, a side, a path kind and boundary values of the   *)
 (* five times and two flags it reads (KeepaliveOps.tla has the operators,  *)
 (* on u64 nanosecond words; the sets of times are in the config, in whole  *)
@@ -36,7 +36,7 @@
 (* pinged is reachable), Keepalive_moved (a review moment that is later    *)
 (* than a time at which the plan is computed again is reachable, so        *)
 (* Stable is not about an empty set of times).                             *)
-(* Lean counterpart: proofs/lean/Vinc/CoreKeepalive*.lean.                 *)
+(* Lean counterpart: proofs/lean/Pinc/CoreKeepalive*.lean.                 *)
 (***************************************************************************)
 EXTENDS Integers, FiniteSets
 CONSTANTS NOWS, TXS, RXS, APPS, QUS, TOPS, ACC, ACTREV

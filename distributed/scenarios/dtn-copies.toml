@@ -1,6 +1,6 @@
 name = "dtn-copies"
-about = "Copy-limited spray and wait: the laptop (4 copies) fans its update out over contacts up only in windows. It hands two copies and custody to the office carrier, keeps two, and later meets the distractor peers c1 and cloud that take copies too; the office, in standing contact with the phone, delivers. No more holders than the 4-copy budget, and every node hands on fewer copies than it received. VINC only: iroh and libp2p have no copy-limited forwarding."
-stacks = ["vinc"]
+about = "Copy-limited spray and wait: the laptop (4 copies) fans its update out over contacts up only in windows. It hands two copies and custody to the office carrier, keeps two, and later meets the distractor peers c1 and cloud that take copies too; the office, in standing contact with the phone, delivers. No more holders than the 4-copy budget, and every node hands on fewer copies than it received. PINC only: iroh and libp2p have no copy-limited forwarding."
+stacks = ["pinc"]
 repetitions = 3
 
 [resources]

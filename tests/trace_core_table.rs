@@ -1,6 +1,6 @@
-//! Trace generation for the endpoint's connection-id table: seeded runs of a real `Table` (`vinc-core`, built with the
+//! Trace generation for the endpoint's connection-id table: seeded runs of a real `Table` (`pinc-core`, built with the
 //! `trace` feature), recorded as ndjson (`core_table.ndjson`) for the TLA+ trace check (`TraceCoreTable.tla`) and the
-//! Lean replay (`Vinc/TraceCoreTable.lean`).
+//! Lean replay (`Pinc/TraceCoreTable.lean`).
 //!
 //! A run drives a table of 1, 2, 3, 4, 8 or 16 entries with a random seed (so a random bucket function: the
 //! capacity-1 table sends every key to one chain, the others collide as the hash falls) through `insert`,
@@ -31,8 +31,8 @@
 
 use std::fmt::Write as _;
 
-use vinc_core::Table;
-use vinc_tests::SplitMix64;
+use pinc_core::Table;
+use pinc_tests::SplitMix64;
 
 /// The naive table: the entries in insertion order, each with the number of the push that made it.
 #[derive(Default, Clone)]
@@ -386,7 +386,7 @@ fn the_table_matches_the_models() {
     assert!(seen.removed_mid_chain > 0, "no removal left another key in its chain");
     assert!(seen.shared_chain > 0, "no two keys shared a chain");
     assert!(seen.pair_removed > 0 && seen.touched_dup > 0 && seen.removed_dup > 0 && seen.cleared > 0);
-    if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
+    if let Ok(dir) = std::env::var("PINC_TRACE_DIR") {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(std::path::Path::new(&dir).join("core_table.ndjson"), &out).unwrap();
     }

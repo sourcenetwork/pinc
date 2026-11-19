@@ -1,6 +1,6 @@
 name = "port-mapping-none"
 about = "The port-mapping topology with a router that maps no ports: the node asks and nobody answers, so nothing changes; the peer behind the symmetric translation reaches it only through the relay."
-stacks = ["vinc"]
+stacks = ["pinc"]
 repetitions = 1
 
 [[sites]]

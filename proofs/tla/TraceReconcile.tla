@@ -1,6 +1,6 @@
 ----------------------------- MODULE TraceReconcile -----------------------------
 (***************************************************************************)
-(* Trace validation of the set reconciliation: vinc-reconcile core.rs and  *)
+(* Trace validation of the set reconciliation: pinc-reconcile core.rs and  *)
 (* session.rs.                                                             *)
 (*                                                                         *)
 (* The Rust test tests/trace_reconcile.rs runs seeded sessions of the real *)
@@ -27,18 +27,18 @@
 (* initiator's report, item for item.                                      *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds reconcile_tla.ndjson (the cases of reconcile.ndjson that fit TLC; the Lean replay takes them all).     *)
+(* variable PINC_TRACE_DIR, the directory that holds reconcile_tla.ndjson (the cases of reconcile.ndjson that fit TLC; the Lean replay takes them all).     *)
 (* (reconcile_big.ndjson, the sessions that carry a varint of 2^31 or      *)
 (* more, is replayed by the Lean replay only: TLC integers are 32 bits.)   *)
 (*                                                                         *)
-(* Lean counterpart: Vinc/TraceReconcile.lean (lake exe replay).           *)
+(* Lean counterpart: Pinc/TraceReconcile.lean (lake exe replay).           *)
 (***************************************************************************)
 EXTENDS ReconcileSess, Json, IOUtils
 
 VARIABLES i, ini, rsp, cs
 vars == <<i, ini, rsp, cs>>
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/reconcile_tla.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/reconcile_tla.ndjson")
 Ev == Trace[i]
 
 Rng(s) == {s[k] : k \in 1..Len(s)}

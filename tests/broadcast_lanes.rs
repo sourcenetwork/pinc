@@ -15,8 +15,8 @@
 mod common;
 
 use common::{Net, SEC, ty};
-use vinc_broadcast::Lane;
-use vinc_crypto::IdentityAlg;
+use pinc_broadcast::Lane;
+use pinc_crypto::IdentityAlg;
 
 const T: &[u8] = b"news";
 

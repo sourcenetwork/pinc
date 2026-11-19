@@ -2,12 +2,12 @@
 
 use std::rc::Rc;
 
-use vinc_sim::suite::grade::fixture::blank_world;
-use vinc_sim::suite::grade::{
+use pinc_sim::suite::grade::fixture::blank_world;
+use pinc_sim::suite::grade::{
     RunFacts, TERMS, Terms, compute_fair_terms, compute_terms, delivery_share, delivery_shares, with_fair,
 };
-use vinc_sim::suite::rec::{IntentMeta, MemberEvent, MustArg, Rec};
-use vinc_sim::suite::world::model::{Change, ChangeKind, IntentKind, World};
+use pinc_sim::suite::rec::{IntentMeta, MemberEvent, MustArg, Rec};
+use pinc_sim::suite::world::model::{Change, ChangeKind, IntentKind, World};
 
 use crate::common::*;
 

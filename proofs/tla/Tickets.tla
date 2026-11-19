@@ -1,6 +1,6 @@
 ------------------------------- MODULE Tickets -------------------------------
 (***************************************************************************)
-(* The ticket stores of vinc-security/src/tickets.rs: ServerTickets and    *)
+(* The ticket stores of pinc-security/src/tickets.rs: ServerTickets and    *)
 (* ClientTickets.                                                          *)
 (*                                                                         *)
 (* A store is a sequence of N slots (a ticket with its stamp, or "none")   *)

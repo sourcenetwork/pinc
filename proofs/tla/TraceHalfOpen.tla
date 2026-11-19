@@ -1,7 +1,7 @@
 ---------------------------- MODULE TraceHalfOpen ----------------------------
 (***************************************************************************)
 (* Trace validation of the endpoint's half-open cap and the lifetime of an *)
-(* unauthenticated session: vinc-core rx.rs, events.rs, endpoint.rs,       *)
+(* unauthenticated session: pinc-core rx.rs, events.rs, endpoint.rs,       *)
 (* timers.rs.                                                              *)
 (*                                                                         *)
 (* The Rust test tests/trace_halfopen.rs drives real endpoints (built with *)
@@ -44,14 +44,14 @@
 (* code makes).                                                            *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds halfopen.ndjson.      *)
+(* variable PINC_TRACE_DIR, the directory that holds halfopen.ndjson.      *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
 VARIABLES i, e, p
 vars == <<i, e, p>>
 INSTANCE HalfOpenOps
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/halfopen.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/halfopen.ndjson")
 Ev == Trace[i]
 
 \* a recorded slot: <<slot, in use, created, unauthenticated, counted, has a deadline, the deadline, its life>>

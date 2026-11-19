@@ -10,15 +10,15 @@
 //! The test asserts the codec's laws itself against a plain tracker: a valid frame parses back from its encoding,
 //! the encoding has the length `body_len` states, an accepted body (changed, cut or extended) re-encodes to the same
 //! bytes, every proper prefix of a frame is a partial read, and a prefix naming a body above `MAX_BODY` is refused.
-//! The TLA+ check (`TraceHubCodec.tla`) and the Lean replay (`Vinc.TraceMembershipCodec`) apply the proved model
+//! The TLA+ check (`TraceHubCodec.tla`) and the Lean replay (`Pinc.TraceMembershipCodec`) apply the proved model
 //! to the same bytes and compare.
 
-use vinc_membership::codec::{
+use pinc_membership::codec::{
     Alive, Down, ENTRY_LEN, Frame, FrameError, Hello, MAX_BODY, MAX_PROBES, Other, Path, Probe, Proof, Record, Snap,
     entry_bytes, ty,
 };
-use vinc_tests::SplitMix64;
-use vinc_wire::WireError;
+use pinc_tests::SplitMix64;
+use pinc_wire::WireError;
 
 use crate::common::{TraceWriter, b, limbs, list};
 
@@ -269,7 +269,7 @@ fn small_frames(out: &mut Vec<Vec<u8>>) {
     for a in [Alive::Down, Alive::Alive, Alive::Left] {
         for inc in [0, u64::from(u32::MAX), u64::MAX] {
             let m = mid(5);
-            add(&Frame::Delta(vinc_membership::codec::Entry {
+            add(&Frame::Delta(pinc_membership::codec::Entry {
                 member: &m,
                 rec: rec(inc, 65_535, 3),
                 alive: a,

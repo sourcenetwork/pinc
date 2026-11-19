@@ -1,6 +1,6 @@
 ------------------------------ MODULE TraceMtu -------------------------------
 (***************************************************************************)
-(* Trace validation of path MTU discovery: vinc-transport conn/mtu.rs.     *)
+(* Trace validation of path MTU discovery: pinc-transport conn/mtu.rs.     *)
 (*                                                                         *)
 (* The Rust test tests/trace_mtu.rs drives the real state machine (built   *)
 (* with the cargo feature `trace`) through seeded runs of the calls the    *)
@@ -13,7 +13,7 @@
 (* checker integer; a time at or above it is recorded as it).              *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds mtu.ndjson.           *)
+(* variable PINC_TRACE_DIR, the directory that holds mtu.ndjson.           *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, TLC, Json, IOUtils
 CONSTANTS TOP, MINMTU, PROBEMTU, JFLOOR, JMTU, REPROBE
@@ -21,7 +21,7 @@ VARIABLES i, m
 vars == <<i, m>>
 INSTANCE MtuOps
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/mtu.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/mtu.ndjson")
 Ev0 == Trace[i]
 
 MOf(v) == [cur |-> v.cur, infl |-> v.infl, probed |-> v.probed, jdone |-> v.jdone, retry |-> v.retry,

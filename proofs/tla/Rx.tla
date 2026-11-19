@@ -1,6 +1,6 @@
 --------------------------------- MODULE Rx ---------------------------------
 (***************************************************************************)
-(* Received packet ranges and acknowledgement thinning of vinc-transport   *)
+(* Received packet ranges and acknowledgement thinning of pinc-transport   *)
 (* recovery/recv.rs over every interleaving of the calls the connection    *)
 (* makes on it, at small sizes (RxOps.tla has the operators).              *)
 (*                                                                         *)
@@ -22,7 +22,7 @@
 (*    MAXACK, or only the newest after a confirmation (ReportShape);       *)
 (*  - the tables of our acknowledgements and of confirmations are bounded  *)
 (*    (TablesBounded).                                                     *)
-(* Lean counterpart: proofs/lean/Vinc/TransportRx*.lean.                   *)
+(* Lean counterpart: proofs/lean/Pinc/TransportRx*.lean.                   *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
 CONSTANTS MS, SEC, TOP, MAXPN, U32MAX, SENTN, CONFN, MAXACK, CAP, PN, HOR, KMAX

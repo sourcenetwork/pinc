@@ -14,11 +14,11 @@
 #[path = "membership_world.rs"]
 mod world;
 
-use vinc_membership::codec::{Alive, Entry, Frame, Path, Record, ty};
-use vinc_membership::{Carrier, Event, Route, Trace};
+use pinc_membership::codec::{Alive, Entry, Frame, Path, Record, ty};
+use pinc_membership::{Carrier, Event, Route, Trace};
 use world::{LEAVE, SEC, World, id};
 
-vinc_tests::install_counting_allocator!();
+pinc_tests::install_counting_allocator!();
 
 const START: u64 = 100 * SEC;
 

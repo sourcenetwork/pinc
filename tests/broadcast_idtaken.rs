@@ -18,11 +18,11 @@ use std::rc::Rc;
 
 use common::{Ev, Net, SEC, WALL0, keypair, ty};
 use rapidhash::quality::SeedableState;
-use vinc_broadcast::wire::Head;
-use vinc_broadcast::{Limits, Reject, Trace, auth};
-use vinc_crypto::IdentityAlg;
-use vinc_crypto::identity::MAX_SIGNATURE_LEN;
-use vinc_wire::hlc::Hlc;
+use pinc_broadcast::wire::Head;
+use pinc_broadcast::{Limits, Reject, Trace, auth};
+use pinc_crypto::IdentityAlg;
+use pinc_crypto::identity::MAX_SIGNATURE_LEN;
+use pinc_wire::hlc::Hlc;
 
 const T: &[u8] = b"taken";
 const ALG: IdentityAlg = IdentityAlg::Ed25519;
@@ -228,7 +228,7 @@ fn a_copy_due_no_acknowledgement_is_a_plain_duplicate() {
 /// stored and acknowledged in full: no id is refused for the length of the walk, and the long walks are counted.
 #[test]
 fn a_long_run_is_delivered_stored_and_acknowledged() {
-    let two_step = SeedableState::custom(0x5eed, &vinc_tests::MAP_SECRETS);
+    let two_step = SeedableState::custom(0x5eed, &pinc_tests::MAP_SECRETS);
     let home = |id: u64| two_step.hash_one(id) & 16383;
     let ids: Vec<u64> = (0u64..).filter(|id| home(*id) == 0).take(140).collect();
     let mut net = Net::new(ALG, 1, 2, SEC);

@@ -1,6 +1,6 @@
 //! Trace generation for the batch builder: seeded random runs of the real `BatchBuilder` through its public API,
 //! recorded as ndjson (`connect_pack.ndjson`) for the TLA+ trace check (`TraceConnectPack.tla`) and the Lean replay
-//! (`Vinc/TraceConnectPack.lean`).
+//! (`Pinc/TraceConnectPack.lean`).
 //!
 //! A run is a sequence of batches in one buffer, whose length comes from the run (the real `MAX_FRAME_LEN`, with
 //! room to spare, with none to spare, and every shortage down to a buffer smaller than the header room). A batch is
@@ -10,7 +10,7 @@
 //! of range). Every few offers the builder is dropped and rebuilt from its `BatchState` (`resume`). Each answer is
 //! checked against a plain reference written here (the rules of the module documentation), and every finished
 //! record is decoded with the real `Frame::decode` and compared with the frames that were accepted, in order.
-//! The trace is written to the directory in `VINC_TRACE_DIR` when it is set; otherwise nothing is written.
+//! The trace is written to the directory in `PINC_TRACE_DIR` when it is set; otherwise nothing is written.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -30,11 +30,11 @@ mod connect_common;
 use std::fmt::Write as _;
 
 use connect_common::nid;
-use vinc_connect::carrier::{
+use pinc_connect::carrier::{
     BATCH_MAX_BYTES, BATCH_MAX_FRAMES, BatchBuilder, Frame, FrameError, MAX_FRAME_LEN, MAX_PACKET_LEN, NODE_ID_LEN,
     Offer,
 };
-use vinc_tests::SplitMix64;
+use pinc_tests::SplitMix64;
 
 /// `MAX_NOTICE_LEN` of the code.
 const MAX_NOTICE_LEN: usize = 8192;
@@ -301,7 +301,7 @@ fn the_batch_builder_matches_the_reference_and_records_its_trace() {
     for seed in 0..66u64 {
         run(seed, caps[(seed as usize) % caps.len()], &mut out);
     }
-    let Some(dir) = std::env::var_os("VINC_TRACE_DIR") else {
+    let Some(dir) = std::env::var_os("PINC_TRACE_DIR") else {
         return;
     };
     let dir = std::path::PathBuf::from(dir);

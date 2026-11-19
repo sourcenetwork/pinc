@@ -16,10 +16,10 @@
     unreachable_pub
 )]
 
-use vinc_crypto::{Aead, IdentityAlg, NodeId, Secret};
-use vinc_security::message::MAX_MESSAGE_LEN;
-use vinc_security::tickets::{DEFAULT_TICKET_LIFETIME_S, MAX_BATCH};
-use vinc_security::{
+use pinc_crypto::{Aead, IdentityAlg, NodeId, Secret};
+use pinc_security::message::MAX_MESSAGE_LEN;
+use pinc_security::tickets::{DEFAULT_TICKET_LIFETIME_S, MAX_BATCH};
+use pinc_security::{
     ClientTickets, CreditRecord, Env, Event, Failure, Output, PacketKey, ResponderStores, ServerTickets, TicketBatch,
     TicketEntry,
 };
@@ -27,7 +27,7 @@ use vinc_security::{
 mod sec_common;
 use sec_common::{ALPN, ALPN_B, Tamper, World, assert_data_flows, assert_same_keys, big_stack};
 
-vinc_tests::install_counting_allocator!();
+pinc_tests::install_counting_allocator!();
 
 const LIFETIME_NS: u64 = DEFAULT_TICKET_LIFETIME_S as u64 * 1_000_000_000;
 
@@ -240,7 +240,7 @@ fn a_ticket_is_bound_to_its_alpn() {
         let mut i = w.initiator_with(dial, ALPN, false, true);
         let mut r = w.responder();
         let t = Tamper::custom(0, |m| {
-            // ALPN "vinc/1" -> "vinc/2" inside the Hello.
+            // ALPN "pinc/1" -> "pinc/2" inside the Hello.
             let at = m.windows(6).position(|x| x == ALPN).unwrap();
             m[at..at + 6].copy_from_slice(ALPN_B);
         });
@@ -351,10 +351,10 @@ fn the_resume_run_allocates_nothing() {
             };
             w.prekeys.acquire(&mut env).unwrap()
         };
-        let cfg = vinc_security::ResponderConfig::new(
+        let cfg = pinc_security::ResponderConfig::new(
             w.rp.id,
-            vinc_security::ConnId::new(b"respond0").unwrap(),
-            vinc_security::AlpnList::new(&[ALPN]).unwrap(),
+            pinc_security::ConnId::new(b"respond0").unwrap(),
+            pinc_security::AlpnList::new(&[ALPN]).unwrap(),
         );
         let mut hello = vec![0u8; MAX_MESSAGE_LEN];
         let mut reply = vec![0u8; MAX_MESSAGE_LEN];
@@ -369,22 +369,22 @@ fn the_resume_run_allocates_nothing() {
             drbg: &mut w.r_drbg,
         };
         let mut seen = [0u8; 4];
-        let stats = vinc_tests::measure(|| {
-            let mut i = vinc_security::Initiator::new(
+        let stats = pinc_tests::measure(|| {
+            let mut i = pinc_security::Initiator::new(
                 &mut env_i,
-                vinc_security::InitiatorParams {
+                pinc_security::InitiatorParams {
                     peer: dial,
                     alpn: ALPN,
-                    scid: vinc_security::ConnId::new(b"initiat0").unwrap(),
+                    scid: pinc_security::ConnId::new(b"initiat0").unwrap(),
                     identity: &w.ip.id,
                     prekey: &prekey,
                     peer_has_prekey: false,
                     ticket: Some(ticket),
-                    credit: vinc_security::CreditRecord::NONE,
+                    credit: pinc_security::CreditRecord::NONE,
                 },
             )
             .unwrap();
-            let mut r = vinc_security::Responder::new(cfg);
+            let mut r = pinc_security::Responder::new(cfg);
             let Some(Output::Send { data, .. }) = i.poll_output() else {
                 panic!("no hello")
             };
@@ -529,7 +529,7 @@ fn issued_ticket_ids_never_repeat_a_stored_one() {
     let mut tickets = ServerTickets::<64>::new();
     let mut seen = std::collections::BTreeSet::new();
     for round in 0..2 {
-        let mut drbg = vinc_crypto::Drbg::new(&[0x77; 32]);
+        let mut drbg = pinc_crypto::Drbg::new(&[0x77; 32]);
         let mut env = Env {
             provider: &w.r_prov,
             now: w.now,
@@ -549,7 +549,7 @@ fn issued_ticket_ids_never_repeat_a_stored_one() {
     // Once more ids are stored than the attempts allow, the replayed generator is exhausted: a typed error.
     let mut failed = false;
     for _ in 0..8 {
-        let mut drbg = vinc_crypto::Drbg::new(&[0x77; 32]);
+        let mut drbg = pinc_crypto::Drbg::new(&[0x77; 32]);
         let mut env = Env {
             provider: &w.r_prov,
             now: w.now,
@@ -646,12 +646,12 @@ fn the_ticket_key_is_bound_to_the_remembered_credit_record() {
                 now: w.now,
                 drbg: &mut w.i_drbg,
             };
-            vinc_security::Initiator::new(
+            pinc_security::Initiator::new(
                 &mut env,
-                vinc_security::InitiatorParams {
+                pinc_security::InitiatorParams {
                     peer: dial,
                     alpn: ALPN,
-                    scid: vinc_security::ConnId::new(b"initiat0").unwrap(),
+                    scid: pinc_security::ConnId::new(b"initiat0").unwrap(),
                     identity: &w.ip.id,
                     prekey: &prekey,
                     peer_has_prekey: false,

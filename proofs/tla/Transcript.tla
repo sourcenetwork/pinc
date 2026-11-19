@@ -1,7 +1,7 @@
 ----------------------------- MODULE Transcript -----------------------------
 (***************************************************************************)
-(* The transcript encoding of vinc-crypto Transcript::absorb and the field *)
-(* lists of vinc-security schedule.rs.                                     *)
+(* The transcript encoding of pinc-crypto Transcript::absorb and the field *)
+(* lists of pinc-security schedule.rs.                                     *)
 (*                                                                         *)
 (* absorb writes a field as its varint length followed by its bytes, and a *)
 (* transcript hashes the concatenation. The hash cannot tell two lists     *)
@@ -13,7 +13,7 @@
 (* the varint of a length below 128 is that one byte (all the scaled       *)
 (* lengths are), so Absorb(f) = <<Len(f)>> \o f. The length byte lives in  *)
 (* the same alphabet as the data, as in the code. Multi-byte varints are   *)
-(* covered by Varint.tla and proofs/lean/Vinc/Varint.lean, and the         *)
+(* covered by Varint.tla and proofs/lean/Pinc/Varint.lean, and the         *)
 (* injectivity for fields of any length by Transcript.lean                 *)
 (* (encode_injective).                                                     *)
 (*                                                                         *)
@@ -39,7 +39,7 @@
 (*                                                                         *)
 (* The labels are two distinct constants of the same length here (the real *)
 (* labels differ in length), which is the harder case for the encoding.    *)
-(* Lean counterpart: proofs/lean/Vinc/Transcript.lean.                     *)
+(* Lean counterpart: proofs/lean/Pinc/Transcript.lean.                     *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
 

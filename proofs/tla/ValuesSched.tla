@@ -1,6 +1,6 @@
 ------------------------------ MODULE ValuesSched ------------------------------
 (***************************************************************************)
-(* Model of the work scheduler of vinc-values (fetch/sched.rs, the start    *)
+(* Model of the work scheduler of pinc-values (fetch/sched.rs, the start    *)
 (* of fetch/mod.rs and the finish of fetch/recv.rs) on the span lists of    *)
 (* span.rs: the stripe queue, every provider's assigned list, the store's   *)
 (* verified set, with the code's own steps: start (align of the wanted      *)
@@ -39,7 +39,7 @@
 (*            queue size) never rises: PhiLe;                               *)
 (*  Done      Complete only with every wanted group verified; the liar end  *)
 (*            only with no holder left.                                     *)
-(* Lean counterpart: Vinc/ValuesSchedCover.lean (reach_cover), Evict.lean,  *)
+(* Lean counterpart: Pinc/ValuesSchedCover.lean (reach_cover), Evict.lean,  *)
 (* Term.lean, Steal.lean; the exact accounting of the primitives is         *)
 (* ValuesSchedList.lean / ValuesSchedHoles.lean.                            *)
 (***************************************************************************)

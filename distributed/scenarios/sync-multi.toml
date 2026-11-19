@@ -1,6 +1,6 @@
 name = "sync-multi"
 about = "Syncing a 64 MiB value from three providers in three sites to one consumer on a LAN link of 200 Mbit/s per provider site."
-stacks = ["vinc", "iroh", "libp2p"]
+stacks = ["pinc", "iroh", "libp2p"]
 repetitions = 3
 
 [resources]

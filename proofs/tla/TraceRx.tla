@@ -1,6 +1,6 @@
 ------------------------------ MODULE TraceRx --------------------------------
 (***************************************************************************)
-(* Trace validation of the received-packet tracker: vinc-transport         *)
+(* Trace validation of the received-packet tracker: pinc-transport         *)
 (* recovery/recv.rs.                                                       *)
 (*                                                                         *)
 (* The Rust test tests/trace_rx.rs drives real trackers (built with the    *)
@@ -15,7 +15,7 @@
 (* and the real constants: nanoseconds, 48 and 32 table entries, 32 ranges.*)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds rx.ndjson.            *)
+(* variable PINC_TRACE_DIR, the directory that holds rx.ndjson.            *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
 
@@ -25,7 +25,7 @@ vars == <<i, x>>
 
 INSTANCE RxOps
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/rx.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/rx.ndjson")
 Ev0 == Trace[i]
 
 PairsOf(l) == [k \in 1..Len(l) |-> <<l[k][1], l[k][2]>>]

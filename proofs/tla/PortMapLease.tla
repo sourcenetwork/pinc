@@ -1,7 +1,7 @@
 ------------------------------ MODULE PortMapLease ------------------------------
 (***************************************************************************)
 (* The lease of one port mapping, between the client of                    *)
-(* crates/vinc-portmap/src/client.rs (PortMap) and the gateway that grants *)
+(* crates/pinc-portmap/src/client.rs (PortMap) and the gateway that grants *)
 (* it.                                                                     *)
 (*                                                                         *)
 (* Who acts. The client asks the gateway for a mapping (PortMap::enter of  *)
@@ -63,7 +63,7 @@
 (* start after the next grant, inside the floor a later announce had set); *)
 (* each says in its own comment what goes wrong.                           *)
 (*                                                                         *)
-(* Lean counterpart: proofs/lean/Vinc/PortMapLease.lean (renew_at before   *)
+(* Lean counterpart: proofs/lean/Pinc/PortMapLease.lean (renew_at before   *)
 (* expiry, the clamp, and the two sides of lease::restarted).              *)
 (***************************************************************************)
 \* Integer arithmetic (-1 marks "no epoch heard yet"), and TLC's helpers.

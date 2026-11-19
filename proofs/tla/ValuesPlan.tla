@@ -1,7 +1,7 @@
 ------------------------------ MODULE ValuesPlan ------------------------------
 (***************************************************************************)
-(* The closed-form response geometry of vinc-values (plan.rs) against the  *)
-(* concatenated range encodings of vinc-dag. The operators are in          *)
+(* The closed-form response geometry of pinc-values (plan.rs) against the  *)
+(* concatenated range encodings of pinc-dag. The operators are in          *)
 (* ValuesPlanOps.tla; this module enumerates requests and checks, for each:*)
 (*                                                                         *)
 (*  - PlanNew (the checked u64 arithmetic of Plan::new) equals the         *)
@@ -19,7 +19,7 @@
 (*  - frame_of_group, proof_pair (every pair of every frame, and none past *)
 (*    them) and the 64-node path (never truncated).                        *)
 (*                                                                         *)
-(* Lean counterpart: proofs/lean/Vinc/ValuesPlanMain.lean (planNew_eq_spec,*)
+(* Lean counterpart: proofs/lean/Pinc/ValuesPlanMain.lean (planNew_eq_spec,*)
 (* frame_spec, range_ends, start_strict, locate_frame, locate_some,       *)
 (* proofPair_spec, frameOfGroup_spec, pathGo_eq), unbounded.              *)
 (***************************************************************************)

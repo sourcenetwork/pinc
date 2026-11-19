@@ -27,12 +27,12 @@
 #[path = "membership_world.rs"]
 mod world;
 
-use vinc_membership::codec::{Alive, Entry, Frame, Hello, Record, ty};
-use vinc_membership::session::DENIED_CODE;
-use vinc_membership::{Carrier, CloseReason, Event, Route, Trace};
+use pinc_membership::codec::{Alive, Entry, Frame, Hello, Record, ty};
+use pinc_membership::session::DENIED_CODE;
+use pinc_membership::{Carrier, CloseReason, Event, Route, Trace};
 use world::{Bc, LEAVE, MS, SEC, World, id};
 
-vinc_tests::install_counting_allocator!();
+pinc_tests::install_counting_allocator!();
 
 const START: u64 = 100 * SEC;
 
@@ -314,7 +314,7 @@ fn another_hubs_down_is_refused_while_our_own_lease_is_fresh() {
         matches!(
             t,
             Trace::DownRefused {
-                why: vinc_membership::event::Refusal::LeaseFresh,
+                why: pinc_membership::event::Refusal::LeaseFresh,
                 ..
             }
         )
@@ -344,29 +344,29 @@ fn a_down_needs_a_proof_of_two_paths_and_no_open_carrier() {
     w.crash(2);
     w.run(40 * SEC);
     let m = id(2);
-    let one = vinc_membership::codec::Proof::new(
+    let one = pinc_membership::codec::Proof::new(
         5000,
-        &[vinc_membership::codec::Probe {
+        &[pinc_membership::codec::Probe {
             age_ms: 1000,
-            path: vinc_membership::codec::Path::Session,
+            path: pinc_membership::codec::Path::Session,
         }],
     )
     .unwrap();
     let inc = w.nodes[2].m.incarnation();
-    let down = |proof| Frame::Down(vinc_membership::codec::Down { member: &m, inc, proof });
+    let down = |proof| Frame::Down(pinc_membership::codec::Down { member: &m, inc, proof });
     let f = down(one);
     w.inject(1, 0, &f);
     assert_eq!(w.nodes[1].m.roster_len(), 2, "a proof of one path is not enough");
-    let two = vinc_membership::codec::Proof::new(
+    let two = pinc_membership::codec::Proof::new(
         5000,
         &[
-            vinc_membership::codec::Probe {
+            pinc_membership::codec::Probe {
                 age_ms: 1000,
-                path: vinc_membership::codec::Path::Session,
+                path: pinc_membership::codec::Path::Session,
             },
-            vinc_membership::codec::Probe {
+            pinc_membership::codec::Probe {
                 age_ms: 900,
-                path: vinc_membership::codec::Path::Relay,
+                path: pinc_membership::codec::Path::Relay,
             },
         ],
     )
@@ -376,16 +376,16 @@ fn a_down_needs_a_proof_of_two_paths_and_no_open_carrier() {
     w.inject(1, 0, &f);
     assert_eq!(w.nodes[1].m.roster_len(), 2, "an open carrier to this hub refuses it");
     w.nodes[1].h.carriers.insert(m, Carrier::Unknown);
-    let liar = vinc_membership::codec::Proof::new(
+    let liar = pinc_membership::codec::Proof::new(
         10,
         &[
-            vinc_membership::codec::Probe {
+            pinc_membership::codec::Probe {
                 age_ms: 1000,
-                path: vinc_membership::codec::Path::Session,
+                path: pinc_membership::codec::Path::Session,
             },
-            vinc_membership::codec::Probe {
+            pinc_membership::codec::Probe {
                 age_ms: 900,
-                path: vinc_membership::codec::Path::Relay,
+                path: pinc_membership::codec::Path::Relay,
             },
         ],
     )
@@ -409,7 +409,7 @@ fn a_down_needs_a_proof_of_two_paths_and_no_open_carrier() {
     w2.inject(
         0,
         1,
-        &Frame::Down(vinc_membership::codec::Down {
+        &Frame::Down(pinc_membership::codec::Down {
             member: &m2,
             inc: w2.nodes[2].m.incarnation(),
             proof: two,
@@ -559,7 +559,7 @@ fn frames_of_other_types_reach_the_broadcast_layer_and_renew_the_lease() {
     w.inject(
         0,
         1,
-        &Frame::Other(vinc_membership::codec::Other {
+        &Frame::Other(pinc_membership::codec::Other {
             ty: 9,
             topic: b"t",
             rest: b"payload",
@@ -615,13 +615,13 @@ struct Null {
     last_rx: u64,
 }
 
-impl vinc_membership::Session for Null {
-    fn send(&mut self, _: &vinc_membership::NodeId, _: Route, _: &[u8]) -> bool {
+impl pinc_membership::Session for Null {
+    fn send(&mut self, _: &pinc_membership::NodeId, _: Route, _: &[u8]) -> bool {
         self.sends += 1;
         true
     }
-    fn evidence(&self, _: &vinc_membership::NodeId) -> Option<vinc_membership::Evidence> {
-        Some(vinc_membership::Evidence {
+    fn evidence(&self, _: &pinc_membership::NodeId) -> Option<pinc_membership::Evidence> {
+        Some(pinc_membership::Evidence {
             last_rx: self.last_rx,
             srtt: 20 * MS,
             pto: 0,
@@ -629,25 +629,25 @@ impl vinc_membership::Session for Null {
             direct: false,
         })
     }
-    fn carrier(&self, _: &vinc_membership::NodeId) -> Carrier {
+    fn carrier(&self, _: &pinc_membership::NodeId) -> Carrier {
         Carrier::Open
     }
-    fn close(&mut self, _: &vinc_membership::NodeId, _: CloseReason) {}
+    fn close(&mut self, _: &pinc_membership::NodeId, _: CloseReason) {}
 }
 
-impl vinc_membership::Broadcast for Null {
-    fn floor(&mut self, _: &vinc_membership::NodeId, _: &mut [u8]) -> usize {
+impl pinc_membership::Broadcast for Null {
+    fn floor(&mut self, _: &pinc_membership::NodeId, _: &mut [u8]) -> usize {
         0
     }
-    fn frame(&mut self, _: &vinc_membership::NodeId, _: u8, _: &[u8], _: &[u8]) {}
-    fn hold(&mut self, _: &vinc_membership::NodeId) {}
-    fn restore(&mut self, _: &vinc_membership::NodeId) {}
-    fn release(&mut self, _: &vinc_membership::NodeId) {}
-    fn resubscribe(&mut self, _: &vinc_membership::NodeId) {}
-    fn primary_changed(&mut self, _: Option<&vinc_membership::NodeId>, _: &vinc_membership::NodeId) {}
+    fn frame(&mut self, _: &pinc_membership::NodeId, _: u8, _: &[u8], _: &[u8]) {}
+    fn hold(&mut self, _: &pinc_membership::NodeId) {}
+    fn restore(&mut self, _: &pinc_membership::NodeId) {}
+    fn release(&mut self, _: &pinc_membership::NodeId) {}
+    fn resubscribe(&mut self, _: &pinc_membership::NodeId) {}
+    fn primary_changed(&mut self, _: Option<&pinc_membership::NodeId>, _: &pinc_membership::NodeId) {}
 }
 
-impl vinc_membership::Local for Null {
+impl pinc_membership::Local for Null {
     fn version(&self) -> u16 {
         1
     }
@@ -666,7 +666,7 @@ fn bytes(f: &Frame<'_>) -> Vec<u8> {
 
 #[test]
 fn steady_state_allocates_nothing() {
-    use vinc_membership::{Config, Membership};
+    use pinc_membership::{Config, Membership};
     let rec = |n: u8| Record {
         inc: (u64::from(n) + 1) << 16,
         ver: 1,
@@ -711,14 +711,14 @@ fn steady_state_allocates_nothing() {
     member.session_up(&mut mhost, SEC, &id(0), false);
     let mut entries = Vec::new();
     for n in 2..6u8 {
-        entries.extend_from_slice(&vinc_membership::codec::entry_bytes(
+        entries.extend_from_slice(&pinc_membership::codec::entry_bytes(
             &id(usize::from(n)),
             &rec(n),
             Alive::Alive,
         ));
     }
     let snap = bytes(&Frame::Snap(
-        vinc_membership::codec::Snap::new(false, false, &entries).unwrap(),
+        pinc_membership::codec::Snap::new(false, false, &entries).unwrap(),
     ));
     member.on_bytes(&mut mhost, SEC, &id(0), &snap).unwrap();
     let ack = bytes(&Frame::Ack);
@@ -753,7 +753,7 @@ fn steady_state_allocates_nothing() {
     // Warm up past every table growing, then count.
     round(&mut hub, &mut member, &mut host, &mut mhost, 2 * SEC, 400);
     let mut events = 0;
-    let stats = vinc_tests::measure(|| events = round(&mut hub, &mut member, &mut host, &mut mhost, 300 * SEC, 4000));
+    let stats = pinc_tests::measure(|| events = round(&mut hub, &mut member, &mut host, &mut mhost, 300 * SEC, 4000));
     assert_eq!(stats.count(), 0, "{stats:?}");
     assert_eq!(events, 0, "a quiet group reports nothing");
     assert!(host.sends > 0 && mhost.sends > 0, "the machines did work");
@@ -767,16 +767,16 @@ fn steady_state_allocates_nothing() {
 /// A host whose carriers the test sets, that takes every send and reports a validated direct path to everyone.
 #[derive(Default)]
 struct Scripted {
-    carriers: std::collections::BTreeMap<vinc_membership::NodeId, Carrier>,
-    released: Vec<vinc_membership::NodeId>,
+    carriers: std::collections::BTreeMap<pinc_membership::NodeId, Carrier>,
+    released: Vec<pinc_membership::NodeId>,
 }
 
-impl vinc_membership::Session for Scripted {
-    fn send(&mut self, _: &vinc_membership::NodeId, _: Route, _: &[u8]) -> bool {
+impl pinc_membership::Session for Scripted {
+    fn send(&mut self, _: &pinc_membership::NodeId, _: Route, _: &[u8]) -> bool {
         true
     }
-    fn evidence(&self, _: &vinc_membership::NodeId) -> Option<vinc_membership::Evidence> {
-        Some(vinc_membership::Evidence {
+    fn evidence(&self, _: &pinc_membership::NodeId) -> Option<pinc_membership::Evidence> {
+        Some(pinc_membership::Evidence {
             last_rx: 0,
             srtt: 20 * MS,
             pto: 0,
@@ -784,27 +784,27 @@ impl vinc_membership::Session for Scripted {
             direct: true,
         })
     }
-    fn carrier(&self, m: &vinc_membership::NodeId) -> Carrier {
+    fn carrier(&self, m: &pinc_membership::NodeId) -> Carrier {
         self.carriers.get(m).copied().unwrap_or_default()
     }
-    fn close(&mut self, _: &vinc_membership::NodeId, _: CloseReason) {}
+    fn close(&mut self, _: &pinc_membership::NodeId, _: CloseReason) {}
 }
 
-impl vinc_membership::Broadcast for Scripted {
-    fn floor(&mut self, _: &vinc_membership::NodeId, _: &mut [u8]) -> usize {
+impl pinc_membership::Broadcast for Scripted {
+    fn floor(&mut self, _: &pinc_membership::NodeId, _: &mut [u8]) -> usize {
         0
     }
-    fn frame(&mut self, _: &vinc_membership::NodeId, _: u8, _: &[u8], _: &[u8]) {}
-    fn hold(&mut self, _: &vinc_membership::NodeId) {}
-    fn restore(&mut self, _: &vinc_membership::NodeId) {}
-    fn release(&mut self, m: &vinc_membership::NodeId) {
+    fn frame(&mut self, _: &pinc_membership::NodeId, _: u8, _: &[u8], _: &[u8]) {}
+    fn hold(&mut self, _: &pinc_membership::NodeId) {}
+    fn restore(&mut self, _: &pinc_membership::NodeId) {}
+    fn release(&mut self, m: &pinc_membership::NodeId) {
         self.released.push(*m);
     }
-    fn resubscribe(&mut self, _: &vinc_membership::NodeId) {}
-    fn primary_changed(&mut self, _: Option<&vinc_membership::NodeId>, _: &vinc_membership::NodeId) {}
+    fn resubscribe(&mut self, _: &pinc_membership::NodeId) {}
+    fn primary_changed(&mut self, _: Option<&pinc_membership::NodeId>, _: &pinc_membership::NodeId) {}
 }
 
-impl vinc_membership::Local for Scripted {
+impl pinc_membership::Local for Scripted {
     fn version(&self) -> u16 {
         1
     }
@@ -817,7 +817,7 @@ impl vinc_membership::Local for Scripted {
 }
 
 /// The id of the `k`-th member of a big table: 30 zero bytes and `k` as a big-endian number.
-fn wide(k: u16) -> vinc_membership::NodeId {
+fn wide(k: u16) -> pinc_membership::NodeId {
     let mut id = [0u8; 32];
     id[30..].copy_from_slice(&k.to_be_bytes());
     id
@@ -825,8 +825,8 @@ fn wide(k: u16) -> vinc_membership::NodeId {
 
 #[test]
 fn a_returning_carrier_never_grows_a_full_roster_past_its_bound() {
-    use vinc_membership::consts::MAX_TABLE;
-    use vinc_membership::{Config, Membership};
+    use pinc_membership::consts::MAX_TABLE;
+    use pinc_membership::{Config, Membership};
     let me = [255u8; 32];
     let other = [254u8; 32];
     let mut h = Scripted::default();

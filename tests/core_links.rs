@@ -28,8 +28,8 @@
 
 use std::net::SocketAddr;
 
-use vinc_core::{Command, Event, Role, SessionId, Value};
-use vinc_tests::*;
+use pinc_core::{Command, Event, Role, SessionId, Value};
+use pinc_tests::*;
 
 /// The bytes at the link's rate are multiplied by this: the sender averages at least a quarter of the link.
 const FACTOR: u64 = 4;

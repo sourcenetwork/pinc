@@ -1,8 +1,8 @@
 //! Trace generation for the transcripts: what every `Transcript` of the workspace absorbs, in order, recorded as
 //! ndjson (`transcript.ndjson`) for the TLA+ trace check (`TraceTranscript.tla`) and the Lean replay
-//! (`Vinc.TraceTranscript`).
+//! (`Pinc.TraceTranscript`).
 //!
-//! With the `trace` feature of `vinc-crypto` armed on the thread, every `snapshot` of a transcript is one `tr` line:
+//! With the `trace` feature of `pinc-crypto` armed on the thread, every `snapshot` of a transcript is one `tr` line:
 //! the transcript's label and, for each field absorbed so far, the tag the call site gave it and its length, in
 //! absorption order. The checkers hold the field list of every kind of transcript (the handshake, the resumption,
 //! the ticket context, the sub-session context, the key roll id, the prekey hash, the chain, and the delay-tolerant
@@ -13,7 +13,7 @@
 //! transcript. A line is written once however often it repeats.
 //!
 //! Every kind is asserted here against the field list, so the test is meaningful without the proof tools. The trace
-//! is written to the directory in `VINC_TRACE_DIR` when it is set; otherwise nothing is written.
+//! is written to the directory in `PINC_TRACE_DIR` when it is set; otherwise nothing is written.
 #![allow(
     clippy::unwrap_used,
     clippy::indexing_slicing,
@@ -27,12 +27,12 @@ mod sec_common;
 use std::collections::HashSet;
 use std::fmt::Write as _;
 
-use vinc_crypto::transcript::trace;
-use vinc_crypto::{IdentityAlg, Secret};
-use vinc_dtn::custody::CustodyAck;
-use vinc_dtn::hlc::Hlc;
-use vinc_security::keyroll::request_id;
-use vinc_security::{prekey_hash, sub_session_secret};
+use pinc_crypto::transcript::trace;
+use pinc_crypto::{IdentityAlg, Secret};
+use pinc_dtn::custody::CustodyAck;
+use pinc_dtn::hlc::Hlc;
+use pinc_security::keyroll::request_id;
+use pinc_security::{prekey_hash, sub_session_secret};
 
 use sec_common::{ALPN, World, big_stack};
 
@@ -98,24 +98,24 @@ fn transcript_traces() {
     });
     // every kind was recorded, in its full form
     let labels = [
-        "VINC 2026 v1 handshake",
-        "VINC 2026 v1 resume handshake",
-        "VINC 2026 v1 ticket",
-        "VINC 2026 v1 sub session context",
-        "VINC 2026 v1 key roll id",
-        "VINC 2026 v1 prekey hash",
-        "VINC 2026 v1 chain",
-        "VINC 2026 v1 dtn transcript",
-        "VINC 2026 v1 dtn chain",
-        "VINC 2026 v1 dtn bundle id",
-        "VINC 2026 v1 dtn head",
-        "VINC 2026 v1 dtn custody ack",
+        "PINC 2026 v1 handshake",
+        "PINC 2026 v1 resume handshake",
+        "PINC 2026 v1 ticket",
+        "PINC 2026 v1 sub session context",
+        "PINC 2026 v1 key roll id",
+        "PINC 2026 v1 prekey hash",
+        "PINC 2026 v1 chain",
+        "PINC 2026 v1 dtn transcript",
+        "PINC 2026 v1 dtn chain",
+        "PINC 2026 v1 dtn bundle id",
+        "PINC 2026 v1 dtn head",
+        "PINC 2026 v1 dtn custody ack",
     ];
     for l in labels {
         assert!(trace.contains(&format!("\"label\":\"{l}\"")), "no transcript of {l}");
     }
     // a full handshake absorbs 20 fields; a resumption 14
-    assert!(trace.contains(r#""label":"VINC 2026 v1 handshake","fields":[["label",22],["version",1],["alpn",6]"#));
+    assert!(trace.contains(r#""label":"PINC 2026 v1 handshake","fields":[["label",22],["version",1],["alpn",6]"#));
     assert!(
         trace
             .lines()
@@ -126,7 +126,7 @@ fn transcript_traces() {
             .lines()
             .any(|l| l.contains("resume handshake\"") && l.matches("],[").count() == 13)
     );
-    let Some(dir) = std::env::var_os("VINC_TRACE_DIR") else {
+    let Some(dir) = std::env::var_os("PINC_TRACE_DIR") else {
         return;
     };
     std::fs::write(std::path::Path::new(&dir).join("transcript.ndjson"), trace).unwrap();

@@ -1,6 +1,6 @@
 ---------------------------- MODULE RekeyCodec ----------------------------
 (***************************************************************************)
-(* The REKEY body of vinc-security keyroll.rs (Rekey::write, read, encode *)
+(* The REKEY body of pinc-security keyroll.rs (Rekey::write, read, encode *)
 (* and decode): kind(1) (0 request, 1 answer), share(32), and for an       *)
 (* answer echo(8), the identifier of the request it answers, and a varint  *)
 (* switch_pn. The varint is the Encode and Decode of Varint.tla on the     *)
@@ -19,7 +19,7 @@
 (*               has exactly one accepted body;                            *)
 (*   Strict      every cut of the body, a trailing byte, an unknown kind   *)
 (*               and a kind changed to the other are refused.              *)
-(* Lean counterpart: Vinc/KeyRoll.lean (decode_encode, encode_decode,      *)
+(* Lean counterpart: Pinc/KeyRoll.lean (decode_encode, encode_decode,      *)
 (* encode_injective, the refusal theorems).                                *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets

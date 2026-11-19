@@ -15,9 +15,9 @@
 use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-use vinc_sim::reference::RefRng;
-use vinc_sim::toy_stream::{StreamCmd, StreamProbe};
-use vinc_sim::{
+use pinc_sim::reference::RefRng;
+use pinc_sim::toy_stream::{StreamCmd, StreamProbe};
+use pinc_sim::{
     FlatCost, LanConfig, LinkConfig, NatConfig, NatKind, NodeId, PortPolicy, Sim, SimConfig, StreamEvent, StreamId,
     StreamKind, StreamPolicy, Time,
 };
@@ -174,7 +174,7 @@ fn build(sc: &Scenario) -> Run {
     }
     for c in &sc.cuts {
         let ids =
-            |s: &str| -> Vec<vinc_sim::LanId> { s.split(',').map(|x| lans[x.parse::<usize>().unwrap()]).collect() };
+            |s: &str| -> Vec<pinc_sim::LanId> { s.split(',').map(|x| lans[x.parse::<usize>().unwrap()]).collect() };
         sim.partition_lans(
             c[0].parse().unwrap(),
             c[1].parse().unwrap(),

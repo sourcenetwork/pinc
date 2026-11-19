@@ -20,12 +20,12 @@
     clippy::items_after_statements
 )]
 
-use vinc_connect::carrier::session::{self, ALPN, CarrierError, Poll, ProtectedCarrier};
-use vinc_connect::carrier::{Frame, NODE_ID_LEN};
-use vinc_connect::relay::datagram::Datagram;
-use vinc_connect::relay::{CloseReason, Effect, Sink, Trace, UdpTarget};
-use vinc_crypto::{Drbg, IdentityAlg, Keypair, NodeId, Software};
-use vinc_security::{
+use pinc_connect::carrier::session::{self, ALPN, CarrierError, Poll, ProtectedCarrier};
+use pinc_connect::carrier::{Frame, NODE_ID_LEN};
+use pinc_connect::relay::datagram::Datagram;
+use pinc_connect::relay::{CloseReason, Effect, Sink, Trace, UdpTarget};
+use pinc_crypto::{Drbg, IdentityAlg, Keypair, NodeId, Software};
+use pinc_security::{
     ConnId, CreditRecord, Env, InitiatorParams, KeyHandle, LocalIdentity, PrekeyPolicy, ResponderStores, SoftKeys,
     SoftPrekeys,
 };
@@ -65,7 +65,7 @@ pub fn nid(tag: u8) -> NodeId {
 
 /// A frame as its owned encoding.
 pub fn enc(f: &Frame<'_>) -> Vec<u8> {
-    let mut b = vec![0u8; vinc_connect::carrier::MAX_FRAME_LEN];
+    let mut b = vec![0u8; pinc_connect::carrier::MAX_FRAME_LEN];
     let n = f.encode(&mut b).unwrap();
     b.truncate(n);
     b
@@ -388,9 +388,9 @@ pub fn dg(d: &Datagram<'_>) -> Vec<u8> {
 // ---- the relay fixture ----
 
 use core::net::SocketAddr;
-use vinc_connect::record::{self, MAX_RECORD_LEN, Reach, RecordFields};
-use vinc_connect::relay::sleep;
-use vinc_connect::relay::{Config, RecordOrigin, Reject, Relay, SessionId};
+use pinc_connect::record::{self, MAX_RECORD_LEN, Reach, RecordFields};
+use pinc_connect::relay::sleep;
+use pinc_connect::relay::{Config, RecordOrigin, Reject, Relay, SessionId};
 
 pub type R = Relay<16, 16, 8, 4096>;
 

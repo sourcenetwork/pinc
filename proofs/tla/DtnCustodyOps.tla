@@ -1,6 +1,6 @@
 ---------------------------- MODULE DtnCustodyOps ----------------------------
 (***************************************************************************)
-(* The operations of vinc-dtn/src/custody.rs (CustodyBook<N>) on the shared *)
+(* The operations of pinc-dtn/src/custody.rs (CustodyBook<N>) on the shared *)
 (* ledger of DtnStoreOps.tla, step for step. The book is a sequence of      *)
 (* records [bundle, prev, off, oid] or BNone: off is the node custody was   *)
 (* offered to (0 for none), oid the id of that offer (0 when none: the     *)
@@ -39,7 +39,7 @@
 (*  Delivered  clear the record, release the item                           *)
 (*  BExpire    expire, then sync                                            *)
 (*                                                                          *)
-(* The Lean counterpart is proofs/lean/Vinc/DtnCustody*.lean.               *)
+(* The Lean counterpart is proofs/lean/Pinc/DtnCustody*.lean.               *)
 (***************************************************************************)
 EXTENDS DtnStoreOps
 

@@ -42,10 +42,10 @@ impl<A: SimApps> SimNode<A> {
         self.pump(now);
     }
 
-    pub fn poll_transmit(&mut self, buf: &mut [u8]) -> Option<vinc_sim::Transmit> {
+    pub fn poll_transmit(&mut self, buf: &mut [u8]) -> Option<pinc_sim::Transmit> {
         let (local, remote, d) = self.out.datagrams.pop_front()?;
         buf[..d.len()].copy_from_slice(&d);
-        Some(vinc_sim::Transmit {
+        Some(pinc_sim::Transmit {
             local,
             remote,
             len: d.len(),
@@ -125,11 +125,11 @@ impl<A: SimApps> SimNode<A> {
                 ranges,
                 providers,
             } => {
-                let spans: Vec<vinc_values::span::Span> = ranges
+                let spans: Vec<pinc_values::span::Span> = ranges
                     .iter()
-                    .map(|(off, len)| vinc_values::span::Span { off: *off, len: *len })
+                    .map(|(off, len)| pinc_values::span::Span { off: *off, len: *len })
                     .collect();
-                let req = vinc_node::ValuesRequest {
+                let req = pinc_node::ValuesRequest {
                     root,
                     length,
                     ranges: &spans,
@@ -325,7 +325,7 @@ impl<A: SimApps> SimNode<A> {
     }
 }
 
-impl<A: SimApps> vinc_sim::Node for SimNode<A> {
+impl<A: SimApps> pinc_sim::Node for SimNode<A> {
     type Cmd = NCmd;
     type Event = NEv;
 
@@ -333,7 +333,7 @@ impl<A: SimApps> vinc_sim::Node for SimNode<A> {
         SimNode::handle_datagram(self, now, local, remote, data);
     }
 
-    fn poll_transmit(&mut self, _now: Time, buf: &mut [u8]) -> Option<vinc_sim::Transmit> {
+    fn poll_transmit(&mut self, _now: Time, buf: &mut [u8]) -> Option<pinc_sim::Transmit> {
         SimNode::poll_transmit(self, buf)
     }
 

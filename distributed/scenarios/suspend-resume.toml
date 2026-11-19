@@ -1,6 +1,6 @@
 name = "suspend-resume"
-about = "Publish and subscribe while a subscriber sleeps and wakes: it announces its sleep where the stack has the notion (VINC), is frozen from 10 s to 25 s, then thawed; one hub, four peers, 50 messages a second for 40 s."
-stacks = ["vinc", "iroh", "libp2p"]
+about = "Publish and subscribe while a subscriber sleeps and wakes: it announces its sleep where the stack has the notion (PINC), is frozen from 10 s to 25 s, then thawed; one hub, four peers, 50 messages a second for 40 s."
+stacks = ["pinc", "iroh", "libp2p"]
 repetitions = 3
 
 [resources]

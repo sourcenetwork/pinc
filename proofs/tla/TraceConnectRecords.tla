@@ -1,6 +1,6 @@
 ---------------------------- MODULE TraceConnectRecords ----------------------------
 (***************************************************************************)
-(* Trace validation of the relay's record store: vinc-connect/src/relay/   *)
+(* Trace validation of the relay's record store: pinc-connect/src/relay/   *)
 (* records.rs and the record part of discovery.rs and clients.rs.          *)
 (*                                                                         *)
 (* The Rust test tests/trace_connect_records.rs drives the real Relay      *)
@@ -16,7 +16,7 @@
 (* and the same counters.                                                  *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds                       *)
+(* variable PINC_TRACE_DIR, the directory that holds                       *)
 (* connect_records.ndjson.                                                 *)
 (***************************************************************************)
 EXTENDS ConnectRecordsOps, Json, IOUtils
@@ -24,7 +24,7 @@ EXTENDS ConnectRecordsOps, Json, IOUtils
 VARIABLES i, cf, R
 vars == <<i, cf, R>>
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/connect_records.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/connect_records.ndjson")
 Ev == Trace[i]
 
 Init == i = 1 /\ cf = [R |-> 1, P |-> 1, me |-> 0] /\ R = NewStore(cf)

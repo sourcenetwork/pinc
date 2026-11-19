@@ -1,7 +1,7 @@
 //! Trace generation for the topic broadcast: the real `Topics` machine of four nodes (a hub, a publisher and two
 //! subscribers, one of which answers its access checks by hand) driven through its public API, recorded as ndjson
 //! (`broadcast.ndjson`) for the TLA+ trace check (`TraceBroadcast.tla`) and the Lean replay
-//! (`Vinc/BroadcastTrace.lean`).
+//! (`Pinc/BroadcastTrace.lean`).
 //!
 //! Every input the message path acts on is one line: a frame handed to a node (`frame`, with the head fields of the
 //! message as ids, one id per distinct byte string), a HAVE (`have`), a timer (`timer`), an access answer (`acp`) and
@@ -17,7 +17,7 @@
 //! proved separately.
 //!
 //! The test asserts the facts it relies on itself, so it is meaningful without the proof tools. The trace is written
-//! to the directory in `VINC_TRACE_DIR` when it is set; otherwise nothing is written.
+//! to the directory in `PINC_TRACE_DIR` when it is set; otherwise nothing is written.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -38,12 +38,12 @@ mod common;
 use std::collections::HashMap;
 
 use common::{Ev, Net, SEC, WALL0, keypair, ty};
-use vinc_broadcast::consts::HELD_MAX;
-use vinc_broadcast::wire::{Head, MAX_HEAD};
-use vinc_broadcast::{Limits, Reject, Trace, auth, topic_tag};
-use vinc_crypto::IdentityAlg;
-use vinc_crypto::identity::MAX_SIGNATURE_LEN;
-use vinc_wire::hlc::Hlc;
+use pinc_broadcast::consts::HELD_MAX;
+use pinc_broadcast::wire::{Head, MAX_HEAD};
+use pinc_broadcast::{Limits, Reject, Trace, auth, topic_tag};
+use pinc_crypto::IdentityAlg;
+use pinc_crypto::identity::MAX_SIGNATURE_LEN;
+use pinc_wire::hlc::Hlc;
 
 /// Model time: units of 1/8 millisecond.
 fn units(ns: u64) -> u64 {
@@ -652,7 +652,7 @@ fn broadcast_trace() {
     );
     w.run_until(2030 * SEC);
     assert!(w.out.lines().count() > 100);
-    if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
+    if let Ok(dir) = std::env::var("PINC_TRACE_DIR") {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(std::path::Path::new(&dir).join("broadcast.ndjson"), &w.out).unwrap();
     }

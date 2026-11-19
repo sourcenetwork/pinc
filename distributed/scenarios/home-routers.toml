@@ -1,6 +1,6 @@
 name = "home-routers"
 about = "Two nodes each behind a home router (one port-restricted, one symmetric) with a public site between them; the transport tests dial from behind the address translation to the public node."
-stacks = ["vinc", "iroh", "libp2p"]
+stacks = ["pinc", "iroh", "libp2p"]
 repetitions = 3
 
 [[sites]]

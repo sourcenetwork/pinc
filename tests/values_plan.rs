@@ -1,4 +1,4 @@
-//! The response geometry and the store-reading source: the closed-form plan equals the `vinc-dag` range encoding
+//! The response geometry and the store-reading source: the closed-form plan equals the `pinc-dag` range encoding
 //! byte for byte, and the source reproduces any byte of a response from the store.
 #![allow(
     clippy::unwrap_used,
@@ -17,15 +17,15 @@ mod values_support;
 
 use proptest::prelude::*;
 use values_support::*;
-use vinc_dag::tree::{Layout, PARENT_LEN, RangeEncoder, Step, build_outboard_vec, encoded_len};
-use vinc_transport::stream::StreamSource;
-use vinc_values::knobs::{MAX_REQ_RANGES, SERVE_BATCH};
-use vinc_values::plan::Plan;
-use vinc_values::source::ValueSource;
-use vinc_values::span::Span;
-use vinc_values::wire::{GROUP_HDR, GroupHeader};
+use pinc_dag::tree::{Layout, PARENT_LEN, RangeEncoder, Step, build_outboard_vec, encoded_len};
+use pinc_transport::stream::StreamSource;
+use pinc_values::knobs::{MAX_REQ_RANGES, SERVE_BATCH};
+use pinc_values::plan::Plan;
+use pinc_values::source::ValueSource;
+use pinc_values::span::Span;
+use pinc_values::wire::{GROUP_HDR, GroupHeader};
 
-/// The response to `spans` built the slow way from the `vinc-dag` encoder: header, proof pairs, group bytes.
+/// The response to `spans` built the slow way from the `pinc-dag` encoder: header, proof pairs, group bytes.
 fn reference(value: &[u8], outboard: &[u8], spans: &[Span]) -> Vec<u8> {
     let layout = Layout::new(value.len() as u64, 4).unwrap();
     let mut out = Vec::new();
@@ -210,7 +210,7 @@ fn the_source_window_is_the_serve_batch() {
 #[test]
 fn a_source_over_a_store_that_lost_bytes_reads_short() {
     struct Gone(PStore);
-    impl vinc_values::store::ValueRead for Gone {
+    impl pinc_values::store::ValueRead for Gone {
         fn servable_len(&self, r: &[u8; 32]) -> Option<u64> {
             self.0.servable_len(r)
         }

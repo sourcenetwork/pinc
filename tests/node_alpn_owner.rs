@@ -5,8 +5,8 @@
 mod node_script;
 
 use node_script::node_with;
-use vinc_node::{DTN_ALPN, Enabled, HUB_ALPN, NoApps, SETS_ALPN, VALUES_ALPN};
-use vinc_tests::LayerApps;
+use pinc_node::{DTN_ALPN, Enabled, HUB_ALPN, NoApps, SETS_ALPN, VALUES_ALPN};
+use pinc_tests::LayerApps;
 
 /// A thread with the stack a node needs.
 fn big<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {

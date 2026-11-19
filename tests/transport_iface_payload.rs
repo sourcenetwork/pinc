@@ -3,7 +3,7 @@
 
 #![allow(clippy::unwrap_used)]
 
-use vinc_transport::conn::{HEADERS_V4, HEADERS_V6, MtuProbe, PROBE_MTU, interface_payload};
+use pinc_transport::conn::{HEADERS_V4, HEADERS_V6, MtuProbe, PROBE_MTU, interface_payload};
 
 #[test]
 fn the_interface_payload_is_the_mtu_less_the_headers_of_the_family() {

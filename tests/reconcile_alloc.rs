@@ -12,10 +12,10 @@
 mod common;
 
 use common::{fixed_set, index, mutate};
-use vinc_reconcile::{Initiator, Limits, MemIndex, Responder, Step};
-use vinc_tests::{SplitMix64, measure};
+use pinc_reconcile::{Initiator, Limits, MemIndex, Responder, Step};
+use pinc_tests::{SplitMix64, measure};
 
-vinc_tests::install_counting_allocator!();
+pinc_tests::install_counting_allocator!();
 
 /// One session with preallocated message buffers and no clones, so that only the library can allocate.
 fn session(init: &mut Initiator, resp: &mut Responder, a: &MemIndex, b: &MemIndex, tx: &mut Vec<u8>, rx: &mut Vec<u8>) {

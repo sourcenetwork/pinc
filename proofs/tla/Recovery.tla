@@ -1,6 +1,6 @@
 ------------------------------ MODULE Recovery ------------------------------
 (***************************************************************************)
-(* Loss recovery of vinc-transport (recovery/engine.rs, ack.rs, loss.rs,   *)
+(* Loss recovery of pinc-transport (recovery/engine.rs, ack.rs, loss.rs,   *)
 (* pto.rs, sent.rs, rtt.rs, tail.rs) over every interleaving of the calls  *)
 (* the connection makes on it, at small sizes (RecoveryOps.tla has the     *)
 (* operators and the scaling).                                             *)
@@ -31,7 +31,7 @@
 (*    (GhostBound); the ghost look runs at most once per 25 ms;            *)
 (*  - tail repair: a candidate exists only after a burst of exactly one    *)
 (*    packet (TailShape).                                                  *)
-(* Lean counterpart: proofs/lean/Vinc/TransportRecovery*.lean.             *)
+(* Lean counterpart: proofs/lean/Pinc/TransportRecovery*.lean.             *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
 CONSTANTS N, MS, SEC, MP, TOP, MAXG, LATEN, DELTAS, PNMAX, SIZES, HOR, OPS, KMAX, FLAGS, PMAX, FRN

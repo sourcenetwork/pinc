@@ -1,6 +1,6 @@
 -------------------------------- MODULE Reasm --------------------------------
 (***************************************************************************)
-(* Handshake fragment reassembly of vinc-transport conn/reasm.rs over      *)
+(* Handshake fragment reassembly of pinc-transport conn/reasm.rs over      *)
 (* every interleaving of fragments (any order, any number of times, of     *)
 (* messages of different lengths), at small sizes (ReasmOps.tla has the    *)
 (* operators).                                                             *)
@@ -17,7 +17,7 @@
 (*  - the table is bounded: a fragment that needs a run past NR is        *)
 (*    dropped and changes nothing but the message length (Bounded);        *)
 (*  - the state never holds more than MX bytes (Total).                    *)
-(* Lean counterpart: proofs/lean/Vinc/TransportReasm*.lean.                *)
+(* Lean counterpart: proofs/lean/Pinc/TransportReasm*.lean.                *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
 CONSTANTS MX, NR, KMAX

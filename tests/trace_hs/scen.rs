@@ -1,8 +1,8 @@
 //! The scenarios of `trace_handshake.rs`: every world is one run of the real machines, asserted here and recorded by
 //! the [`Sim`].
-use vinc_security::message::{Initial, ResumeHello};
-use vinc_security::responder::{LATE_INITIAL_BUDGET, RESEND_BUDGET};
-use vinc_security::{ConnId, Failure};
+use pinc_security::message::{Initial, ResumeHello};
+use pinc_security::responder::{LATE_INITIAL_BUDGET, RESEND_BUDGET};
+use pinc_security::{ConnId, Failure};
 
 use crate::sim::{Ids, LH, LR, Sim, ex};
 use crate::tamper::{agree, flip_field, kinds, malformed};
@@ -791,7 +791,7 @@ fn misc() {
         sim.setup_full(1);
         let mut bytes = sim.export(5);
         let at = 2 + 1 + 32 + 1;
-        assert_eq!(&bytes[at..at + 6], b"vinc/1");
+        assert_eq!(&bytes[at..at + 6], b"pinc/1");
         bytes[at + 5] = b'2';
         sim.restart();
         assert_eq!(sim.restore(&bytes), Ok(1));

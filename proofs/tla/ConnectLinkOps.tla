@@ -1,6 +1,6 @@
 ---------------------------- MODULE ConnectLinkOps ----------------------------
 (***************************************************************************)
-(* The client carrier state machine of vinc-connect/src/client/link.rs as   *)
+(* The client carrier state machine of pinc-connect/src/client/link.rs as   *)
 (* pure operators: each takes the link L, the shared state S, a clock       *)
 (* reading and the context c, and returns the new link, the new shared      *)
 (* state and what the host must do.                                         *)
@@ -11,7 +11,7 @@
 (* division of the code is exact). saturating_sub is SatSub; a plain `-`    *)
 (* of the code is Sub, which stops TLC with an error when it would          *)
 (* underflow. The shared "unset" values are -1 (keep_fail, defer_until).    *)
-(* Lean counterpart: Vinc/ConnectLink.lean, ConnectLinkThm.lean.            *)
+(* Lean counterpart: Pinc/ConnectLink.lean, ConnectLinkThm.lean.            *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC
 

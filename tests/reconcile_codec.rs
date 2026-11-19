@@ -14,9 +14,9 @@ mod common;
 
 use common::{index, run_with, sorted, sym_diff};
 use proptest::prelude::*;
-use vinc_reconcile::wire::{count, frame_body, frame_len, put_bound, put_varint, read_bound};
-use vinc_reconcile::{Fingerprint, Initiator, ItemIndex, Limits, Responder};
-use vinc_wire::Reader;
+use pinc_reconcile::wire::{count, frame_body, frame_len, put_bound, put_varint, read_bound};
+use pinc_reconcile::{Fingerprint, Initiator, ItemIndex, Limits, Responder};
+use pinc_wire::Reader;
 
 fn small_item() -> impl Strategy<Value = Vec<u8>> {
     // A narrow alphabet makes shared prefixes, and items that are prefixes of others, common.

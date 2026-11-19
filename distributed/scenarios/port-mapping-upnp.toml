@@ -1,6 +1,6 @@
 name = "port-mapping-upnp"
 about = "As port-mapping, with a router that maps ports by UPnP-IGD only."
-stacks = ["vinc"]
+stacks = ["pinc"]
 repetitions = 1
 
 [[sites]]

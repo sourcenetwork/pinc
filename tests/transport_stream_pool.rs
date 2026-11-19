@@ -15,11 +15,11 @@ mod common;
 
 use common::{Table, next_control, peer, read_all, setup};
 use proptest::prelude::*;
-use vinc_tests::measure;
-use vinc_transport::stream::pool::{BufferPool, CHUNK_SIZE};
-use vinc_transport::stream::{Config, ControlFrame, RecvStatus, StreamError, StreamSource, Streams};
+use pinc_tests::measure;
+use pinc_transport::stream::pool::{BufferPool, CHUNK_SIZE};
+use pinc_transport::stream::{Config, ControlFrame, RecvStatus, StreamError, StreamSource, Streams};
 
-vinc_tests::install_counting_allocator!();
+pinc_tests::install_counting_allocator!();
 
 // ---- pool grant property --------------------------------------------------------------------------------------------
 

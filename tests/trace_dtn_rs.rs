@@ -1,6 +1,6 @@
 //! Trace generation for the GF(2^8) arithmetic, its slice kernels and the Reed-Solomon code: real runs of `inv`, `mul`,
 //! `xor_into`, `mul_add`, `scale`, `Rs::new`, `Rs::encode` and `Rs::reconstruct` through the public API, recorded as
-//! ndjson (`dtn_rs.ndjson`) for the TLA+ trace check (`TraceDtnRs.tla`) and the Lean replay (`Vinc/TraceDtnRs.lean`).
+//! ndjson (`dtn_rs.ndjson`) for the TLA+ trace check (`TraceDtnRs.tla`) and the Lean replay (`Pinc/TraceDtnRs.lean`).
 //!
 //! What is recorded: every value of `inv` (all 256), `mul` for every first operand against a fixed set of second
 //! operands and a seeded spread of pairs, the three slice kernels on random slices of lengths around the eight-byte
@@ -12,7 +12,7 @@
 //!
 //! The test asserts everything itself (the products against a shift-and-add reference written here, the field laws,
 //! and that every successful reconstruction returns the whole original block), so it is meaningful without the proof
-//! tools. The trace is written to the directory in `VINC_TRACE_DIR` when it is set; otherwise nothing is written.
+//! tools. The trace is written to the directory in `PINC_TRACE_DIR` when it is set; otherwise nothing is written.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -30,10 +30,10 @@
 
 use std::fmt::Write as _;
 
-use vinc_dtn::error::DtnError;
-use vinc_dtn::gf256::{inv, mul, mul_add, scale, xor_into};
-use vinc_dtn::rs::Rs;
-use vinc_tests::SplitMix64;
+use pinc_dtn::error::DtnError;
+use pinc_dtn::gf256::{inv, mul, mul_add, scale, xor_into};
+use pinc_dtn::rs::Rs;
+use pinc_tests::SplitMix64;
 
 /// The product by shift-and-add with reduction by 0x11d: the definition, independent of the tables.
 fn ref_mul(a: u8, b: u8) -> u8 {
@@ -349,7 +349,7 @@ fn field_and_code_trace() {
     }
 
     assert!(out.len() > 3000);
-    if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
+    if let Ok(dir) = std::env::var("PINC_TRACE_DIR") {
         std::fs::create_dir_all(&dir).unwrap();
         let mut text = out.join("\n");
         text.push('\n');

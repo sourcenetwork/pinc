@@ -3,7 +3,7 @@
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 
 use proptest::prelude::*;
-use vinc_transport::recovery::{LossEstimate, REPAIR_MIN_AGE, REPAIR_THRESHOLD, SECOND, TailRepair};
+use pinc_transport::recovery::{LossEstimate, REPAIR_MIN_AGE, REPAIR_THRESHOLD, SECOND, TailRepair};
 
 // ---------------------------------------------------------------------------------------------------------------
 // The loss estimate and tail repair

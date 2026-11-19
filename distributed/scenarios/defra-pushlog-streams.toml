@@ -1,6 +1,6 @@
 name = "defra-pushlog-streams"
 about = "DefraDB's pushlog burst over direct streams, as defradb.rs sends it: 2000 updates of 4 KiB from a writer to one replicator across a WAN (20 ms round trip, 100 Mbit/s), each on a stream of its own, 64 and 256 in flight; the replicator echoes each update, so twice the bytes cross."
-stacks = ["vinc", "iroh", "libp2p"]
+stacks = ["pinc", "iroh", "libp2p"]
 repetitions = 3
 
 [[sites]]

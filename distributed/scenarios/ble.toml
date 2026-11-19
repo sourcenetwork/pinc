@@ -1,6 +1,6 @@
 name = "ble"
 about = "Bluetooth Low Energy carrying IPv6, emulated (its delay, jitter, loss, rate and datagram size, not the radio): the link layer fragments, so the interface carries 1280 bytes; 15 ms delay and 7.5 ms jitter each way (a connection interval of 30 ms taken as the wait for the next connection event), 0.7 Mbit/s each way, no random loss (the link layer retransmits); measured rates are 82 to 1320 kbit/s."
-stacks = ["vinc", "iroh", "libp2p"]
+stacks = ["pinc", "iroh", "libp2p"]
 repetitions = 3
 mtu = 1280
 

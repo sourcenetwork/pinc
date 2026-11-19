@@ -12,10 +12,10 @@
 mod connect_sim_common;
 
 use connect_sim_common::*;
-use vinc_connect::relay::Trace;
-use vinc_core::Event;
-use vinc_sim::{NatKind, SEC};
-use vinc_tests::{Cmd, Ev};
+use pinc_connect::relay::Trace;
+use pinc_core::Event;
+use pinc_sim::{NatKind, SEC};
+use pinc_tests::{Cmd, Ev};
 
 #[test]
 fn a_sleeping_member_is_held_for_woken_and_served_from_the_mailbox() {

@@ -1,6 +1,6 @@
 ------------------------- MODULE TraceConnectCarrier -------------------------
 (***************************************************************************)
-(* Trace validation of the protected carrier: vinc-connect                 *)
+(* Trace validation of the protected carrier: pinc-connect                 *)
 (* carrier/session.rs.                                                     *)
 (*                                                                         *)
 (* The Rust test tests/trace_connect_carrier.rs runs a real dialer and a   *)
@@ -27,7 +27,7 @@
 (* Constants TLC cannot hold (MAX_PACKET_NUMBER, u64::MAX and the          *)
 (* ChaCha20-Poly1305 failure limit 2^36) stand at 2^30: no run comes near  *)
 (* them. Needs the TLA+ CommunityModules (Json, IOUtils) and the           *)
-(* environment variable VINC_TRACE_DIR, the directory that holds           *)
+(* environment variable PINC_TRACE_DIR, the directory that holds           *)
 (* connect_carrier.ndjson.                                                 *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, TLC, Json, IOUtils
@@ -35,7 +35,7 @@ VARIABLES i, c, tab, K
 vars == <<i, c, tab, K>>
 INSTANCE ConnectCarrierOps WITH MaxPn <- 1073741824, Sat <- 1073741824
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/connect_carrier.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/connect_carrier.ndjson")
 Ev0 == Trace[i]
 Sides == {"d", "a"}
 SendName(s) == IF s = "d" THEN 0 ELSE 1

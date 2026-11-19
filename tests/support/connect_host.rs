@@ -18,31 +18,31 @@
 use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
 
-use vinc_core::{Command, CommandError, Endpoint, EndpointConfig, Event, Query, Reply, SessionId};
-use vinc_crypto::{Drbg, IdentityAlg, Keypair, NodeId, Secret};
-use vinc_security::{
+use pinc_core::{Command, CommandError, Endpoint, EndpointConfig, Event, Query, Reply, SessionId};
+use pinc_crypto::{Drbg, IdentityAlg, Keypair, NodeId, Secret};
+use pinc_security::{
     Env, KeyHandle, KeyRequest, KeyResponse, LocalIdentity, PrekeyInfo, PrekeyPolicy, SoftKeys, SoftPrekeys,
 };
-use vinc_transport::stream::NoSource;
+use pinc_transport::stream::NoSource;
 
 use crate::{Caps, CoreEp, memory, slots};
 
-pub const HUB_ALPN: &[u8] = b"vinc/a";
+pub const HUB_ALPN: &[u8] = b"pinc/a";
 
 /// What a simulated node reports to the scenario.
 #[derive(Debug, Clone)]
 pub enum Ev {
     Ep(Event),
-    Notice(vinc_connect::client::Notice),
-    Stream(vinc_sim::StreamEvent),
-    Trace(vinc_connect::relay::Trace),
+    Notice(pinc_connect::client::Notice),
+    Stream(pinc_sim::StreamEvent),
+    Trace(pinc_connect::relay::Trace),
     Wake(NodeId),
 }
 
 #[allow(clippy::large_enum_variant, reason = "a test type, built once per key request")]
 /// A key answer that owns its bytes, so the request it answers can be dropped first.
 pub enum Answer {
-    Sig([u8; vinc_crypto::identity::MAX_SIGNATURE_LEN], usize),
+    Sig([u8; pinc_crypto::identity::MAX_SIGNATURE_LEN], usize),
     Secret(Secret<32>),
     Failed,
 }
@@ -75,11 +75,11 @@ pub fn answer_parts(
         now,
         drbg,
     };
-    let mut sig = [0u8; vinc_crypto::identity::MAX_SIGNATURE_LEN];
+    let mut sig = [0u8; pinc_crypto::identity::MAX_SIGNATURE_LEN];
     match soft.answer(&mut env, req, &mut sig) {
         KeyResponse::Signature(s) => {
             let n = s.len();
-            let mut out = [0u8; vinc_crypto::identity::MAX_SIGNATURE_LEN];
+            let mut out = [0u8; pinc_crypto::identity::MAX_SIGNATURE_LEN];
             out[..n].copy_from_slice(s);
             Answer::Sig(out, n)
         }
@@ -113,7 +113,7 @@ impl Host {
         let alg = IdentityAlg::Ed25519;
         let kp = Keypair::from_seed(alg, &vec![tag; alg.seed_len()]).unwrap();
         let identity = LocalIdentity::from_keypair(&kp, KeyHandle(1)).unwrap();
-        let prov = Caps(vinc_crypto::Software, true);
+        let prov = Caps(pinc_crypto::Software, true);
         let mut drbg = Drbg::new(&[tag ^ 0x5a; 32]);
         let mut cfg = EndpointConfig::new(u64::from(tag) * 0x9E37_79B9);
         cfg.conn.max_gso = 1;
@@ -178,7 +178,7 @@ impl Host {
                     ..
                 } = self;
                 let owned = match ep.query(Query::KeyRequest(session)) {
-                    vinc_core::Answer::KeyRequest(req) => Some(answer_parts(prov, kp, prekeys, drbg, now, &req)),
+                    pinc_core::Answer::KeyRequest(req) => Some(answer_parts(prov, kp, prekeys, drbg, now, &req)),
                     _ => None,
                 };
                 let Some(owned) = owned else { return };
@@ -208,7 +208,7 @@ impl Host {
     pub fn read_stream(&mut self, now: u64, session: SessionId, stream: u64) {
         loop {
             let chunk = match self.ep.query(Query::Read { session, stream }) {
-                vinc_core::Answer::Chunk(c) if !c.is_empty() => c.to_vec(),
+                pinc_core::Answer::Chunk(c) if !c.is_empty() => c.to_vec(),
                 _ => break,
             };
             self.read
@@ -238,5 +238,5 @@ impl Host {
 #[derive(Default)]
 pub struct Outbox {
     pub datagrams: VecDeque<(SocketAddr, SocketAddr, Vec<u8>)>,
-    pub ops: VecDeque<(vinc_sim::StreamOp, Vec<u8>)>,
+    pub ops: VecDeque<(pinc_sim::StreamOp, Vec<u8>)>,
 }

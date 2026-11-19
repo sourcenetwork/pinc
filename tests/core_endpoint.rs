@@ -10,12 +10,12 @@
     clippy::cast_possible_truncation
 )]
 
-use vinc_core::{
+use pinc_core::{
     Answer, Command, CommandError, ConnectFailure, EndReason, Event, IfaceEvent, IfaceId, Query, Role, SessionId,
     StateError, Value, state_len,
 };
-use vinc_tests::*;
-use vinc_transport::conn::{CloseReason, code};
+use pinc_tests::*;
+use pinc_transport::conn::{CloseReason, code};
 
 fn open_and_send(net: &mut CoreNet, n: usize, s: SessionId, data: &[u8]) -> u64 {
     let now = net.now;
@@ -144,7 +144,7 @@ fn largest_datagrams(mtu: u16, delay: u64) -> (usize, usize) {
     for tag in [1u8, 2] {
         let addr: std::net::SocketAddr = ([10, 0, 0, tag], 4433).into();
         net.nodes
-            .push(TNode::with_mtu(tag, addr, now, vinc_crypto::IdentityAlg::Ed25519, mtu));
+            .push(TNode::with_mtu(tag, addr, now, pinc_crypto::IdentityAlg::Ed25519, mtu));
     }
     let (a, b) = (0, 1);
     let (sa, _sb) = net.connect_pair(a, b, ALPN_A, Role::Other);
@@ -298,7 +298,7 @@ fn an_unregistered_protocol_is_refused_and_the_dial_fails() {
         assert!(!net.nodes[a].saw(|e| matches!(e, Event::Connected { .. })));
         // The registry is bounded and ignores empty names.
         assert!(!net.nodes[b].ep.register_alpn(b""));
-        for i in 0..vinc_core::MAX_ALPNS as u8 {
+        for i in 0..pinc_core::MAX_ALPNS as u8 {
             let _ = net.nodes[b].ep.register_alpn(&[b'x', i]);
         }
         assert!(!net.nodes[b].ep.register_alpn(b"overflow"));
@@ -311,7 +311,7 @@ fn a_node_serves_the_hub_protocol_and_four_application_protocols() {
         let mut net = CoreNet::new(10 * MS_NS);
         let b = net.add(2);
         net.nodes[b].ep.unregister_alpn(ALPN_B);
-        let names: [&[u8]; 5] = [b"vinc/hub", b"/app/a", b"/app/b", b"/app/c", b"/app/d"];
+        let names: [&[u8]; 5] = [b"pinc/hub", b"/app/a", b"/app/b", b"/app/c", b"/app/d"];
         assert!(names.iter().all(|n| net.nodes[b].ep.register_alpn(n)));
     });
 }
@@ -366,8 +366,8 @@ fn a_node_does_not_dial_itself_and_a_dial_needs_a_route() {
                 ..
             }
         )));
-        let other = vinc_crypto::NodeId {
-            alg: vinc_crypto::IdentityAlg::Ed25519,
+        let other = pinc_crypto::NodeId {
+            alg: pinc_crypto::IdentityAlg::Ed25519,
             bytes: [9; 32],
         };
         let v6: std::net::SocketAddr = "[::1]:1".parse().unwrap();
@@ -525,9 +525,9 @@ fn after_an_address_change_the_session_leaves_from_the_new_address_at_once() {
 
 #[test]
 fn an_ended_endpoint_gives_its_table_back_with_every_session_closed() {
-    use vinc_core::{Endpoint, EndpointConfig};
-    use vinc_crypto::Drbg;
-    use vinc_security::{KeyHandle, LocalIdentity};
+    use pinc_core::{Endpoint, EndpointConfig};
+    use pinc_crypto::Drbg;
+    use pinc_security::{KeyHandle, LocalIdentity};
 
     big_stack(|| {
         let mut net = CoreNet::new(5 * MS_NS);
@@ -557,10 +557,10 @@ fn an_ended_endpoint_gives_its_table_back_with_every_session_closed() {
 /// An endpoint that owns its table holds the memory of the most sessions it has had at once, not of every slot.
 #[test]
 fn an_owned_endpoint_makes_the_memory_of_a_slot_when_the_slot_is_first_taken() {
-    use vinc_core::{Endpoint, EndpointConfig};
-    use vinc_crypto::{Drbg, IdentityAlg, Keypair, Software};
-    use vinc_security::{Env, KeyHandle, LocalIdentity, PrekeyPolicy, SoftPrekeys};
-    use vinc_transport::stream::NoSource;
+    use pinc_core::{Endpoint, EndpointConfig};
+    use pinc_crypto::{Drbg, IdentityAlg, Keypair, Software};
+    use pinc_security::{Env, KeyHandle, LocalIdentity, PrekeyPolicy, SoftPrekeys};
+    use pinc_transport::stream::NoSource;
 
     let identity = |tag: u8| {
         let kp = Keypair::from_seed(IdentityAlg::Ed25519, &[tag; 32]).unwrap();

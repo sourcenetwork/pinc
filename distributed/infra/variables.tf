@@ -44,5 +44,5 @@ variable "operator_cidr" {
 variable "name" {
   description = "A prefix for every resource, so a fleet is easy to find and remove."
   type        = string
-  default     = "vinc-distributed"
+  default     = "pinc-distributed"
 }

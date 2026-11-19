@@ -236,7 +236,7 @@ impl Handler for App {
                 Ok(Value::Null)
             }
             Cmd::Suspend | Cmd::Resume => Err("iroh has no notion of a node going to sleep: not available".into()),
-            Cmd::Reach { .. } => Err("the reach test is VINC's port mapping check: not available for iroh".into()),
+            Cmd::Reach { .. } => Err("the reach test is PINC's port mapping check: not available for iroh".into()),
             Cmd::Provide { size, seed } => self.provide(size, seed).await,
             Cmd::Fetch {
                 value,

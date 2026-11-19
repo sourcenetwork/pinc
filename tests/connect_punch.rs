@@ -17,7 +17,7 @@
 use std::net::SocketAddr;
 
 use proptest::prelude::*;
-use vinc_connect::client::punch::{
+use pinc_connect::client::punch::{
     ACTIVE_KEEP, Born, FIRST_DELAY, GOOD_LATENCY, MTU_DEFER, PROBES, Puncher, Step, UPGRADE_INTERVAL, View, decode,
     encode, probe_gaps,
 };
@@ -59,16 +59,16 @@ fn addrs(n: usize) -> Vec<SocketAddr> {
 fn reach_out_carries_up_to_eight_candidates() {
     for n in 0..=8 {
         let a = addrs(n);
-        let mut b = [0u8; vinc_core::REACH_BODY_MAX];
+        let mut b = [0u8; pinc_core::REACH_BODY_MAX];
         let len = encode(&a, &mut b).unwrap();
         let mut out = [SocketAddr::from(([0, 0, 0, 0], 0)); 8];
         assert_eq!(decode(&b[..len], &mut out), Some(n));
         assert_eq!(&out[..n], &a[..]);
-        assert!(len <= vinc_core::REACH_BODY_MAX);
+        assert!(len <= pinc_core::REACH_BODY_MAX);
     }
     // a ninth is cut off at encode, refused at decode
     let a = addrs(9);
-    let mut b = [0u8; vinc_core::REACH_BODY_MAX];
+    let mut b = [0u8; pinc_core::REACH_BODY_MAX];
     let len = encode(&a, &mut b).unwrap();
     assert_eq!(b[0], 8);
     let mut body = b[..len].to_vec();

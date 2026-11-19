@@ -9,14 +9,14 @@ mod connect_common;
 use core::net::SocketAddr;
 
 use connect_common::{SEC, big_stack, ed, id, nid};
-use vinc_connect::client::link::State;
-use vinc_connect::client::{Config, Connectivity, Io, Port, RelayCfg};
-use vinc_core::{
+use pinc_connect::client::link::State;
+use pinc_connect::client::{Config, Connectivity, Io, Port, RelayCfg};
+use pinc_core::{
     Command, CommandError, Event, Events, NodeStats, PeerInfo, Reply, Role, SessionId, SessionStats, Value,
 };
-use vinc_crypto::Software;
-use vinc_security::{Alpn, ConnId};
-use vinc_tests::Host;
+use pinc_crypto::Software;
+use pinc_security::{Alpn, ConnId};
+use pinc_tests::Host;
 
 /// An endpoint that holds one established, validated hub session on the route `route`.
 struct Stub {
@@ -25,7 +25,7 @@ struct Stub {
 }
 
 impl Port for Stub {
-    type Src = vinc_transport::stream::NoSource;
+    type Src = pinc_transport::stream::NoSource;
 
     fn command(&mut self, _: u64, cmd: Command<'_, Self::Src>) -> Result<Reply, CommandError> {
         let value = match cmd {
@@ -62,7 +62,7 @@ impl Port for Stub {
             last_app: 0,
             sub: false,
             answered: true,
-            transport: vinc_transport::conn::Stats::default(),
+            transport: pinc_transport::conn::Stats::default(),
         })
     }
 
@@ -70,11 +70,11 @@ impl Port for Stub {
         None
     }
 
-    fn peer(&self, _: &vinc_crypto::NodeId) -> Option<PeerInfo> {
+    fn peer(&self, _: &pinc_crypto::NodeId) -> Option<PeerInfo> {
         None
     }
 
-    fn reach_body(&self, _: SessionId, _: &mut [u8; vinc_core::REACH_BODY_MAX]) -> usize {
+    fn reach_body(&self, _: SessionId, _: &mut [u8; pinc_core::REACH_BODY_MAX]) -> usize {
         0
     }
 
@@ -119,12 +119,12 @@ fn a_tunnel_packet_leaves_from_the_local_address_of_the_hub_session() {
             now,
         };
         let session = conn
-            .dial(now, &mut ep, hub, b"vinc/hub", Role::Hub, &[hub_udp])
+            .dial(now, &mut ep, hub, b"pinc/hub", Role::Hub, &[hub_udp])
             .unwrap();
         let connected = Event::Connected {
             session,
             node: hub,
-            alpn: Alpn::new(b"vinc/hub").unwrap(),
+            alpn: Alpn::new(b"pinc/hub").unwrap(),
             resumed: false,
         };
         conn.observe(now, &mut ep, &connected);
@@ -178,12 +178,12 @@ fn a_packet_the_tunnel_takes_while_the_carrier_is_down_dials_the_carrier() {
             now,
         };
         let session = conn
-            .dial(now, &mut ep, hub, b"vinc/hub", Role::Hub, &[hub_udp])
+            .dial(now, &mut ep, hub, b"pinc/hub", Role::Hub, &[hub_udp])
             .unwrap();
         let connected = Event::Connected {
             session,
             node: hub,
-            alpn: Alpn::new(b"vinc/hub").unwrap(),
+            alpn: Alpn::new(b"pinc/hub").unwrap(),
             resumed: false,
         };
         conn.observe(now, &mut ep, &connected);

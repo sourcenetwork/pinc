@@ -1,6 +1,6 @@
 ------------------------------ MODULE TraceBuilder ------------------------------
 (***************************************************************************)
-(* Trace validation of vinc-dag OutboardBuilder (tree/builder.rs).         *)
+(* Trace validation of pinc-dag OutboardBuilder (tree/builder.rs).         *)
 (*                                                                         *)
 (* The Rust test tests/trace_builder.rs runs the real builder on random    *)
 (* values, group sizes and splits of the value into pieces. A run starts   *)
@@ -30,7 +30,7 @@
 (* root state, and TLC checks the runs on all workers at once.             *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds builder.ndjson.       *)
+(* variable PINC_TRACE_DIR, the directory that holds builder.ndjson.       *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
 
@@ -41,7 +41,7 @@ BB == INSTANCE BuilderBytes WITH lay <- 0, st <- 0
 U == INSTANCE U64
 L == INSTANCE Layout WITH SmallLen <- 0, PreN <- 0, c <- 0
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/builder.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/builder.ndjson")
 
 (* the layout of the current run *)
 Lay == BB!MkLay(U!W(P.len), U!W(P.G), 64)

@@ -13,10 +13,10 @@
 mod layers_common;
 
 use layers_common::{LWorld, big, secs};
-use vinc_node::Enabled;
-use vinc_node::trace::{Body, NodeTrace};
-use vinc_sim::{MS, Time};
-use vinc_tests::{LayerApps, NCmd, SplitMix64};
+use pinc_node::Enabled;
+use pinc_node::trace::{Body, NodeTrace};
+use pinc_sim::{MS, Time};
+use pinc_tests::{LayerApps, NCmd, SplitMix64};
 
 fn values_on(t: u8) -> LayerApps {
     LayerApps::new(
@@ -29,7 +29,7 @@ fn values_on(t: u8) -> LayerApps {
 }
 
 /// When the first layer a peer dialed came up at node `n`, at or after `from`.
-fn incoming_up(w: &LWorld, n: vinc_sim::NodeId, from: Time) -> Option<Time> {
+fn incoming_up(w: &LWorld, n: pinc_sim::NodeId, from: Time) -> Option<Time> {
     w.sim.node(n).traces.iter().find_map(|(t, it)| {
         (*t >= from && matches!(it.body, Body::Node(NodeTrace::LayerUp { incoming: 1, .. }))).then_some(*t)
     })

@@ -14,8 +14,8 @@
 
 use std::collections::BTreeMap;
 
-use vinc_sim::suite::world::canon::sections;
-use vinc_sim::suite::world::{
+use pinc_sim::suite::world::canon::sections;
+use pinc_sim::suite::world::{
     self, Params, SCENARIOS, SeedSet, Variant, add_adversary, adversary_for, build, variants,
 };
 

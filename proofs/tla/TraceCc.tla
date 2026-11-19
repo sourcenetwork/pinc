@@ -1,6 +1,6 @@
 ------------------------------ MODULE TraceCc -------------------------------
 (***************************************************************************)
-(* Trace validation of congestion control and pacing: vinc-transport       *)
+(* Trace validation of congestion control and pacing: pinc-transport       *)
 (* recovery/cubic.rs, round_exit.rs, delivery.rs and pacer.rs.             *)
 (*                                                                         *)
 (* The Rust test tests/trace_cc.rs drives a real controller and pacer      *)
@@ -16,7 +16,7 @@
 (* is recorded as TOP), and the runs keep every window far below it.       *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds cc.ndjson.            *)
+(* variable PINC_TRACE_DIR, the directory that holds cc.ndjson.            *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
 
@@ -26,7 +26,7 @@ vars == <<i, x, p>>
 
 INSTANCE CcOps
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/cc.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/cc.ndjson")
 Ev0 == Trace[i]
 
 XOf(v) == [cwnd |-> v.cwnd, ss |-> v.ss, wmax |-> v.wmax, west |-> v.west, k |-> v.k, epoch |-> v.epoch, rec |-> v.rec,

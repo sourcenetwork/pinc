@@ -1,6 +1,6 @@
 ---------------------------- MODULE TraceCoreTable ----------------------------
 (***************************************************************************)
-(* Trace validation of the endpoint's connection-id table: vinc-core       *)
+(* Trace validation of the endpoint's connection-id table: pinc-core       *)
 (* table.rs, Table.                                                        *)
 (*                                                                         *)
 (* The Rust test tests/trace_core_table.rs drives real tables (built with  *)
@@ -17,14 +17,14 @@
 (* the key of the call; it must stay the same function of the key.         *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds core_table.ndjson.    *)
+(* variable PINC_TRACE_DIR, the directory that holds core_table.ndjson.    *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, TLC, Json, IOUtils
 VARIABLES i, t, bk, cap
 vars == <<i, t, bk, cap>>
 INSTANCE CoreTableOps
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/core_table.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/core_table.ndjson")
 Ev == Trace[i]
 
 \* the table the code shows: the entry at each array position (an empty sequence for a free one), the entries from the

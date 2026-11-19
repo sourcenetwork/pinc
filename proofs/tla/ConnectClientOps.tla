@@ -1,6 +1,6 @@
 ---------------------------- MODULE ConnectClientOps ----------------------------
 (***************************************************************************)
-(* The client rules of vinc-connect/src/client as pure operators: the      *)
+(* The client rules of pinc-connect/src/client as pure operators: the      *)
 (* punch timer and probe gaps (punch.rs), the hub tunnel decisions and     *)
 (* splice tables (tunnel.rs), the first-flight selection and pending dials *)
 (* (dial.rs), the lookup table (lookup.rs) and the probe state with the    *)
@@ -14,7 +14,7 @@
 (* clock is only read on whole microseconds. -1 stands for none. Nodes,    *)
 (* relays, sessions and addresses are small numbers; tables are sequences  *)
 (* of fixed length, as the arrays of the code.                             *)
-(* Lean counterpart: Vinc/ConnectClient.lean, ConnectClientThm.lean.       *)
+(* Lean counterpart: Pinc/ConnectClient.lean, ConnectClientThm.lean.       *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC
 

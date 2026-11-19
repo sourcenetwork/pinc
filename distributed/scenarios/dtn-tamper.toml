@@ -1,6 +1,6 @@
 name = "dtn-tamper"
-about = "A tampered slice is rejected: a carrier whose store corrupts what it keeps serves the phone's update while the honest laptop is out of contact; the phone refuses the slices that fail their proof against the signed root and gets the intact update from the laptop later. Restarted, the carrier drops the held record whose signed head was tampered with. VINC only: iroh and libp2p have no per-slice proofs."
-stacks = ["vinc"]
+about = "A tampered slice is rejected: a carrier whose store corrupts what it keeps serves the phone's update while the honest laptop is out of contact; the phone refuses the slices that fail their proof against the signed root and gets the intact update from the laptop later. Restarted, the carrier drops the held record whose signed head was tampered with. PINC only: iroh and libp2p have no per-slice proofs."
+stacks = ["pinc"]
 repetitions = 3
 
 [resources]

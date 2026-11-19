@@ -1,6 +1,6 @@
 //! Trace generation for the reception of a bundle (`Reception`): real receptions fed through the public API, recorded
 //! as ndjson (`dtn_reception.ndjson`) for the TLA+ trace check (`TraceDtnReception.tla`) and the Lean replay
-//! (`Vinc/TraceDtnReception.lean`).
+//! (`Pinc/TraceDtnReception.lean`).
 //!
 //! The bundle has the shape of the model: `k = 2`, `m = 2`, three data slices of 1 KiB symbols, so two erasure blocks
 //! (block 0 with symbols 0 to 3, block 1 with the short data symbol 4 and parity 5, 6) and seven symbols. A run is
@@ -18,7 +18,7 @@
 //! order, that a damaged stream records only a prefix of its range, that no symbol outside the range is ever
 //! recorded, that the held set only grows, that `finish` says `Incomplete` exactly when a block holds fewer than
 //! `k` symbols, that `finish` never writes a held symbol, and that an honest sender is never `Inconsistent`, so it is meaningful without the proof tools. The
-//! trace is written to the directory in `VINC_TRACE_DIR` when it is set; otherwise nothing is written.
+//! trace is written to the directory in `PINC_TRACE_DIR` when it is set; otherwise nothing is written.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -39,15 +39,15 @@ mod dtn_common;
 
 use core::ops::Range;
 use dtn_common::{keypair, make, plan, recipient};
-use vinc_crypto::IdentityAlg;
-use vinc_dag::ranges::VerifiedRanges;
-use vinc_dag::tree::build_outboard;
-use vinc_dtn::DtnError;
-use vinc_dtn::bundle::{Receiving, Reception, serve, serve_len};
-use vinc_dtn::head::SignedHead;
-use vinc_dtn::held::{BlockHeld, HeldSet, held_len};
-use vinc_dtn::layout::SliceLayout;
-use vinc_tests::SplitMix64;
+use pinc_crypto::IdentityAlg;
+use pinc_dag::ranges::VerifiedRanges;
+use pinc_dag::tree::build_outboard;
+use pinc_dtn::DtnError;
+use pinc_dtn::bundle::{Receiving, Reception, serve, serve_len};
+use pinc_dtn::head::SignedHead;
+use pinc_dtn::held::{BlockHeld, HeldSet, held_len};
+use pinc_dtn::layout::SliceLayout;
+use pinc_tests::SplitMix64;
 
 const NOW: u64 = 5;
 const TOTAL: u64 = 7;
@@ -385,7 +385,7 @@ fn run<'s, P: Probe<'s>>(b: &Bundle, seed: u64, id: usize, store: &'s mut BlockH
                     let mut head = *b.signed.head();
                     head.root[0] ^= 1;
                     // the signature no longer covers the head
-                    let mut enc = vec![0; vinc_dtn::head::MAX_SIGNED_HEAD_LEN];
+                    let mut enc = vec![0; pinc_dtn::head::MAX_SIGNED_HEAD_LEN];
                     let n = b.signed.encode(&mut enc).unwrap();
                     enc[100] ^= 1;
                     let _ = head;
@@ -451,18 +451,18 @@ fn reception_trace() {
     // the sealed bundle of the faulty sender really commits to non-code-word parity: a complete honest decode of a
     // reception that holds only some symbols of block 0 cannot match its root
     assert!(
-        vinc_tests::soaking() || out.iter().any(|l| l.contains(r#""res":"inconsistent""#)),
+        pinc_tests::soaking() || out.iter().any(|l| l.contains(r#""res":"inconsistent""#)),
         "a faulty sender is caught"
     );
     assert!(
-        vinc_tests::soaking() || out.iter().any(|l| l.contains(r#""res":"full""#)),
+        pinc_tests::soaking() || out.iter().any(|l| l.contains(r#""res":"full""#)),
         "the held set fills up"
     );
     assert!(
-        vinc_tests::soaking() || out.iter().any(|l| l.contains(r#""op":"fin","res":"ok""#)),
+        pinc_tests::soaking() || out.iter().any(|l| l.contains(r#""op":"fin","res":"ok""#)),
         "a finish succeeds"
     );
-    if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
+    if let Ok(dir) = std::env::var("PINC_TRACE_DIR") {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             std::path::Path::new(&dir).join("dtn_reception.ndjson"),

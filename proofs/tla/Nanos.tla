@@ -1,7 +1,7 @@
 ------------------------------- MODULE Nanos --------------------------------
 (***************************************************************************)
 (* Exact time arithmetic for the membership specifications: the Nanos      *)
-(* (u64) of vinc-membership session.rs on the 80-bit limb words of         *)
+(* (u64) of pinc-membership session.rs on the 80-bit limb words of         *)
 (* U64.tla (TLC integers are 32 bits wide, a time in nanoseconds is not).  *)
 (*                                                                         *)
 (* Every operation of the code has an operator here with the semantics of  *)
@@ -17,7 +17,7 @@
 (* Checked by NanosCheck.cfg (the ASSUMEs, through NanosCheck.tla): the    *)
 (* operators against hand-computed                                         *)
 (* values at the edges (0, 1, 2^16, 2^32, 2^63, 2^64 - 1).                 *)
-(* Lean counterpart: Nat arithmetic in Vinc/MembershipModelTypes.lean.      *)
+(* Lean counterpart: Nat arithmetic in Pinc/MembershipModelTypes.lean.      *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, TLC
 

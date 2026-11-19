@@ -1,6 +1,6 @@
 -------------------------------- MODULE Rtt ---------------------------------
 (***************************************************************************)
-(* The node's round trips (vinc-core rtt.rs, NodeRtt), over every          *)
+(* The node's round trips (pinc-core rtt.rs, NodeRtt), over every          *)
 (* interleaving of a handshake sample, a restored peer, a connection's     *)
 (* round trip peak, a dial that times out, a new connection and a push of  *)
 (* the node values to a running one, at small sizes (RttOps.tla has the    *)
@@ -67,7 +67,7 @@
 (* (a ceiling of 9 s: FloorShape fails); Rtt_sat (a saturated average),    *)
 (* Rtt_full (a refused peer), Rtt_thin (a thin node) and Rtt_peakzero (a   *)
 (* zero peak beside a positive average) are reachability witnesses.        *)
-(* Lean counterpart: proofs/lean/Vinc/CoreRtt*.lean.                       *)
+(* Lean counterpart: proofs/lean/Pinc/CoreRtt*.lean.                       *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
 CONSTANTS CAP, PEERS, VALSMS, TOPV, EDGE, DEPTH, PEAK_RESETS, ZERO_RESETS, EVICT, FLOOR_TOP, HUB_HALF

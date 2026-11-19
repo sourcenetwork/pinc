@@ -3,8 +3,8 @@
 
 use std::fmt::Write as _;
 
-use vinc_tests::*;
-use vinc_transport::conn::{CarrierView, CloseReason, Event, TimerView};
+use pinc_tests::*;
+use pinc_transport::conn::{CarrierView, CloseReason, Event, TimerView};
 
 /// The largest integer TLC holds.
 pub const TOP: i64 = 2_147_483_647;

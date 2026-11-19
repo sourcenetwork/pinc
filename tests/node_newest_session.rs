@@ -13,8 +13,8 @@
 mod node_common;
 
 use node_common::{World, big, secs};
-use vinc_node::trace::tag;
-use vinc_node::{Body, NodeTrace};
+use pinc_node::trace::tag;
+use pinc_node::{Body, NodeTrace};
 
 #[test]
 fn a_restarted_member_is_served_on_its_new_session() {

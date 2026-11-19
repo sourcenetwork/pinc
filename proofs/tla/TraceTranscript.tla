@@ -3,14 +3,14 @@
 (* Trace validation of the order of the fields every transcript absorbs.   *)
 (*                                                                         *)
 (* The Rust test tests/trace_transcript.rs arms the test-only record of     *)
-(* vinc-crypto's Transcript and drives every kind of transcript of the     *)
+(* pinc-crypto's Transcript and drives every kind of transcript of the     *)
 (* workspace through the public API. Each snapshot of a transcript is one  *)
 (* line of transcript.ndjson: its label and, for each field absorbed so    *)
 (* far, the tag the call site gave the field and its length, in the order  *)
 (* of the absorb calls.                                                    *)
 (*                                                                         *)
 (* This module holds the field list of each kind (the lists of             *)
-(* Transcript.tla and proofs/lean/Vinc/Transcript.lean, with the tag of    *)
+(* Transcript.tla and proofs/lean/Pinc/Transcript.lean, with the tag of    *)
 (* each field and the length it may have) and requires each recorded line  *)
 (* to be a prefix of the list of its label, field by field: the tag and    *)
 (* the length of the k-th absorb must be the k-th field's. A transcript    *)
@@ -26,14 +26,14 @@
 (* layer and the credit record absorb nothing into a transcript.           *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds transcript.ndjson.    *)
+(* variable PINC_TRACE_DIR, the directory that holds transcript.ndjson.    *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
 
 VARIABLES i, full
 vars == <<i, full>>
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/transcript.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/transcript.ndjson")
 
 L == INSTANCE Labels WITH x <- i
 
@@ -51,19 +51,19 @@ Sig == Vr("sig", 64, 3373)
 AnyLen == 1000000
 
 (* the security labels (labels.rs; checked against Labels.tla below) *)
-HsL == "VINC 2026 v1 handshake"
-ResumeL == "VINC 2026 v1 resume handshake"
-ChainL == "VINC 2026 v1 chain"
-PrekeyHashL == "VINC 2026 v1 prekey hash"
-TicketL == "VINC 2026 v1 ticket"
-SubCtxL == "VINC 2026 v1 sub session context"
-RollIdL == "VINC 2026 v1 key roll id"
-(* the delay-tolerant delivery labels (vinc-dtn labels.rs) *)
-DtnChainL == "VINC 2026 v1 dtn chain"
-DtnTranscriptL == "VINC 2026 v1 dtn transcript"
-DtnBundleIdL == "VINC 2026 v1 dtn bundle id"
-DtnHeadL == "VINC 2026 v1 dtn head"
-DtnAckL == "VINC 2026 v1 dtn custody ack"
+HsL == "PINC 2026 v1 handshake"
+ResumeL == "PINC 2026 v1 resume handshake"
+ChainL == "PINC 2026 v1 chain"
+PrekeyHashL == "PINC 2026 v1 prekey hash"
+TicketL == "PINC 2026 v1 ticket"
+SubCtxL == "PINC 2026 v1 sub session context"
+RollIdL == "PINC 2026 v1 key roll id"
+(* the delay-tolerant delivery labels (pinc-dtn labels.rs) *)
+DtnChainL == "PINC 2026 v1 dtn chain"
+DtnTranscriptL == "PINC 2026 v1 dtn transcript"
+DtnBundleIdL == "PINC 2026 v1 dtn bundle id"
+DtnHeadL == "PINC 2026 v1 dtn head"
+DtnAckL == "PINC 2026 v1 dtn custody ack"
 
 ASSUME {HsL, ResumeL, ChainL, PrekeyHashL, TicketL, SubCtxL, RollIdL} \subseteq {L!AllLabels[k] : k \in DOMAIN L!AllLabels}
 

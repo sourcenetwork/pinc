@@ -1,6 +1,6 @@
 name = "churn"
 about = "Publish and subscribe while peers leave and come back: one hub and eight peers, a publisher sending 50 messages a second for 40 s, four peers killed one after another and started again 8 s later."
-stacks = ["vinc", "iroh", "libp2p"]
+stacks = ["pinc", "iroh", "libp2p"]
 repetitions = 3
 
 [resources]

@@ -3,10 +3,10 @@
 
 use std::path::PathBuf;
 
-use vinc_distributed::results::{Row, markdown, resummarize, summarize};
+use pinc_distributed::results::{Row, markdown, resummarize, summarize};
 
 fn dir(name: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("vinc-distributed-{name}-{}", std::process::id()));
+    let d = std::env::temp_dir().join(format!("pinc-distributed-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
     d
@@ -32,10 +32,10 @@ fn row(stack: &str, p50: f64) -> Row {
 #[test]
 fn the_summary_is_rebuilt_from_the_rows_and_a_second_call_changes_nothing() {
     let d = dir("summarize");
-    let rows = [row("vinc", 900.0), row("iroh", 1200.0)];
+    let rows = [row("pinc", 900.0), row("iroh", 1200.0)];
     let lines: Vec<String> = rows.iter().map(|r| serde_json::to_string(r).unwrap()).collect();
     std::fs::write(d.join("raw.jsonl"), lines.join("\n")).unwrap();
-    let stacks = vec!["vinc".to_owned(), "iroh".to_owned()];
+    let stacks = vec!["pinc".to_owned(), "iroh".to_owned()];
     let conditions = vec!["Backend: a machine.".to_owned()];
     let title = d.file_name().unwrap().to_string_lossy().into_owned();
     let old = markdown(&title, &conditions, &summarize(&rows[..1], &stacks[..1]));
@@ -83,14 +83,14 @@ fn the_peak_rows_and_the_driven_reading_pass_through_a_rebuilt_summary_and_a_sta
     gone.node.clear();
     gone.status = "not measured: the client printed no result".into();
     let rows = vec![
-        many_row("vinc", "many", 120.0, 190.0),
+        many_row("pinc", "many", 120.0, 190.0),
         many_row("iroh", "many", 150.0, 170.0),
         many_row("libp2p", "many", 300.0, 400.0),
-        many_row("vinc", "many_driven", 110.0, 180.0),
+        many_row("pinc", "many_driven", 110.0, 180.0),
         many_row("iroh", "many_driven", 140.0, 160.0),
         gone,
     ];
-    let stacks: Vec<String> = ["vinc", "iroh", "libp2p"].iter().map(|s| (*s).to_owned()).collect();
+    let stacks: Vec<String> = ["pinc", "iroh", "libp2p"].iter().map(|s| (*s).to_owned()).collect();
     let tables = summarize(&rows, &stacks);
     let tests: Vec<&str> = tables.iter().map(|t| t.test.as_str()).collect();
     assert_eq!(tests, ["many", "many_driven"], "each reading is a table of its own");
@@ -106,7 +106,7 @@ fn the_peak_rows_and_the_driven_reading_pass_through_a_rebuilt_summary_and_a_sta
         .iter()
         .find(|l| l.label.starts_with("server peak"))
         .unwrap();
-    assert!(matches!(last.cells[2], vinc_distributed::results::Cell::Missing(_)));
+    assert!(matches!(last.cells[2], pinc_distributed::results::Cell::Missing(_)));
 
     let d = dir("summarize-many");
     let lines: Vec<String> = rows.iter().map(|r| serde_json::to_string(r).unwrap()).collect();
@@ -137,14 +137,14 @@ fn a_many_cell_that_was_null_in_the_line_is_missing_and_never_ranked() {
     unknown
         .node
         .insert("server_peak_kib_per_conn".into(), serde_json::Value::Null);
-    let rows = vec![many_row("vinc", "many", 120.0, 190.0), unknown];
-    let stacks: Vec<String> = ["vinc", "iroh"].iter().map(|s| (*s).to_owned()).collect();
+    let rows = vec![many_row("pinc", "many", 120.0, 190.0), unknown];
+    let stacks: Vec<String> = ["pinc", "iroh"].iter().map(|s| (*s).to_owned()).collect();
     let tables = summarize(&rows, &stacks);
     let line = tables[0]
         .lines
         .iter()
         .find(|l| l.label == "server peak memory per connection")
         .unwrap();
-    assert!(matches!(line.cells[1], vinc_distributed::results::Cell::Missing(_)));
+    assert!(matches!(line.cells[1], pinc_distributed::results::Cell::Missing(_)));
     assert_ne!(line.best, Some(1), "a value that was not measured is not the best");
 }

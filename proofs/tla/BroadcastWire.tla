@@ -1,6 +1,6 @@
 ------------------------------ MODULE BroadcastWire ------------------------------
 (***************************************************************************)
-(* The head of a vinc-broadcast message, wire.rs `Head::parse` and         *)
+(* The head of a pinc-broadcast message, wire.rs `Head::parse` and         *)
 (* `Head::write`, and the frame of `build`, over small byte alphabets and  *)
 (* field widths, exhaustively: every byte string up to MaxLen symbols is   *)
 (* parsed. The widths are parameters (the code uses 8, 32, 1, 0/key/sig    *)
@@ -18,7 +18,7 @@
 (* FrameRoundTrip and FrameCanonical for `build`: len | type | topic_len | *)
 (* topic | rest, with the topic within its limit.                          *)
 (*                                                                         *)
-(* Lean counterpart: proofs/lean/Vinc/BroadcastWire.lean.                  *)
+(* Lean counterpart: proofs/lean/Pinc/BroadcastWire.lean.                  *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
 

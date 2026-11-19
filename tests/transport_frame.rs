@@ -20,15 +20,15 @@
 use std::ops::RangeInclusive;
 
 use proptest::prelude::*;
-use vinc_security::{Rekey, TicketBatch, TicketEntry};
-use vinc_tests::SplitMix64;
-use vinc_transport::frame::{
+use pinc_security::{Rekey, TicketBatch, TicketEntry};
+use pinc_tests::SplitMix64;
+use pinc_transport::frame::{
     Ack, Frame, FrameError, FrameIter, MAX_ACK_RANGES, MAX_STREAM_END, ack_len, datagram_overhead, stream_overhead, ty,
     write_ack,
 };
-use vinc_wire::{WireError, Writer};
+use pinc_wire::{WireError, Writer};
 
-vinc_tests::install_counting_allocator!();
+pinc_tests::install_counting_allocator!();
 
 fn encode(f: &Frame<'_>) -> Vec<u8> {
     let mut buf = vec![0u8; f.encoded_len() + 4];
@@ -316,7 +316,7 @@ fn validation_errors() {
     // Decode the same overflow by hand: offset 2^62 - 1 is 9 varint bytes (7-bit groups).
     let off = {
         let mut o = [0u8; 9];
-        let n = vinc_wire::varint::encode(MAX_STREAM_END, &mut o).unwrap();
+        let n = pinc_wire::varint::encode(MAX_STREAM_END, &mut o).unwrap();
         o[..n].to_vec()
     };
     let mut wire = vec![0x0e, 1];
@@ -457,7 +457,7 @@ fn ack_decoding_rejects_malformed_frames() {
     // Largest above 2^62 - 1.
     let mut wire = vec![0x02];
     let mut v = [0u8; 9];
-    let n = vinc_wire::varint::encode(1 << 62, &mut v).unwrap();
+    let n = pinc_wire::varint::encode(1 << 62, &mut v).unwrap();
     wire.extend_from_slice(&v[..n]);
     wire.extend_from_slice(&[0, 0]);
     assert_eq!(decode_all(&wire), vec![Err(FrameError::Ack)]);
@@ -742,7 +742,7 @@ fn frame_paths_allocate_nothing() {
     let mut junk = [0u8; 256];
     rng.fill(&mut junk);
     let mut buf = [0u8; 2048];
-    let stats = vinc_tests::measure(|| {
+    let stats = pinc_tests::measure(|| {
         let mut w = Writer::new(&mut buf);
         for f in &frames {
             f.write(&mut w).unwrap();

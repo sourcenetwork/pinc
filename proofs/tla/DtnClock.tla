@@ -1,6 +1,6 @@
 ------------------------------ MODULE DtnClock ------------------------------
 (***************************************************************************)
-(* The hybrid logical clock and the bundle lifetime of vinc-dtn            *)
+(* The hybrid logical clock and the bundle lifetime of pinc-dtn            *)
 (* (hlc.rs: `Hlc::tick`, `Hlc::observe`, `Hlc::expires_at`; head.rs:       *)
 (* `Head::is_expired`) on the machine integers of U64.tla: the physical    *)
 (* part is a u64 and the logical counter a u32 whose `saturating_add(1)`   *)
@@ -19,7 +19,7 @@
 (* below the creation time; a head is alive strictly before its expiry     *)
 (* and expired from it on, and stays expired as time passes.               *)
 (*                                                                         *)
-(* Lean counterpart (proofs/lean/Vinc/DtnLayoutHlc.lean, unbounded):       *)
+(* Lean counterpart (proofs/lean/Pinc/DtnLayoutHlc.lean, unbounded):       *)
 (* tick_wall, tick_le, tick_lt, tick_now, observe_wall, observe_now,       *)
 (* observe_gt_self, observe_gt_remote, expiresAt_exact, expiresAt_sat,     *)
 (* expiresAt_ge_wall, expired_iff, expired_mono.                           *)

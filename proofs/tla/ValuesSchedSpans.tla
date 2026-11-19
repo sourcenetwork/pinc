@@ -1,6 +1,6 @@
 ---------------------------- MODULE ValuesSchedSpans ----------------------------
 (***************************************************************************)
-(* The operators of vinc-values span.rs on lists of spans [off, len],       *)
+(* The operators of pinc-values span.rs on lists of spans [off, len],       *)
 (* shared by the list model (ValuesSchedList.tla) and the schedule model    *)
 (* (ValuesSched.tla): Span::end, RangeList push / push_front / extend /     *)
 (* push_new / total with the capacity as an argument, and the holes loop    *)

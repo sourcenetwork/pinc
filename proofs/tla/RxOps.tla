@@ -1,6 +1,6 @@
 ------------------------------- MODULE RxOps --------------------------------
 (***************************************************************************)
-(* The operations of vinc-transport recovery/recv.rs (ReceivedPackets), *)
+(* The operations of pinc-transport recovery/recv.rs (ReceivedPackets), *)
 (* step for step: the bounded range set of received packet numbers, the   *)
 (* duplicate test, the acknowledgement decision, the ranges to report and *)
 (* the floor the peer's confirmations raise. Rx.tla checks them over every *)

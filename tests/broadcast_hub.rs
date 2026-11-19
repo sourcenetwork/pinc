@@ -14,9 +14,9 @@
 mod common;
 
 use common::{Net, SEC, ty};
-use vinc_broadcast::consts::{DEFAULT_MAX_BODY, LOG_CAP};
-use vinc_broadcast::{Reject, Trace};
-use vinc_crypto::IdentityAlg;
+use pinc_broadcast::consts::{DEFAULT_MAX_BODY, LOG_CAP};
+use pinc_broadcast::{Reject, Trace};
+use pinc_crypto::IdentityAlg;
 
 const T: &[u8] = b"log";
 
@@ -193,7 +193,7 @@ fn a_dedupe_entry_lasts_600s_and_not_a_nanosecond_longer() {
 
 #[test]
 fn a_full_dedupe_set_refuses_new_ids_instead_of_growing() {
-    use vinc_broadcast::consts::SEEN_CAP;
+    use pinc_broadcast::consts::SEEN_CAP;
     let mut net = Net::new(IdentityAlg::Ed25519, 1, 2, SEC);
     net.subscribe(2, T);
     let mut full = 0;

@@ -1,11 +1,11 @@
 ------------------------------ MODULE ValuesSchedOps ------------------------------
 (***************************************************************************)
-(* The scheduler arithmetic of vinc-values fetch/sched.rs, as operators     *)
+(* The scheduler arithmetic of pinc-values fetch/sched.rs, as operators     *)
 (* shared by the schedule model (ValuesSched.tla) and the trace check       *)
 (* (TraceValuesSched.tla): prate, target (ARRIVAL_CURVE), the TAIL_SHRINK    *)
 (* cap, the idle test, the eta of a steal candidate, the choice of the      *)
 (* victim and the cut (keep) of a steal. Lean counterpart:                  *)
-(* proofs/lean/Vinc/ValuesSchedSteal.lean (the same functions on Nat, with  *)
+(* proofs/lean/Pinc/ValuesSchedSteal.lean (the same functions on Nat, with  *)
 (* the bounds proved for every input).                                      *)
 (*                                                                         *)
 (* TLC integers are 32 bits, the code is u64. Times are carried as          *)

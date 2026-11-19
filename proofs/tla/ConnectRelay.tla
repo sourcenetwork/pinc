@@ -46,7 +46,7 @@
 (*                 the table full is no refusal: nothing is traced        *)
 (* FullUdp starts with the UDP table full of other nodes (ConnectRelay_full) *)
 (* and LoudSpu puts the traced refusal back (ConnectRelay_wfull).          *)
-(* Lean: Vinc/ConnectRelayThm.lean (peer_unauth, forward_peer, no_reforward,*)
+(* Lean: Pinc/ConnectRelayThm.lean (peer_unauth, forward_peer, no_reforward,*)
 (* back_window, charge_inv, tunnel_spec, spu_member, heard_idle,           *)
 (* heard_unready_quiet, forwarded, sleep_spec, ...).                       *)
 (***************************************************************************)

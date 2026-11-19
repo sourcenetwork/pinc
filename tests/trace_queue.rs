@@ -1,6 +1,6 @@
-//! Trace generation for the endpoint's event queue: seeded runs of a real ring (`vinc-core`, built with the `trace`
+//! Trace generation for the endpoint's event queue: seeded runs of a real ring (`pinc-core`, built with the `trace`
 //! feature), recorded as ndjson (`queue.ndjson`) for the TLA+ trace check (`TraceQueue.tla`) and the Lean replay
-//! (`Vinc/TraceQueue.lean`).
+//! (`Pinc/TraceQueue.lean`).
 //!
 //! A run pushes events of the kinds the endpoint raises (recoverable stream notifications, unrecoverable ones that
 //! name a session or none, a session's `Closed`), pops, and purges a session, in mixes that keep the ring short, fill
@@ -29,10 +29,10 @@
 
 use std::fmt::Write as _;
 
-use vinc_core::{EndReason, Event, EventProbe, SessionId};
-use vinc_crypto::{IdentityAlg, NodeId};
-use vinc_security::Alpn;
-use vinc_tests::SplitMix64;
+use pinc_core::{EndReason, Event, EventProbe, SessionId};
+use pinc_crypto::{IdentityAlg, NodeId};
+use pinc_security::Alpn;
+use pinc_tests::SplitMix64;
 
 const CAP: usize = EventProbe::CAP;
 const H: usize = EventProbe::HEADROOM;
@@ -85,7 +85,7 @@ fn mk(kind: u64, session: u64, n: u64) -> Event {
                 alg: IdentityAlg::Ed25519,
                 bytes: [n as u8; 32],
             },
-            alpn: Alpn::new(b"vinc/a").unwrap(),
+            alpn: Alpn::new(b"pinc/a").unwrap(),
         },
     }
 }
@@ -352,7 +352,7 @@ fn the_event_queue_matches_the_models() {
     assert!(seen.stalled > 0, "the ring never stalled");
     assert!(seen.bursts > 0, "no burst was pushed");
     assert!(seen.popped_empty > 0, "no pop found the ring empty");
-    if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
+    if let Ok(dir) = std::env::var("PINC_TRACE_DIR") {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(std::path::Path::new(&dir).join("queue.ndjson"), &out).unwrap();
     }

@@ -16,7 +16,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Bound::{Excluded, Unbounded};
 
 use proptest::prelude::*;
-use vinc_table::{Error, SortedSlab, Storage};
+use pinc_table::{Error, SortedSlab, Storage};
 
 /// The least capacity that takes the 4-byte index.
 const WIDE: usize = 65_536;

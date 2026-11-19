@@ -1,6 +1,6 @@
-//! Trace generation for the extension frame registry and its dispatch (`vinc-transport` `frame/ext.rs`, the endpoint's
-//! `Co::Extension` arm in `vinc-core` `events.rs`), recorded as ndjson for the TLA+ trace check (`TraceExt.tla`) and the
-//! Lean replay (`Vinc/TraceExt.lean`).
+//! Trace generation for the extension frame registry and its dispatch (`pinc-transport` `frame/ext.rs`, the endpoint's
+//! `Co::Extension` arm in `pinc-core` `events.rs`), recorded as ndjson for the TLA+ trace check (`TraceExt.tla`) and the
+//! Lean replay (`Pinc/TraceExt.lean`).
 //!
 //! The registry is read from the code (`ASSIGNED` and the constants) and recorded once. Then pairs of real endpoints
 //! on a simulated link carry one extension frame at a time: every registered type, types between and beyond them (one,
@@ -31,11 +31,11 @@
     unreachable_pub
 )]
 
-use vinc_core::{Answer, Command, EXT_BODY_MAX, Event, Query, REACH_BODY_MAX, Role, SessionId};
-use vinc_tests::*;
-use vinc_transport::frame::{EXTENSION_BASE, ext};
+use pinc_core::{Answer, Command, EXT_BODY_MAX, Event, Query, REACH_BODY_MAX, Role, SessionId};
+use pinc_tests::*;
+use pinc_transport::frame::{EXTENSION_BASE, ext};
 
-vinc_tests::install_counting_allocator!();
+pinc_tests::install_counting_allocator!();
 
 const NARROW: u64 = 1 << 28;
 
@@ -231,7 +231,7 @@ fn extension_frames_reach_the_layer_that_registered_their_type() {
         assert!(out.reach >= 8, "reach {}", out.reach);
         assert!(out.dropped_unallowed > 50, "dropped {}", out.dropped_unallowed);
         assert!(out.types.len() >= 20);
-        if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
+        if let Ok(dir) = std::env::var("PINC_TRACE_DIR") {
             std::fs::create_dir_all(&dir).unwrap();
             std::fs::write(std::path::Path::new(&dir).join("ext.ndjson"), &out.narrow).unwrap();
             std::fs::write(std::path::Path::new(&dir).join("ext_wide.ndjson"), &out.wide).unwrap();

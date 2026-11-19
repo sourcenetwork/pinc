@@ -1,6 +1,6 @@
 ------------------------------- MODULE RangeVerifier -------------------------------
 (***************************************************************************)
-(* Model of vinc-dag RangeVerifier (tree/verify.rs): the stack of pending  *)
+(* Model of pinc-dag RangeVerifier (tree/verify.rs): the stack of pending  *)
 (* nodes (cv, lo, hi), the sticky failure flag and the log of released     *)
 (* groups, for a tree of n groups and a requested group range              *)
 (* [first, last). An adversary feeds, at each step, either the genuine     *)

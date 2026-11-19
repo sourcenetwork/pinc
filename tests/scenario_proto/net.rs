@@ -5,13 +5,13 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::rc::Rc;
 
-use vinc_core::SessionId;
-use vinc_sim::suite::crypto::{MsgId, Registry};
-use vinc_sim::suite::grade::fixture::blank_world;
-use vinc_sim::suite::proto::host::{Host, LayerEvent, Layers};
-use vinc_sim::suite::proto::{Durable, MsgIntents, Stack};
-use vinc_sim::suite::rec::{NS, Rec};
-use vinc_sim::suite::world::model::{Intent, IntentKind, Must, World};
+use pinc_core::SessionId;
+use pinc_sim::suite::crypto::{MsgId, Registry};
+use pinc_sim::suite::grade::fixture::blank_world;
+use pinc_sim::suite::proto::host::{Host, LayerEvent, Layers};
+use pinc_sim::suite::proto::{Durable, MsgIntents, Stack};
+use pinc_sim::suite::rec::{NS, Rec};
+use pinc_sim::suite::world::model::{Intent, IntentKind, Must, World};
 
 pub enum Action {
     Connect { peer: usize, alpn: &'static [u8] },

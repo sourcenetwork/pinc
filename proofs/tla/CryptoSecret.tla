@@ -1,6 +1,6 @@
 ----------------------------- MODULE CryptoSecret -----------------------------
 (***************************************************************************)
-(* The secrets of vinc-crypto (secret.rs): ct_eq and Secret equality, the  *)
+(* The secrets of pinc-crypto (secret.rs): ct_eq and Secret equality, the  *)
 (* Debug text and zeroization.                                             *)
 (*                                                                         *)
 (* ct_eq answers equality of contents; a difference in length returns      *)
@@ -12,7 +12,7 @@
 (*                                                                         *)
 (* Checked over every byte string of up to 3 bytes of a 2-letter alphabet: *)
 (*   CtEqIff, CtEqLength, CtEqSymmetric, DebugHidesBytes, ZeroizeShape     *)
-(* Lean counterpart: proofs/lean/Vinc/CryptoSecret.lean.                   *)
+(* Lean counterpart: proofs/lean/Pinc/CryptoSecret.lean.                   *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
 

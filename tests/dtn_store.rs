@@ -19,11 +19,11 @@ mod dtn_common;
 
 use dtn_common::{keypair, make, plan, recipient};
 use proptest::prelude::*;
-use vinc_crypto::IdentityAlg;
-use vinc_dtn::custody::{CustodyAck, CustodyBook, CustodyError, Incoming};
-use vinc_dtn::head::BundleId;
-use vinc_dtn::hlc::Hlc;
-use vinc_dtn::store::{Class, Key, Ledger, Space, StoreError};
+use pinc_crypto::IdentityAlg;
+use pinc_dtn::custody::{CustodyAck, CustodyBook, CustodyError, Incoming};
+use pinc_dtn::head::BundleId;
+use pinc_dtn::hlc::Hlc;
+use pinc_dtn::store::{Class, Key, Ledger, Space, StoreError};
 
 fn key(n: u8) -> Key {
     Key {
@@ -231,7 +231,7 @@ proptest! {
     }
 }
 
-fn node(seed: u64) -> (vinc_crypto::Keypair, vinc_crypto::NodeId) {
+fn node(seed: u64) -> (pinc_crypto::Keypair, pinc_crypto::NodeId) {
     let k = keypair(IdentityAlg::Ed25519, seed);
     let id = k.node_id();
     (k, id)

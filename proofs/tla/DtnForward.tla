@@ -1,6 +1,6 @@
 ------------------------------ MODULE DtnForward ------------------------------
 (***************************************************************************)
-(* One node of vinc-dtn forward.rs: binary spray-and-wait with a copy      *)
+(* One node of pinc-dtn forward.rs: binary spray-and-wait with a copy      *)
 (* budget and link-aware retransmission timers. The operators are those of *)
 (* DtnForwardOps.tla (Forwarder::step and poll, step for step); this spec *)
 (* drives them with every input at every time and adds ghost variables     *)

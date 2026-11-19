@@ -1,6 +1,6 @@
 ------------------------------ MODULE ConnectWs ------------------------------
 (***************************************************************************)
-(* The WebSocket framing of the carrier, vinc-connect carrier/ws.rs, over  *)
+(* The WebSocket framing of the carrier, pinc-connect carrier/ws.rs, over  *)
 (* every split of the byte stream into reads (ConnectWsOps.tla has the     *)
 (* operators, which follow the code step for step).                        *)
 (*                                                                         *)

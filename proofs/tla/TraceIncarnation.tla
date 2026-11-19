@@ -1,6 +1,6 @@
 --------------------------- MODULE TraceIncarnation ---------------------------
 (***************************************************************************)
-(* Trace validation of the incarnation and the address tag: vinc-membership *)
+(* Trace validation of the incarnation and the address tag: pinc-membership *)
 (* incarnation.rs (Incarnation::start, next_record, observe, AddressTag).   *)
 (*                                                                         *)
 (* The Rust test tests/trace_membership.rs (part inc) runs the real code    *)
@@ -15,8 +15,8 @@
 (* (an error leaves the store as it was).                                   *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment      *)
-(* variable VINC_TRACE_DIR, the directory that holds minc.ndjson.           *)
-(* Lean counterpart: Vinc/TraceMembershipInc.lean.                          *)
+(* variable PINC_TRACE_DIR, the directory that holds minc.ndjson.           *)
+(* Lean counterpart: Pinc/TraceMembershipInc.lean.                          *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, TLC, Json, IOUtils
 
@@ -27,7 +27,7 @@ INC == INSTANCE Incarnation WITH PersModes <- {TRUE}, TrackFloor <- FALSE, Fault
                                  loc <- 0, inc <- 0, ann <- 0, mono <- 0, floorOK <- 0, obsOK <- 0, heard <- 0, steps <- 0
 U == INSTANCE U64
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/minc.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/minc.ndjson")
 
 Ev == Trace[i]
 

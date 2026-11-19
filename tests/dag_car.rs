@@ -1,4 +1,4 @@
-//! Tests of vinc-dag's CAR v1 reader, incremental decoder and writer.
+//! Tests of pinc-dag's CAR v1 reader, incremental decoder and writer.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -10,13 +10,13 @@
 )]
 
 use proptest::prelude::*;
-use vinc_dag::car::{CarDecoder, CarError, CarReader, CarWriter, Decoded};
-use vinc_dag::cid::{BLAKE3, Cid, CidError, DAG_CBOR, RAW, SHA2_256};
-use vinc_wire::WireError;
+use pinc_dag::car::{CarDecoder, CarError, CarReader, CarWriter, Decoded};
+use pinc_dag::cid::{BLAKE3, Cid, CidError, DAG_CBOR, RAW, SHA2_256};
+use pinc_wire::WireError;
 
 mod golden;
 
-vinc_tests::install_counting_allocator!();
+pinc_tests::install_counting_allocator!();
 
 const MAX: usize = 1 << 16;
 
@@ -308,7 +308,7 @@ proptest! {
 fn reading_and_writing_do_not_allocate() {
     let (car, cids) = golden_car();
     let mut out = vec![0u8; car.len()];
-    let info = vinc_tests::measure(|| {
+    let info = pinc_tests::measure(|| {
         let r = CarReader::new(&car, MAX).unwrap().with_verify(true);
         let n = r.roots().count() + r.sections().flatten().count();
         let mut dec = CarDecoder::new(MAX);

@@ -1,8 +1,8 @@
 //! The tampers of `trace_handshake.rs`: which field of which message a flipped bit changes, in the model's names, and
 //! the inputs built from them.
-use vinc_security::Established;
-use vinc_security::ids::aead_tag;
-use vinc_security::message::{Finish, Initial, MessageType, PrekeyField, Reject, Reply, ResumeHello, ResumeReply};
+use pinc_security::Established;
+use pinc_security::ids::aead_tag;
+use pinc_security::message::{Finish, Initial, MessageType, PrekeyField, Reject, Reply, ResumeHello, ResumeReply};
 
 use crate::sim::Inp;
 

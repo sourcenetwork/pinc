@@ -18,7 +18,7 @@
 (* ev, tr) and drained by Drain, which also applies the queue bound         *)
 (* QUEUE_CAP and the Lost records of event.rs.                              *)
 (*                                                                         *)
-(* Lean counterpart: Vinc/MembershipModelTypes.lean.                        *)
+(* Lean counterpart: Pinc/MembershipModelTypes.lean.                        *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC
 

@@ -1,4 +1,4 @@
-//! Benchmarks of `vinc-dtn`: the GF(2^8) kernel, Reed-Solomon encode and decode, and sealing and receiving bundles.
+//! Benchmarks of `pinc-dtn`: the GF(2^8) kernel, Reed-Solomon encode and decode, and sealing and receiving bundles.
 #![allow(
     missing_docs,
     clippy::unwrap_used,
@@ -10,14 +10,14 @@
 use std::hint::black_box;
 
 use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main};
-use vinc_crypto::{IdentityAlg, Keypair, Provider, Secret, Software};
-use vinc_dtn::bundle::{Outgoing, Plan, Reception, seal_bundle, serve, serve_len};
-use vinc_dtn::gf256::mul_add;
-use vinc_dtn::head::Erasure;
-use vinc_dtn::hlc::Hlc;
-use vinc_dtn::layout::SliceLayout;
-use vinc_dtn::rs::Rs;
-use vinc_dtn::seal::{RecipientKeys, SealSeeds, decapsulate};
+use pinc_crypto::{IdentityAlg, Keypair, Provider, Secret, Software};
+use pinc_dtn::bundle::{Outgoing, Plan, Reception, seal_bundle, serve, serve_len};
+use pinc_dtn::gf256::mul_add;
+use pinc_dtn::head::Erasure;
+use pinc_dtn::hlc::Hlc;
+use pinc_dtn::layout::SliceLayout;
+use pinc_dtn::rs::Rs;
+use pinc_dtn::seal::{RecipientKeys, SealSeeds, decapsulate};
 
 struct SplitMix64(u64);
 

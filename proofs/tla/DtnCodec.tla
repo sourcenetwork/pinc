@@ -1,6 +1,6 @@
 ------------------------------ MODULE DtnCodec ------------------------------
 (***************************************************************************)
-(* The head and acknowledgement codecs of vinc-dtn (head.rs, custody.rs,   *)
+(* The head and acknowledgement codecs of pinc-dtn (head.rs, custody.rs,   *)
 (* endorse.rs) on byte sequences: `Head::write`, `Head::read` (known       *)
 (* identity tags, then a valid layout), `Endorsement::{encode, decode}`    *)
 (* (the two lengths must be the algorithm's), `SignedHead::{encode,        *)
@@ -26,7 +26,7 @@
 (* tag bytes and are covered by the same scan, with the targeted checks    *)
 (* below as well.                                                          *)
 (*                                                                         *)
-(* Lean counterpart (proofs/lean/Vinc/DtnCodec.lean, DtnCodecWire.lean,    *)
+(* Lean counterpart (proofs/lean/Pinc/DtnCodec.lean, DtnCodecWire.lean,    *)
 (* unbounded): signed_roundtrip, signed_canonical (a decoded string is the *)
 (* canonical encoding of a well-formed value), signed_injective,           *)
 (* signed_trailing, signed_truncated, signed_checks (tags, layout,         *)

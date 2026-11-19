@@ -1,4 +1,4 @@
-//! The `vinc-sim` links: FIFO under jitter, explicit reordering, loss models, duplication, bandwidth and queue,
+//! The `pinc-sim` links: FIFO under jitter, explicit reordering, loss models, duplication, bandwidth and queue,
 //! MTU, asymmetry and scheduled changes.
 #![allow(
     clippy::unwrap_used,
@@ -17,8 +17,8 @@
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-use vinc_sim::toy::{Probe, ProbeCmd, ProbeEvent};
-use vinc_sim::{DropReason, LinkChange, LinkConfig, Loss, MS, NodeId, SEC, Sim, SimConfig, US};
+use pinc_sim::toy::{Probe, ProbeCmd, ProbeEvent};
+use pinc_sim::{DropReason, LinkChange, LinkConfig, Loss, MS, NodeId, SEC, Sim, SimConfig, US};
 
 const A: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)), 1);
 const B: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2)), 1);

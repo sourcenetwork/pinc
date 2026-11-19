@@ -1,6 +1,6 @@
 ---------------------------- MODULE ValuesVerifyRx ----------------------------
 (***************************************************************************)
-(* The receive state of one request stream (vinc-values fetch/rx.rs) and   *)
+(* The receive state of one request stream (pinc-values fetch/rx.rs) and   *)
 (* the GroupVerifier of ValuesVerify.tla: the verifier stays at an item    *)
 (* boundary whenever a frame starts.                                       *)
 (*                                                                         *)

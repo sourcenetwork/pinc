@@ -15,8 +15,8 @@
 mod layers_common;
 
 use layers_common::{LWorld, big, secs};
-use vinc_node::{Body, DtnPlan, Enabled, NodeEvent, NodeTrace};
-use vinc_tests::{LayerApps, NCmd, SplitMix64};
+use pinc_node::{Body, DtnPlan, Enabled, NodeEvent, NodeTrace};
+use pinc_tests::{LayerApps, NCmd, SplitMix64};
 
 #[test]
 fn a_bundle_of_three_hundred_blocks_is_received_and_refused_by_no_one() {

@@ -11,9 +11,9 @@
 mod connect_sim_common;
 
 use connect_sim_common::*;
-use vinc_connect::client::{Kind, Notice};
-use vinc_connect::record::Reach;
-use vinc_sim::{LanConfig, SEC, StreamPolicy};
+use pinc_connect::client::{Kind, Notice};
+use pinc_connect::record::Reach;
+use pinc_sim::{LanConfig, SEC, StreamPolicy};
 
 #[test]
 fn udp_blocked_forces_a_carrier_that_falls_back_from_tcp_to_websocket_and_still_dials() {
@@ -50,7 +50,7 @@ fn udp_blocked_forces_a_carrier_that_falls_back_from_tcp_to_websocket_and_still_
         w.sim.command(
             secs(30),
             a,
-            vinc_tests::Cmd::Send {
+            pinc_tests::Cmd::Send {
                 session: sa,
                 data: b"through ws".to_vec(),
             },
@@ -76,7 +76,7 @@ fn a_node_whose_relays_take_no_udp_is_blocked_at_once_and_can_be_found() {
             ..LanConfig::default()
         });
         // A browser: no relay has a UDP address for it, so it sends no probe and waits for no answer.
-        let carrier_only = vinc_tests::RelaySpec { udp: None, ..rs };
+        let carrier_only = pinc_tests::RelaySpec { udp: None, ..rs };
         let a = w.client_in(&client_spec(0xa1, priv_addr(1), &[carrier_only]), lan);
         let b = w.client_public(&client_spec(0xb1, priv_addr(2), &[rs]));
         w.run(secs(5));
@@ -94,7 +94,7 @@ fn a_node_that_hears_udp_looks_peers_up_over_udp() {
     big(|| {
         let mut w = World::new(22);
         let (r, rs) = w.relay(1, relay_ip(10));
-        let nat_a = w.nat(vinc_sim::NatKind::FullCone, ext(1), 120 * SEC, 7200 * SEC);
+        let nat_a = w.nat(pinc_sim::NatKind::FullCone, ext(1), 120 * SEC, 7200 * SEC);
         let a = w.client_behind(&client_spec(0xa1, priv_addr(1), &[rs]), nat_a);
         let b = w.client_public(&client_spec(0xb1, priv_addr(2), &[rs]));
         w.run(secs(5));
@@ -106,8 +106,8 @@ fn a_node_that_hears_udp_looks_peers_up_over_udp() {
 }
 
 /// A UDP-dark node behind a NAT that forgets an idle TCP flow after `tcp_timeout`.
-fn dark_world(seed: u64, tcp_timeout: u64) -> (World, vinc_sim::NodeId, vinc_sim::NodeId, vinc_sim::NodeId) {
-    use vinc_sim::{NatConfig, NatKind, PortPolicy};
+fn dark_world(seed: u64, tcp_timeout: u64) -> (World, pinc_sim::NodeId, pinc_sim::NodeId, pinc_sim::NodeId) {
+    use pinc_sim::{NatConfig, NatKind, PortPolicy};
     let mut w = World::new(seed);
     let ((r1, rs1), (r2, rs2)) = by_id(w.relay(1, relay_ip(10)), w.relay(2, relay_ip(20)));
     let lan = w.sim.add_lan(LanConfig {
@@ -133,7 +133,7 @@ fn dark_world(seed: u64, tcp_timeout: u64) -> (World, vinc_sim::NodeId, vinc_sim
 
 #[test]
 fn the_lease_converges_below_the_middlebox_timeout_then_a_stale_send_resets_a_carrier_that_idled_out() {
-    use vinc_connect::client::link::lease_keep;
+    use pinc_connect::client::link::lease_keep;
     big(|| {
         let (mut w, a, _r1, r2) = dark_world(31, 20 * SEC);
         // Learning, second by second: the lease is set by each silent death and only ever falls.
@@ -173,7 +173,7 @@ fn the_lease_converges_below_the_middlebox_timeout_then_a_stale_send_resets_a_ca
         assert_eq!(w.client(a).conn.shared().lease_hi, lease);
         assert_eq!(
             w.client(a).conn.carrier_state(0),
-            vinc_connect::client::link::State::Open
+            pinc_connect::client::link::State::Open
         );
 
         // STALE_SEND: the second relay's carrier is neither home nor ridden, so nothing keeps it alive. A send onto
@@ -183,7 +183,7 @@ fn the_lease_converges_below_the_middlebox_timeout_then_a_stale_send_resets_a_ca
         w.sim.command(
             secs(800),
             a,
-            vinc_tests::Cmd::Raw {
+            pinc_tests::Cmd::Raw {
                 relay: 1,
                 peer,
                 data: packet.clone(),
@@ -195,7 +195,7 @@ fn the_lease_converges_below_the_middlebox_timeout_then_a_stale_send_resets_a_ca
         w.sim.command(
             secs(900),
             a,
-            vinc_tests::Cmd::Raw {
+            pinc_tests::Cmd::Raw {
                 relay: 1,
                 peer,
                 data: packet,
@@ -213,7 +213,7 @@ fn the_lease_converges_below_the_middlebox_timeout_then_a_stale_send_resets_a_ca
             .relay_node(r2)
             .traces
             .iter()
-            .filter(|(_, t)| matches!(t, vinc_connect::relay::Trace::Routed { .. }))
+            .filter(|(_, t)| matches!(t, pinc_connect::relay::Trace::Routed { .. }))
             .count();
         assert_eq!(
             routed, 2,
@@ -241,7 +241,7 @@ fn a_carrier_nobody_rides_is_checked_while_the_node_has_a_session() {
         assert!(
             w.client(a)
                 .session_stats(s)
-                .is_some_and(|st| st.route.is_some_and(|(_, r)| !vinc_core::is_relay_addr(&r))),
+                .is_some_and(|st| st.route.is_some_and(|(_, r)| !pinc_core::is_relay_addr(&r))),
             "the session runs on the direct path: {}",
             w.dump(a)
         );
@@ -256,7 +256,7 @@ fn a_carrier_nobody_rides_is_checked_while_the_node_has_a_session() {
 /// A dial of a UDP-dark node whose carrier died silently (its NAT forgot the idle TCP flow after 20 s) at 30 s: when
 /// the dial is connected, or `None` by 100 s.
 fn dial_over_a_silently_dead_carrier(seed: u64) -> Option<u64> {
-    use vinc_sim::{NatConfig, NatKind, PortPolicy};
+    use pinc_sim::{NatConfig, NatKind, PortPolicy};
     let mut w = World::new(seed);
     let ((_r1, rs1), (_r2, rs2)) = by_id(w.relay(1, relay_ip(10)), w.relay(2, relay_ip(20)));
     let lan = w.sim.add_lan(LanConfig {
@@ -286,7 +286,7 @@ fn dial_over_a_silently_dead_carrier(seed: u64) -> Option<u64> {
     w.sim
         .events(a)
         .iter()
-        .find_map(|(t, e)| matches!(e, vinc_tests::Ev::Ep(vinc_core::Event::Connected { .. })).then_some(*t))
+        .find_map(|(t, e)| matches!(e, pinc_tests::Ev::Ep(pinc_core::Event::Connected { .. })).then_some(*t))
 }
 
 #[test]
@@ -303,7 +303,7 @@ fn a_dial_at_its_third_try_checks_its_carriers_and_replaces_one_that_died_silent
 #[test]
 fn the_home_moves_to_the_second_relay_when_the_first_dies() {
     big(|| {
-        use vinc_sim::NatKind;
+        use pinc_sim::NatKind;
         let mut w = World::new(41);
         let (r1, rs1) = w.relay(1, relay_ip(10));
         let (r2, rs2) = w.relay(2, relay_ip(20));
@@ -329,7 +329,7 @@ fn the_home_moves_to_the_second_relay_when_the_first_dies() {
             assert_eq!(homes, [0, 1], "the home moved once, to the second relay");
             assert_eq!(
                 w.client(n).conn.carrier_state(1),
-                vinc_connect::client::link::State::Open
+                pinc_connect::client::link::State::Open
             );
             assert_eq!(w.client(n).conn.home(), Some(1));
         }
@@ -344,7 +344,7 @@ fn the_home_moves_to_the_second_relay_when_the_first_dies() {
 #[test]
 fn a_dial_through_the_second_relay_while_the_first_is_dead() {
     big(|| {
-        use vinc_sim::NatKind;
+        use pinc_sim::NatKind;
         let mut w = World::new(42);
         let (r1, rs1) = w.relay(1, relay_ip(10));
         let (_r2, rs2) = w.relay(2, relay_ip(20));
@@ -361,7 +361,7 @@ fn a_dial_through_the_second_relay_while_the_first_is_dead() {
         w.sim.command(
             secs(75),
             a,
-            vinc_tests::Cmd::Send {
+            pinc_tests::Cmd::Send {
                 session: sa,
                 data: b"via two".to_vec(),
             },
@@ -373,7 +373,7 @@ fn a_dial_through_the_second_relay_while_the_first_is_dead() {
 
 #[test]
 fn an_answer_of_no_record_ends_the_wait_of_a_pending_dial() {
-    use vinc_connect::relay::Trace;
+    use pinc_connect::relay::Trace;
     big(|| {
         let mut w = World::new(91);
         let (r, rs) = w.relay(1, relay_ip(10));
@@ -383,14 +383,14 @@ fn an_answer_of_no_record_ends_the_wait_of_a_pending_dial() {
         });
         let a = w.client_in(&client_spec(0xa1, priv_addr(1), &[rs]), lan);
         w.run(secs(15));
-        let ghost = vinc_tests::Client::new(&client_spec(0xee, priv_addr(9), &[])).host.me;
+        let ghost = pinc_tests::Client::new(&client_spec(0xee, priv_addr(9), &[])).host.me;
         w.sim.command(
             secs(15),
             a,
-            vinc_tests::Cmd::Dial {
+            pinc_tests::Cmd::Dial {
                 node: ghost,
                 hints: vec![],
-                role: vinc_core::Role::Other,
+                role: pinc_core::Role::Other,
             },
         );
         w.run(secs(100));
@@ -421,14 +421,14 @@ fn a_pending_dial_that_ended_drops_its_lookup() {
         });
         let a = w.client_in(&client_spec(0xa1, priv_addr(1), &[rs]), lan);
         w.run(secs(15));
-        let ghost = vinc_tests::Client::new(&client_spec(0xee, priv_addr(9), &[])).host.me;
+        let ghost = pinc_tests::Client::new(&client_spec(0xee, priv_addr(9), &[])).host.me;
         w.sim.command(
             secs(15),
             a,
-            vinc_tests::Cmd::Dial {
+            pinc_tests::Cmd::Dial {
                 node: ghost,
                 hints: vec![],
-                role: vinc_core::Role::Other,
+                role: pinc_core::Role::Other,
             },
         );
         w.run(secs(20));
@@ -439,7 +439,7 @@ fn a_pending_dial_that_ended_drops_its_lookup() {
         );
         w.run(secs(120));
         let ended = w.when(a, |e| {
-            matches!(e, vinc_tests::Ev::Ep(vinc_core::Event::ConnectFailed { .. }))
+            matches!(e, pinc_tests::Ev::Ep(pinc_core::Event::ConnectFailed { .. }))
         });
         assert!(ended.is_some(), "the dial ended: {}", w.dump(a));
         assert_eq!(
@@ -463,14 +463,14 @@ fn a_dial_waiting_for_its_peers_address_does_not_resend_its_flight() {
         });
         let a = w.client_in(&client_spec(0xa1, priv_addr(1), &[rs]), lan);
         w.run(secs(15));
-        let ghost = vinc_tests::Client::new(&client_spec(0xee, priv_addr(9), &[])).host.me;
+        let ghost = pinc_tests::Client::new(&client_spec(0xee, priv_addr(9), &[])).host.me;
         w.sim.command(
             secs(15),
             a,
-            vinc_tests::Cmd::Dial {
+            pinc_tests::Cmd::Dial {
                 node: ghost,
                 hints: vec![],
-                role: vinc_core::Role::Other,
+                role: pinc_core::Role::Other,
             },
         );
         w.run(secs(30));
@@ -495,7 +495,7 @@ fn keep_learn_shortens_the_keepalive_after_silent_deaths_until_the_carrier_stops
             let mut w = World::new(95);
             let (_r, rs) = w.relay(1, relay_ip(10));
             // UDP works (so the lease rules stay out), but the NAT forgets an idle TCP flow after 20 s.
-            let nat = w.nat(vinc_sim::NatKind::PortRestricted, ext(1), 120 * SEC, 20 * SEC);
+            let nat = w.nat(pinc_sim::NatKind::PortRestricted, ext(1), 120 * SEC, 20 * SEC);
             let mut s = client_spec(0xa1, priv_addr(1), &[rs]);
             s.keep_learn = learn;
             let a = w.client_behind(&s, nat);

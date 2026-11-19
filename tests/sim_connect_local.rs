@@ -13,8 +13,8 @@ mod connect_sim_common;
 use std::net::SocketAddr;
 
 use connect_sim_common::*;
-use vinc_sim::LanConfig;
-use vinc_tests::{Cmd, ip4};
+use pinc_sim::LanConfig;
+use pinc_tests::{Cmd, ip4};
 
 #[test]
 fn a_local_beacon_becomes_a_candidate_path_that_the_handshake_verifies() {

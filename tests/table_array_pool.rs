@@ -11,7 +11,7 @@
 )]
 
 use proptest::prelude::*;
-use vinc_table::{Array, Error, Pool, Slot, Storage};
+use pinc_table::{Array, Error, Pool, Slot, Storage};
 
 fn mem(n: usize, owned: bool) -> Storage {
     if owned {

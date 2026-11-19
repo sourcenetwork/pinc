@@ -1,4 +1,4 @@
-//! Tests of vinc-transport's recovery: received-packet tracking, the acknowledgement policy, loss detection by path,
+//! Tests of pinc-transport's recovery: received-packet tracking, the acknowledgement policy, loss detection by path,
 //! the probe timer and the give-up rules, ghosts and late acknowledgements, the loss estimate, tail repair and the
 //! byte accounting.
 //!
@@ -16,7 +16,7 @@
 )]
 
 use proptest::prelude::*;
-use vinc_transport::recovery::{
+use pinc_transport::recovery::{
     Event, FrameRef, FrameRefs, LossEstimate, MAX_ACK_RANGES, MAX_PACKET_NUMBER, MIN_CWND, MS, PathKind,
     ReceivedPackets, Recovery, RecoveryError, RxOutcome, RxPacket, SECOND, Sent, Summary, TailRepair, Timeout,
 };
@@ -28,7 +28,7 @@ mod recovery_tail;
 
 use recovery_ack::rx;
 
-vinc_tests::install_counting_allocator!();
+pinc_tests::install_counting_allocator!();
 
 pub(crate) const MSS: u64 = 1200;
 
@@ -732,7 +732,7 @@ fn the_hot_paths_do_not_allocate() {
     let est = LossEstimate::new();
     let mut tail = TailRepair::new();
     let mut count = 0u64;
-    let stats = vinc_tests::measure(|| {
+    let stats = pinc_tests::measure(|| {
         for pn in 0..200u64 {
             rec.on_packet_sent(Sent {
                 frames: stream_frame(pn),
@@ -743,7 +743,7 @@ fn the_hot_paths_do_not_allocate() {
         rec.on_packet_untracked(200).unwrap();
     });
     assert_eq!(stats.count(), 0, "on_packet_sent allocated");
-    let stats = vinc_tests::measure(|| {
+    let stats = pinc_tests::measure(|| {
         rec.on_ack_received(300 * MS, [190..=199, 100..=150, 0..=50], |e| {
             if let Event::Acked { .. } = e {
                 count += 1;
@@ -752,7 +752,7 @@ fn the_hot_paths_do_not_allocate() {
         .ok();
     });
     assert_eq!(stats.count(), 0, "ack processing allocated");
-    let stats = vinc_tests::measure(|| {
+    let stats = pinc_tests::measure(|| {
         let mut now = 400 * MS;
         for _ in 0..12 {
             if let Some(t) = rec.next_timeout() {
@@ -765,7 +765,7 @@ fn the_hot_paths_do_not_allocate() {
         rec.flush_in_flight(now, |_| {});
     });
     assert_eq!(stats.count(), 0, "the timers allocated");
-    let stats = vinc_tests::measure(|| {
+    let stats = pinc_tests::measure(|| {
         for pn in 0..100u64 {
             rxp.on_packet_received(rx(pn * 3, pn)).unwrap();
             if pn % 7 == 0 {

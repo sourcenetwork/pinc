@@ -1,6 +1,6 @@
 ------------------------------ MODULE TraceLayout ------------------------------
 (***************************************************************************)
-(* Trace validation of vinc-dag Layout (tree/layout.rs).                   *)
+(* Trace validation of pinc-dag Layout (tree/layout.rs).                   *)
 (*                                                                         *)
 (* The Rust test tests/trace_tla.rs runs the real `Layout` on lengths up   *)
 (* to u64::MAX (the boundary lengths 2^j - 1, 2^j, 2^j + 1, the lengths    *)
@@ -14,7 +14,7 @@
 (* whose properties TLC checks exhaustively in Layout.cfg.                 *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds tla/layout.ndjson.    *)
+(* variable PINC_TRACE_DIR, the directory that holds tla/layout.ndjson.    *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, TLC, Json, IOUtils
 
@@ -23,7 +23,7 @@ VARIABLE c
 L == INSTANCE Layout WITH SmallLen <- 0, PreN <- 0, c <- 0
 U == INSTANCE U64
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/tla/layout.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/tla/layout.ndjson")
 
 Init == c = [t |-> "root"]
 

@@ -1,6 +1,6 @@
 ----------------------------- MODULE TraceKeystore -----------------------------
 (***************************************************************************)
-(* Trace validation of vinc-keystore: the software store, the key host,    *)
+(* Trace validation of pinc-keystore: the software store, the key host,    *)
 (* the sealed format and the TPM store.                                    *)
 (*                                                                         *)
 (* tests/trace_keystore.rs records keystore.ndjson (events "ks"): handles  *)
@@ -20,15 +20,15 @@
 (*      hnd and auth are the refusals that send nothing; seal and unseal   *)
 (*      follow ParseHeader and UnsealResult                                *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds the two files.        *)
+(* variable PINC_TRACE_DIR, the directory that holds the two files.        *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
 
 VARIABLES i, st
 vars == <<i, st>>
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/keystore.ndjson")
-         \o ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/keystore_tpm.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/keystore.ndjson")
+         \o ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/keystore_tpm.ndjson")
 
 T == INSTANCE KeystoreTpm WITH FlushCanFail <- FALSE, tpm <- 0, primary <- 0, keys <- 0, leaked <- 0, log <- 0, op <- 0, nh <- 0, steps <- 0
 I == INSTANCE CryptoIdentity WITH x <- 0

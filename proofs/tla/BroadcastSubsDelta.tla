@@ -1,7 +1,7 @@
 ---------------------------- MODULE BroadcastSubsDelta ----------------------------
 (***************************************************************************)
 (* The subscriber list a hub replicates to its members, sent as changes.   *)
-(* Code: crates/vinc-broadcast/src/subs.rs (tell_members, flush_stale,     *)
+(* Code: crates/pinc-broadcast/src/subs.rs (tell_members, flush_stale,     *)
 (* announce, Topics::announce_topic, note_publisher, subs_writable,        *)
 (* on_subs with FULL, DELTA and ASK, held_ver, cur_ver), gap.rs send_sub,  *)
 (* on_sub and on_unsub, behind.rs peer_writable.                           *)
@@ -70,7 +70,7 @@
 (* recipient bring a member back up to date; they are what makes progress, *)
 (* not what keeps a list right, so they have no RED of their own.          *)
 (*                                                                         *)
-(* Lean counterpart: proofs/lean/Vinc/BroadcastSubsDelta.lean (the change  *)
+(* Lean counterpart: proofs/lean/Pinc/BroadcastSubsDelta.lean (the change  *)
 (* of two sorted lists, applied, gives the new list: Apply below).         *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets

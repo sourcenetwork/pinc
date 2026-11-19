@@ -11,11 +11,11 @@ mod dtn_common;
 
 use dtn_common::{bytes, keypair, make, plan, recipient};
 use proptest::prelude::*;
-use vinc_crypto::IdentityAlg;
-use vinc_dtn::bundle::{Receiving, Reception};
-use vinc_dtn::error::DtnError;
-use vinc_dtn::held::{BlockHeld, HeldSet, held_len};
-use vinc_dtn::layout::SliceLayout;
+use pinc_crypto::IdentityAlg;
+use pinc_dtn::bundle::{Receiving, Reception};
+use pinc_dtn::error::DtnError;
+use pinc_dtn::held::{BlockHeld, HeldSet, held_len};
+use pinc_dtn::layout::SliceLayout;
 
 const NOW: u64 = 2_000;
 

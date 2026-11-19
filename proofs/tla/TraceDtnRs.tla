@@ -1,6 +1,6 @@
 ----------------------------- MODULE TraceDtnRs -----------------------------
 (***************************************************************************)
-(* Trace validation of vinc-dtn's GF(2^8) arithmetic, slice kernels and    *)
+(* Trace validation of pinc-dtn's GF(2^8) arithmetic, slice kernels and    *)
 (* Reed-Solomon code (gf256.rs, rs.rs).                                    *)
 (*                                                                         *)
 (* The Rust test tests/trace_dtn_rs.rs runs the real inv and mul (all 256  *)
@@ -14,14 +14,14 @@
 (* DtnRs_*.cfg. A block is the flat bytes of its symbols.                  *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds dtn_rs.ndjson.        *)
+(* variable PINC_TRACE_DIR, the directory that holds dtn_rs.ndjson.        *)
 (***************************************************************************)
 EXTENDS DtnRsOps, Json, IOUtils
 
 VARIABLE c
 vars == <<c, tabs>>
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/dtn_rs.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/dtn_rs.ndjson")
 
 Init == TabInit /\ c = [t |-> "root"]
 

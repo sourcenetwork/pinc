@@ -1,6 +1,6 @@
 ----------------------------- MODULE TraceKeyRoll -----------------------------
 (***************************************************************************)
-(* Trace validation of the key roll: vinc-security keyroll.rs (Roll,       *)
+(* Trace validation of the key roll: pinc-security keyroll.rs (Roll,       *)
 (* Rekey, due), record.rs (PacketKey seal, open, rolled) and schedule.rs   *)
 (* (roll_secret, through the keys).                                        *)
 (*                                                                         *)
@@ -31,7 +31,7 @@
 (* only.                                                                   *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds keyroll.ndjson.       *)
+(* variable PINC_TRACE_DIR, the directory that holds keyroll.ndjson.       *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
 
@@ -46,7 +46,7 @@ RC == INSTANCE Record WITH MaxPn <- 1000000, AesLimit <- 0, ChachaLimit <- 0, Ma
 CD == INSTANCE RekeyCodec WITH ans <- 0, sh <- 0, echo <- 0, spn <- 0
 U == INSTANCE U64
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/keyroll.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/keyroll.ndjson")
 
 NONEROLL == [none |-> TRUE]
 

@@ -1,7 +1,7 @@
 ------------------------------ MODULE NodeBackoff ------------------------------
 (***************************************************************************)
 (* The node's table of failed dials and its table of dials in progress     *)
-(* (vinc-node io.rs, duties.rs, events.rs), over every interleaving of     *)
+(* (pinc-node io.rs, duties.rs, events.rs), over every interleaving of     *)
 (* dials, connections, failed dials, sessions the full session table shed, *)
 (* closed sessions and the prune at any times from a small set (a clock    *)
 (* that steps back and times at the top of the u64 range included), at     *)
@@ -46,7 +46,7 @@
 (* Known limitation (low severity, filed): once the table is full a        *)
 (* newly failing or shed peer has no entry and is redialed at every duty   *)
 (* pass.                                                                   *)
-(* Lean counterpart: proofs/lean/Vinc/NodeBackoff*.lean.                   *)
+(* Lean counterpart: proofs/lean/Pinc/NodeBackoff*.lean.                   *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, Nanos
 CONSTANTS MAXT, PEERS, HUBS, REV, TIMES, IGNORE_WINDOW, SHED_FREE

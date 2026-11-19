@@ -1,4 +1,4 @@
-//! Benchmarks of the `vinc-transport` packet layer: building and sealing a short packet, opening and parsing one,
+//! Benchmarks of the `pinc-transport` packet layer: building and sealing a short packet, opening and parsing one,
 //! and the ACK frame with 32 ranges.
 #![allow(
     missing_docs,
@@ -14,11 +14,11 @@ use std::hint::black_box;
 use std::ops::RangeInclusive;
 
 use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main};
-use vinc_crypto::{Aead, Secret, Software};
-use vinc_security::{HeaderKey, Limits, PacketKey};
-use vinc_transport::frame::{Frame, FrameIter, stream_overhead, write_ack};
-use vinc_transport::packet::{ConnId, PN_LEN_BASE, PnLayout, ShortHeader, encode_pn, open, seal, unprotect_header};
-use vinc_wire::Writer;
+use pinc_crypto::{Aead, Secret, Software};
+use pinc_security::{HeaderKey, Limits, PacketKey};
+use pinc_transport::frame::{Frame, FrameIter, stream_overhead, write_ack};
+use pinc_transport::packet::{ConnId, PN_LEN_BASE, PnLayout, ShortHeader, encode_pn, open, seal, unprotect_header};
+use pinc_wire::Writer;
 
 const DATAGRAM: usize = 1452;
 const DCID_LEN: usize = 4;

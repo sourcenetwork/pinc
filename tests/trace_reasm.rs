@@ -1,6 +1,6 @@
-//! Trace generation for the handshake fragment reassembly: seeded runs of a real reassembly (`vinc-transport`, built
+//! Trace generation for the handshake fragment reassembly: seeded runs of a real reassembly (`pinc-transport`, built
 //! with the `trace` feature), recorded as ndjson (`reasm.ndjson`) for the TLA+ trace check (`TraceReasm.tla`) and the
-//! Lean replay (`Vinc/TraceReasm.lean`).
+//! Lean replay (`Pinc/TraceReasm.lean`).
 //!
 //! A run cuts messages of random lengths (up to the largest message and past it) into fragments and hands them in
 //! order, reversed, shuffled, repeated, overlapping, cut off at the end of the message and with a message of another
@@ -23,8 +23,8 @@
 
 use std::fmt::Write as _;
 
-use vinc_tests::SplitMix64;
-use vinc_transport::conn::{ReasmProbe, ReasmView};
+use pinc_tests::SplitMix64;
+use pinc_transport::conn::{ReasmProbe, ReasmView};
 
 fn view_json(v: &ReasmView) -> String {
     let runs: Vec<String> = v.runs.iter().map(|(s, e)| format!("[{s},{e}]")).collect();
@@ -174,10 +174,10 @@ fn reassembly_runs_match_the_models() {
     }
     assert!(out.contains(r#""op":"add""#));
     assert!(
-        vinc_tests::soaking() || out.contains(r#""out":-1"#) && out.matches(r#""runs":[]"#).count() > 80,
+        pinc_tests::soaking() || out.contains(r#""out":-1"#) && out.matches(r#""runs":[]"#).count() > 80,
         "no message was ever completed"
     );
-    if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
+    if let Ok(dir) = std::env::var("PINC_TRACE_DIR") {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(std::path::Path::new(&dir).join("reasm.ndjson"), &out).unwrap();
     }

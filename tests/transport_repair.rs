@@ -10,11 +10,11 @@
     clippy::cast_possible_truncation
 )]
 
-use vinc_crypto::IdentityAlg;
-use vinc_security::Env;
-use vinc_tests::*;
+use pinc_crypto::IdentityAlg;
+use pinc_security::Env;
+use pinc_tests::*;
 
-vinc_tests::install_counting_allocator!();
+pinc_tests::install_counting_allocator!();
 
 /// Sent-packet slots of the ring test: few enough that a handful of packets fill it.
 const SLOTS: usize = 8;
@@ -151,6 +151,6 @@ fn a_tail_repair_leaves_with_the_next_packet_when_the_sent_ring_had_no_slot() {
     });
 }
 
-fn stream_cfg(client: bool) -> vinc_transport::stream::Config {
-    vinc_transport::stream::Config::new(client)
+fn stream_cfg(client: bool) -> pinc_transport::stream::Config {
+    pinc_transport::stream::Config::new(client)
 }

@@ -15,10 +15,10 @@ use std::net::SocketAddr;
 
 use connect_common::{Rec, SEC, big_stack};
 use connect_rig::Rig;
-use vinc_connect::record::{MAX_ADDRS, Reach};
-use vinc_crypto::Software;
-use vinc_security::Env;
-use vinc_tests::Host;
+use pinc_connect::record::{MAX_ADDRS, Reach};
+use pinc_crypto::Software;
+use pinc_security::Env;
+use pinc_tests::Host;
 
 const NOW: u64 = 1000 * SEC;
 

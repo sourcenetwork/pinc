@@ -1,6 +1,6 @@
 -------------------------------- MODULE Heap --------------------------------
 (***************************************************************************)
-(* The endpoint's deadline heap (vinc-core heap.rs, DeadlineHeap) over     *)
+(* The endpoint's deadline heap (pinc-core heap.rs, DeadlineHeap) over     *)
 (* every sequence of `set` calls at small sizes: N ids, deadlines 0..T     *)
 (* (few, so that many are equal), and an id outside the heap among the     *)
 (* calls (HeapOps.tla has the operators).                                  *)
@@ -27,7 +27,7 @@
 (* TIEHI is the tie rule of the operators: FALSE as the code has it. The   *)
 (* witness Heap_hi sets it TRUE (the higher id wins a tie) and Order       *)
 (* fails. Heap_full is a reachability witness: the heap fills.             *)
-(* Lean counterpart: proofs/lean/Vinc/CoreHeap*.lean.                      *)
+(* Lean counterpart: proofs/lean/Pinc/CoreHeap*.lean.                      *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
 CONSTANTS N, T, TIEHI

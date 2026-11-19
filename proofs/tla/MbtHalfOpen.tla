@@ -1,6 +1,6 @@
 ----------------------------- MODULE MbtHalfOpen -----------------------------
 (***************************************************************************)
-(* Model-based tests of the endpoint's half-open cap (vinc-core rx.rs,     *)
+(* Model-based tests of the endpoint's half-open cap (pinc-core rx.rs,     *)
 (* timers.rs): the state graph of the admission and expiry operators of    *)
 (* HalfOpenOps.tla at the code's real cap (256), for a Rust test to walk.  *)
 (*                                                                         *)

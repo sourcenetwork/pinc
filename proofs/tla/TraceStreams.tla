@@ -1,7 +1,7 @@
 ----------------------------- MODULE TraceStreams -----------------------------
 (***************************************************************************)
 (* Trace validation of the receive and credit path of the stream layer:    *)
-(* vinc-transport stream/table.rs, recv.rs, flow.rs, ranges.rs and pool.rs *)
+(* pinc-transport stream/table.rs, recv.rs, flow.rs, ranges.rs and pool.rs *)
 (* (Streams, Recv, Window, Meter, RangeSet, Ring over the buffer pool).    *)
 (*                                                                         *)
 (* The Rust test tests/trace_streams.rs drives real tables (built with the *)
@@ -36,7 +36,7 @@
 (* that has carried no data.                                               *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds streams.ndjson.       *)
+(* variable PINC_TRACE_DIR, the directory that holds streams.ndjson.       *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
 
@@ -46,7 +46,7 @@ vars == <<i, rs>>
 
 INSTANCE StreamsOps
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/streams.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/streams.ndjson")
 Ev == Trace[i]
 
 \* the hidden fields of a slot (cnt, sfl: whether it counts against the peer's limit, whether its send half has

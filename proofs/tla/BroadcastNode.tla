@@ -1,6 +1,6 @@
 ------------------------------ MODULE BroadcastNode ------------------------------
 (***************************************************************************)
-(* One vinc-broadcast node under every input: the receive path of          *)
+(* One pinc-broadcast node under every input: the receive path of          *)
 (* BroadcastNodeOps with an environment that delivers any message by any   *)
 (* frame type at any time (hub push, gap repair, the member fallback, a    *)
 (* replay by a relay), answers or leaves unanswered the access checks,     *)
@@ -46,7 +46,7 @@
 (*  - Every table stays within its capacity (Bounds).                      *)
 (*  - A timer leaves no expired id and no expired message (Swept).         *)
 (*                                                                         *)
-(* Lean counterpart: proofs/lean/Vinc/BroadcastNode.lean.                  *)
+(* Lean counterpart: proofs/lean/Pinc/BroadcastNode.lean.                  *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC
 

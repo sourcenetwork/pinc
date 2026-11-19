@@ -1,6 +1,6 @@
 ----------------------------- MODULE TraceDtnSeal -----------------------------
 (***************************************************************************)
-(* Trace validation of the one-shot encryption: vinc-dtn seal.rs           *)
+(* Trace validation of the one-shot encryption: pinc-dtn seal.rs           *)
 (* (encapsulate, decapsulate, the slice cipher), bundle.rs (seal_bundle)   *)
 (* and head.rs (the signed head).                                          *)
 (*                                                                         *)
@@ -27,7 +27,7 @@
 (* sender's exactly when the terms say so.                                 *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds dtn_seal.ndjson.      *)
+(* variable PINC_TRACE_DIR, the directory that holds dtn_seal.ndjson.      *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
 
@@ -38,7 +38,7 @@ DS == INSTANCE DtnSeal WITH Srcs <- {}, Nodes <- {}, Kps <- {}, Epochs <- {}, Wa
                             SeedReuse <- FALSE, LeakKinds <- {}, BX0 <- FALSE, BK0 <- FALSE, Pays <- {},
                             bundles <- <<>>, L <- {}
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/dtn_seal.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/dtn_seal.ndjson")
 Ev == Trace[i]
 
 Bound(id) == \E p \in om : p[2] = id

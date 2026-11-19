@@ -18,16 +18,16 @@ use std::collections::{BTreeMap, BinaryHeap, HashMap, VecDeque};
 use std::ops::Range;
 use std::rc::Rc;
 
-use vinc_dag::ranges::VerifiedRanges;
-use vinc_dag::tree::{Cv, OutboardBuilder, build_outboard_vec};
-use vinc_tests::SplitMix64;
-use vinc_transport::stream::{StreamId, StreamSource};
-use vinc_values::fetch::{Fetch, FetchSpec, In, Io};
-use vinc_values::server::{Server, ServerIn};
-use vinc_values::session::{Inbound, OpenError, Outbound, PeerInfo, Provider, Session};
-use vinc_values::source::ValueSource;
-use vinc_values::store::{StoreError, ValueRead, ValueStore};
-use vinc_values::trace::{Event, Out, Trace};
+use pinc_dag::ranges::VerifiedRanges;
+use pinc_dag::tree::{Cv, OutboardBuilder, build_outboard_vec};
+use pinc_tests::SplitMix64;
+use pinc_transport::stream::{StreamId, StreamSource};
+use pinc_values::fetch::{Fetch, FetchSpec, In, Io};
+use pinc_values::server::{Server, ServerIn};
+use pinc_values::session::{Inbound, OpenError, Outbound, PeerInfo, Provider, Session};
+use pinc_values::source::ValueSource;
+use pinc_values::store::{StoreError, ValueRead, ValueStore};
+use pinc_values::trace::{Event, Out, Trace};
 
 pub const GROUP: u64 = 16384;
 pub const MS: u64 = 1_000_000;
@@ -297,7 +297,7 @@ impl ValueRead for ClientStore {
 
 impl ValueStore for ClientStore {
     fn verified_from(&self, _: &[u8; 32], from: u64) -> Option<Range<u64>> {
-        vinc_values::store::verified_after(&self.verified, from)
+        pinc_values::store::verified_after(&self.verified, from)
     }
 
     fn write_at(&mut self, _: &[u8; 32], offset: u64, data: &[u8]) -> Result<(), StoreError> {
@@ -351,7 +351,7 @@ impl Rec {
         self.events.iter().any(|(_, e)| matches!(e, Event::Complete))
     }
 
-    pub fn failed(&self) -> Option<vinc_values::trace::FailReason> {
+    pub fn failed(&self) -> Option<pinc_values::trace::FailReason> {
         self.events
             .iter()
             .find_map(|(_, e)| if let Event::Failed(r) = e { Some(*r) } else { None })

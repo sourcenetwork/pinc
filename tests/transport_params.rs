@@ -12,10 +12,10 @@
 )]
 
 use proptest::prelude::*;
-use vinc_crypto::IdentityAlg;
-use vinc_tests::*;
-use vinc_transport::conn::{CloseReason, CreditRecord, credit_for_streams, peer_limits};
-use vinc_transport::stream::{self, StreamError};
+use pinc_crypto::IdentityAlg;
+use pinc_tests::*;
+use pinc_transport::conn::{CloseReason, CreditRecord, credit_for_streams, peer_limits};
+use pinc_transport::stream::{self, StreamError};
 
 #[test]
 fn the_record_is_six_bytes_and_exact() {
@@ -66,12 +66,12 @@ proptest! {
 }
 
 /// A small MCU-like peer: tiny windows, three streams, no datagrams.
-fn mcu() -> (stream::Config, vinc_transport::conn::Config) {
+fn mcu() -> (stream::Config, pinc_transport::conn::Config) {
     let mut sc = stream::Config::new(true);
     sc.initial_stream_window = 32 * 1024;
     sc.max_stream_window = 32 * 1024;
     sc.max_streams = 3;
-    let mut cfg = vinc_transport::conn::Config::new();
+    let mut cfg = pinc_transport::conn::Config::new();
     cfg.credit = credit_for_streams(&sc);
     cfg.credit.max_datagram = 0;
     (sc, cfg)
@@ -167,7 +167,7 @@ fn zero_rtt_respects_the_limits_the_ticket_remembered() {
             "the ticket carries the server's record"
         );
         let (mut sa, mut sb) = (Store::new(true), Store::with_stream(CHUNKS, &sc));
-        let a = w.client(&mut sa, Some(ticket), vinc_security::ClientTickets::new());
+        let a = w.client(&mut sa, Some(ticket), pinc_security::ClientTickets::new());
         let b = w.server(&mut sb);
         let mut net = Net::new(a, b, Link::new(65, Params::new(10 * MS)), &mut w.stores);
         // Before the handshake finishes, early data is limited to what the server advertised last time.

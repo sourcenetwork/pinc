@@ -10,8 +10,8 @@
     clippy::cast_possible_truncation
 )]
 
-use vinc_core::{Answer, Command, CommandError, Event, Query, Role, SessionId};
-use vinc_tests::*;
+use pinc_core::{Answer, Command, CommandError, Event, Query, Role, SessionId};
+use pinc_tests::*;
 
 const D: u64 = 5 * MS_NS;
 

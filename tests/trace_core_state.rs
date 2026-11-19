@@ -1,6 +1,6 @@
-//! Trace generation for the endpoint's saved state (`vinc-core` `state.rs`): seeded runs of a real endpoint, recorded as
+//! Trace generation for the endpoint's saved state (`pinc-core` `state.rs`): seeded runs of a real endpoint, recorded as
 //! ndjson (`core_state.ndjson`, numbers below 2^30, for the TLA+ trace check `TraceCoreState.tla`; `core_state_wide.ndjson`,
-//! numbers up to 2^64 - 1, for the Lean replay only) for the Lean replay (`Vinc/TraceCoreState.lean`).
+//! numbers up to 2^64 - 1, for the Lean replay only) for the Lean replay (`Pinc/TraceCoreState.lean`).
 //!
 //! An event is one call of the real endpoint: `restore` (the bytes it was given, the state it held before as the bytes
 //! `export_state` wrote for it, the result and the state after the same way) or `export` (the state, the size of the
@@ -33,14 +33,14 @@
 
 use std::fmt::Write as _;
 
-use vinc_core::{Endpoint, EndpointConfig, PEER_RTTS, PREKEY_PEERS, STATE_VERSION, Slot, StateError, state_len};
-use vinc_crypto::{Drbg, IdentityAlg, Keypair, Software};
-use vinc_security::{KeyHandle, LocalIdentity};
-use vinc_tests::*;
-use vinc_transport::conn::{Resources, Tables};
-use vinc_transport::recovery::LossEstimate;
-use vinc_transport::stream::pool::BufferPool;
-use vinc_transport::stream::{self, NoSource, Streams};
+use pinc_core::{Endpoint, EndpointConfig, PEER_RTTS, PREKEY_PEERS, STATE_VERSION, Slot, StateError, state_len};
+use pinc_crypto::{Drbg, IdentityAlg, Keypair, Software};
+use pinc_security::{KeyHandle, LocalIdentity};
+use pinc_tests::*;
+use pinc_transport::conn::{Resources, Tables};
+use pinc_transport::recovery::LossEstimate;
+use pinc_transport::stream::pool::BufferPool;
+use pinc_transport::stream::{self, NoSource, Streams};
 
 /// The client ticket slots of the endpoint in the test.
 const CT: usize = 3;
@@ -652,7 +652,7 @@ fn saved_state_matches_the_models() {
         assert!(s.contains(r#""ok":true,"res":["#) && s.contains(r#""ok":false,"res":[]"#));
         assert!(s.contains(r#""op":"export""#));
     }
-    if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
+    if let Ok(dir) = std::env::var("PINC_TRACE_DIR") {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(std::path::Path::new(&dir).join("core_state.ndjson"), &small).unwrap();
         std::fs::write(std::path::Path::new(&dir).join("core_state_wide.ndjson"), &wide).unwrap();

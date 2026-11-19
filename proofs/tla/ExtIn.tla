@@ -1,6 +1,6 @@
 -------------------------------- MODULE ExtIn ---------------------------------
 (***************************************************************************)
-(* The ring of extension frames held for the application (vinc-core        *)
+(* The ring of extension frames held for the application (pinc-core        *)
 (* ext_in.rs): every interleaving of put and take at small sizes           *)
 (* (ExtInOps.tla has the operators).                                         *)
 (*                                                                         *)
@@ -28,7 +28,7 @@
 (* fails); ExtIn_evict, ExtIn_refuse and ExtIn_stay are reachability witnesses: a full   *)
 (* ring drops a frame, a body is refused, a frame stays held for a short   *)
 (* buffer.                                                                 *)
-(* Lean counterpart: proofs/lean/Vinc/CoreExtIn*.lean.                       *)
+(* Lean counterpart: proofs/lean/Pinc/CoreExtIn*.lean.                       *)
 (***************************************************************************)
 EXTENDS Integers, Sequences
 CONSTANTS CAP, MX, PMAX, LS, OC, NEWEST

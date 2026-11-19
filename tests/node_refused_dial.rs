@@ -5,8 +5,8 @@
 mod node_script;
 
 use node_script::{hub_alpn, id_of, node_with};
-use vinc_core::{Event, SessionId};
-use vinc_node::{BACKOFF_FIRST, HUB_ALPN, NoApps};
+use pinc_core::{Event, SessionId};
+use pinc_node::{BACKOFF_FIRST, HUB_ALPN, NoApps};
 
 /// A thread with the stack a node needs.
 fn big<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {

@@ -1,4 +1,4 @@
-# VINC tasks. `just` lists them; `just gate` runs everything a change must pass; CI runs the same recipes.
+# PINC tasks. `just` lists them; `just gate` runs everything a change must pass; CI runs the same recipes.
 
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
@@ -6,7 +6,7 @@ tla_home := env_var_or_default("TLA_HOME", env_var("HOME") / ".local/share/tla")
 no_std_targets := "thumbv7em-none-eabihf wasm32-unknown-unknown"
 # Targets without 32-bit compare-and-swap (the Cortex-M0 class): only the program's crates build there.
 cas_less_targets := "thumbv6m-none-eabi"
-# The benchmarks and the distributed harness are workspaces of their own (the libraries they measure VINC against,
+# The benchmarks and the distributed harness are workspaces of their own (the libraries they measure PINC against,
 # their runtime and their C code stay out of the library's graph). They build into one directory beside the library's,
 # so the library's build output, which `pure` scans, never holds the comparators' C code.
 target := env_var_or_default("CARGO_TARGET_DIR", justfile_directory() / "target")
@@ -99,7 +99,7 @@ deps:
 hygiene:
     #!/usr/bin/env bash
     set -euo pipefail
-    names='finalist|grader|vinc_experiments|eurekagent|roster_settle|kindling|scramdb'
+    names='finalist|grader|pinc_experiments|eurekagent|roster_settle|kindling|scramdb'
     if git grep -nIiE --untracked "$names" -- . ':!justfile'; then echo "hygiene: internal names in the files above" >&2; exit 1; fi
     if git grep -nIP --untracked '[\x{2013}\x{2014}]' -- .; then echo "hygiene: em-dash or en-dash in the files above" >&2; exit 1; fi
 
@@ -136,14 +136,14 @@ doc:
 # Build every no_std crate for a microcontroller and for wasm, then link a program with no allocator for each target.
 # The program (tests/noalloc) runs an endpoint from caller storage, a handshake and a stream between two endpoints in
 # one program, so a crate it reaches that asks for the heap fails the link. It does not cover membership, broadcast,
-# reconcile, the node crate, the keystore or the facade, which still need an allocator (vinc#640). The targets without
-# compare-and-swap build the program's crates (wire, crypto, security, transport, core) and vinc-table.
+# reconcile, the node crate, the keystore or the facade, which still need an allocator (pinc#640). The targets without
+# compare-and-swap build the program's crates (wire, crypto, security, transport, core) and pinc-table.
 no-std:
     for c in $(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(" ".join(p["name"] for p in json.load(sys.stdin)["packages"] if "no_std" in (p.get("keywords") or [])))'); do \
         for t in {{no_std_targets}}; do cargo build -q -p "$c" --no-default-features --target "$t"; done; \
     done
-    for t in {{cas_less_targets}}; do cargo build -q -p vinc-table --no-default-features --target "$t"; done
-    for t in {{no_std_targets}} {{cas_less_targets}}; do cargo build -q -p vinc-noalloc --target "$t"; done
+    for t in {{cas_less_targets}}; do cargo build -q -p pinc-table --no-default-features --target "$t"; done
+    for t in {{no_std_targets}} {{cas_less_targets}}; do cargo build -q -p pinc-noalloc --target "$t"; done
 
 # Fail if any build script of the library's workspace compiled C (run after a build; checks cargo's real target
 # directory). The comparators' C code builds in the benchmarks' own workspace and directory, never here.
@@ -151,10 +151,10 @@ pure:
     dir=$(cargo metadata --format-version 1 --no-deps | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])'); \
     [ -d "$dir" ] || { echo "pure: no build output in $dir; build first" >&2; exit 1; }; \
     ! find "$dir" -path '*/build/*' \( -name '*.o' -o -name '*.a' -o -name '*.so' -o -name '*.obj' \) | grep . \
-        || { echo "a build script compiled C (listed above); VINC is pure Rust" >&2; exit 1; }
+        || { echo "a build script compiled C (listed above); PINC is pure Rust" >&2; exit 1; }
 
-# Measure VINC against iroh and rust-libp2p on this machine (loopback, then netem-shaped); writes benches/results/.
-# Run it on the benchmark host with nothing else running: VINC_JOB_EXCLUSIVE=1 vinc-job just compare. Needs sudo and tc.
+# Measure PINC against iroh and rust-libp2p on this machine (loopback, then netem-shaped); writes benches/results/.
+# Run it on the benchmark host with nothing else running: PINC_JOB_EXCLUSIVE=1 pinc-job just compare. Needs sudo and tc.
 compare *args:
     RUSTFLAGS="{{native}}" python3 benches/compare.py --target-dir {{measure_target}} {{args}}
 
@@ -165,7 +165,7 @@ test *args:
 # The stack tests in an application's debug build: every crate at opt-level 0 (`--cargo-profile` is cargo's profile,
 # nextest's own `--profile` is its configuration).
 unoptimised *args:
-    cargo nextest run --cargo-profile unoptimised -p vinc-tests --test relay_stack {{args}}
+    cargo nextest run --cargo-profile unoptimised -p pinc-tests --test relay_stack {{args}}
 
 # The distributed harness's own tests (the orchestration logic; no root, no Docker).
 test-distributed *args:

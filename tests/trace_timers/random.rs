@@ -1,7 +1,7 @@
 //! The random run of the timers trace: seeded random calls on a connected pair.
 
-use vinc_tests::*;
-use vinc_transport::conn::PathId;
+use pinc_tests::*;
+use pinc_transport::conn::PathId;
 
 use crate::duo::{How, app, close, inject, simple, with_pair};
 use crate::rec::Log;

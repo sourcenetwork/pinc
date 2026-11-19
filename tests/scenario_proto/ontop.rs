@@ -5,12 +5,12 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
 
-use vinc_sim::suite::crypto::MsgId;
-use vinc_sim::suite::proto::body::{self, Verdict};
-use vinc_sim::suite::proto::host::{Host, LayerEvent, Layers};
-use vinc_sim::suite::proto::{Command, OnTop, OnTopEvent, ValueIds, stall_fraction};
-use vinc_sim::suite::rec::{MemberEvent, MemberKind, NS};
-use vinc_sim::suite::world::model::IntentKind;
+use pinc_sim::suite::crypto::MsgId;
+use pinc_sim::suite::proto::body::{self, Verdict};
+use pinc_sim::suite::proto::host::{Host, LayerEvent, Layers};
+use pinc_sim::suite::proto::{Command, OnTop, OnTopEvent, ValueIds, stall_fraction};
+use pinc_sim::suite::rec::{MemberEvent, MemberKind, NS};
+use pinc_sim::suite::world::model::IntentKind;
 
 use crate::lone::{Env, Lone, S};
 use crate::net::{allow, base_intent, new_world};
@@ -84,7 +84,7 @@ impl Lone {
     }
 }
 
-fn publish_intent(size: u64) -> vinc_sim::suite::world::model::Intent {
+fn publish_intent(size: u64) -> pinc_sim::suite::world::model::Intent {
     let mut d = base_intent(0, IntentKind::Publish);
     d.topic = Some(b"/col/0".to_vec());
     d.size = Some(size);
@@ -280,13 +280,13 @@ fn fetch_env() -> (Env, ValueIds, MsgId) {
     w.values.insert("v".to_owned(), 1000);
     w.provides.insert(1, vec!["v".to_owned()]);
     let env = Env::new(w);
-    let v = env.reg.new_msg(1, vinc_sim::suite::crypto::PayloadKind::Value, 1000);
+    let v = env.reg.new_msg(1, pinc_sim::suite::crypto::PayloadKind::Value, 1000);
     let mut ids = ValueIds::new();
     ids.insert("v".to_owned(), v);
     (env, ids, v)
 }
 
-fn fetch_intent() -> vinc_sim::suite::world::model::Intent {
+fn fetch_intent() -> pinc_sim::suite::world::model::Intent {
     let mut d = base_intent(0, IntentKind::Fetch);
     d.value = Some("v".to_owned());
     d.providers = vec![1];
@@ -493,7 +493,7 @@ fn reconcile_env() -> Env {
     Env::new(w)
 }
 
-fn reconcile_intent() -> vinc_sim::suite::world::model::Intent {
+fn reconcile_intent() -> pinc_sim::suite::world::model::Intent {
     let mut d = base_intent(0, IntentKind::Reconcile);
     d.to = Some(1);
     d.set_ref = Some(b"/col/0".to_vec());

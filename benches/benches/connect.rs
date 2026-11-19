@@ -1,4 +1,4 @@
-//! Benchmarks of `vinc-connect`: the decision the client makes for every datagram it routes onto a relay carrier, the
+//! Benchmarks of `pinc-connect`: the decision the client makes for every datagram it routes onto a relay carrier, the
 //! throughput of the protected carrier (seal and open), and the throughput of the relay forwarding between two
 //! carrier sessions.
 //!
@@ -22,21 +22,21 @@ use std::hint::black_box;
 use std::net::SocketAddr;
 
 use criterion::{BatchSize, Criterion, Throughput};
-use vinc_connect::carrier::session::{self, ALPN, Poll, ProtectedCarrier};
-use vinc_connect::carrier::{Frame, MAX_FRAME_LEN};
-use vinc_connect::client::{Config as ClientConfig, Connectivity, Io, RelayCfg};
-use vinc_connect::relay::datagram::Datagram;
-use vinc_connect::relay::{Config, Effect, Relay, Sink};
-use vinc_core::{Endpoint, EndpointConfig, Slot};
-use vinc_crypto::{Drbg, IdentityAlg, Keypair, NodeId, Software};
-use vinc_security::{
+use pinc_connect::carrier::session::{self, ALPN, Poll, ProtectedCarrier};
+use pinc_connect::carrier::{Frame, MAX_FRAME_LEN};
+use pinc_connect::client::{Config as ClientConfig, Connectivity, Io, RelayCfg};
+use pinc_connect::relay::datagram::Datagram;
+use pinc_connect::relay::{Config, Effect, Relay, Sink};
+use pinc_core::{Endpoint, EndpointConfig, Slot};
+use pinc_crypto::{Drbg, IdentityAlg, Keypair, NodeId, Software};
+use pinc_security::{
     ConnId, CreditRecord, Env, InitiatorParams, KeyHandle, LocalIdentity, PrekeyPolicy, ResponderStores, SoftKeys,
     SoftPrekeys,
 };
-use vinc_transport::conn::{Resources, Tables};
-use vinc_transport::recovery::LossEstimate;
-use vinc_transport::stream::pool::BufferPool;
-use vinc_transport::stream::{self, NoSource, Streams};
+use pinc_transport::conn::{Resources, Tables};
+use pinc_transport::recovery::LossEstimate;
+use pinc_transport::stream::pool::BufferPool;
+use pinc_transport::stream::{self, NoSource, Streams};
 
 const NOW: u64 = 1_000_000_000_000;
 const PACKET: usize = 1200;
@@ -374,7 +374,7 @@ fn bench_route(c: &mut Criterion) {
         loop {
             let ans = conn.key_request(0).map(|r| {
                 csoft
-                    .answer(&mut env, &r, &mut [0u8; vinc_crypto::identity::MAX_SIGNATURE_LEN])
+                    .answer(&mut env, &r, &mut [0u8; pinc_crypto::identity::MAX_SIGNATURE_LEN])
                     .clone_response()
             });
             let Some(ans) = ans else { break };
@@ -408,13 +408,13 @@ fn bench_route(c: &mut Criterion) {
         if k > 0 {
             conn.stream_data(now, &mut env, 0, &back[..k]);
         }
-        if conn.carrier_state(0) == vinc_connect::client::link::State::Open {
+        if conn.carrier_state(0) == pinc_connect::client::link::State::Open {
             break;
         }
     }
     assert_eq!(
         conn.carrier_state(0),
-        vinc_connect::client::link::State::Open,
+        pinc_connect::client::link::State::Open,
         "the carrier opened"
     );
     let peer = NodeId {
@@ -446,19 +446,19 @@ trait CloneResponse {
 
 enum Owned {
     Sig(Vec<u8>),
-    Secret(vinc_crypto::Secret<32>),
+    Secret(pinc_crypto::Secret<32>),
 }
 
 impl Owned {
-    fn get(&self) -> vinc_security::KeyResponse<'_> {
+    fn get(&self) -> pinc_security::KeyResponse<'_> {
         match self {
-            Self::Sig(s) => vinc_security::KeyResponse::Signature(s),
-            Self::Secret(s) => vinc_security::KeyResponse::SharedSecret(vinc_crypto::Secret::new(*s.expose())),
+            Self::Sig(s) => pinc_security::KeyResponse::Signature(s),
+            Self::Secret(s) => pinc_security::KeyResponse::SharedSecret(pinc_crypto::Secret::new(*s.expose())),
         }
     }
 }
 
-impl CloneResponse for vinc_security::KeyResponse<'_> {
+impl CloneResponse for pinc_security::KeyResponse<'_> {
     fn clone_response(self) -> Owned {
         match self {
             Self::Signature(s) => Owned::Sig(s.to_vec()),

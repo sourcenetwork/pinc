@@ -1,6 +1,6 @@
 ------------------------------ MODULE StreamsOps ------------------------------
 (***************************************************************************)
-(* The operations of vinc-transport stream/table.rs, recv.rs, flow.rs,     *)
+(* The operations of pinc-transport stream/table.rs, recv.rs, flow.rs,     *)
 (* ranges.rs and pool.rs on the receive and credit path, step for step.    *)
 (* Streams.tla checks them over every interleaving at small sizes;         *)
 (* TraceStreams.tla replays the recorded calls of the real code through    *)
@@ -83,7 +83,7 @@
 (*                                                                         *)
 (* Data bytes are not part of the state here; a frame carries `diff`, whether *)
 (* its bytes differ from the bytes already stored where they overlap. The *)
-(* content theorems are in Vinc/TransportStreams.lean.                     *)
+(* content theorems are in Pinc/TransportStreams.lean.                     *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
 

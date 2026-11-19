@@ -1,6 +1,6 @@
 ----------------------------- MODULE HeaderProt -----------------------------
 (***************************************************************************)
-(* Model of the header protection of vinc-security record.rs               *)
+(* Model of the header protection of pinc-security record.rs               *)
 (* (HeaderKey::protect, unprotect and the helper apply) on bytes.          *)
 (*                                                                         *)
 (* apply XORs the first mask byte, under the first-byte mask (4 low bits   *)
@@ -23,7 +23,7 @@
 (*                    length minus one in the low two bits of the first    *)
 (*                    byte, with whatever bytes follow the field;          *)
 (*   ProtectRefuses   protect refuses lengths 0 and 5.                     *)
-(* Lean counterpart: Vinc/Record.lean (apply_involutive, apply_first_low,  *)
+(* Lean counterpart: Pinc/Record.lean (apply_involutive, apply_first_low,  *)
 (* unprotect_len_range, unprotect_protect).                                *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets

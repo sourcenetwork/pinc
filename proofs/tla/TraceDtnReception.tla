@@ -1,6 +1,6 @@
 ------------------------------ MODULE TraceDtnReception ------------------------------
 (***************************************************************************)
-(* Trace validation of the reception of a bundle (vinc-dtn/src/bundle.rs   *)
+(* Trace validation of the reception of a bundle (pinc-dtn/src/bundle.rs   *)
 (* `Reception`).                                                           *)
 (*                                                                         *)
 (* The Rust test tests/trace_dtn_reception.rs drives real receptions of an *)
@@ -26,7 +26,7 @@
 (* The step before an event is the held set the previous event recorded.   *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds dtn_reception.ndjson. *)
+(* variable PINC_TRACE_DIR, the directory that holds dtn_reception.ndjson. *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils, RangeOps
 
@@ -37,7 +37,7 @@ R3 == INSTANCE DtnReception WITH G <- 1024, W <- 3, ct <- 0, have <- 0, buf <- 0
 \* a BlockHeld never refuses a symbol: the cap of 4 is the most runs 7 symbols can make
 R4 == INSTANCE DtnReception WITH G <- 1024, W <- 4, ct <- 0, have <- 0, buf <- 0, res <- 0
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/dtn_reception.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/dtn_reception.ndjson")
 News == SelectSeq(Trace, LAMBDA e : e.op = "new")
 
 H(x) == [k \in 1..Len(x) |-> <<x[k][1], x[k][2]>>]

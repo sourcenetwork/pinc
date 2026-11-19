@@ -1,6 +1,6 @@
 --------------------------- MODULE TraceVerifiedRanges ---------------------------
 (***************************************************************************)
-(* Trace validation of vinc-dag VerifiedRanges<N> and VerifiedRangesVec.   *)
+(* Trace validation of pinc-dag VerifiedRanges<N> and VerifiedRangesVec.   *)
 (*                                                                         *)
 (* The Rust test tests/trace_ranges.rs records, per insert, the request,   *)
 (* whether it succeeded, the set after it (the public iter()) and the      *)
@@ -15,7 +15,7 @@
 (* execution); VecCap stands for "no capacity limit".                      *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds ranges.ndjson.        *)
+(* variable PINC_TRACE_DIR, the directory that holds ranges.ndjson.        *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, TLC, Json, IOUtils, RangeOps
 
@@ -24,7 +24,7 @@ vars == <<items, req, res, i>>
 
 VR == INSTANCE VerifiedRanges WITH N <- 0, MaxOff <- 0
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/ranges.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/ranges.ndjson")
 
 VecCap == 1000000
 Cap(ev) == IF ev.kind = "vec" THEN VecCap ELSE ev.n

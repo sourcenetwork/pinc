@@ -1,6 +1,6 @@
 ------------------------------ MODULE FacadeTurn ------------------------------
 (***************************************************************************)
-(* The drive's turn (crates/vinc/src/drive.rs: Shared::run_as and the      *)
+(* The drive's turn (crates/pinc/src/drive.rs: Shared::run_as and the      *)
 (* guard Turn with its Drop) over the slab of standby.rs (StandbyOps.tla): *)
 (* how the futures of the facade take, hold and hand on the driving role,  *)
 (* and what the driver reads from the host. The futures F are numbered     *)
@@ -71,7 +71,7 @@
 (* a dropped receive future loses no datagram; sleep(at) does not finish   *)
 (* before at; every future runs on the thread that built the endpoint, so  *)
 (* a poll is one step and no borrow of the core is held across an await.   *)
-(* Lean counterpart: proofs/lean/Vinc/FacadeTurn.lean.                     *)
+(* Lean counterpart: proofs/lean/Pinc/FacadeTurn.lean.                     *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
 CONSTANTS F, OWNER, ROLE, DRAIN, DMAX, STARTS, GENS, PASS,

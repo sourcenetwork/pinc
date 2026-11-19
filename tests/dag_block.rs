@@ -1,4 +1,4 @@
-//! Tests of vinc-dag's `DefraDB` block format.
+//! Tests of pinc-dag's `DefraDB` block format.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -10,14 +10,14 @@
 )]
 
 use proptest::prelude::*;
-use vinc_dag::block::{BlockError, BlockParts, BlockRef, Link, encode_block};
-use vinc_dag::cid::{Cid, CidError, DAG_CBOR, RAW, SHA2_256};
-use vinc_wire::WireError;
-use vinc_wire::cbor::Decoder;
+use pinc_dag::block::{BlockError, BlockParts, BlockRef, Link, encode_block};
+use pinc_dag::cid::{Cid, CidError, DAG_CBOR, RAW, SHA2_256};
+use pinc_wire::WireError;
+use pinc_wire::cbor::Decoder;
 
 mod golden;
 
-vinc_tests::install_counting_allocator!();
+pinc_tests::install_counting_allocator!();
 
 /// Re-encode a parsed block from its parts.
 fn reencode(block: &BlockRef<'_>) -> Vec<u8> {
@@ -193,7 +193,7 @@ fn heads_and_links_order_by_cid_text_then_name() {
 
 /// A block with the given heads written as given, without sorting.
 fn encode_heads_raw(heads: &[Cid]) -> Vec<u8> {
-    use vinc_wire::cbor::Encoder;
+    use pinc_wire::cbor::Encoder;
     let mut buf = vec![0u8; 1024];
     let mut e = Encoder::new(&mut buf);
     let mut keys = e.ordered_map(2).unwrap();
@@ -432,7 +432,7 @@ fn parse_and_encode_do_not_allocate() {
     }];
     let bytes = encode(&mut heads.clone(), &mut links.clone(), Some(cid_of(4)), Some(cid_of(5)));
     let mut out = [0u8; 512];
-    let info = vinc_tests::measure(|| {
+    let info = pinc_tests::measure(|| {
         let block = BlockRef::parse(&bytes).unwrap();
         let n = block.references().count() + block.heads().count() + block.links().count();
         let mut parts = BlockParts {
@@ -447,7 +447,7 @@ fn parse_and_encode_do_not_allocate() {
     });
     assert_eq!(info.count(), 0);
     for (_, bytes, _) in golden::BLOCKS {
-        let info = vinc_tests::measure(|| {
+        let info = pinc_tests::measure(|| {
             std::hint::black_box(BlockRef::parse(bytes).unwrap().references().count());
         });
         assert_eq!(info.count(), 0);

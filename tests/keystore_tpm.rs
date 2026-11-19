@@ -1,11 +1,11 @@
-//! Tests of `TpmStore` against a software TPM (`swtpm`, package `swtpm`); see `vinc_tests::Swtpm`.
+//! Tests of `TpmStore` against a software TPM (`swtpm`, package `swtpm`); see `pinc_tests::Swtpm`.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
 
-use vinc_crypto::identity::{verify, verify_node};
-use vinc_crypto::{CryptoError, IdentityAlg, NodeId, Provider, Software};
-use vinc_keystore::tpm::SimTransport;
-use vinc_keystore::{KeyHandle, KeyStore, KeyStoreError, TpmConfig, TpmStore};
-use vinc_tests::{SplitMix64, Swtpm};
+use pinc_crypto::identity::{verify, verify_node};
+use pinc_crypto::{CryptoError, IdentityAlg, NodeId, Provider, Software};
+use pinc_keystore::tpm::SimTransport;
+use pinc_keystore::{KeyHandle, KeyStore, KeyStoreError, TpmConfig, TpmStore};
+use pinc_tests::{SplitMix64, Swtpm};
 
 const PERSISTENT_KEY: u32 = 0x8101_0001;
 /// The order of the P-256 group, big-endian.
@@ -78,7 +78,7 @@ fn create_persist_sign_200_messages_low_s() {
     let (alg, pk) = store.public(&key).unwrap();
     assert_eq!((alg, pk.len()), (IdentityAlg::EcdsaP256, 33));
 
-    // Raw TPM signatures: about half have a high s, which vinc_crypto rejects; n - s is the same signature.
+    // Raw TPM signatures: about half have a high s, which pinc_crypto rejects; n - s is the same signature.
     let handle = store.tpm_handle(&key).unwrap();
     let mut high = 0;
     for msg in messages(1, 40) {
@@ -130,7 +130,7 @@ fn create_persist_sign_200_messages_low_s() {
 }
 
 #[test]
-fn public_key_and_node_id_agree_with_vinc_crypto() {
+fn public_key_and_node_id_agree_with_pinc_crypto() {
     let tpm = Swtpm::start();
     let mut store = tpm.open(TpmConfig::new());
     let key = new_key(&mut store);
@@ -200,7 +200,7 @@ fn unsupported_algorithms_are_typed_errors() {
     let key = new_key(&mut store);
     assert_eq!(store.decapsulate(&key, &[0; 1088]), Err(KeyStoreError::Unsupported));
     // A handle from a software store is not known here.
-    let mut soft = vinc_keystore::SoftwareStore::new().unwrap();
+    let mut soft = pinc_keystore::SoftwareStore::new().unwrap();
     let (kem, _) = soft.generate_kem().unwrap();
     assert_eq!(store.decapsulate(&kem, &[0; 1088]), Err(KeyStoreError::Unsupported));
     assert_eq!(store.sign(&kem, b"x"), Err(KeyStoreError::UnknownKey));

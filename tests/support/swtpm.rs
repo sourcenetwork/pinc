@@ -15,8 +15,8 @@ use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
-use vinc_keystore::tpm::SimTransport;
-use vinc_keystore::{TpmConfig, TpmStore};
+use pinc_keystore::tpm::SimTransport;
+use pinc_keystore::{TpmConfig, TpmStore};
 
 const STARTUP_DEADLINE: Duration = Duration::from_secs(20);
 
@@ -34,7 +34,7 @@ impl Swtpm {
         for _ in 0..8 {
             let port = free_port_pair();
             let dir = std::env::temp_dir().join(format!(
-                "vinc-swtpm-{}-{}",
+                "pinc-swtpm-{}-{}",
                 std::process::id(),
                 DIR_SEQ.fetch_add(1, Ordering::Relaxed)
             ));

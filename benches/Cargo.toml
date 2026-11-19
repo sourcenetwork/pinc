@@ -1,6 +1,6 @@
 # The micro benchmarks and the loopback comparison with iroh and rust-libp2p: a workspace of its own, outside the
 # library's, so the comparators, their runtime (tokio) and their C code (ring, aws-lc-sys) never enter the library's
-# dependency graph or lockfile. The VINC crates come in by path; every dependency is declared once, below.
+# dependency graph or lockfile. The PINC crates come in by path; every dependency is declared once, below.
 [workspace]
 resolver = "3"
 
@@ -9,34 +9,34 @@ version = "0.1.0"
 authors = ["Theo M. Bulut <theo@source.network>"]
 edition = "2024"
 rust-version = "1.99"
-repository = "https://github.com/sourcenetwork/vinc"
+repository = "https://github.com/sourcenetwork/pinc"
 publish = false
 
 [workspace.dependencies]
-vinc-wire = { path = "../crates/vinc-wire", version = "0.1.0" }
-vinc-dag = { path = "../crates/vinc-dag", version = "0.1.0" }
-vinc-crypto = { path = "../crates/vinc-crypto", version = "0.1.0" }
-vinc-security = { path = "../crates/vinc-security", version = "0.1.0" }
-vinc-keystore = { path = "../crates/vinc-keystore", version = "0.1.0" }
-vinc-transport = { path = "../crates/vinc-transport", version = "0.1.0" }
-vinc-sim = { path = "../crates/vinc-sim", version = "0.1.0" }
-vinc-connect = { path = "../crates/vinc-connect", version = "0.1.0" }
-vinc-reconcile = { path = "../crates/vinc-reconcile", version = "0.1.0" }
-vinc-dtn = { path = "../crates/vinc-dtn", version = "0.1.0" }
-vinc-values = { path = "../crates/vinc-values", version = "0.1.0" }
-vinc-core = { path = "../crates/vinc-core", version = "0.1.0" }
-vinc-broadcast = { path = "../crates/vinc-broadcast", version = "0.1.0" }
-vinc = { path = "../crates/vinc", version = "0.1.0" }
+pinc-wire = { path = "../crates/pinc-wire", version = "0.1.0" }
+pinc-dag = { path = "../crates/pinc-dag", version = "0.1.0" }
+pinc-crypto = { path = "../crates/pinc-crypto", version = "0.1.0" }
+pinc-security = { path = "../crates/pinc-security", version = "0.1.0" }
+pinc-keystore = { path = "../crates/pinc-keystore", version = "0.1.0" }
+pinc-transport = { path = "../crates/pinc-transport", version = "0.1.0" }
+pinc-sim = { path = "../crates/pinc-sim", version = "0.1.0" }
+pinc-connect = { path = "../crates/pinc-connect", version = "0.1.0" }
+pinc-reconcile = { path = "../crates/pinc-reconcile", version = "0.1.0" }
+pinc-dtn = { path = "../crates/pinc-dtn", version = "0.1.0" }
+pinc-values = { path = "../crates/pinc-values", version = "0.1.0" }
+pinc-core = { path = "../crates/pinc-core", version = "0.1.0" }
+pinc-broadcast = { path = "../crates/pinc-broadcast", version = "0.1.0" }
+pinc = { path = "../crates/pinc", version = "0.1.0" }
 
 blake3 = { version = "1.8.7", default-features = false, features = ["pure"] }
 nuclei = "0.5.8"
 tokio = { version = "1.54.1", default-features = false, features = ["rt", "net", "time", "macros"] }
 criterion = "0.7.0"
-# The libraries VINC is measured against, and what they need.
+# The libraries PINC is measured against, and what they need.
 iroh = "1.4.1"
 libp2p = { version = "0.57.1", default-features = false }
 libp2p-stream = "0.5.0-alpha"
-# Segmented UDP sends and coalesced receives for the VINC host, the calls the compared libraries use.
+# Segmented UDP sends and coalesced receives for the PINC host, the calls the compared libraries use.
 quinn-udp = "0.5.16"
 futures = { version = "0.3.34", default-features = false }
 
@@ -69,8 +69,8 @@ inherits = "release"
 debug = true
 
 [package]
-name = "vinc-benches"
-description = "Criterion benchmarks of the VINC crates, and the loopback comparison with iroh and rust-libp2p"
+name = "pinc-benches"
+description = "Criterion benchmarks of the PINC crates, and the loopback comparison with iroh and rust-libp2p"
 version.workspace = true
 authors.workspace = true
 edition.workspace = true
@@ -79,20 +79,20 @@ publish = false
 autobenches = false
 
 [dependencies]
-vinc-wire = { workspace = true }
-vinc-dag = { workspace = true, features = ["std"] }
-vinc-crypto = { workspace = true }
-vinc-security = { workspace = true }
-vinc-transport = { workspace = true, features = ["alloc"] }
-vinc-sim = { workspace = true }
-vinc-reconcile = { workspace = true, features = ["alloc"] }
-vinc-dtn = { workspace = true }
-vinc-values = { workspace = true }
-vinc-core = { workspace = true, features = ["alloc"] }
-vinc-connect = { workspace = true }
-vinc-broadcast = { workspace = true, features = ["alloc"] }
-vinc = { workspace = true }
-vinc-keystore = { workspace = true, features = ["std"] }
+pinc-wire = { workspace = true }
+pinc-dag = { workspace = true, features = ["std"] }
+pinc-crypto = { workspace = true }
+pinc-security = { workspace = true }
+pinc-transport = { workspace = true, features = ["alloc"] }
+pinc-sim = { workspace = true }
+pinc-reconcile = { workspace = true, features = ["alloc"] }
+pinc-dtn = { workspace = true }
+pinc-values = { workspace = true }
+pinc-core = { workspace = true, features = ["alloc"] }
+pinc-connect = { workspace = true }
+pinc-broadcast = { workspace = true, features = ["alloc"] }
+pinc = { workspace = true }
+pinc-keystore = { workspace = true, features = ["std"] }
 nuclei = { workspace = true }
 
 iroh = { workspace = true }
@@ -166,7 +166,7 @@ name = "broadcast"
 harness = false
 
 [[bench]]
-name = "vinc_loopback"
+name = "pinc_loopback"
 harness = false
 
 [[bench]]
@@ -174,7 +174,7 @@ name = "connect"
 harness = false
 
 [[bench]]
-name = "compare_vinc"
+name = "compare_pinc"
 harness = false
 
 [[bench]]

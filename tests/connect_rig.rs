@@ -14,11 +14,11 @@
 
 use core::net::SocketAddr;
 
-use vinc_connect::carrier::session::{self, Poll, ProtectedCarrier};
-use vinc_connect::client::{Config, Connectivity, Io, RelayCfg};
-use vinc_connect::relay::{Relay, Trace};
-use vinc_crypto::{Drbg, Software};
-use vinc_security::{
+use pinc_connect::carrier::session::{self, Poll, ProtectedCarrier};
+use pinc_connect::client::{Config, Connectivity, Io, RelayCfg};
+use pinc_connect::relay::{Relay, Trace};
+use pinc_crypto::{Drbg, Software};
+use pinc_security::{
     ConnId, Env, KeyHandle as SecHandle, KeyRequest, KeyResponse, LocalIdentity, ResponderStores, SoftKeys,
 };
 
@@ -33,14 +33,14 @@ pub type Conn = Connectivity<Software, 1, 4>;
 /// An answer that owns its bytes.
 pub enum Ans {
     Sig(Vec<u8>),
-    Secret(vinc_crypto::Secret<32>),
+    Secret(pinc_crypto::Secret<32>),
 }
 
 impl Ans {
     pub fn response(&self) -> KeyResponse<'_> {
         match self {
             Self::Sig(s) => KeyResponse::Signature(s),
-            Self::Secret(s) => KeyResponse::SharedSecret(vinc_crypto::Secret::new(*s.expose())),
+            Self::Secret(s) => KeyResponse::SharedSecret(pinc_crypto::Secret::new(*s.expose())),
         }
     }
 }
@@ -56,19 +56,19 @@ pub struct Rig {
     pub relay: Box<R>,
     pub rc: Box<ProtectedCarrier<Software>>,
     stores: ResponderStores<2, 2>,
-    relay_kp: vinc_crypto::Keypair,
+    relay_kp: pinc_crypto::Keypair,
     pub drbg: Drbg,
     rdrbg: Drbg,
     pub sink: Collect,
-    pub session: Option<vinc_connect::relay::SessionId>,
-    peer: Option<vinc_crypto::NodeId>,
-    pub relay_id: vinc_crypto::NodeId,
+    pub session: Option<pinc_connect::relay::SessionId>,
+    peer: Option<pinc_crypto::NodeId>,
+    pub relay_id: pinc_crypto::NodeId,
     pub udp: SocketAddr,
     pub tcp: SocketAddr,
 }
 
 impl Rig {
-    pub fn new(identity: &LocalIdentity, prekey: vinc_security::PrekeyInfo) -> Self {
+    pub fn new(identity: &LocalIdentity, prekey: pinc_security::PrekeyInfo) -> Self {
         let relay_kp = ed(0x77);
         let relay_id = id(&relay_kp);
         let udp: SocketAddr = RELAY_UDP.parse().unwrap();
@@ -92,7 +92,7 @@ impl Rig {
         };
         let mut conn = Box::new(Connectivity::new(cfg, prekey, Software, 7));
         conn.set_local(&["192.168.1.2:4433".parse().unwrap()]);
-        let relay = Box::new(R::new(vinc_connect::relay::Config::new(relay_id, 3)));
+        let relay = Box::new(R::new(pinc_connect::relay::Config::new(relay_id, 3)));
         let rcfg = session::responder_config(
             LocalIdentity::from_keypair(&relay_kp, SecHandle(1)).unwrap(),
             ConnId::new(b"relay000").unwrap(),
@@ -162,7 +162,7 @@ impl Rig {
         self.conn.stream_opened(now, &mut env, 0);
         for _ in 0..40 {
             self.shuttle(custody, now, answered);
-            if self.session.is_some() && self.conn.carrier_state(0) == vinc_connect::client::link::State::Open {
+            if self.session.is_some() && self.conn.carrier_state(0) == pinc_connect::client::link::State::Open {
                 break;
             }
         }

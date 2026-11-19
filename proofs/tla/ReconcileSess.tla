@@ -3,7 +3,7 @@
 (* The reply loop with rollback, the frames, the root, the final check,    *)
 (* the cold stream and the handlers of the initiator and the responder     *)
 (* (core.rs answer/turn/resume, session.rs). TLA+ counterpart of           *)
-(* Vinc/ReconcileSession.lean.                                             *)
+(* Pinc/ReconcileSession.lean.                                             *)
 (*                                                                         *)
 (* An initiator is [core, phase] with phase in "idle" "open" "checking"    *)
 (* "done"; a responder is [core, side] with side in "fresh" "open" "cold"  *)

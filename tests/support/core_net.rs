@@ -1,4 +1,4 @@
-//! A small deterministic pump for `vinc-core` endpoints: nodes, an in-memory network and the host duties a node
+//! A small deterministic pump for `pinc-core` endpoints: nodes, an in-memory network and the host duties a node
 //! performs (answering key requests and access checks, reading streams).
 //!
 //! [`CoreNet`] carries datagrams between [`TNode`]s with one fixed one-way delay (and optional loss by a closure),
@@ -25,16 +25,16 @@ use std::collections::{BinaryHeap, HashMap, VecDeque};
 use std::fmt::Write as _;
 use std::net::SocketAddr;
 
-use vinc_core::{
+use pinc_core::{
     Answer, Command, CommandError, Endpoint, EndpointConfig, Event, Query, Reply, Role, SessionId, Slot, Transmit,
     Value,
 };
-use vinc_crypto::{Drbg, IdentityAlg, Keypair, NodeId, Software};
-use vinc_security::{Env, KeyHandle, KeyResponse, LocalIdentity, PrekeyPolicy, SoftKeys, SoftPrekeys};
-use vinc_transport::conn::{Machines, Resources, Tables};
-use vinc_transport::recovery::LossEstimate;
-use vinc_transport::stream::pool::BufferPool;
-use vinc_transport::stream::{self, NoSource, RecvStatus, Streams};
+use pinc_crypto::{Drbg, IdentityAlg, Keypair, NodeId, Software};
+use pinc_security::{Env, KeyHandle, KeyResponse, LocalIdentity, PrekeyPolicy, SoftKeys, SoftPrekeys};
+use pinc_transport::conn::{Machines, Resources, Tables};
+use pinc_transport::recovery::LossEstimate;
+use pinc_transport::stream::pool::BufferPool;
+use pinc_transport::stream::{self, NoSource, RecvStatus, Streams};
 
 use crate::{Caps, SplitMix64};
 
@@ -54,8 +54,8 @@ pub const MS_NS: u64 = 1_000_000;
 pub type CoreEp = Endpoint<'static, 'static, Caps, NoSource, CN, CC, CF, CNP, CK, CD, CPK, CTK, CCT>;
 pub type CoreSlot = Slot<'static, Caps, NoSource, CN, CC, CF, CNP>;
 
-pub const ALPN_A: &[u8] = b"vinc/a";
-pub const ALPN_B: &[u8] = b"vinc/b";
+pub const ALPN_A: &[u8] = b"pinc/a";
+pub const ALPN_B: &[u8] = b"pinc/b";
 
 /// The memory of one connection, leaked for the life of the test.
 pub fn memory(client: bool) -> Resources<'static, NoSource, CN, CC, CF> {
@@ -276,7 +276,7 @@ impl TNode {
             now,
             drbg: &mut self.drbg,
         };
-        let mut sig = [0u8; vinc_crypto::identity::MAX_SIGNATURE_LEN];
+        let mut sig = [0u8; pinc_crypto::identity::MAX_SIGNATURE_LEN];
         let resp = match self.ep.query(Query::KeyRequest(session)) {
             Answer::KeyRequest(req) => match soft.answer(&mut env, &req, &mut sig) {
                 KeyResponse::Signature(s) => KeyResponse::Signature(s),

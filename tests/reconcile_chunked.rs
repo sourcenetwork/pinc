@@ -17,10 +17,10 @@ mod common;
 use std::thread;
 
 use common::{Dir, assert_exact, fixed_set, index, mutate, pair, run_with, sorted, var_set};
-use vinc_reconcile::wire::{frame_body, read_parts};
-use vinc_reconcile::{Error, Initiator, Limits, MemError, MemIndex, Reason, Responder, RunError, Step};
-use vinc_tests::SplitMix64;
-use vinc_wire::Reader;
+use pinc_reconcile::wire::{frame_body, read_parts};
+use pinc_reconcile::{Error, Initiator, Limits, MemError, MemIndex, Reason, Responder, RunError, Step};
+use pinc_tests::SplitMix64;
+use pinc_wire::Reader;
 
 const ITEM: usize = 40;
 /// What a message may add to the parts the limit bounds: the count and, in the first message, the set reference.

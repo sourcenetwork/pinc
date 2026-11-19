@@ -1,7 +1,7 @@
 //! The comparison harness for iroh (see `compare/mod.rs`).
 //!
 //! Defaults: `Endpoint::builder(presets::Minimal)` with the relay and every address lookup service off and one UDP
-//! socket on the bench's address (`VINC_BENCH_BIND`, loopback by default), so no run touches a network it was not given; iroh's own transport configuration and its tokio
+//! socket on the bench's address (`PINC_BENCH_BIND`, loopback by default), so no run touches a network it was not given; iroh's own transport configuration and its tokio
 //! multi-thread runtime with one worker per core. The resumed scenario uses iroh's 0-RTT path
 //! (`connect_with_opts` then `into_0rtt` on the dialer, `into_0rtt` on the acceptor).
 #![allow(

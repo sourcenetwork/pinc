@@ -1,6 +1,6 @@
 ------------------------------ MODULE TracePn -------------------------------
 (***************************************************************************)
-(* Trace validation of the packet-number codec: vinc-transport             *)
+(* Trace validation of the packet-number codec: pinc-transport             *)
 (* packet/number.rs.                                                       *)
 (*                                                                         *)
 (* The Rust test tests/trace_pn.rs calls the real encode_pn, decode_pn and *)
@@ -12,7 +12,7 @@
 (* (numbers up to 2^64 - 1, the width 4, the real 2^62).                   *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds pn.ndjson.            *)
+(* variable PINC_TRACE_DIR, the directory that holds pn.ndjson.            *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, TLC, Json, IOUtils
 
@@ -20,7 +20,7 @@ CONSTANTS BYTE, P62, MAXPN, TOP, WIDEWIN
 VARIABLE i
 INSTANCE PnOps
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/pn.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/pn.ndjson")
 Ev0 == Trace[i]
 
 EncEv == LET r == EncodePn(Ev0.full, Ev0.len)

@@ -17,23 +17,23 @@ use crate::orchestrate::window::drops;
 use crate::orchestrate::{Ctx, Event};
 use crate::quiet::Snapshot;
 use crate::results::Row;
-use crate::scenario::{Stack, Transport, TransportTest, VincEndpoints};
+use crate::scenario::{Stack, Transport, TransportTest, PincEndpoints};
 
-/// The environment of a node program: the address it binds and the interface size VINC states.
+/// The environment of a node program: the address it binds and the interface size PINC states.
 pub(crate) fn node_env(ip: std::net::Ipv4Addr, mtu: u32) -> Vec<(String, String)> {
     vec![
-        ("VINC_BENCH_BIND".into(), ip.to_string()),
-        ("VINC_BENCH_MTU".into(), mtu.to_string()),
+        ("PINC_BENCH_BIND".into(), ip.to_string()),
+        ("PINC_BENCH_MTU".into(), mtu.to_string()),
         // A remote login environment must not turn a row per-core; the per-core argument still wins.
-        ("VINC_BENCH_ENDPOINTS".into(), "1".into()),
+        ("PINC_BENCH_ENDPOINTS".into(), "1".into()),
     ]
 }
 
-/// The options of a node program for `test`: per-core only for VINC's many test (every other test and stack runs on one
+/// The options of a node program for `test`: per-core only for PINC's many test (every other test and stack runs on one
 /// endpoint), and the reading of every many test.
-fn options(stack: Stack, endpoints: VincEndpoints, test: &TransportTest) -> Vec<String> {
+fn options(stack: Stack, endpoints: PincEndpoints, test: &TransportTest) -> Vec<String> {
     let mut options = Vec::new();
-    if stack == Stack::Vinc && endpoints == VincEndpoints::PerCore && matches!(test, TransportTest::Many { .. }) {
+    if stack == Stack::Pinc && endpoints == PincEndpoints::PerCore && matches!(test, TransportTest::Many { .. }) {
         options.push("--endpoints=per-core".to_owned());
     }
     if let TransportTest::Many { reading, .. } = test {
@@ -111,7 +111,7 @@ async fn one(
         row.status = "not measured: the pair's nodes are not in the plan".into();
         return Ok(row);
     }
-    let options = options(stack, ctx.sc.vinc_endpoints, test);
+    let options = options(stack, ctx.sc.pinc_endpoints, test);
     let server_args = args(stack, &["server".into()], &options);
     let server_env = node_env(b.address(&ctx.plan, si).0, ctx.plan.mtu);
     let mut srv = b.spawn(si, &server_args, &server_env)?;
@@ -200,7 +200,7 @@ async fn one(
 #[cfg(test)]
 mod tests {
     use super::{node_env, options};
-    use crate::scenario::{Reading, Stack, TransportTest, VincEndpoints};
+    use crate::scenario::{Reading, Stack, TransportTest, PincEndpoints};
 
     const MANY: TransportTest = TransportTest::Many {
         connections: 500,
@@ -211,18 +211,18 @@ mod tests {
     #[test]
     fn the_nodes_are_told_the_scenarios_interface_size() {
         let env = node_env("10.1.0.2".parse().unwrap_or(std::net::Ipv4Addr::UNSPECIFIED), 1280);
-        assert!(env.contains(&("VINC_BENCH_MTU".to_owned(), "1280".to_owned())));
-        assert!(env.contains(&("VINC_BENCH_BIND".to_owned(), "10.1.0.2".to_owned())));
+        assert!(env.contains(&("PINC_BENCH_MTU".to_owned(), "1280".to_owned())));
+        assert!(env.contains(&("PINC_BENCH_BIND".to_owned(), "10.1.0.2".to_owned())));
     }
 
     #[test]
     fn the_nodes_run_one_endpoint_whatever_their_login_environment_says() {
         let env = node_env(std::net::Ipv4Addr::UNSPECIFIED, 1280);
-        assert!(env.contains(&("VINC_BENCH_ENDPOINTS".to_owned(), "1".to_owned())));
+        assert!(env.contains(&("PINC_BENCH_ENDPOINTS".to_owned(), "1".to_owned())));
     }
 
     #[test]
-    fn per_core_reaches_only_vinc_in_the_many_test_and_every_many_test_names_its_reading() {
+    fn per_core_reaches_only_pinc_in_the_many_test_and_every_many_test_names_its_reading() {
         let driven = TransportTest::Many {
             connections: 500,
             bytes_each: 65536,
@@ -232,18 +232,18 @@ mod tests {
             bytes: 1 << 20,
             streams: 1,
         };
-        let per_core = VincEndpoints::PerCore;
+        let per_core = PincEndpoints::PerCore;
         assert_eq!(
-            options(Stack::Vinc, per_core, &MANY),
+            options(Stack::Pinc, per_core, &MANY),
             ["--endpoints=per-core", "--reading=undriven"]
         );
         assert_eq!(
-            options(Stack::Vinc, per_core, &driven),
+            options(Stack::Pinc, per_core, &driven),
             ["--endpoints=per-core", "--reading=driven"]
         );
-        assert_eq!(options(Stack::Vinc, VincEndpoints::One, &MANY), ["--reading=undriven"]);
+        assert_eq!(options(Stack::Pinc, PincEndpoints::One, &MANY), ["--reading=undriven"]);
         assert_eq!(options(Stack::Iroh, per_core, &MANY), ["--reading=undriven"]);
         assert_eq!(options(Stack::Libp2p, per_core, &driven), ["--reading=driven"]);
-        assert_eq!(options(Stack::Vinc, per_core, &throughput), Vec::<String>::new());
+        assert_eq!(options(Stack::Pinc, per_core, &throughput), Vec::<String>::new());
     }
 }

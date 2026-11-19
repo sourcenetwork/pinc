@@ -1,6 +1,6 @@
 ---------------------------- MODULE KeystoreSealed ----------------------------
 (***************************************************************************)
-(* The sealed format of vinc-keystore (sealed.rs): header || nonce (12) || *)
+(* The sealed format of pinc-keystore (sealed.rs): header || nonce (12) || *)
 (* ciphertext || tag (16), ChaCha20-Poly1305 with the whole header as      *)
 (* associated data, and the software store's version byte (software.rs).   *)
 (*                                                                         *)
@@ -24,7 +24,7 @@
 (*   OnlyGenuine     an accepted blob is a sealing under the key           *)
 (*   SoftwareVersion the software store requires its version byte first    *)
 (* TraceKeystore.tla checks the recorded blobs against Parse and the       *)
-(* layout. Lean counterpart: proofs/lean/Vinc/KeystoreSealed.lean          *)
+(* layout. Lean counterpart: proofs/lean/Pinc/KeystoreSealed.lean          *)
 (* (parse_error_iff, build_parse, parse_build, decrypt_encrypt,            *)
 (* decrypt_sound, wrong_key, wrong_header, swUnseal_swSeal).               *)
 (***************************************************************************)

@@ -15,11 +15,11 @@
 mod values_support;
 
 use values_support::*;
-use vinc_values::knobs;
-use vinc_values::plan::Plan;
-use vinc_values::session::Provider;
-use vinc_values::span::Span;
-use vinc_values::trace::{Event, Release, Trace};
+use pinc_values::knobs;
+use pinc_values::plan::Plan;
+use pinc_values::session::Provider;
+use pinc_values::span::Span;
+use pinc_values::trace::{Event, Release, Trace};
 
 const G: u64 = GROUP;
 
@@ -92,7 +92,7 @@ fn the_numbers_are_the_tuned_ones() {
     assert_eq!(knobs::STALL_RTT, 4);
     // The most the one-byte count of a request holds, and the size of the largest request it allows.
     assert_eq!(knobs::MAX_REQ_RANGES, 255);
-    assert_eq!(vinc_values::wire::REQ_MAX, 34 + 16 * 255);
+    assert_eq!(pinc_values::wire::REQ_MAX, 34 + 16 * 255);
 }
 
 #[test]

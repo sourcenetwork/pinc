@@ -15,8 +15,8 @@ mod common;
 use std::cell::RefCell;
 
 use common::{NO_CAP, Src, drain_control, drain_frames, next_control, pattern, peer, setup};
-use vinc_transport::stream::pool::{BufferPool, CHUNK_SIZE};
-use vinc_transport::stream::{Config, ControlFrame, RecvStatus, StreamError, Streams};
+use pinc_transport::stream::pool::{BufferPool, CHUNK_SIZE};
+use pinc_transport::stream::{Config, ControlFrame, RecvStatus, StreamError, Streams};
 
 // ---- send ---------------------------------------------------------------------------------------------------------
 

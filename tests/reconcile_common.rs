@@ -13,8 +13,8 @@
 
 use std::sync::mpsc::{Receiver, Sender, channel};
 
-use vinc_reconcile::{Channel, Error, Initiator, ItemIndex, Limits, MemError, MemIndex, Recv, Responder, Step};
-use vinc_tests::SplitMix64;
+use pinc_reconcile::{Channel, Error, Initiator, ItemIndex, Limits, MemError, MemIndex, Recv, Responder, Step};
+use pinc_tests::SplitMix64;
 
 pub type Item = Vec<u8>;
 pub type Err = Error<MemError>;

@@ -21,9 +21,9 @@ mod connect_common;
 
 use connect_common::{Out, Rig, big_stack, enc, id, nid};
 use proptest::prelude::*;
-use vinc_connect::carrier::session::{CarrierError, IN_LEN, MAX_UNIT_LEN, PEER_ALPN};
-use vinc_connect::carrier::ws::{self, Decoder, MAX_PAYLOAD, Opcode, Role, WsError, WsFrame};
-use vinc_connect::carrier::{BatchBuilder, Frame, MAX_FRAME_LEN, Offer};
+use pinc_connect::carrier::session::{CarrierError, IN_LEN, MAX_UNIT_LEN, PEER_ALPN};
+use pinc_connect::carrier::ws::{self, Decoder, MAX_PAYLOAD, Opcode, Role, WsError, WsFrame};
+use pinc_connect::carrier::{BatchBuilder, Frame, MAX_FRAME_LEN, Offer};
 
 fn pkt(n: usize, fill: u8) -> Vec<u8> {
     vec![fill; n]
@@ -196,7 +196,7 @@ fn a_dialer_refuses_a_relay_that_is_not_the_one_it_named() {
         let mut out = vec![0u8; 100];
         assert_eq!(
             rig.client
-                .seal(&vinc_crypto::Software, &Frame::Ping, &mut out)
+                .seal(&pinc_crypto::Software, &Frame::Ping, &mut out)
                 .unwrap_err(),
             CarrierError::Closed
         );
@@ -210,7 +210,7 @@ fn nothing_is_sealed_before_the_handshake() {
         let mut out = vec![0u8; 100];
         assert_eq!(
             rig.client
-                .seal(&vinc_crypto::Software, &Frame::Ping, &mut out)
+                .seal(&pinc_crypto::Software, &Frame::Ping, &mut out)
                 .unwrap_err(),
             CarrierError::NotOpen
         );
@@ -423,7 +423,7 @@ fn an_ended_carrier_answers_closed_before_any_other_check() {
         rig.feed_relay(&[0, 0]);
         assert_eq!(rig.poll_relay().unwrap_err(), CarrierError::UnitSize);
         assert!(rig.relay.is_ended());
-        let p = vinc_crypto::Software;
+        let p = pinc_crypto::Software;
         // no room, nothing to seal, too much to seal: the end is reported first
         assert_eq!(
             rig.relay.seal(&p, &Frame::Ping, &mut [0u8; 1]).unwrap_err(),

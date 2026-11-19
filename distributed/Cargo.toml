@@ -1,7 +1,7 @@
-# The distributed test harness: one binary that builds an emulated or real network, runs VINC, iroh and rust-libp2p
+# The distributed test harness: one binary that builds an emulated or real network, runs PINC, iroh and rust-libp2p
 # nodes on it, injects faults, measures, and serves a dashboard. A workspace of its own, outside the library's, so the
 # comparators, their runtime (tokio) and their C code (ring, aws-lc-sys) never enter the library's dependency graph or
-# lockfile. The VINC crates come in by path; every dependency is declared once, below.
+# lockfile. The PINC crates come in by path; every dependency is declared once, below.
 [workspace]
 resolver = "3"
 
@@ -10,26 +10,26 @@ version = "0.1.0"
 authors = ["Theo M. Bulut <theo@source.network>"]
 edition = "2024"
 rust-version = "1.99"
-repository = "https://github.com/sourcenetwork/vinc"
+repository = "https://github.com/sourcenetwork/pinc"
 publish = false
 
 [workspace.dependencies]
-vinc = { path = "../crates/vinc", version = "0.1.0" }
-vinc-keystore = { path = "../crates/vinc-keystore", version = "0.1.0" }
-# The layers the VINC node program composes; each is the library's own crate, by path.
-vinc-node = { path = "../crates/vinc-node", version = "0.1.0" }
-vinc-core = { path = "../crates/vinc-core", version = "0.1.0" }
-vinc-crypto = { path = "../crates/vinc-crypto", version = "0.1.0" }
-vinc-security = { path = "../crates/vinc-security", version = "0.1.0" }
-vinc-connect = { path = "../crates/vinc-connect", version = "0.1.0" }
-vinc-portmap = { path = "../crates/vinc-portmap", version = "0.1.0" }
-vinc-membership = { path = "../crates/vinc-membership", version = "0.1.0" }
-vinc-broadcast = { path = "../crates/vinc-broadcast", version = "0.1.0" }
-vinc-values = { path = "../crates/vinc-values", version = "0.1.0" }
-vinc-reconcile = { path = "../crates/vinc-reconcile", version = "0.1.0" }
-vinc-dag = { path = "../crates/vinc-dag", version = "0.1.0" }
-vinc-transport = { path = "../crates/vinc-transport", version = "0.1.0" }
-vinc-dtn = { path = "../crates/vinc-dtn", version = "0.1.0" }
+pinc = { path = "../crates/pinc", version = "0.1.0" }
+pinc-keystore = { path = "../crates/pinc-keystore", version = "0.1.0" }
+# The layers the PINC node program composes; each is the library's own crate, by path.
+pinc-node = { path = "../crates/pinc-node", version = "0.1.0" }
+pinc-core = { path = "../crates/pinc-core", version = "0.1.0" }
+pinc-crypto = { path = "../crates/pinc-crypto", version = "0.1.0" }
+pinc-security = { path = "../crates/pinc-security", version = "0.1.0" }
+pinc-connect = { path = "../crates/pinc-connect", version = "0.1.0" }
+pinc-portmap = { path = "../crates/pinc-portmap", version = "0.1.0" }
+pinc-membership = { path = "../crates/pinc-membership", version = "0.1.0" }
+pinc-broadcast = { path = "../crates/pinc-broadcast", version = "0.1.0" }
+pinc-values = { path = "../crates/pinc-values", version = "0.1.0" }
+pinc-reconcile = { path = "../crates/pinc-reconcile", version = "0.1.0" }
+pinc-dag = { path = "../crates/pinc-dag", version = "0.1.0" }
+pinc-transport = { path = "../crates/pinc-transport", version = "0.1.0" }
+pinc-dtn = { path = "../crates/pinc-dtn", version = "0.1.0" }
 
 nuclei = "0.5.8"
 tokio = { version = "1.54.1", default-features = false }
@@ -44,14 +44,14 @@ hyper = { version = "1.12.0", default-features = false }
 hyper-util = { version = "0.1.21", default-features = false }
 http-body-util = "0.1.5"
 bytes = "1.12.1"
-# The libraries VINC is measured against.
+# The libraries PINC is measured against.
 iroh = "1.4.1"
 iroh-gossip = { version = "0.102.0", default-features = false, features = ["net"] }
 iroh-blobs = { version = "0.104.1", default-features = false }
 blake3 = "1.8.7"
 libp2p = { version = "0.57.1", default-features = false }
 libp2p-stream = "0.5.0-alpha"
-# Segmented UDP sends and coalesced receives for the VINC host, the calls the compared libraries use.
+# Segmented UDP sends and coalesced receives for the PINC host, the calls the compared libraries use.
 quinn-udp = "0.5.16"
 
 [workspace.lints.rust]
@@ -84,8 +84,8 @@ lto = "fat"
 codegen-units = 1
 
 [package]
-name = "vinc-distributed"
-description = "The distributed test harness: VINC, iroh and rust-libp2p nodes on an emulated or real network, with faults, kernel metrics and a live dashboard"
+name = "pinc-distributed"
+description = "The distributed test harness: PINC, iroh and rust-libp2p nodes on an emulated or real network, with faults, kernel metrics and a live dashboard"
 version.workspace = true
 authors.workspace = true
 edition.workspace = true
@@ -93,21 +93,21 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-vinc = { workspace = true }
-vinc-keystore = { workspace = true, features = ["std"] }
-vinc-node = { workspace = true }
-vinc-core = { workspace = true, features = ["alloc"] }
-vinc-crypto = { workspace = true }
-vinc-security = { workspace = true }
-vinc-connect = { workspace = true }
-vinc-portmap = { workspace = true }
-vinc-membership = { workspace = true, features = ["alloc"] }
-vinc-broadcast = { workspace = true, features = ["alloc"] }
-vinc-values = { workspace = true }
-vinc-reconcile = { workspace = true, features = ["alloc"] }
-vinc-dag = { workspace = true, features = ["alloc"] }
-vinc-transport = { workspace = true, features = ["alloc"] }
-vinc-dtn = { workspace = true }
+pinc = { workspace = true }
+pinc-keystore = { workspace = true, features = ["std"] }
+pinc-node = { workspace = true }
+pinc-core = { workspace = true, features = ["alloc"] }
+pinc-crypto = { workspace = true }
+pinc-security = { workspace = true }
+pinc-connect = { workspace = true }
+pinc-portmap = { workspace = true }
+pinc-membership = { workspace = true, features = ["alloc"] }
+pinc-broadcast = { workspace = true, features = ["alloc"] }
+pinc-values = { workspace = true }
+pinc-reconcile = { workspace = true, features = ["alloc"] }
+pinc-dag = { workspace = true, features = ["alloc"] }
+pinc-transport = { workspace = true, features = ["alloc"] }
+pinc-dtn = { workspace = true }
 nuclei = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "time", "io-util", "sync", "process", "signal", "fs"] }
 futures = { workspace = true, features = ["std", "async-await"] }

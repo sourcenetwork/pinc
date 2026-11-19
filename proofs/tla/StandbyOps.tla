@@ -1,6 +1,6 @@
 ----------------------------- MODULE StandbyOps -----------------------------
 (***************************************************************************)
-(* The operations of crates/vinc/src/standby.rs (Standby), step for step:  *)
+(* The operations of crates/pinc/src/standby.rs (Standby), step for step:  *)
 (* the slab of tickets of the facade futures that wait, and the queue of   *)
 (* those waiting for the driving role. FacadeStandby.tla checks them over  *)
 (* every sequence of calls, stale and forged tickets included;             *)

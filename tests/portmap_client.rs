@@ -4,10 +4,10 @@
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-use vinc_portmap::client::{FIRST_GAP, HTTP_WAIT, PORT, RETRY};
-use vinc_portmap::lease::SEC;
-use vinc_portmap::upnp::{self, SSDP};
-use vinc_portmap::{Config, PortMap, Proto, natpmp, pcp};
+use pinc_portmap::client::{FIRST_GAP, HTTP_WAIT, PORT, RETRY};
+use pinc_portmap::lease::SEC;
+use pinc_portmap::upnp::{self, SSDP};
+use pinc_portmap::{Config, PortMap, Proto, natpmp, pcp};
 
 const GW: Ipv4Addr = Ipv4Addr::new(192, 168, 1, 1);
 const EXT: Ipv4Addr = Ipv4Addr::new(203, 0, 113, 9);
@@ -31,7 +31,7 @@ fn client(gateway: Option<Ipv4Addr>, local: SocketAddr, lifetime: u32) -> PortMa
 /// Every datagram the client wants sent now.
 fn sent(pm: &mut PortMap) -> Vec<(SocketAddr, Vec<u8>)> {
     let mut out = Vec::new();
-    let mut b = [0u8; vinc_portmap::MAX_DATAGRAM];
+    let mut b = [0u8; pinc_portmap::MAX_DATAGRAM];
     while let Some((to, n)) = pm.poll_datagram(&mut b) {
         out.push((to, b[..n].to_vec()));
     }

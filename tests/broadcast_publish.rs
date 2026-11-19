@@ -14,8 +14,8 @@
 mod common;
 
 use common::{ALGS, Ev, Net, SEC, ty};
-use vinc_broadcast::Trace;
-use vinc_crypto::IdentityAlg;
+use pinc_broadcast::Trace;
+use pinc_crypto::IdentityAlg;
 
 const T: &[u8] = b"news";
 
@@ -72,8 +72,8 @@ fn the_fan_copy_rides_the_second_lane() {
     let mid = n.t.publish(&mut n.h, SEC, T, b"x").unwrap();
     let lanes: Vec<_> = net.nodes[2].h.out.iter().map(|o| (o.lane, o.to)).collect();
     assert_eq!(lanes.len(), 2);
-    assert_eq!(lanes[0], (vinc_broadcast::Lane::Main, net.id(0)));
-    assert_eq!(lanes[1], (vinc_broadcast::Lane::Fan, net.id(1)));
+    assert_eq!(lanes[0], (pinc_broadcast::Lane::Main, net.id(0)));
+    assert_eq!(lanes[1], (pinc_broadcast::Lane::Fan, net.id(1)));
     let _ = mid;
 }
 
@@ -165,18 +165,18 @@ fn oversize_and_overlong_are_refused() {
     let n = &mut net.nodes[2];
     assert!(n.t.publish(&mut n.h, SEC, &[b'a'; 256], b"x").is_err());
     assert!(
-        n.t.publish(&mut n.h, SEC, T, &vec![0; vinc_broadcast::consts::DEFAULT_MAX_BODY + 1])
+        n.t.publish(&mut n.h, SEC, T, &vec![0; pinc_broadcast::consts::DEFAULT_MAX_BODY + 1])
             .is_err()
     );
     assert!(
-        n.t.publish(&mut n.h, SEC, T, &vec![0; vinc_broadcast::consts::DEFAULT_MAX_BODY])
+        n.t.publish(&mut n.h, SEC, T, &vec![0; pinc_broadcast::consts::DEFAULT_MAX_BODY])
             .is_ok()
     );
 }
 
 #[test]
 fn a_key_that_is_not_the_nodes_is_refused_at_start() {
-    use vinc_broadcast::{Config, StartError, Topics};
+    use pinc_broadcast::{Config, StartError, Topics};
     let key = common::keypair(IdentityAlg::Ed25519, 1);
     let other = common::keypair(IdentityAlg::Ed25519, 2);
     let cfg = Config {
@@ -185,8 +185,8 @@ fn a_key_that_is_not_the_nodes_is_refused_at_start() {
         hubs: &[],
         incarnation: 1,
         trace: false,
-        limits: vinc_broadcast::Limits::default(),
-        map_keys: vinc_tests::id_key(0x5eed),
+        limits: pinc_broadcast::Limits::default(),
+        map_keys: pinc_tests::id_key(0x5eed),
     };
     assert_eq!(
         Topics::start(&cfg, Box::new(key), SEC, 1).unwrap_err(),
@@ -196,7 +196,7 @@ fn a_key_that_is_not_the_nodes_is_refused_at_start() {
 
 #[test]
 fn a_revoked_origin_is_refused_and_its_subscription_forgotten() {
-    use vinc_broadcast::Reject;
+    use pinc_broadcast::Reject;
     let mut net = world();
     net.publish(2, T, b"warm up");
     let (publisher, subscriber) = (net.id(2), net.id(3));

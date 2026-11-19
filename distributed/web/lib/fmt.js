@@ -51,4 +51,4 @@ export function when(unixSecs) {
   return d.toISOString().replace("T", " ").slice(0, 16) + " UTC";
 }
 
-export const STACKS = ["vinc", "iroh", "libp2p"];
+export const STACKS = ["pinc", "iroh", "libp2p"];

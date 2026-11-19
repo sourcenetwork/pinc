@@ -15,7 +15,7 @@
 (* field and the head of the first part.                                   *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds reconcile_wire.ndjson.*)
+(* variable PINC_TRACE_DIR, the directory that holds reconcile_wire.ndjson.*)
 (***************************************************************************)
 EXTENDS Integers, Sequences, TLC, Json, IOUtils
 
@@ -23,7 +23,7 @@ VARIABLE c
 
 RW == INSTANCE ReconcileWire WITH MaxCpl <- 255, Alpha <- {}, BLen <- 0, RAlpha <- {}, RLen <- 0, Mode <- "none", c <- 0
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/reconcile_wire.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/reconcile_wire.ndjson")
 
 Init == c = [t |-> "root"]
 

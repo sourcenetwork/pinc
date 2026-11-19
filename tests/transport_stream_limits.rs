@@ -14,8 +14,8 @@
 mod common;
 
 use common::{NO_CAP, Table, drain_control, next_control, pattern, peer, read_all, setup, setup_credit};
-use vinc_transport::stream::pool::BufferPool;
-use vinc_transport::stream::{Config, ControlFrame, NoSource, PeerLimits, StreamError, Streams};
+use pinc_transport::stream::pool::BufferPool;
+use pinc_transport::stream::{Config, ControlFrame, NoSource, PeerLimits, StreamError, Streams};
 
 // ---- stream ids and limits ----------------------------------------------------------------------------------------
 

@@ -14,9 +14,9 @@
 mod common;
 
 use common::{ALGS, Net, SEC, keypair, ty};
-use vinc_broadcast::wire::Head;
-use vinc_broadcast::{Reject, Trace, auth};
-use vinc_crypto::identity::MAX_SIGNATURE_LEN;
+use pinc_broadcast::wire::Head;
+use pinc_broadcast::{Reject, Trace, auth};
+use pinc_crypto::identity::MAX_SIGNATURE_LEN;
 
 const T: &[u8] = b"news";
 
@@ -40,7 +40,7 @@ fn rejected(net: &mut Net, i: usize) -> Vec<Reject> {
     out
 }
 
-fn tamper_world(alg: vinc_crypto::IdentityAlg, hop: (usize, u8), flip_body: bool) -> Net {
+fn tamper_world(alg: pinc_crypto::IdentityAlg, hop: (usize, u8), flip_body: bool) -> Net {
     let mut net = Net::new(alg, 1, 2, SEC);
     net.subscribe(2, T);
     net.filter = Some(Box::new(move |_, to, bytes| {
@@ -124,19 +124,19 @@ fn an_empty_body_is_signed_too() {
     }
 }
 
-fn mk<'a>(alg: vinc_crypto::IdentityAlg, pk: &'a [u8], mid: [u8; 8], origin: &'a [u8; 32], sig: &'a [u8]) -> Head<'a> {
+fn mk<'a>(alg: pinc_crypto::IdentityAlg, pk: &'a [u8], mid: [u8; 8], origin: &'a [u8; 32], sig: &'a [u8]) -> Head<'a> {
     Head {
         mid,
         origin,
         alg,
-        pk: if alg == vinc_crypto::IdentityAlg::Ed25519 {
+        pk: if alg == pinc_crypto::IdentityAlg::Ed25519 {
             &[]
         } else {
             pk
         },
         sig,
         isb: true,
-        ts: vinc_wire::hlc::Hlc::new(1, 0),
+        ts: pinc_wire::hlc::Hlc::new(1, 0),
     }
 }
 
@@ -148,7 +148,7 @@ fn the_signature_covers_the_topic_the_id_and_the_body() {
         let id = key.node_id();
         let mid = auth::message_id(&id.bytes, 1, 1, T);
         let mut sig = [0u8; MAX_SIGNATURE_LEN];
-        let n = auth::sign(&key, T, &mid, b"body", vinc_wire::hlc::Hlc::new(1, 0), true, &mut sig).unwrap();
+        let n = auth::sign(&key, T, &mid, b"body", pinc_wire::hlc::Hlc::new(1, 0), true, &mut sig).unwrap();
         let mut pk = vec![0u8; alg.public_key_len()];
         key.public_key(&mut pk).unwrap();
         let good = mk(alg, &pk, mid, &id.bytes, &sig[..n]);
@@ -179,14 +179,14 @@ fn the_signature_covers_the_topic_the_id_and_the_body() {
 #[test]
 fn a_key_that_is_not_the_origins_is_rejected() {
     for alg in [
-        vinc_crypto::IdentityAlg::EcdsaP256,
-        vinc_crypto::IdentityAlg::MlDsa65,
-        vinc_crypto::IdentityAlg::Hybrid,
+        pinc_crypto::IdentityAlg::EcdsaP256,
+        pinc_crypto::IdentityAlg::MlDsa65,
+        pinc_crypto::IdentityAlg::Hybrid,
     ] {
         let (a, b) = (keypair(alg, 1), keypair(alg, 2));
         let mid = auth::message_id(&a.node_id().bytes, 1, 1, T);
         let mut sig = [0u8; MAX_SIGNATURE_LEN];
-        let n = auth::sign(&b, T, &mid, b"x", vinc_wire::hlc::Hlc::new(1, 0), true, &mut sig).unwrap();
+        let n = auth::sign(&b, T, &mid, b"x", pinc_wire::hlc::Hlc::new(1, 0), true, &mut sig).unwrap();
         let mut pk = vec![0u8; alg.public_key_len()];
         b.public_key(&mut pk).unwrap();
         // b signed and supplies its own key, but claims a's node id.
@@ -197,7 +197,7 @@ fn a_key_that_is_not_the_origins_is_rejected() {
             pk: &pk,
             sig: &sig[..n],
             isb: true,
-            ts: vinc_wire::hlc::Hlc::new(1, 0),
+            ts: pinc_wire::hlc::Hlc::new(1, 0),
         };
         assert!(!auth::verify(&head, T, b"x"), "{alg:?}");
     }
@@ -216,7 +216,7 @@ fn message_ids_differ_by_every_input() {
 
 #[test]
 fn the_timestamp_and_the_body_flag_are_signed_too() {
-    use vinc_wire::hlc::Hlc;
+    use pinc_wire::hlc::Hlc;
     for alg in ALGS {
         let key = keypair(alg, 9);
         let id = key.node_id();
@@ -230,7 +230,7 @@ fn the_timestamp_and_the_body_flag_are_signed_too() {
             mid,
             origin: &id.bytes,
             alg,
-            pk: if alg == vinc_crypto::IdentityAlg::Ed25519 {
+            pk: if alg == pinc_crypto::IdentityAlg::Ed25519 {
                 &[]
             } else {
                 &pk

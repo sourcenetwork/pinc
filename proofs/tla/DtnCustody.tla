@@ -1,6 +1,6 @@
 ------------------------------ MODULE DtnCustody ------------------------------
 (***************************************************************************)
-(* Model check of custody, vinc-dtn/src/custody.rs: the book and the shared *)
+(* Model check of custody, pinc-dtn/src/custody.rs: the book and the shared *)
 (* ledger under every sequence of calls (DtnCustodyOps.tla, the same        *)
 (* definitions the trace check uses). The environment calls accept (with   *)
 (* any incoming offer id), offer, on_ack (a valid or an invalid ack, from   *)
@@ -48,7 +48,7 @@
 (*                    outstanding offer id was handed out (OfferIdsBelow)   *)
 (*   Linked, Distinct every held bundle's item is custody (or already gone  *)
 (*                    before the next sync); a bundle is held once          *)
-(* The Lean counterpart is proofs/lean/Vinc/DtnCustody*.lean.               *)
+(* The Lean counterpart is proofs/lean/Pinc/DtnCustody*.lean.               *)
 (***************************************************************************)
 EXTENDS DtnCustodyOps
 

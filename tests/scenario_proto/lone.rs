@@ -4,14 +4,14 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use vinc_core::SessionId;
-use vinc_sim::suite::crypto::{MsgId, PayloadKind, Registry};
-use vinc_sim::suite::proto::body::{self, Verdict, render};
-use vinc_sim::suite::proto::frame::{Frame, Framer, T_ACK, T_ECHO, T_PUSH, T_REQ, T_RESP, hdr};
-use vinc_sim::suite::proto::host::{LayerEvent, Layers};
-use vinc_sim::suite::proto::{ALPN_DOCSYNC, ALPN_ECHO, ALPN_MANAGE, ALPN_PUSHLOG, Durable, MsgIntents, Stack};
-use vinc_sim::suite::rec::{IntentMeta, MustArg, NS, Rec};
-use vinc_sim::suite::world::model::{IntentKind, World};
+use pinc_core::SessionId;
+use pinc_sim::suite::crypto::{MsgId, PayloadKind, Registry};
+use pinc_sim::suite::proto::body::{self, Verdict, render};
+use pinc_sim::suite::proto::frame::{Frame, Framer, T_ACK, T_ECHO, T_PUSH, T_REQ, T_RESP, hdr};
+use pinc_sim::suite::proto::host::{LayerEvent, Layers};
+use pinc_sim::suite::proto::{ALPN_DOCSYNC, ALPN_ECHO, ALPN_MANAGE, ALPN_PUSHLOG, Durable, MsgIntents, Stack};
+use pinc_sim::suite::rec::{IntentMeta, MustArg, NS, Rec};
+use pinc_sim::suite::world::model::{IntentKind, World};
 
 use crate::net::{TestHost, allow, base_intent, new_world};
 

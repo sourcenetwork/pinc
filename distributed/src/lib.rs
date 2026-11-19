@@ -1,4 +1,4 @@
-//! The distributed test harness of VINC: one binary that builds a real or emulated network, runs VINC, iroh and
+//! The distributed test harness of PINC: one binary that builds a real or emulated network, runs PINC, iroh and
 //! rust-libp2p nodes on it, injects faults, measures from the programs and from the kernel, and writes results.
 //!
 //! - [`scenario`]: the scenario files (topology, stacks, workload, faults, repetitions) and their validation.
@@ -30,5 +30,5 @@ pub mod results;
 pub mod scenario;
 pub mod scenario_transport;
 pub mod serve;
-pub mod vinc_endpoints;
+pub mod pinc_endpoints;
 pub mod workloads;

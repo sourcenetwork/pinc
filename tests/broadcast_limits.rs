@@ -14,9 +14,9 @@
 mod common;
 
 use common::{Net, SEC, keypair};
-use vinc_broadcast::wire::MAX_HEAD;
-use vinc_broadcast::{Config, IdKey, Limits, Refused, StartError, Topics};
-use vinc_crypto::IdentityAlg;
+use pinc_broadcast::wire::MAX_HEAD;
+use pinc_broadcast::{Config, IdKey, Limits, Refused, StartError, Topics};
+use pinc_crypto::IdentityAlg;
 
 const T: &[u8] = b"lim";
 
@@ -29,7 +29,7 @@ fn start(limits: Limits) -> Result<Topics, StartError> {
         incarnation: 1,
         trace: false,
         limits,
-        map_keys: vinc_tests::id_key(0x5eed),
+        map_keys: pinc_tests::id_key(0x5eed),
     };
     Topics::start(&cfg, Box::new(key), SEC, 1)
 }
@@ -102,7 +102,7 @@ fn a_node_refuses_a_received_body_over_its_own_limit() {
         incarnation: 1,
         trace: false,
         limits: small,
-        map_keys: vinc_tests::id_key(0x5eed),
+        map_keys: pinc_tests::id_key(0x5eed),
     };
     net.nodes[2].t = Topics::start(&cfg, Box::new(key), SEC, common::WALL0 + 1000).unwrap();
     net.set_primary(2, 0);

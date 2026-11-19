@@ -1,6 +1,6 @@
 name = "defra-pushlog-long"
 about = "DefraDB's pushlog fan-out in a burst longer than a hub keeps: one writer pushes 6000 updates of 4 KiB as fast as 10000 a second to 10 replicators across a WAN (20 ms round trip, 100 Mbit/s each way), about 24 MiB to each."
-stacks = ["vinc", "iroh", "libp2p"]
+stacks = ["pinc", "iroh", "libp2p"]
 repetitions = 3
 
 [resources]

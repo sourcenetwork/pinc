@@ -1,6 +1,6 @@
 ---------------------------- MODULE TraceConnectWs ----------------------------
 (***************************************************************************)
-(* Trace validation of the WebSocket framing of the carrier: vinc-connect  *)
+(* Trace validation of the WebSocket framing of the carrier: pinc-connect  *)
 (* carrier/ws.rs.                                                          *)
 (*                                                                         *)
 (* The Rust test tests/trace_connect_ws.rs calls the real `encode` for     *)
@@ -23,14 +23,14 @@
 (* ConnectWs.tla. MAX_PAYLOAD is recorded by the init event.               *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds connect_ws.ndjson.    *)
+(* variable PINC_TRACE_DIR, the directory that holds connect_ws.ndjson.    *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, TLC, Json, IOUtils
 VARIABLES i, mp, pr, im
 vars == <<i, mp, pr, im>>
 INSTANCE ConnectWsOps WITH MP <- mp, Wrong <- "none"
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/connect_ws.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/connect_ws.ndjson")
 Ev == Trace[i]
 Ids == 1..5000
 

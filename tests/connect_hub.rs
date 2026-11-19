@@ -19,11 +19,11 @@
 mod connect_common;
 
 use connect_common::*;
-use vinc_connect::carrier::Frame;
-use vinc_connect::mailbox;
-use vinc_connect::relay::datagram::{Datagram, MAX_TUNNEL_DATAGRAM};
-use vinc_connect::relay::sleep;
-use vinc_connect::relay::{NodeState, Reject, SessionId, Trace, UdpTarget, rule};
+use pinc_connect::carrier::Frame;
+use pinc_connect::mailbox;
+use pinc_connect::relay::datagram::{Datagram, MAX_TUNNEL_DATAGRAM};
+use pinc_connect::relay::sleep;
+use pinc_connect::relay::{NodeState, Reject, SessionId, Trace, UdpTarget, rule};
 
 #[test]
 fn the_hub_tunnel_up_requires_an_authenticated_member_and_routes_like_a_carrier_packet() {
@@ -811,7 +811,7 @@ fn the_relay_pings_every_client_carrier_every_600_seconds() {
     let ping = enc(&Frame::Ping);
     let pings = |fx: &mut Fx, at: u64| {
         fx.r.handle_timeout(at, &mut fx.s);
-        let mut to: Vec<vinc_crypto::NodeId> = fx
+        let mut to: Vec<pinc_crypto::NodeId> = fx
             .fx()
             .into_iter()
             .filter_map(|r| match r {

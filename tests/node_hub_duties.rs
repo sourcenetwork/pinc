@@ -13,13 +13,13 @@
 mod node_common;
 
 use node_common::{OWD, World, big, secs};
-use vinc_broadcast::Limits;
-use vinc_membership::Trace as MTrace;
-use vinc_membership::codec::ty;
-use vinc_node::NodeTrace;
-use vinc_node::trace::Body;
-use vinc_sim::{LinkConfig, Sim, SimConfig};
-use vinc_tests::{NCmd, with_pool_chunks};
+use pinc_broadcast::Limits;
+use pinc_membership::Trace as MTrace;
+use pinc_membership::codec::ty;
+use pinc_node::NodeTrace;
+use pinc_node::trace::Body;
+use pinc_sim::{LinkConfig, Sim, SimConfig};
+use pinc_tests::{NCmd, with_pool_chunks};
 
 const TOPIC: &[u8] = b"news";
 
@@ -244,7 +244,7 @@ fn a_membership_frame_refused_by_a_full_backlog_closes_the_session_and_the_recon
 
 #[test]
 fn a_hub_names_the_route_a_datagram_to_a_member_takes() {
-    use vinc_crypto::{IdentityAlg, NodeId};
+    use pinc_crypto::{IdentityAlg, NodeId};
     big(|| {
         let mut w = World::build(411, 1, 2);
         w.run(secs(30));

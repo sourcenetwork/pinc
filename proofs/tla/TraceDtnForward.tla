@@ -1,7 +1,7 @@
 --------------------------- MODULE TraceDtnForward ---------------------------
 (***************************************************************************)
 (* Trace validation of the spray-and-wait forwarder                        *)
-(* (vinc-dtn/src/forward.rs).                                              *)
+(* (pinc-dtn/src/forward.rs).                                              *)
 (*                                                                         *)
 (* The Rust test tests/trace_dtn_forward.rs drives the real Forwarder with *)
 (* seeded random inputs (ticks, holds, links, acknowledgements, forgets    *)
@@ -25,7 +25,7 @@
 (* replayed by Lean only.                                                  *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds dtn_forward.ndjson.   *)
+(* variable PINC_TRACE_DIR, the directory that holds dtn_forward.ndjson.   *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
 
@@ -35,7 +35,7 @@ vars == <<i, f>>
 NMem == 2
 F == INSTANCE DtnForwardOps WITH B <- 2, L <- 2, T <- 2, D <- NMem, Retry <- 3, MaxSends <- 3
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/dtn_forward.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/dtn_forward.ndjson")
 
 Init == i = 1 /\ f = F!New(0)
 

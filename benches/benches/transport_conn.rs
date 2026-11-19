@@ -1,4 +1,4 @@
-//! Benchmarks of the `vinc-transport` connection: bulk throughput between two connections in memory with each AEAD at
+//! Benchmarks of the `pinc-transport` connection: bulk throughput between two connections in memory with each AEAD at
 //! 0% and 1% loss, handshake to first byte, and the cost per packet of sending and of receiving in steady state.
 //!
 //! The two connections exchange datagrams directly, with no delay and a seeded loss draw; virtual time advances 50
@@ -21,17 +21,17 @@ use std::hint::black_box;
 use std::time::{Duration, Instant};
 
 use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main};
-use vinc_crypto::provider::{KEM_CIPHERTEXT_LEN, KEM_ENCAPS_KEY_LEN};
-use vinc_crypto::{Aead, Capabilities, CryptoError, Drbg, IdentityAlg, Keypair, Provider, Secret, Software};
-use vinc_security::{AlpnList, Env, KeyHandle, LocalIdentity, PrekeyPolicy, ResponderStores, SoftKeys, SoftPrekeys};
-use vinc_transport::conn::{
+use pinc_crypto::provider::{KEM_CIPHERTEXT_LEN, KEM_ENCAPS_KEY_LEN};
+use pinc_crypto::{Aead, Capabilities, CryptoError, Drbg, IdentityAlg, Keypair, Provider, Secret, Software};
+use pinc_security::{AlpnList, Env, KeyHandle, LocalIdentity, PrekeyPolicy, ResponderStores, SoftKeys, SoftPrekeys};
+use pinc_transport::conn::{
     ClientParams, Config, Connection, Event, PathId, PathInfo, Resources, ServerParams, Tables,
 };
-use vinc_transport::recovery::LossEstimate;
-use vinc_transport::stream::pool::BufferPool;
-use vinc_transport::stream::{self, NoSource, Streams};
+use pinc_transport::recovery::LossEstimate;
+use pinc_transport::stream::pool::BufferPool;
+use pinc_transport::stream::{self, NoSource, Streams};
 
-const ALPN: &[u8] = b"vinc/1";
+const ALPN: &[u8] = b"pinc/1";
 const MIB: usize = 1 << 20;
 
 /// [`Software`] with a chosen answer to "does AES-GCM run on hardware", so both AEADs can be measured anywhere.

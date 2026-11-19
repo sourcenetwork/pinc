@@ -17,7 +17,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 pub use crate::scenario_transport::{Transport, TransportTest};
-pub use crate::vinc_endpoints::{Reading, VincEndpoints};
+pub use crate::pinc_endpoints::{Reading, PincEndpoints};
 
 /// The most nodes one scenario may have: the backend's address plan and the dashboard are sized for it.
 pub const MAX_NODES: usize = 512;
@@ -36,8 +36,8 @@ pub const MIN_MTU: u32 = 1280;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Stack {
-    /// VINC.
-    Vinc,
+    /// PINC.
+    Pinc,
     /// iroh.
     Iroh,
     /// rust-libp2p over QUIC.
@@ -46,12 +46,12 @@ pub enum Stack {
 
 impl Stack {
     /// Every stack, in the order tables show them.
-    pub const ALL: [Self; 3] = [Self::Vinc, Self::Iroh, Self::Libp2p];
+    pub const ALL: [Self; 3] = [Self::Pinc, Self::Iroh, Self::Libp2p];
 
     /// The name in files and on the command line.
     pub fn name(self) -> &'static str {
         match self {
-            Self::Vinc => "vinc",
+            Self::Pinc => "pinc",
             Self::Iroh => "iroh",
             Self::Libp2p => "libp2p",
         }
@@ -224,8 +224,8 @@ pub enum Role {
     Hub,
     /// A relay or rendezvous point.
     Relay,
-    /// A `vinc_relay` server (the binary in `VINC_RELAY_BIN`) in place of a VINC node: the other nodes list it as their
-    /// first relay, ahead of the hubs, and join through it as a hub. VINC only.
+    /// A `pinc_relay` server (the binary in `PINC_RELAY_BIN`) in place of a PINC node: the other nodes list it as their
+    /// first relay, ahead of the hubs, and join through it as a hub. PINC only.
     RelayServer,
 }
 
@@ -328,7 +328,7 @@ pub enum Workload {
     Reconcile(crate::workloads::Reconcile),
     /// Bundles for nodes that are offline, carried by delay-tolerant delivery, with checks on its rules.
     Dtn(crate::dtn::Dtn),
-    /// One node dials another by its node id; the session's path says whether it is direct (VINC only).
+    /// One node dials another by its node id; the session's path says whether it is direct (PINC only).
     Reach(crate::workloads::Reach),
 }
 
@@ -373,7 +373,7 @@ pub enum FaultAction {
     Pause {
         /// The node.
         node: String,
-        /// Tell the group the node is going to sleep first, for the stacks that have that notion (VINC does; the
+        /// Tell the group the node is going to sleep first, for the stacks that have that notion (PINC does; the
         /// others are frozen all the same).
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         graceful: bool,
@@ -413,7 +413,7 @@ pub struct Fault {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DebugOpts {
-    /// Record the VINC nodes' traces and packet log (datagrams and relay carrier bytes, with the milliseconds since
+    /// Record the PINC nodes' traces and packet log (datagrams and relay carrier bytes, with the milliseconds since
     /// the node started) and write them beside the results, one file per node after each pubsub, sync or reconcile
     /// measurement. Tracing slows the nodes, so every row made with it says its timings are not comparable. Other
     /// stacks and the transport workload ignore it.
@@ -450,10 +450,10 @@ pub struct Scenario {
     /// size.
     #[serde(default = "default_mtu", skip_serializing_if = "is_default_mtu")]
     pub mtu: u32,
-    /// How many endpoints VINC runs in the transport workload's `many` test (see [`VincEndpoints`]); the other stacks
+    /// How many endpoints PINC runs in the transport workload's `many` test (see [`PincEndpoints`]); the other stacks
     /// and every other test are unaffected.
-    #[serde(default, skip_serializing_if = "VincEndpoints::is_default")]
-    pub vinc_endpoints: VincEndpoints,
+    #[serde(default, skip_serializing_if = "PincEndpoints::is_default")]
+    pub pinc_endpoints: PincEndpoints,
     /// What every node gets.
     #[serde(default)]
     pub resources: Resources,
@@ -598,7 +598,7 @@ impl Scenario {
             ));
         }
         if self.stacks.is_empty() {
-            out.push(Problem::new("stacks", "name at least one stack: vinc, iroh or libp2p"));
+            out.push(Problem::new("stacks", "name at least one stack: pinc, iroh or libp2p"));
         }
         if self.stacks.iter().collect::<BTreeSet<_>>().len() != self.stacks.len() {
             out.push(Problem::new("stacks", "a stack is named twice"));
@@ -623,15 +623,15 @@ impl Scenario {
         if !(64..=262_144).contains(&self.resources.memory_mib) {
             out.push(Problem::new("resources.memory_mib", "use 64 to 262144 MiB per node"));
         }
-        self.check_vinc_endpoints(&mut out);
+        self.check_pinc_endpoints(&mut out);
         let site_names = self.check_sites(&mut out);
         let nodes = self.check_nodes(&site_names, &mut out);
         self.check_links(&site_names, &mut out);
         let node_names: BTreeMap<&str, &NodeSpec> = nodes.iter().map(|n| (n.name.as_str(), n)).collect();
-        if nodes.iter().any(|n| n.role == Role::RelayServer) && self.stacks != [Stack::Vinc] {
+        if nodes.iter().any(|n| n.role == Role::RelayServer) && self.stacks != [Stack::Pinc] {
             out.push(Problem::new(
                 "stacks",
-                "a relay-server node runs with the vinc stack only",
+                "a relay-server node runs with the pinc stack only",
             ));
         }
         match &self.workload {

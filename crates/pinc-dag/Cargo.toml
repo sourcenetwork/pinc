@@ -1,0 +1,23 @@
+[package]
+name = "pinc-dag"
+description = "The lite PINC DAG library: CIDs and blocks in DefraDB's format, BLAKE3 verified streaming, verified-range sets; no networking code"
+keywords = ["no_std", "dag", "cid", "blake3"]
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[features]
+default = []
+alloc = []
+std = ["alloc", "blake3/std"]
+
+[dependencies]
+pinc-wire = { workspace = true }
+blake3 = { workspace = true }
+sha2 = { workspace = true }
+
+[lints]
+workspace = true

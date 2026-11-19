@@ -8,13 +8,13 @@
     clippy::cast_possible_truncation
 )]
 
-use vinc_broadcast::wire::ty;
-use vinc_broadcast::{Config, Event, Host, Lane, Topics};
-use vinc_crypto::{IdentityAlg, Keypair};
-use vinc_membership::{Frame, NodeId};
-use vinc_tests::measure;
+use pinc_broadcast::wire::ty;
+use pinc_broadcast::{Config, Event, Host, Lane, Topics};
+use pinc_crypto::{IdentityAlg, Keypair};
+use pinc_membership::{Frame, NodeId};
+use pinc_tests::measure;
 
-vinc_tests::install_counting_allocator!();
+pinc_tests::install_counting_allocator!();
 
 const T: &[u8] = b"alloc";
 const SEC: u64 = 1_000_000_000;
@@ -86,8 +86,8 @@ fn world(alg: IdentityAlg) -> World {
         hubs: &hubs,
         incarnation: 1 << 16,
         trace: false,
-        limits: vinc_broadcast::Limits::default(),
-        map_keys: vinc_tests::id_key(0x5eed),
+        limits: pinc_broadcast::Limits::default(),
+        map_keys: pinc_tests::id_key(0x5eed),
     };
     let now = SEC;
     let wall = 1_700_000_000_000;

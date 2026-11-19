@@ -1,10 +1,10 @@
 ---------------------------- MODULE ResponderLimit ----------------------------
 (***************************************************************************)
 (* How long a responder holds a half-open handshake once it has answered   *)
-(* (vinc#387).                                                             *)
-(* Code: crates/vinc-transport/src/conn/handshake.rs (RESPONDER_HOLD,      *)
+(* (pinc#387).                                                             *)
+(* Code: crates/pinc-transport/src/conn/handshake.rs (RESPONDER_HOLD,      *)
 (* Timing::connect_timeout, Handshake::step: the hold is set when the      *)
-(* responder's flight first goes out), crates/vinc-core/src/slot.rs        *)
+(* responder's flight first goes out), crates/pinc-core/src/slot.rs        *)
 (* (Slot::half_open_life) and timers.rs (settle_core, run_timer: the       *)
 (* endpoint's own half-open sweep follows the same life).                  *)
 (*                                                                         *)

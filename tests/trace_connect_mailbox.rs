@@ -1,6 +1,6 @@
 //! Trace generation for the mailbox: seeded random runs of the real `Mailbox` through its public API, recorded as
 //! ndjson (`connect_mailbox.ndjson`) for the TLA+ trace check (`TraceConnectMailbox.tla`) and the Lean replay
-//! (`Vinc/TraceConnectMailbox.lean`).
+//! (`Pinc/TraceConnectMailbox.lean`).
 //!
 //! A run is one mailbox (members and bytes per member from the run's shape, the age from the run) driven by pushes of
 //! bodies of every size (empty, one byte, a quarter of the quota, exactly the quota less the header, over it, over
@@ -8,7 +8,7 @@
 //! amounts around the age. The test checks every answer against a plain reference queue written here, and the bytes
 //! of every delivered body against what was stored (so the ring, with its wrap-around, is checked byte for byte).
 //! What is recorded is what an observer sees: the answer, the held (messages, bytes) of the member, the counters.
-//! The trace is written to the directory in `VINC_TRACE_DIR` when it is set; otherwise nothing is written.
+//! The trace is written to the directory in `PINC_TRACE_DIR` when it is set; otherwise nothing is written.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -29,9 +29,9 @@ use std::collections::{BTreeMap, VecDeque};
 use std::fmt::Write as _;
 
 use connect_common::nid;
-use vinc_connect::carrier::MAX_PACKET_LEN;
-use vinc_connect::mailbox::{ENTRY_HEAD, Mailbox, Push, Stats};
-use vinc_tests::SplitMix64;
+use pinc_connect::carrier::MAX_PACKET_LEN;
+use pinc_connect::mailbox::{ENTRY_HEAD, Mailbox, Push, Stats};
+use pinc_tests::SplitMix64;
 
 struct Msg {
     src: u8,
@@ -280,7 +280,7 @@ fn the_mailbox_matches_the_reference_and_records_its_trace() {
             _ => run::<3, 1600>(seed, 15, &mut out),
         }
     }
-    let Some(dir) = std::env::var_os("VINC_TRACE_DIR") else {
+    let Some(dir) = std::env::var_os("PINC_TRACE_DIR") else {
         return;
     };
     let dir = std::path::PathBuf::from(dir);

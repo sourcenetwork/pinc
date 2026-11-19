@@ -1,6 +1,6 @@
 -------------------------- MODULE ConnectCarrierOps --------------------------
 (***************************************************************************)
-(* The operations of vinc-connect carrier/session.rs (ProtectedCarrier),   *)
+(* The operations of pinc-connect carrier/session.rs (ProtectedCarrier),   *)
 (* step for step: the unit framing of the byte stream (a 2-byte big-endian *)
 (* length, then that many bytes), the bounded input buffer and its lazy    *)
 (* release, the handshake units (the handshake machine is a step that      *)

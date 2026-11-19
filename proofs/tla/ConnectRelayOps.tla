@@ -1,6 +1,6 @@
 -------------------------- MODULE ConnectRelayOps --------------------------
 (***************************************************************************)
-(* The relay of vinc-connect/src/relay (mod.rs, clients.rs, route.rs,      *)
+(* The relay of pinc-connect/src/relay (mod.rs, clients.rs, route.rs,      *)
 (* records.rs, discovery.rs): carrier sessions, quota, forwarding, the     *)
 (* reply route, the hub tunnel, record storage, sleep notices and the      *)
 (* hold of packets for sleeping members, as pure operators: each takes the *)

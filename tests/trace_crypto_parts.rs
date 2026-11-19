@@ -1,4 +1,4 @@
-//! The DRBG, provider and secret parts of the `vinc-crypto` trace (see `trace_crypto.rs`).
+//! The DRBG, provider and secret parts of the `pinc-crypto` trace (see `trace_crypto.rs`).
 #![allow(
     unsafe_code,
     clippy::unwrap_used,
@@ -15,10 +15,10 @@ use aes::Aes128;
 use aes::cipher::{BlockCipherEncrypt, KeyInit};
 use chacha20::ChaCha20;
 use chacha20::cipher::{KeyIvInit, StreamCipher, StreamCipherSeek};
-use vinc_crypto::drbg::MAX_FILL;
-use vinc_crypto::provider::{KEM_CIPHERTEXT_LEN, KEM_ENCAPS_KEY_LEN};
-use vinc_crypto::{Aead, CryptoError, Drbg, Provider, Secret, Software, ct_eq};
-use vinc_tests::SplitMix64;
+use pinc_crypto::drbg::MAX_FILL;
+use pinc_crypto::provider::{KEM_CIPHERTEXT_LEN, KEM_ENCAPS_KEY_LEN};
+use pinc_crypto::{Aead, CryptoError, Drbg, Provider, Secret, Software, ct_eq};
+use pinc_tests::SplitMix64;
 
 use super::{arr, limbs, rand, res};
 

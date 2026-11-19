@@ -15,14 +15,14 @@
 use std::collections::BTreeSet;
 
 use proptest::prelude::*;
-use vinc_crypto::{Aead, Provider, Secret, Software, expand};
-use vinc_security::amp::{FACTOR, OVERHEAD};
-use vinc_security::record::{AES_GCM_PACKET_LIMIT, CHACHA_FAILURE_LIMIT, MAX_PACKET_NUMBER};
-use vinc_security::{AmpBudget, HeaderKey, Limits, PacketKey, RecordError, labels, roll_secret};
+use pinc_crypto::{Aead, Provider, Secret, Software, expand};
+use pinc_security::amp::{FACTOR, OVERHEAD};
+use pinc_security::record::{AES_GCM_PACKET_LIMIT, CHACHA_FAILURE_LIMIT, MAX_PACKET_NUMBER};
+use pinc_security::{AmpBudget, HeaderKey, Limits, PacketKey, RecordError, labels, roll_secret};
 
 mod sec_common;
 
-vinc_tests::install_counting_allocator!();
+pinc_tests::install_counting_allocator!();
 
 const AEADS: [Aead; 2] = [Aead::ChaCha20Poly1305, Aead::Aes128Gcm];
 
@@ -319,7 +319,7 @@ fn seal_open_and_header_protection_allocate_nothing() {
         let hk = HeaderKey::from_secret(&p, aead, &secret(8)).unwrap();
         let mut payload = [3u8; 1400];
         let sample = [9u8; 16];
-        let stats = vinc_tests::measure(|| {
+        let stats = pinc_tests::measure(|| {
             let tag = tx.seal(&p, 1, b"hdr", &mut payload).unwrap();
             let (mut first, mut pn) = (0x41u8, [0u8, 1]);
             hk.protect(&p, &mut first, &mut pn, &sample, false).unwrap();
@@ -394,20 +394,20 @@ fn amp_budget_examples() {
 #[test]
 fn labels_are_prefixed_unique_and_distinct_from_the_crypto_labels() {
     let mut all: Vec<&str> = labels::ALL.to_vec();
-    all.extend(vinc_crypto::labels::ALL);
+    all.extend(pinc_crypto::labels::ALL);
     for l in &all {
-        assert!(l.starts_with("VINC 2026 v1 "), "{l}");
-        assert!(l.starts_with(vinc_crypto::labels::RESERVED), "{l}");
+        assert!(l.starts_with("PINC 2026 v1 "), "{l}");
+        assert!(l.starts_with(pinc_crypto::labels::RESERVED), "{l}");
         assert!(l.len() > labels::PREFIX.len(), "{l}");
         assert!(l.is_ascii());
         assert!(!l.contains('\u{2013}') && !l.contains('\u{2014}'));
     }
     let unique: BTreeSet<&str> = all.iter().copied().collect();
     assert_eq!(unique.len(), all.len(), "a label is used twice");
-    assert_eq!(labels::PREFIX, vinc_crypto::labels::PREFIX);
-    assert_eq!(labels::SIGNATURE_RESPONDER, "VINC 2026 v1 responder");
-    assert_eq!(labels::SIGNATURE_INITIATOR, "VINC 2026 v1 initiator");
-    assert_eq!(labels::HANDSHAKE, "VINC 2026 v1 handshake");
+    assert_eq!(labels::PREFIX, pinc_crypto::labels::PREFIX);
+    assert_eq!(labels::SIGNATURE_RESPONDER, "PINC 2026 v1 responder");
+    assert_eq!(labels::SIGNATURE_INITIATOR, "PINC 2026 v1 initiator");
+    assert_eq!(labels::HANDSHAKE, "PINC 2026 v1 handshake");
 }
 
 #[test]

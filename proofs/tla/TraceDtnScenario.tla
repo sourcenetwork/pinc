@@ -2,7 +2,7 @@
 (***************************************************************************)
 (* Trace validation of the delay-tolerant scenarios: four nodes that each  *)
 (* run the real Forwarder, CustodyBook and Ledger, joined by a network     *)
-(* that delays and loses messages (vinc-dtn forward.rs, custody.rs,        *)
+(* that delays and loses messages (pinc-dtn forward.rs, custody.rs,        *)
 (* store.rs).                                                              *)
 (*                                                                         *)
 (* The Rust test tests/trace_dtn_scenario.rs runs seeded random scenarios  *)
@@ -24,7 +24,7 @@
 (* 3 sends, ledgers of 3 slots and 3 bytes (node 3 has none), books of 2.  *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds dtn_scenario.ndjson.  *)
+(* variable PINC_TRACE_DIR, the directory that holds dtn_scenario.ndjson.  *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
 
@@ -41,7 +41,7 @@ SC == INSTANCE DtnScenario WITH N <- 4, Budget <- 4, Exp <- 30, MaxTime <- 1000,
 F == INSTANCE DtnForwardOps WITH B <- 1, L <- 3, T <- 3, D <- 2, Retry <- 2, MaxSends <- 3
 C == INSTANCE DtnCustodyOps WITH MaxU <- 1000
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/dtn_scenario.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/dtn_scenario.ndjson")
 
 Tm(g, p) == IF F!TIdx(g, 1, p) # {} /\ g.ts[F!MinOf(F!TIdx(g, 1, p))].ph = "sent"
             THEN g.ts[F!MinOf(F!TIdx(g, 1, p))].rem ELSE -1

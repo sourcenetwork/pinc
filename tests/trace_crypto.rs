@@ -1,6 +1,6 @@
-//! Trace generation for `vinc-crypto`: the KDF, node ids and identities, the DRBG, the provider and the secrets,
+//! Trace generation for `pinc-crypto`: the KDF, node ids and identities, the DRBG, the provider and the secrets,
 //! driven through the public API and recorded as ndjson (`crypto.ndjson`) for the TLA+ trace check
-//! (`TraceCrypto.tla`) and the Lean replay (`Vinc.TraceCrypto`).
+//! (`TraceCrypto.tla`) and the Lean replay (`Pinc.TraceCrypto`).
 //!
 //! Every event is `{"t":"cr","op":...}`. The checkers recompute each answer with the proved model from the recorded
 //! inputs, and take the answers of the primitives from the event, where the test computed them by calling the
@@ -18,7 +18,7 @@
 //!   X25519 low-order points and the ML-KEM parsers.
 //! * `cteq`, `drop`: `ct_eq` and `Secret` comparison, and the bytes of a `Secret` after it is dropped.
 //!
-//! The trace is written to the directory in `VINC_TRACE_DIR` when it is set; otherwise nothing is written.
+//! The trace is written to the directory in `PINC_TRACE_DIR` when it is set; otherwise nothing is written.
 #![allow(
     unsafe_code,
     clippy::unwrap_used,
@@ -35,9 +35,9 @@ mod parts;
 use parts::{drbg_trace, provider_trace, secret_trace};
 
 use p256::ecdsa::signature::Verifier as _;
-use vinc_crypto::identity::{MAX_PUBLIC_KEY_LEN, MAX_SIGNATURE_LEN, verify, verify_ml_dsa_65, verify_node};
-use vinc_crypto::{CryptoError, IdentityAlg, Keypair, NodeId, expand, extract, labels};
-use vinc_tests::SplitMix64;
+use pinc_crypto::identity::{MAX_PUBLIC_KEY_LEN, MAX_SIGNATURE_LEN, verify, verify_ml_dsa_65, verify_node};
+use pinc_crypto::{CryptoError, IdentityAlg, Keypair, NodeId, expand, extract, labels};
+use pinc_tests::SplitMix64;
 
 const ALGS: [IdentityAlg; 4] = [
     IdentityAlg::Ed25519,
@@ -139,8 +139,8 @@ fn n_plus(delta: i8) -> [u8; 32] {
 // labels and the KDF
 
 fn labels_trace(out: &mut String) {
-    let all: Vec<&str> = vinc_security::labels::ALL.to_vec();
-    let dtn: Vec<&str> = vinc_dtn::labels::ALL.to_vec();
+    let all: Vec<&str> = pinc_security::labels::ALL.to_vec();
+    let dtn: Vec<&str> = pinc_dtn::labels::ALL.to_vec();
     let crypto = [labels::NODE_ID, labels::HYBRID_SIGNATURE];
     assert_eq!(labels::ALL, crypto);
     let mut every: Vec<&str> = all.iter().chain(crypto.iter()).chain(dtn.iter()).copied().collect();
@@ -166,10 +166,10 @@ fn labels_trace(out: &mut String) {
 fn kdf_trace(out: &mut String) {
     let mut rng = SplitMix64::traced(0xC0DE_0001);
     let label_set = [
-        vinc_security::labels::PACKET_KEY,
-        vinc_security::labels::PACKET_IV,
-        vinc_security::labels::HEADER_KEY,
-        vinc_dtn::labels::SLICE_KEY,
+        pinc_security::labels::PACKET_KEY,
+        pinc_security::labels::PACKET_IV,
+        pinc_security::labels::HEADER_KEY,
+        pinc_dtn::labels::SLICE_KEY,
     ];
     for label in label_set {
         for ctx_len in [0usize, 1, 32, 33, 100] {
@@ -691,7 +691,7 @@ fn crypto_traces() {
         out
     });
     assert!(out.lines().count() > 800);
-    if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
+    if let Ok(dir) = std::env::var("PINC_TRACE_DIR") {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(std::path::Path::new(&dir).join("crypto.ndjson"), out).unwrap();
     }

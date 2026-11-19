@@ -1,0 +1,24 @@
+[package]
+name = "pinc-connect"
+description = "PINC connectivity: the secured relay carrier, its frame codec, and the relay-side state machines (sessions, forwarding, records, lookup, address discovery, hub tunnel, sleep notices and the mailbox)"
+keywords = ["no_std", "relay", "carrier", "rendezvous", "sans-io"]
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+pinc-wire = { workspace = true }
+pinc-crypto = { workspace = true }
+pinc-security = { workspace = true }
+pinc-core = { workspace = true }
+pinc-transport = { workspace = true }
+
+[features]
+# Keep the relays' buffers on the heap, built one relay at a time, so the layer can be built on a small stack.
+alloc = []
+
+[lints]
+workspace = true

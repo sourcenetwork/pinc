@@ -1,6 +1,6 @@
 ---------------------------- MODULE ConnectWsOps -----------------------------
 (***************************************************************************)
-(* The operations of vinc-connect carrier/ws.rs (WebSocket framing, RFC    *)
+(* The operations of pinc-connect carrier/ws.rs (WebSocket framing, RFC    *)
 (* 6455 section 5), step for step: `encode` (one unfragmented frame, the  *)
 (* length in the shortest form, a client's payload masked) and             *)
 (* `Decoder::decode` (the checks in the order the code makes them).        *)

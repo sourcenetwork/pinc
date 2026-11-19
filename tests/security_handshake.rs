@@ -16,10 +16,10 @@
     unreachable_pub
 )]
 
-use vinc_crypto::provider::KEM_ENCAPS_KEY_LEN;
-use vinc_crypto::{Aead, Drbg, IdentityAlg, NodeId, Software};
-use vinc_security::message::{FRAGMENT_HEADER, MAX_MESSAGE_LEN, min_initial_len, reply_datagrams, reply_len};
-use vinc_security::{
+use pinc_crypto::provider::KEM_ENCAPS_KEY_LEN;
+use pinc_crypto::{Aead, Drbg, IdentityAlg, NodeId, Software};
+use pinc_security::message::{FRAGMENT_HEADER, MAX_MESSAGE_LEN, min_initial_len, reply_datagrams, reply_len};
+use pinc_security::{
     CreditRecord, Env, Event, Failure, InitialForm, KeyRequest, KeyResponse, Output, PrekeyCache, ResponderStores,
     SoftKeys,
 };
@@ -27,7 +27,7 @@ use vinc_security::{
 mod sec_common;
 use sec_common::{ALGS, ALPN, ALPN_B, Caps, Tamper, World, assert_data_flows, assert_same_keys, big_stack, keypair};
 
-vinc_tests::install_counting_allocator!();
+pinc_tests::install_counting_allocator!();
 
 const HW: [(bool, bool); 4] = [(true, true), (true, false), (false, true), (false, false)];
 
@@ -208,11 +208,11 @@ fn prekey_cache_of_capacity_zero_always_misses() {
                 drbg: &mut w.r_drbg,
             };
             let soft_i = SoftKeys {
-                signer: Some((vinc_security::KeyHandle(1), &w.ip.kp)),
+                signer: Some((pinc_security::KeyHandle(1), &w.ip.kp)),
                 prekeys: Some(&w.prekeys),
             };
             let soft_r = SoftKeys {
-                signer: Some((vinc_security::KeyHandle(1), &w.rp.kp)),
+                signer: Some((pinc_security::KeyHandle(1), &w.rp.kp)),
                 prekeys: None,
             };
             let mut types = vec![];
@@ -323,7 +323,7 @@ fn a_repeated_initial_gets_the_same_reply_and_the_finish_can_be_retransmitted() 
                 drbg: &mut w.r_drbg,
             };
             let soft_r = SoftKeys {
-                signer: Some((vinc_security::KeyHandle(1), &w.rp.kp)),
+                signer: Some((pinc_security::KeyHandle(1), &w.rp.kp)),
                 prekeys: None,
             };
             r.handle(&mut env_r, &mut w.stores, &first).unwrap();
@@ -627,9 +627,9 @@ fn an_unknown_alpn_is_refused() {
 fn a_hub_that_offers_only_the_old_hub_protocol_name_is_refused() {
     big_stack(|| {
         let mut w = World::new(IdentityAlg::Ed25519, IdentityAlg::Ed25519, false, false);
-        w.r_alpns = vec![b"vinc/hub"];
+        w.r_alpns = vec![b"pinc/hub"];
         let dial = w.dial();
-        let mut i = w.initiator_with(dial, vinc_node::HUB_ALPN, false, false);
+        let mut i = w.initiator_with(dial, pinc_node::HUB_ALPN, false, false);
         let mut r = w.responder();
         let out = w.run(&mut i, &mut r, None);
         assert_eq!(out.r_failed(), Some(Failure::UnknownAlpn));
@@ -690,7 +690,7 @@ fn key_requests_can_be_answered_many_polls_later() {
             assert!(r.poll_output().is_none(), "no output while the key is pending");
         }
         // A response of the wrong kind is refused and changes nothing.
-        let wrong = KeyResponse::SharedSecret(vinc_crypto::Secret::new([0; 32]));
+        let wrong = KeyResponse::SharedSecret(pinc_crypto::Secret::new([0; 32]));
         assert_eq!(
             r.on_key_response(&mut env_r, wrong),
             Err(Failure::UnexpectedKeyResponse)
@@ -698,7 +698,7 @@ fn key_requests_can_be_answered_many_polls_later() {
         assert!(r.poll_output().is_none());
         let mut sig = vec![0u8; 4000];
         let n = w.rp.kp.sign(&message, &mut sig).unwrap();
-        assert_eq!(key, vinc_security::KeyHandle(1));
+        assert_eq!(key, pinc_security::KeyHandle(1));
         r.on_key_response(&mut env_r, KeyResponse::Signature(&sig[..n]))
             .unwrap();
         let Some(Output::Send { data, .. }) = r.poll_output() else {
@@ -790,7 +790,7 @@ fn a_response_without_a_request_is_refused() {
 fn garbage_input_never_panics() {
     big_stack(|| {
         let mut w = World::new(IdentityAlg::Ed25519, IdentityAlg::Ed25519, false, false);
-        let mut rng = vinc_tests::SplitMix64::new(7);
+        let mut rng = pinc_tests::SplitMix64::new(7);
         let mut r = w.responder();
         let mut i = w.initiator();
         let mut env_r = Env {
@@ -856,20 +856,20 @@ fn a_full_handshake_run_allocates_nothing() {
                 };
                 w.prekeys.acquire(&mut env).unwrap()
             };
-            let mut r_cfg = vinc_security::ResponderConfig::new(
+            let mut r_cfg = pinc_security::ResponderConfig::new(
                 w.rp.id,
-                vinc_security::ConnId::new(b"respond0").unwrap(),
-                vinc_security::AlpnList::new(&[ALPN]).unwrap(),
+                pinc_security::ConnId::new(b"respond0").unwrap(),
+                pinc_security::AlpnList::new(&[ALPN]).unwrap(),
             );
             r_cfg.tickets_per_session = 1;
             let mut stores = Box::new(ResponderStores::<4, 4>::default());
             let mut buf = vec![0u8; MAX_MESSAGE_LEN];
             let soft_i = SoftKeys {
-                signer: Some((vinc_security::KeyHandle(1), &w.ip.kp)),
+                signer: Some((pinc_security::KeyHandle(1), &w.ip.kp)),
                 prekeys: Some(&w.prekeys),
             };
             let soft_r = SoftKeys {
-                signer: Some((vinc_security::KeyHandle(1), &w.rp.kp)),
+                signer: Some((pinc_security::KeyHandle(1), &w.rp.kp)),
                 prekeys: None,
             };
             let mut env_i = Env {
@@ -883,22 +883,22 @@ fn a_full_handshake_run_allocates_nothing() {
                 drbg: &mut w.r_drbg,
             };
             let mut established = 0;
-            let stats = vinc_tests::measure(|| {
-                let mut i = vinc_security::Initiator::new(
+            let stats = pinc_tests::measure(|| {
+                let mut i = pinc_security::Initiator::new(
                     &mut env_i,
-                    vinc_security::InitiatorParams {
+                    pinc_security::InitiatorParams {
                         peer: dial,
                         alpn: ALPN,
-                        scid: vinc_security::ConnId::new(b"initiat0").unwrap(),
+                        scid: pinc_security::ConnId::new(b"initiat0").unwrap(),
                         identity: &w.ip.id,
                         prekey: &prekey,
                         peer_has_prekey: false,
                         ticket: None,
-                        credit: vinc_security::CreditRecord::NONE,
+                        credit: pinc_security::CreditRecord::NONE,
                     },
                 )
                 .unwrap();
-                let mut r = vinc_security::Responder::new(r_cfg.clone());
+                let mut r = pinc_security::Responder::new(r_cfg.clone());
                 let n = take_send!(i, buf);
                 r.handle(&mut env_r, &mut stores, &buf[..n]).unwrap();
                 assert!(r.answer_soft(&mut env_r, &soft_r).unwrap());

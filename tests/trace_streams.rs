@@ -1,6 +1,6 @@
 //! Trace generation for the receive and credit path of the stream layer: seeded random runs of a real stream table
-//! (`vinc-transport` `Streams`, built with the `trace` feature) over a small pool, recorded as ndjson
-//! (`streams.ndjson`) for the TLA+ trace check (`TraceStreams.tla`) and the Lean replay (`Vinc/TraceStreams.lean`).
+//! (`pinc-transport` `Streams`, built with the `trace` feature) over a small pool, recorded as ndjson
+//! (`streams.ndjson`) for the TLA+ trace check (`TraceStreams.tla`) and the Lean replay (`Pinc/TraceStreams.lean`).
 //!
 //! A run opens a server-side table and drives it through the calls the connection makes: stream frames of an honest
 //! peer (some out of order, overlapping, past the credit, after the final size, with differing bytes, tiny ones that
@@ -13,14 +13,14 @@
 //! from the start (`set_early`), streams are opened past it with data queued, and the establishment raises the limit
 //! and ends that; in runs 37 to 40 the last stream opened early is reset at once, before the limit covers it, so its
 //! reset waits for the limit (#432) and leaves once the establishment covers it. The checkers replay each call with the
-//! operators of the model (`StreamsOps.tla`, `Vinc.TransportStreams`) and require the state they compute to be the
+//! operators of the model (`StreamsOps.tla`, `Pinc.TransportStreams`) and require the state they compute to be the
 //! state recorded, the error they compute to be the error returned, the control frame they give to be the one the
 //! table gave, and every stream whose frame left to be one they let send.
 //!
 //! The test asserts what it can itself (the bytes read are the bytes stored, in order and once; the pool never
 //! passes its budget; a granted limit never goes down; no stream frame and no control frame of a stream leaves for a
 //! stream we opened before the peer's limit covers its ordinal) so it is meaningful without the proof tools. Times are
-//! small ticks (the checker has 32-bit integers). The trace is written to `VINC_TRACE_DIR` when it is set.
+//! small ticks (the checker has 32-bit integers). The trace is written to `PINC_TRACE_DIR` when it is set.
 #![allow(
     clippy::unwrap_used,
     clippy::indexing_slicing,
@@ -35,10 +35,10 @@
 
 use std::fmt::Write as _;
 
-use vinc_tests::{SplitMix64, big_stack};
-use vinc_transport::stream::pool::{BufferPool, CHUNK_SIZE, Chunk};
-use vinc_transport::stream::trace::{SlotView, TableView};
-use vinc_transport::stream::{Config, ControlFrame, NoSource, PeerLimits, StreamError, Streams};
+use pinc_tests::{SplitMix64, big_stack};
+use pinc_transport::stream::pool::{BufferPool, CHUNK_SIZE, Chunk};
+use pinc_transport::stream::trace::{SlotView, TableView};
+use pinc_transport::stream::{Config, ControlFrame, NoSource, PeerLimits, StreamError, Streams};
 
 const N: usize = 4;
 const C: usize = 7;
@@ -754,15 +754,15 @@ fn stream_table_runs_match_the_models() {
         }
         assert!(jumped, "no frame opened a skipped stream inside the credit");
         assert!(
-            vinc_tests::soaking() || past,
+            pinc_tests::soaking() || past,
             "no stream was opened past the peer's limit"
         );
         assert!(
-            vinc_tests::soaking() || released,
+            pinc_tests::soaking() || released,
             "no stream opened past the peer's limit sent once a raise covered it"
         );
         assert!(
-            vinc_tests::soaking() || ctl_released,
+            pinc_tests::soaking() || ctl_released,
             "no control frame of a stream opened past the peer's limit left once a raise covered it"
         );
         for op in [
@@ -789,7 +789,7 @@ fn stream_table_runs_match_the_models() {
             "sent",
         ] {
             assert!(
-                vinc_tests::soaking() || out.contains(&format!(r#""op":"{op}""#)),
+                pinc_tests::soaking() || out.contains(&format!(r#""op":"{op}""#)),
                 "no {op} event"
             );
         }
@@ -810,11 +810,11 @@ fn stream_table_runs_match_the_models() {
             r#""kind":"reset""#,
         ] {
             assert!(
-                vinc_tests::soaking() || out.contains(needle),
+                pinc_tests::soaking() || out.contains(needle),
                 "the runs never reach {needle}"
             );
         }
-        if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
+        if let Ok(dir) = std::env::var("PINC_TRACE_DIR") {
             std::fs::create_dir_all(&dir).unwrap();
             std::fs::write(std::path::Path::new(&dir).join("streams.ndjson"), &out).unwrap();
         }

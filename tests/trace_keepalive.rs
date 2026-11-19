@@ -1,6 +1,6 @@
 //! Trace generation for the keepalive schedule: seeded and boundary inputs run through the real `Inputs::plan` and
-//! `standby_due` of `vinc-core`, recorded as ndjson (`keepalive.ndjson`) for the TLA+ trace check
-//! (`TraceKeepalive.tla`) and the Lean replay (`Vinc/TraceKeepalive.lean`).
+//! `standby_due` of `pinc-core`, recorded as ndjson (`keepalive.ndjson`) for the TLA+ trace check
+//! (`TraceKeepalive.tla`) and the Lean replay (`Pinc/TraceKeepalive.lean`).
 //!
 //! A `u64` is written as four 16-bit limbs (TLC cannot read a number above 2^31). The inputs take every role, side
 //! and path kind; the clock, the last send, the last receive, the last application data and the end of the quiet
@@ -22,11 +22,11 @@
 
 use std::fmt::Write as _;
 
-use vinc_core::{
+use pinc_core::{
     ACTIVE_KEEP, DIRECT_SILENCE, HOLD_WINDOW, IDLE_DROP, IDLE_KEEP, KeepaliveInputs, PATH_KEEP, QUIET_KEEP_ACCEPTOR,
     QUIET_KEEP_DIALER, Role, standby_due,
 };
-use vinc_tests::SplitMix64;
+use pinc_tests::SplitMix64;
 
 const S: u64 = 1_000_000_000;
 
@@ -235,7 +235,7 @@ fn the_keepalive_plan_matches_the_models() {
     }
     // every kind of answer was reached
     assert!(some > 1500 && none > 150 && held_n > 60 && direct_n > 150 && stopped > 30 && reviews > 1500);
-    if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
+    if let Ok(dir) = std::env::var("PINC_TRACE_DIR") {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(format!("{dir}/keepalive.ndjson"), out).unwrap();
     }

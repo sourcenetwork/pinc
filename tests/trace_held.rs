@@ -1,6 +1,6 @@
-//! Trace generation for the held ring of a session: seeded runs of a real ring (`vinc-core`, built with the `trace`
+//! Trace generation for the held ring of a session: seeded runs of a real ring (`pinc-core`, built with the `trace`
 //! feature), recorded as ndjson (`held.ndjson`) for the TLA+ trace check (`TraceHeld.tla`) and the Lean replay
-//! (`Vinc/TraceHeld.lean`).
+//! (`Pinc/TraceHeld.lean`).
 //!
 //! A run pushes events of every kind (opened, readable, writable, reset, datagram, stopped, open ready) for a few
 //! streams, in mixes that keep the ring short, fill it with events the application can recover or cannot, and push on
@@ -27,8 +27,8 @@
 
 use std::fmt::Write as _;
 
-use vinc_core::HeldProbe;
-use vinc_tests::SplitMix64;
+use pinc_core::HeldProbe;
+use pinc_tests::SplitMix64;
 
 const CAP: usize = HeldProbe::SLOTS;
 
@@ -234,7 +234,7 @@ fn the_held_ring_matches_the_models() {
     assert!(seen.wrapped > 0, "the head never went round");
     assert!(seen.cleared > 0, "no clear released events");
     assert!(seen.popped_empty > 0, "no pop found the ring empty");
-    if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
+    if let Ok(dir) = std::env::var("PINC_TRACE_DIR") {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(std::path::Path::new(&dir).join("held.ndjson"), &out).unwrap();
     }

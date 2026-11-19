@@ -1,6 +1,6 @@
 name = "pubsub-wan"
 about = "Publish and subscribe across three sites (20, 80 and 150 ms round trips, 100 Mbit/s each way): a hub and three peers per site, one publisher in the first site, 1000 messages of 1 KiB at 100 a second."
-stacks = ["vinc", "iroh", "libp2p"]
+stacks = ["pinc", "iroh", "libp2p"]
 repetitions = 3
 
 [resources]

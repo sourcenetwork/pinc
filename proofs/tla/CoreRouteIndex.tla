@@ -1,6 +1,6 @@
 ---------------------------- MODULE CoreRouteIndex ----------------------------
 (***************************************************************************)
-(* The endpoint's table of sessions by address (vinc-core endpoint.rs:     *)
+(* The endpoint's table of sessions by address (pinc-core endpoint.rs:     *)
 (* by_route, sync_route, free_slot, session_from; Meta::route in slot.rs;  *)
 (* the call of sync_route in timers.rs settle_core).                       *)
 (*                                                                         *)
@@ -37,7 +37,7 @@
 (*  - CoreRouteIndex_keepold: a settle adds the new entry without taking   *)
 (*    the old one out (a migration). The slot holds two entries: Exact     *)
 (*    fails.                                                               *)
-(* Lean counterpart: proofs/lean/Vinc/CoreRouteIndex*.lean (Inv, sync_inv, *)
+(* Lean counterpart: proofs/lean/Pinc/CoreRouteIndex*.lean (Inv, sync_inv, *)
 (* free_inv, len_le, candidates_eq_walk, settle_complete, lose_complete).  *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets

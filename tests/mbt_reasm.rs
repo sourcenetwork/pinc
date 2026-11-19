@@ -1,15 +1,15 @@
-//! Model-based tests of the handshake fragment reassembly: a real `Reassembly` (`vinc-transport`, built with the
+//! Model-based tests of the handshake fragment reassembly: a real `Reassembly` (`pinc-transport`, built with the
 //! `trace` feature, as `ReasmProbe`) driven along every edge of the state graph of `proofs/tla/MbtReasm.tla`.
 //!
 //! TLC enumerates every state the operators of `ReasmOps.tla` reach with the calls of that module at the code's own
 //! sizes (8 runs, the largest message) and writes the graph; `scripts/mbt.py` turns it into paths from the empty
-//! reassembly that take every edge, which `scripts/proofs.sh` writes to the directory `VINC_MBT_DIR` as
+//! reassembly that take every edge, which `scripts/proofs.sh` writes to the directory `PINC_MBT_DIR` as
 //! `reasm.ndjson`. This test runs each path on a fresh reassembly: after every call the length it returns must be the
 //! model's `out`, and the state (`view`: the runs and the message length being assembled) must be the model's. The
 //! bytes are not in the model, so the test checks them itself: a fragment carries the bytes of a message of its length
 //! (a function of the length and the position), and after every call the buffer inside each run is those bytes, and
 //! at a completed message its whole prefix is. It stops at the first difference and names the file, the case, the
-//! step and the calls that led there. Without `VINC_MBT_DIR` it checks nothing.
+//! step and the calls that led there. Without `PINC_MBT_DIR` it checks nothing.
 #![allow(
     clippy::unwrap_used,
     clippy::panic,
@@ -20,8 +20,8 @@
 
 use std::fmt::Write as _;
 
-use vinc_tests::{Json, MbtCase, mbt_cases};
-use vinc_transport::conn::{ReasmProbe, ReasmView};
+use pinc_tests::{Json, MbtCase, mbt_cases};
+use pinc_transport::conn::{ReasmProbe, ReasmView};
 
 fn num(v: &Json) -> u64 {
     v.u64().unwrap()
@@ -111,7 +111,7 @@ fn run(file: &str, case: &MbtCase, init: &Json) -> usize {
 #[test]
 fn the_reassembly_follows_every_edge_of_the_model() {
     let Some(cases) = mbt_cases("reasm.ndjson") else {
-        eprintln!("mbt_reasm: VINC_MBT_DIR is not set, nothing checked (scripts/proofs.sh generates the cases)");
+        eprintln!("mbt_reasm: PINC_MBT_DIR is not set, nothing checked (scripts/proofs.sh generates the cases)");
         return;
     };
     let mut cases = cases.unwrap();

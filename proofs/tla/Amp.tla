@@ -1,6 +1,6 @@
 -------------------------------- MODULE Amp --------------------------------
 (***************************************************************************)
-(* Model of the anti-amplification budget of vinc-security amp.rs.         *)
+(* Model of the anti-amplification budget of pinc-security amp.rs.         *)
 (*                                                                         *)
 (* The counters rx and tx saturate at U (u64::MAX in the code, a small    *)
 (* parameter here so that TLC reaches saturation: U = 100 is checked); the *)
@@ -23,7 +23,7 @@
 (* the exact sum below U and U above it. As actions: counters never        *)
 (* decrease and validation is sticky.                                      *)
 (*                                                                         *)
-(* Lean counterpart: proofs/lean/Vinc/Amp.lean (amplification_bound,       *)
+(* Lean counterpart: proofs/lean/Pinc/Amp.lean (amplification_bound,       *)
 (* reach_margin, canSend_iff, u128_no_overflow). TraceSecurity.tla checks  *)
 (* the recorded events of the real AmpBudget against AmpOps.tla.           *)
 (***************************************************************************)

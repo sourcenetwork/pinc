@@ -1,4 +1,4 @@
-//! Stream carriers in `vinc-sim`: the TCP and WebSocket model between a node and a relay. Setup round trips, bulk
+//! Stream carriers in `pinc-sim`: the TCP and WebSocket model between a node and a relay. Setup round trips, bulk
 //! transfer over a lossy link, retransmission timeouts and failure, middleboxes (UDP block, stream policy, captive
 //! portal), NAT mappings for streams, partitions, FIN notification, lifecycle faults and determinism.
 #![allow(
@@ -15,8 +15,8 @@
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-use vinc_sim::toy_stream::{StreamCmd, StreamProbe, StreamProbeEvent};
-use vinc_sim::{
+use pinc_sim::toy_stream::{StreamCmd, StreamProbe, StreamProbeEvent};
+use pinc_sim::{
     DropReason, LanConfig, LanId, LinkChange, LinkConfig, MS, NatConfig, NatKind, NodeId, PortPolicy, SEC, Sim,
     SimConfig, StreamEvent, StreamId, StreamKind, StreamPolicy, Time,
 };
@@ -250,9 +250,9 @@ fn a_lost_segment_is_retransmitted_after_the_initial_timeout_of_one_second() {
     w.connect(0, SERVER, StreamKind::Tcp);
     w.sim.run_until(25 * MS);
     w.sim
-        .lan_link_change(25 * MS, w.client_lan, vinc_sim::LanDir::Up, LinkChange::Blocked(true));
+        .lan_link_change(25 * MS, w.client_lan, pinc_sim::LanDir::Up, LinkChange::Blocked(true));
     w.sim
-        .lan_link_change(35 * MS, w.client_lan, vinc_sim::LanDir::Up, LinkChange::Blocked(false));
+        .lan_link_change(35 * MS, w.client_lan, pinc_sim::LanDir::Up, LinkChange::Blocked(false));
     w.sim.command(
         30 * MS,
         w.client,
@@ -580,11 +580,11 @@ fn a_lost_third_ack_leaves_a_raw_tcp_server_unopened_but_a_websocket_server_reco
         let mut w = world(1);
         // The client's ACK leaves at 2 * OWD; the uplink is down from 1 ms to 2 * OWD + 1 ms, after the SYN.
         w.sim
-            .lan_link_change(MS, w.client_lan, vinc_sim::LanDir::Up, LinkChange::Blocked(true));
+            .lan_link_change(MS, w.client_lan, pinc_sim::LanDir::Up, LinkChange::Blocked(true));
         w.sim.lan_link_change(
             2 * OWD + MS,
             w.client_lan,
-            vinc_sim::LanDir::Up,
+            pinc_sim::LanDir::Up,
             LinkChange::Blocked(false),
         );
         w.connect(0, to, kind);

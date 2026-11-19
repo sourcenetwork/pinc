@@ -17,7 +17,7 @@
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 
-use vinc_transport::conn::PathId;
+use pinc_transport::conn::PathId;
 
 use crate::SplitMix64;
 

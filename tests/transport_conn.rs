@@ -1,4 +1,4 @@
-//! The VINCER connection end to end over a deterministic in-memory link.
+//! The PINCER connection end to end over a deterministic in-memory link.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -14,15 +14,15 @@
     clippy::assert_is_empty
 )]
 
-use vinc_crypto::IdentityAlg;
-use vinc_security::{Rekey, TicketBatch, TicketEntry};
-use vinc_tests::*;
-use vinc_transport::conn::{CloseReason, Drop, PathId};
-use vinc_transport::frame::{Frame, ext, write_ack};
-use vinc_transport::stream::datagram::DatagramError;
-use vinc_wire::Writer;
+use pinc_crypto::IdentityAlg;
+use pinc_security::{Rekey, TicketBatch, TicketEntry};
+use pinc_tests::*;
+use pinc_transport::conn::{CloseReason, Drop, PathId};
+use pinc_transport::frame::{Frame, ext, write_ack};
+use pinc_transport::stream::datagram::DatagramError;
+use pinc_wire::Writer;
 
-vinc_tests::install_counting_allocator!();
+pinc_tests::install_counting_allocator!();
 
 fn connect_with(alg: IdentityAlg) {
     big_stack(move || {
@@ -39,7 +39,7 @@ fn connect_with(alg: IdentityAlg) {
     });
 }
 
-fn w_peer(alg: IdentityAlg) -> vinc_crypto::NodeId {
+fn w_peer(alg: IdentityAlg) -> pinc_crypto::NodeId {
     World::new(alg).rp.id.node_id()
 }
 
@@ -485,7 +485,7 @@ fn rejected_resumption_falls_back_and_sends_early_data_again() {
         // The server forgot its tickets: the Hello is rejected and a full handshake follows.
         *w.stores = Stores::default();
         let (mut sa, mut sb) = (Store::new(true), Store::new(false));
-        let a = w.client(&mut sa, Some(ticket), vinc_security::ClientTickets::new());
+        let a = w.client(&mut sa, Some(ticket), pinc_security::ClientTickets::new());
         let b = w.server(&mut sb);
         let mut net = Net::new(a, b, Link::new(56, Params::new(10 * MS)), &mut w.stores);
         let id = net.a.conn.open_bi().unwrap();
@@ -534,7 +534,7 @@ fn resumption_delivers_zero_rtt_data() {
         let mut tickets = first_session(&mut w);
         let ticket = tickets.take(&w.rp.id.node_id(), ALPN, T0).unwrap();
         let (mut sa, mut sb) = (Store::new(true), Store::new(false));
-        let a = w.client(&mut sa, Some(ticket), vinc_security::ClientTickets::new());
+        let a = w.client(&mut sa, Some(ticket), pinc_security::ClientTickets::new());
         let b = w.server(&mut sb);
         let mut net = Net::new(a, b, Link::new(7, Params::new(10 * MS)), &mut w.stores);
         let id = net.a.conn.open_bi().unwrap();
@@ -559,7 +559,7 @@ fn resumption_delivers_zero_rtt_data() {
 fn zero_rtt_with<'a>(w: &'a mut World, sa: &'a mut Store, sb: &'a mut Store, raw: &[u8]) -> (Net<'a, 'a>, u64) {
     let mut tickets = first_session(w);
     let ticket = tickets.take(&w.rp.id.node_id(), ALPN, T0).unwrap();
-    let a = w.client(sa, Some(ticket), vinc_security::ClientTickets::new());
+    let a = w.client(sa, Some(ticket), pinc_security::ClientTickets::new());
     let b = w.server(sb);
     let mut net = Net::new(a, b, Link::new(7, Params::new(10 * MS)), &mut w.stores);
     net.a.conn.inject_frames(raw);
@@ -598,7 +598,7 @@ fn established_only_frames() -> Vec<(&'static str, Vec<u8>)> {
     let rekey = Rekey {
         answer: false,
         share: [1; 32],
-        echo: [0; vinc_security::keyroll::ECHO_LEN],
+        echo: [0; pinc_security::keyroll::ECHO_LEN],
         switch_pn: 0,
     };
     vec![
@@ -682,7 +682,7 @@ fn zero_rtt_data_that_overtakes_the_hello_waits_for_its_keys() {
         let mut tickets = first_session(&mut w);
         let ticket = tickets.take(&w.rp.id.node_id(), ALPN, T0).unwrap();
         let (mut sa, mut sb) = (Store::new(true), Store::new(false));
-        let a = w.client(&mut sa, Some(ticket), vinc_security::ClientTickets::new());
+        let a = w.client(&mut sa, Some(ticket), pinc_security::ClientTickets::new());
         let b = w.server(&mut sb);
         let mut link = Link::new(9, Params::new(10 * MS));
         // The datagram with the Hello arrives 5 ms after the 0-RTT datagrams sent right behind it.
@@ -711,7 +711,7 @@ fn an_answer_that_overtakes_the_resume_reply_waits_for_its_keys() {
         let mut tickets = first_session(&mut w);
         let ticket = tickets.take(&w.rp.id.node_id(), ALPN, T0).unwrap();
         let (mut sa, mut sb) = (Store::new(true), Store::new(false));
-        let a = w.client(&mut sa, Some(ticket), vinc_security::ClientTickets::new());
+        let a = w.client(&mut sa, Some(ticket), pinc_security::ClientTickets::new());
         let b = w.server(&mut sb);
         let mut link = Link::new(10, Params::new(10 * MS));
         // The server's first datagram (the Reply) arrives 5 ms after the answer sent right behind it.
@@ -746,7 +746,7 @@ fn zero_rtt_replay_is_rejected() {
         let first_flight = std::rc::Rc::new(std::cell::RefCell::new(Vec::<Vec<u8>>::new()));
         {
             let (mut sa, mut sb) = (Store::new(true), Store::new(false));
-            let a = w.client(&mut sa, Some(ticket), vinc_security::ClientTickets::new());
+            let a = w.client(&mut sa, Some(ticket), pinc_security::ClientTickets::new());
             let b = w.server(&mut sb);
             let mut net = Net::new(a, b, Link::new(8, Params::new(10 * MS)), &mut w.stores);
             let id = net.a.conn.open_bi().unwrap();
@@ -864,11 +864,11 @@ fn a_failed_key_answer_closes_with_a_typed_reason() {
         assert!(net.run(net.now + 5 * SEC, |n| n.a.deferred.is_some()));
         net.run(net.now + 200 * MS, |_| false);
         let now = net.now;
-        assert_eq!(net.a.deliver_deferred(now), Err(vinc_security::Failure::KeyOperation));
+        assert_eq!(net.a.deliver_deferred(now), Err(pinc_security::Failure::KeyOperation));
         net.a.service(now);
         assert_eq!(
             net.a.closed(),
-            Some(CloseReason::Handshake(vinc_security::Failure::KeyOperation))
+            Some(CloseReason::Handshake(pinc_security::Failure::KeyOperation))
         );
         assert!(net.a.conn.is_closed());
     });

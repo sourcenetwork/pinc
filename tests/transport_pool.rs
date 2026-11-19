@@ -10,11 +10,11 @@
 use std::collections::VecDeque;
 
 use proptest::prelude::*;
-use vinc_tests::measure;
-use vinc_transport::stream::datagram::{DatagramError, Datagrams, EarlyData, MAX_EARLY_PACKETS};
-use vinc_transport::stream::pool::{BufferPool, CHUNK_SIZE, PoolExhausted};
+use pinc_tests::measure;
+use pinc_transport::stream::datagram::{DatagramError, Datagrams, EarlyData, MAX_EARLY_PACKETS};
+use pinc_transport::stream::pool::{BufferPool, CHUNK_SIZE, PoolExhausted};
 
-vinc_tests::install_counting_allocator!();
+pinc_tests::install_counting_allocator!();
 
 #[test]
 fn pool_exhausts_with_a_typed_result_and_recovers() {

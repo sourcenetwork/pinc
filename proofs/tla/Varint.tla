@@ -1,6 +1,6 @@
 ------------------------------ MODULE Varint ------------------------------
 (***************************************************************************)
-(* The unsigned varint of vinc-wire (varint.rs), written step for step on  *)
+(* The unsigned varint of pinc-wire (varint.rs), written step for step on  *)
 (* the machine integers of U64.tla: `encoded_len` (u64::bit_width, usize   *)
 (* div_ceil), `encode` (the overflow test, the saturating_sub of the       *)
 (* missing bytes, the shift by 7 * i and the mask of each group) and       *)
@@ -26,13 +26,13 @@
 (*    followed by a terminator or by nothing, with and without a trailing  *)
 (*    byte (the too long, truncated and non-minimal inputs).               *)
 (*                                                                         *)
-(* Lean counterparts (proofs/lean/Vinc/Varint.lean):                       *)
+(* Lean counterparts (proofs/lean/Pinc/Varint.lean):                       *)
 (*   RoundTrip              Varint.decode_encode                           *)
 (*   Canonical, Unique      Varint.decode_canonical, Varint.unique_encoding *)
 (*   EncodeLength           Varint.encode_length                           *)
 (*   DecodeBounds           Varint.decode_bounds                           *)
 (*   EncodeInto             Varint.encodeInto_ok_iff, encodeInto_decode    *)
-(*   the boundary sets      Vinc.Link (Varint boundary theorems)           *)
+(*   the boundary sets      Pinc.Link (Varint boundary theorems)           *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC
 

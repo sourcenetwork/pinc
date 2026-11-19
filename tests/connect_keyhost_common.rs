@@ -13,17 +13,17 @@
     clippy::similar_names
 )]
 
-use vinc_connect::client::Io;
-use vinc_connect::local::Beacon;
-use vinc_connect::record::Record;
-use vinc_connect::relay::datagram::Datagram;
-use vinc_connect::relay::{NodeState, Trace, sleep};
-use vinc_crypto::{Drbg, Software};
-use vinc_keystore::{KeyHandle, KeyHost, KeyStore};
-use vinc_security::{
+use pinc_connect::client::Io;
+use pinc_connect::local::Beacon;
+use pinc_connect::record::Record;
+use pinc_connect::relay::datagram::Datagram;
+use pinc_connect::relay::{NodeState, Trace, sleep};
+use pinc_crypto::{Drbg, Software};
+use pinc_keystore::{KeyHandle, KeyHost, KeyStore};
+use pinc_security::{
     Env, KeyHandle as SecHandle, KeyRequest, KeyResponse, LocalIdentity, PrekeyPolicy, SoftKeys, SoftPrekeys,
 };
-use vinc_tests::Host;
+use pinc_tests::Host;
 
 use crate::connect_common::SEC;
 use crate::connect_rig::{Ans, Custody, Rig};
@@ -53,7 +53,7 @@ impl<S: KeyStore> Custody for Keys<S> {
                     now,
                     drbg: &mut self.drbg,
                 };
-                let mut sig = [0u8; vinc_crypto::identity::MAX_SIGNATURE_LEN];
+                let mut sig = [0u8; pinc_crypto::identity::MAX_SIGNATURE_LEN];
                 match soft.answer(&mut env, req, &mut sig) {
                     KeyResponse::SharedSecret(s) => Ans::Secret(s),
                     other => panic!("the prekeys did not decapsulate: {other:?}"),
@@ -138,7 +138,7 @@ pub fn exercise<S: KeyStore>(mut host: KeyHost<S>, key: KeyHandle) {
     let mut beacon = None;
     let mut others = Vec::new();
     while let Some((to, n)) = rig.conn.poll_udp(&mut buf) {
-        if to.port() == vinc_connect::local::PORT {
+        if to.port() == pinc_connect::local::PORT {
             beacon = Some(buf[..n].to_vec());
         } else {
             others.push((to, buf[..n].to_vec()));

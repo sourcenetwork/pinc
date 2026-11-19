@@ -1,6 +1,6 @@
 ------------------------------ MODULE Encoder ------------------------------
 (***************************************************************************)
-(* The range encoder of vinc-dag (tree/encode.rs), written step for step   *)
+(* The range encoder of pinc-dag (tree/encode.rs), written step for step   *)
 (* on the machine integers of U64.tla: `RangeEncoder::new` and `step` (the *)
 (* stack of nodes with the pre-order index, `node.hi - node.lo`,           *)
 (* `left_groups`, `node.lo + left`, `node.idx + left`, `node.idx * 64`,    *)
@@ -40,7 +40,7 @@
 (*    buffer is smaller than the stream, the stream length otherwise, no   *)
 (*    failed conversion, never RangeOutOfBounds.                           *)
 (*                                                                         *)
-(* Lean counterparts (proofs/lean/Vinc/Encode.lean, MachineEnc.lean,       *)
+(* Lean counterparts (proofs/lean/Pinc/Encode.lean, MachineEnc.lean,       *)
 (* Bounds.lean):                                                           *)
 (*   StepsOK         Encode.encRun, Encode.lockstep, Encode.encStep_size,  *)
 (*                   MachineEnc.encStepM_eq, MachineEnc.encRunM_eq         *)
@@ -49,7 +49,7 @@
 (*   FoldOK          MachineEnc.foldAdd_eq                                 *)
 (*   TooLongOK       MachineEnc.encodedLen_overflows_iff                   *)
 (*   EncodeOK        MachineEnc.copyLoop_eq, MachineEnc.encodeRange_exact  *)
-(*   the boundary sets  Vinc.Link (Encoder boundary theorems)              *)
+(*   the boundary sets  Pinc.Link (Encoder boundary theorems)              *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC
 

@@ -1,5 +1,5 @@
-//! Trace generation for the node's round trips: seeded runs of a real `NodeRtt` (`vinc-core`), recorded as ndjson
-//! (`rtt.ndjson`) for the TLA+ trace check (`TraceRtt.tla`) and the Lean replay (`Vinc/TraceRtt.lean`).
+//! Trace generation for the node's round trips: seeded runs of a real `NodeRtt` (`pinc-core`), recorded as ndjson
+//! (`rtt.ndjson`) for the TLA+ trace check (`TraceRtt.tla`) and the Lean replay (`Pinc/TraceRtt.lean`).
 //!
 //! A run starts from an empty `NodeRtt` and calls `note_handshake`, `restore_peer`, `note_peak` and `note_timeout`
 //! with a few peers and with values that land on the edges: zero, one, 250 ms and one nanosecond either side, 500 ms,
@@ -27,9 +27,9 @@
 
 use std::fmt::Write as _;
 
-use vinc_core::{FIRST_RESEND, FLOOR_MAX, HUB_RESEND, NodeRtt, PEER_RTTS, SLOW_RTT};
-use vinc_crypto::{IdentityAlg, NodeId};
-use vinc_tests::SplitMix64;
+use pinc_core::{FIRST_RESEND, FLOOR_MAX, HUB_RESEND, NodeRtt, PEER_RTTS, SLOW_RTT};
+use pinc_crypto::{IdentityAlg, NodeId};
+use pinc_tests::SplitMix64;
 
 const MAX: u128 = u64::MAX as u128;
 const MS: u64 = 1_000_000;
@@ -379,7 +379,7 @@ fn the_node_round_trips_match_the_models() {
         "a zero peak beside a positive average never happened"
     );
     assert!(seen.hub_saturated > 0, "the hub resend never saturated");
-    if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
+    if let Ok(dir) = std::env::var("PINC_TRACE_DIR") {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(std::path::Path::new(&dir).join("rtt.ndjson"), &out).unwrap();
     }

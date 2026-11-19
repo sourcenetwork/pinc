@@ -14,8 +14,8 @@
 
 use std::net::SocketAddr;
 
-use vinc_core::{Answer, Command, CommandError, ConnectFailure, EndReason, Event, Query, Role, SessionId, Value};
-use vinc_tests::*;
+use pinc_core::{Answer, Command, CommandError, ConnectFailure, EndReason, Event, Query, Role, SessionId, Value};
+use pinc_tests::*;
 
 const FAST: u64 = 5 * MS_NS; // a round trip of 10 ms is below the 20 ms READY threshold
 

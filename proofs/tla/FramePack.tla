@@ -1,6 +1,6 @@
 ------------------------------ MODULE FramePack ------------------------------
 (***************************************************************************)
-(* The VINCER packet builder (FramePackOps.tla, the operators that follow  *)
+(* The PINCER packet builder (FramePackOps.tla, the operators that follow  *)
 (* fill_frames, put_stream_header, implicit_stream_len and the tail of     *)
 (* build_packet) checked on every combination of what the sources hold:    *)
 (* each case is a state. A case gives the mode of the fill (an ordinary    *)

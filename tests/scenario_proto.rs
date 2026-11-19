@@ -32,13 +32,13 @@ mod ontop;
 use std::collections::BTreeSet;
 
 use net::{Net, allow, base_intent};
-use vinc_sim::suite::crypto::PayloadKind;
-use vinc_sim::suite::proto::body::render;
-use vinc_sim::suite::proto::frame::{Frame, FrameError, Framer, T_ACK, T_ECHO, T_PUSH, hdr};
-use vinc_sim::suite::proto::host::Layers;
-use vinc_sim::suite::proto::{ALPN_DOCSYNC, ALPN_ECHO, ALPN_MANAGE, ALPN_PUSHLOG};
-use vinc_sim::suite::rec::NS;
-use vinc_sim::suite::world::model::IntentKind;
+use pinc_sim::suite::crypto::PayloadKind;
+use pinc_sim::suite::proto::body::render;
+use pinc_sim::suite::proto::frame::{Frame, FrameError, Framer, T_ACK, T_ECHO, T_PUSH, hdr};
+use pinc_sim::suite::proto::host::Layers;
+use pinc_sim::suite::proto::{ALPN_DOCSYNC, ALPN_ECHO, ALPN_MANAGE, ALPN_PUSHLOG};
+use pinc_sim::suite::rec::NS;
+use pinc_sim::suite::world::model::IntentKind;
 
 /// The chunkings every transfer test runs under: byte by byte, one large write, and two backpressured pipes.
 const CONFIGS: [(usize, usize); 4] = [(1, usize::MAX), (4096, usize::MAX), (3, 20), (64, 100)];
@@ -504,6 +504,6 @@ fn a_message_names_its_creator() {
     let net = Net::new(3, 1, 1);
     let m = net.reg.new_msg(2, PayloadKind::Msg, 100);
     let bytes = render(net.reg, m, 100);
-    assert_eq!(vinc_sim::suite::proto::body::message_id(&bytes), Some(m));
+    assert_eq!(pinc_sim::suite::proto::body::message_id(&bytes), Some(m));
     assert_eq!(net.reg.creator_of(m), Some(2));
 }

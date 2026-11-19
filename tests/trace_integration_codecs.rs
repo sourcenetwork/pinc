@@ -1,12 +1,12 @@
 //! Trace generation for the small round trips of the integration layer: the relay path addresses
-//! (`vinc_core::relay_addr`, `relay_parts`), the stream tag (`vinc::write_tag`, `read_tag`, driven over a real
-//! loopback connection) and the stream id at the head of a range-proof body (`vinc-node`'s `head_sid`, `with_sid`, through
+//! (`pinc_core::relay_addr`, `relay_parts`), the stream tag (`pinc::write_tag`, `read_tag`, driven over a real
+//! loopback connection) and the stream id at the head of a range-proof body (`pinc-node`'s `head_sid`, `with_sid`, through
 //! the `trace` view). Recorded as ndjson (`codecs_relay.ndjson`, `codecs_tag.ndjson`, `codecs_sid.ndjson`) for the TLA+
-//! trace check (`TraceIntegrationCodecs.tla`) and the Lean replay (`Vinc/TraceIntegrationCodecs.lean`).
+//! trace check (`TraceIntegrationCodecs.tla`) and the Lean replay (`Pinc/TraceIntegrationCodecs.lean`).
 //!
 //! Every event is one call of the real code on boundary, mutated and seeded random inputs: the arguments and the
 //! result. The test asserts what each codec must satisfy on its own (a decoded value re-encodes to its input, a refusal
-//! changes nothing). The trace is written to `VINC_TRACE_DIR` when it is set; otherwise nothing is written.
+//! changes nothing). The trace is written to `PINC_TRACE_DIR` when it is set; otherwise nothing is written.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -26,16 +26,16 @@
 )]
 
 #[macro_use]
-mod vinc_common;
+mod pinc_common;
 
 use std::fmt::Write as _;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
-use vinc::{ErrorKind, read_tag, write_tag};
-use vinc_common::{ECHO, bind, within};
-use vinc_core::{is_relay_addr, relay_addr, relay_parts};
-use vinc_node::values_frames_probe as frames;
-use vinc_tests::SplitMix64;
+use pinc::{ErrorKind, read_tag, write_tag};
+use pinc_common::{ECHO, bind, within};
+use pinc_core::{is_relay_addr, relay_addr, relay_parts};
+use pinc_node::values_frames_probe as frames;
+use pinc_tests::SplitMix64;
 
 fn arr(b: &[u8]) -> String {
     let mut s = String::from("[");
@@ -60,7 +60,7 @@ fn limbs(v: u64) -> String {
 }
 
 fn write_out(name: &str, out: &str) {
-    if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
+    if let Ok(dir) = std::env::var("PINC_TRACE_DIR") {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(std::path::Path::new(&dir).join(name), out).unwrap();
     }
@@ -238,7 +238,7 @@ fn relay_paths() {
 
 fn varint(v: u64) -> Vec<u8> {
     let mut b = [0u8; 9];
-    let n = vinc_wire::varint::encode(v, &mut b).unwrap();
+    let n = pinc_wire::varint::encode(v, &mut b).unwrap();
     b[..n].to_vec()
 }
 
@@ -396,8 +396,8 @@ fn stream_id_heads() {
 
 #[nuclei::test]
 async fn stream_tags() {
-    let server = bind(vinc_common::builder().alpn(ECHO)).await;
-    let client = bind(vinc_common::builder().alpn(ECHO)).await;
+    let server = bind(pinc_common::builder().alpn(ECHO)).await;
+    let client = bind(pinc_common::builder().alpn(ECHO)).await;
     let mut out = String::new();
     let (mut ok_n, mut cfg_n, mut eof_n, mut wcfg_n) = (0usize, 0usize, 0usize, 0usize);
     within(300, async {

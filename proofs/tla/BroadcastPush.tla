@@ -1,7 +1,7 @@
 ------------------------------ MODULE BroadcastPush ------------------------------
 (***************************************************************************)
 (* A hub pushing a topic to its live subscribers over streams that fill    *)
-(* up: vinc-broadcast msg.rs (Topics::hub_store), behind.rs                 *)
+(* up: pinc-broadcast msg.rs (Topics::hub_store), behind.rs                 *)
 (* (Topics::fall_behind, Topics::room_to_store, Topics::peer_writable),    *)
 (* gap.rs (Topics::on_sub) and log.rs (HubLog::evicts). One publisher      *)
 (* hands the hub messages 1..N in any order, again and again until one is  *)
@@ -13,7 +13,7 @@
 (* When a stream is full the push is refused. The hub then marks the      *)
 (* subscriber behind at that message's log position, pushes it nothing     *)
 (* new directly, and when it is woken sends it the log from that position  *)
-(* on. The host wakes it (StreamWritable, vinc-node events.rs) only when a *)
+(* on. The host wakes it (StreamWritable, pinc-node events.rs) only when a *)
 (* stream that was full takes more bytes. A store that would evict a       *)
 (* message still owed to a behind subscriber is refused, so the publisher  *)
 (* is not acknowledged and tries again later. A subscriber whose stream    *)
@@ -45,7 +45,7 @@
 (* 05bf029, where a refused push was dropped after the publish was        *)
 (* acknowledged; TLC finds AckedReachesLive violated.                      *)
 (* BroadcastPush_noguard.cfg sets Guard = FALSE: the place in the log      *)
-(* without the store refusal (05bf029 alone, option 2 of vinc#74), where a *)
+(* without the store refusal (05bf029 alone, option 2 of pinc#74), where a *)
 (* burst longer than the log evicts what a subscriber is owed after it was *)
 (* acknowledged; TLC finds OwedInLog violated.                             *)
 (* BroadcastPush_notell.cfg sets Tell = FALSE: a let-go subscriber catches *)
@@ -67,12 +67,12 @@
 (* the first position that found the stream full, let go from the start    *)
 (* (a repair never paces the topic), and is caught up from the log like    *)
 (* any subscriber that is behind. BroadcastPush_getdrop.cfg sets Owe =     *)
-(* FALSE, the code before vinc#504, where the rest of the GET was dropped: *)
+(* FALSE, the code before pinc#504, where the rest of the GET was dropped: *)
 (* TLC finds AckedReachesLive violated. BroadcastPush_repair.cfg checks    *)
 (* the step with Ends = 1.                                                 *)
 (*                                                                         *)
 (* A session may end at any time, and the log evicts freely while the      *)
-(* subscriber is away or its GET is on its way (vinc#505). The hub then    *)
+(* subscriber is away or its GET is on its way (pinc#505). The hub then    *)
 (* cannot give the subscriber everything, and says so (RESTORED), by       *)
 (* three rules, each an element of Notice. "sub": the SUB that makes the   *)
 (* subscriber live again asks from a position (`p`, the time `since` of    *)
@@ -96,9 +96,9 @@
 (* _nogettell.cfg each leave one rule out: TLC finds AckedReachesLive      *)
 (* violated. BroadcastPush_away.cfg checks the three with Ends = 1.        *)
 (*                                                                         *)
-(* Lean counterpart: proofs/lean/Vinc/BroadcastLogModel.lean (pushOwed,    *)
+(* Lean counterpart: proofs/lean/Pinc/BroadcastLogModel.lean (pushOwed,    *)
 (* pushOwed_inv, pushOwed_keeps_owed, pushOwed_refused) and                *)
-(* proofs/lean/Vinc/BroadcastWake.lean (wake_inv, wake_stuck_without).     *)
+(* proofs/lean/Pinc/BroadcastWake.lean (wake_inv, wake_stuck_without).     *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC
 
@@ -106,8 +106,8 @@ EXTENDS Integers, Sequences, FiniteSets, TLC
 \* StreamCap: how many frames a stream holds before it refuses (out_cap); Swaps: how many times each subscriber's
 \* session may be replaced (a bound for TLC); Cursor, Guard, Tell, Resume: the parts of the fix
 \* Ends: how many times each subscriber's session may end at the hub (a bound for TLC); Owe: a GET answered into a
-\* stream that fills keeps the subscriber's place (vinc#504); Notice: the rules by which the hub tells a subscriber it
-\* cannot give it everything it asks for, a subset of {"sub", "forgot", "get"} (vinc#505; all three is the code)
+\* stream that fills keeps the subscriber's place (pinc#504); Notice: the rules by which the hub tells a subscriber it
+\* cannot give it everything it asks for, a subset of {"sub", "forgot", "get"} (pinc#505; all three is the code)
 CONSTANTS Subs, N, LogCap, StreamCap, Swaps, Cursor, Guard, Tell, Resume, Ends, Owe, Notice
 
 \* msgAt: the message stored at each log position, positions 1..Len(msgAt), oldest first; base: the oldest position

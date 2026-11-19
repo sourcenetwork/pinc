@@ -20,10 +20,10 @@
 
 use std::collections::VecDeque;
 
-use vinc_crypto::provider::{KEM_CIPHERTEXT_LEN, KEM_ENCAPS_KEY_LEN};
-use vinc_crypto::{Aead, Capabilities, CryptoError, Drbg, IdentityAlg, Keypair, NodeId, Provider, Secret, Software};
-use vinc_security::{AlpnList, ConnId, CreditRecord};
-use vinc_security::{
+use pinc_crypto::provider::{KEM_CIPHERTEXT_LEN, KEM_ENCAPS_KEY_LEN};
+use pinc_crypto::{Aead, Capabilities, CryptoError, Drbg, IdentityAlg, Keypair, NodeId, Provider, Secret, Software};
+use pinc_security::{AlpnList, ConnId, CreditRecord};
+use pinc_security::{
     ClientTickets, Env, Established, Event, Failure, Initiator, InitiatorParams, KeyHandle, LocalIdentity, Output,
     PrekeyPolicy, Responder, ResponderConfig, ResponderStores, SoftKeys, SoftPrekeys,
 };
@@ -129,8 +129,8 @@ pub(crate) const ALGS: [IdentityAlg; 4] = [
     IdentityAlg::MlDsa65,
     IdentityAlg::Hybrid,
 ];
-pub(crate) const ALPN: &[u8] = b"vinc/1";
-pub(crate) const ALPN_B: &[u8] = b"vinc/2";
+pub(crate) const ALPN: &[u8] = b"pinc/1";
+pub(crate) const ALPN_B: &[u8] = b"pinc/2";
 pub(crate) const T0: u64 = 1_000_000_000_000;
 
 pub(crate) fn keypair(alg: IdentityAlg, tag: u8) -> Keypair {
@@ -450,13 +450,13 @@ impl Outcome {
             _ => None,
         })
     }
-    pub fn i_early(&self) -> Option<&vinc_security::EarlyKeys> {
+    pub fn i_early(&self) -> Option<&pinc_security::EarlyKeys> {
         self.i_events.iter().find_map(|e| match e {
             Event::EarlyKeys(x) => Some(x),
             _ => None,
         })
     }
-    pub fn r_early(&self) -> Option<&vinc_security::EarlyKeys> {
+    pub fn r_early(&self) -> Option<&pinc_security::EarlyKeys> {
         self.r_events.iter().find_map(|e| match e {
             Event::EarlyKeys(x) => Some(x),
             _ => None,

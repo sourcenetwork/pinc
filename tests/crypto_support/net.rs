@@ -15,14 +15,14 @@ use std::cmp::Ordering;
 use std::collections::{BTreeSet, BinaryHeap, HashMap};
 use std::net::SocketAddr;
 
-use vinc_core::{
+use pinc_core::{
     Answer, Command, Endpoint, EndpointConfig, Event, Query, Reply, Role, SessionId, Slot, Transmit, Value,
 };
-use vinc_crypto::{Drbg, IdentityAlg, Keypair, NodeId, Software};
-use vinc_security::{Env, KeyHandle, LocalIdentity, PrekeyPolicy, SoftKeys, SoftPrekeys};
-use vinc_sim::suite::crypto::{MsgId, Registry, Term, TermId, Tracked};
-use vinc_tests::{ALPN_A, CC, CCT, CD, CF, CK, CN, CNP, CPK, CTK, MS_NS, SEC_NS, memory};
-use vinc_transport::stream::{NoSource, RecvStatus};
+use pinc_crypto::{Drbg, IdentityAlg, Keypair, NodeId, Software};
+use pinc_security::{Env, KeyHandle, LocalIdentity, PrekeyPolicy, SoftKeys, SoftPrekeys};
+use pinc_sim::suite::crypto::{MsgId, Registry, Term, TermId, Tracked};
+use pinc_tests::{ALPN_A, CC, CCT, CD, CF, CK, CN, CNP, CPK, CTK, MS_NS, SEC_NS, memory};
+use pinc_transport::stream::{NoSource, RecvStatus};
 
 pub type Ep = Endpoint<'static, 'static, Tracked, NoSource, CN, CC, CF, CNP, CK, CD, CPK, CTK, CCT>;
 pub type Sl = Slot<'static, Tracked, NoSource, CN, CC, CF, CNP>;
@@ -111,7 +111,7 @@ impl Host {
                     now,
                     drbg: &mut self.drbg,
                 };
-                let mut sig = [0u8; vinc_crypto::identity::MAX_SIGNATURE_LEN];
+                let mut sig = [0u8; pinc_crypto::identity::MAX_SIGNATURE_LEN];
                 let Answer::KeyRequest(req) = self.ep.query(Query::KeyRequest(session)) else {
                     return;
                 };

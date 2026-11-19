@@ -1,15 +1,15 @@
 //! Model-based tests of the received-packet tracker's range set and the ACK ranges it reports: a real
-//! `ReceivedPackets<N>` (`vinc-transport`, built with the `trace` feature) driven along every edge of the state graph
+//! `ReceivedPackets<N>` (`pinc-transport`, built with the `trace` feature) driven along every edge of the state graph
 //! of `proofs/tla/MbtRanges.tla`.
 //!
 //! TLC enumerates every state the operators of `RxOps.tla` reach at the capacity of a config and writes the graph;
 //! `scripts/mbt.py` turns it into paths from the empty tracker that take every edge, which `scripts/proofs.sh` writes
-//! to the directory `VINC_MBT_DIR`: `ranges.ndjson` from `MbtRanges.cfg` (2 ranges) and `ranges_wide.ndjson` from
+//! to the directory `PINC_MBT_DIR`: `ranges.ndjson` from `MbtRanges.cfg` (2 ranges) and `ranges_wide.ndjson` from
 //! `MbtRanges_wide.cfg` (3 ranges). This test runs each path on a fresh tracker of the config's capacity: after every
 //! call the result must be the model's, and the whole tracker (`trace_view`: the ranges, the floor, the table of our
 //! acknowledgements, the confirmations and the floor they made, and the acknowledgement policy state, which these
 //! calls leave at its start), `largest` and `range_count` must be the model's state. It stops at the first difference
-//! and names the file, the case, the step and the calls that led there. Without `VINC_MBT_DIR` it checks nothing.
+//! and names the file, the case, the step and the calls that led there. Without `PINC_MBT_DIR` it checks nothing.
 //!
 //! The model's numbers stand for the code's as `MbtRanges.tla` says: packet numbers are the code's, and model time `t`
 //! is `origin + t * MS` (the model's `MS` is 1 and its `SEC` 1000, the code's `SECOND` is `1000 * MS`), the origin
@@ -25,8 +25,8 @@
 use std::fmt::Write as _;
 use std::ops::RangeInclusive;
 
-use vinc_tests::{Json, MbtCase, mbt_cases};
-use vinc_transport::recovery::{MAX_ACK_RANGES, MS, ReceivedPackets, RxOutcome, RxPacket, SECOND};
+use pinc_tests::{Json, MbtCase, mbt_cases};
+use pinc_transport::recovery::{MAX_ACK_RANGES, MS, ReceivedPackets, RxOutcome, RxPacket, SECOND};
 
 fn num(v: &Json) -> u64 {
     v.u64().unwrap()
@@ -153,7 +153,7 @@ fn run<const N: usize>(file: &str, case: &MbtCase, init: &Json) -> usize {
     case.steps.len()
 }
 
-/// Walks every case of `file` on trackers of `N` ranges; false when `VINC_MBT_DIR` is unset.
+/// Walks every case of `file` on trackers of `N` ranges; false when `PINC_MBT_DIR` is unset.
 fn walk<const N: usize>(file: &str) -> bool {
     let Some(cases) = mbt_cases(file) else {
         return false;
@@ -194,6 +194,6 @@ fn the_received_ranges_follow_every_edge_of_the_model() {
     // MbtRanges.cfg (2 ranges) and MbtRanges_wide.cfg (3 ranges)
     let walked = [walk::<2>("ranges.ndjson"), walk::<3>("ranges_wide.ndjson")];
     if walked == [false; 2] {
-        eprintln!("mbt_ranges: VINC_MBT_DIR is not set, nothing checked (scripts/proofs.sh generates the cases)");
+        eprintln!("mbt_ranges: PINC_MBT_DIR is not set, nothing checked (scripts/proofs.sh generates the cases)");
     }
 }

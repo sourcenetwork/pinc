@@ -20,13 +20,13 @@
     clippy::needless_pass_by_value
 )]
 
-use vinc_crypto::{IdentityAlg, Keypair, Provider, Secret, Software};
-use vinc_dtn::DtnError;
-use vinc_dtn::bundle::{Outgoing, Plan, Reception, seal_bundle, serve, serve_len};
-use vinc_dtn::head::{Erasure, SignedHead};
-use vinc_dtn::hlc::Hlc;
-use vinc_dtn::seal::{RecipientKeys, SealSeeds};
-use vinc_tests::SplitMix64;
+use pinc_crypto::{IdentityAlg, Keypair, Provider, Secret, Software};
+use pinc_dtn::DtnError;
+use pinc_dtn::bundle::{Outgoing, Plan, Reception, seal_bundle, serve, serve_len};
+use pinc_dtn::head::{Erasure, SignedHead};
+use pinc_dtn::hlc::Hlc;
+use pinc_dtn::seal::{RecipientKeys, SealSeeds};
+use pinc_tests::SplitMix64;
 
 pub const ALGS: [IdentityAlg; 4] = [
     IdentityAlg::Ed25519,
@@ -104,7 +104,7 @@ pub fn make(signer: &Keypair, to: &Recipient, plan: Plan, payload: &[u8], seed: 
         seeds: &seeds,
     };
     let layout =
-        vinc_dtn::layout::SliceLayout::new(plan.erasure.k, plan.erasure.m, plan.slice_log, payload.len() as u64)
+        pinc_dtn::layout::SliceLayout::new(plan.erasure.k, plan.erasure.m, plan.slice_log, payload.len() as u64)
             .unwrap();
     let mut sealed = vec![0xaa; layout.total_len() as usize];
     let mut outboard = vec![0; layout.outboard_len().unwrap() as usize];

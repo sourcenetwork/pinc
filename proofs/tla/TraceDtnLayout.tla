@@ -1,6 +1,6 @@
 ------------------------------ MODULE TraceDtnLayout ------------------------------
 (***************************************************************************)
-(* Trace validation of the bundle layout (vinc-dtn/src/layout.rs).         *)
+(* Trace validation of the bundle layout (pinc-dtn/src/layout.rs).         *)
 (*                                                                         *)
 (* The Rust test tests/trace_dtn_layout.rs runs the real `SliceLayout` on  *)
 (* the boundary parameters (k = 0, k + m = 255 and 256, slice logs 0, 3, 4 *)
@@ -18,7 +18,7 @@
 (* values, equal to the operators of DtnClock.tla.                         *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds dtn_layout.ndjson.    *)
+(* variable PINC_TRACE_DIR, the directory that holds dtn_layout.ndjson.    *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, TLC, Json, IOUtils
 
@@ -28,7 +28,7 @@ D == INSTANCE DtnLayout WITH c <- 0
 K == INSTANCE DtnClock WITH c <- 0
 U == INSTANCE U64
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/dtn_layout.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/dtn_layout.ndjson")
 
 Lm(x) == U!FromLimbs(x)
 

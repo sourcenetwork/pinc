@@ -20,8 +20,8 @@ use std::net::SocketAddr;
 
 use connect_common::nid;
 use proptest::prelude::*;
-use vinc_connect::ticket::{MAX_LEN, MAX_TEXT, Ticket, TicketError, VERSION};
-use vinc_crypto::{IdentityAlg, NodeId};
+use pinc_connect::ticket::{MAX_LEN, MAX_TEXT, Ticket, TicketError, VERSION};
+use pinc_crypto::{IdentityAlg, NodeId};
 
 fn node(tag: u8, alg: IdentityAlg) -> NodeId {
     NodeId { alg, bytes: [tag; 32] }

@@ -12,9 +12,9 @@
 
 use std::net::SocketAddr;
 
-use vinc_core::{Answer, Command, Event, Query, Role, SessionId, Value};
-use vinc_crypto::NodeId;
-use vinc_tests::*;
+use pinc_core::{Answer, Command, Event, Query, Role, SessionId, Value};
+use pinc_crypto::NodeId;
+use pinc_tests::*;
 
 #[test]
 fn random_and_corrupted_datagrams_leave_the_endpoint_serving() {
@@ -268,13 +268,13 @@ fn commands_with_stale_or_absurd_arguments_fail_cleanly() {
                     t,
                     Command::KeyResponse {
                         session: sa,
-                        response: vinc_security::KeyResponse::Failed
+                        response: pinc_security::KeyResponse::Failed
                     }
                 )
                 .is_err()
         );
         let other = NodeId {
-            alg: vinc_crypto::IdentityAlg::Ed25519,
+            alg: pinc_crypto::IdentityAlg::Ed25519,
             bytes: [3; 32],
         };
         let nowhere: SocketAddr = "192.0.2.1:9".parse().unwrap();

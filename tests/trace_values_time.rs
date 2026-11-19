@@ -1,7 +1,7 @@
 //! Trace generation for the time rules of the value fetch (HEAD_HOLD, STALL_REDIAL, the deadline and the failure
 //! reasons): real runs of `Fetch` in the deterministic multi-provider simulation of `values_support`, recorded as ndjson
 //! (`values_time.ndjson`) for the TLA+ trace check (`TraceValuesTime.tla`) and the Lean replay
-//! (`Vinc/ValuesTimeTrace.lean`).
+//! (`Pinc/ValuesTimeTrace.lean`).
 //!
 //! A run is one fetch: a header line (`vtrun`: the first request offset, the wanted groups and wanted spans, the groups
 //! the store held at the start, the deadline, the providers, what `start` reported) and then one line per step of the
@@ -18,7 +18,7 @@
 //! at the start, and seeded random worlds. Every scenario is asserted here, so the test is meaningful without the proof
 //! tools.
 //!
-//! The trace is written to the directory in `VINC_TRACE_DIR` when it is set; otherwise nothing is written.
+//! The trace is written to the directory in `PINC_TRACE_DIR` when it is set; otherwise nothing is written.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -45,12 +45,12 @@ mod values_support;
 use std::fmt::Write as _;
 
 use values_support::*;
-use vinc_tests::SplitMix64;
-use vinc_values::fetch::Timers;
-use vinc_values::knobs;
-use vinc_values::session::Provider;
-use vinc_values::span::{Span, align};
-use vinc_values::trace::{Event, FailReason, Release, Trace};
+use pinc_tests::SplitMix64;
+use pinc_values::fetch::Timers;
+use pinc_values::knobs;
+use pinc_values::session::Provider;
+use pinc_values::span::{Span, align};
+use pinc_values::trace::{Event, FailReason, Release, Trace};
 
 fn limbs(v: u64) -> String {
     format!(
@@ -478,7 +478,7 @@ fn time_rules_trace() {
     assert_eq!(releases(&sim)[0].1, Release::Granules);
 
     let len = 300 * G as usize;
-    let head_frame = vinc_values::plan::Plan::new(len as u64, &[Span { off: 0, len: G }])
+    let head_frame = pinc_values::plan::Plan::new(len as u64, &[Span { off: 0, len: G }])
         .unwrap()
         .total();
     let cfgs = vec![
@@ -658,7 +658,7 @@ fn time_rules_trace() {
         run.go(&mut sim, &ranges, &ps, dl, 120 * SEC);
     }
 
-    if let Some(dir) = std::env::var_os("VINC_TRACE_DIR") {
+    if let Some(dir) = std::env::var_os("PINC_TRACE_DIR") {
         let path = std::path::Path::new(&dir).join("values_time.ndjson");
         std::fs::write(path, out).unwrap();
     }

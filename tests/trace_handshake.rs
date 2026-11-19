@@ -16,7 +16,7 @@
 //! left out.
 //!
 //! Every scenario is asserted here, so the test is meaningful without the proof tools. The trace is written to
-//! `handshake.ndjson` in the directory in `VINC_TRACE_DIR` when it is set; otherwise nothing is written.
+//! `handshake.ndjson` in the directory in `PINC_TRACE_DIR` when it is set; otherwise nothing is written.
 #![allow(
     clippy::assert_is_empty,
     clippy::manual_assert_eq,
@@ -168,11 +168,11 @@ fn handshake_traces() {
             r#""alpn":2"#,
         ] {
             assert!(
-                vinc_tests::soaking() || hs.contains(needle),
+                pinc_tests::soaking() || hs.contains(needle),
                 "the runs never produce {needle}"
             );
         }
-        let Some(dir) = std::env::var_os("VINC_TRACE_DIR") else {
+        let Some(dir) = std::env::var_os("PINC_TRACE_DIR") else {
             return;
         };
         let dir = std::path::PathBuf::from(dir);

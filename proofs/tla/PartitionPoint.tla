@@ -1,6 +1,6 @@
 ---------------------------- MODULE PartitionPoint ----------------------------
 (***************************************************************************)
-(* slice::partition_point, which plan and find of vinc-dag use             *)
+(* slice::partition_point, which plan and find of pinc-dag use             *)
 (* (ranges.rs), as the standard library computes it: the branchless        *)
 (* binary search of RangeOps.PPGo, run on every partitioned slice of up to *)
 (* MaxLen elements (a prefix where the predicate holds, then the rest), so *)
@@ -15,7 +15,7 @@
 (* checked in VerifiedRanges.tla (Inv) and, on the recorded sets of the    *)
 (* Rust code, in TraceVerifiedRanges.tla.                                  *)
 (*                                                                         *)
-(* Lean counterpart: PP.partitionPoint_eq (proofs/lean/Vinc/PartitionPoint.lean), *)
+(* Lean counterpart: PP.partitionPoint_eq (proofs/lean/Pinc/PartitionPoint.lean), *)
 (* whose loop ppGo is PPGo; Ranges.part_end_lt, part_start_le, part_end_le *)
 (* for the partition of canonical sets.                                    *)
 (***************************************************************************)

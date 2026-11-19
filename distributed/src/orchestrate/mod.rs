@@ -29,7 +29,7 @@ use crate::error::{Error, Result};
 use crate::plan::Plan;
 use crate::quiet::{self, Monitor, Snapshot, Thresholds, Usage};
 use crate::results::{self, Row};
-use crate::scenario::{Scenario, VincEndpoints, Workload};
+use crate::scenario::{Scenario, PincEndpoints, Workload};
 
 pub use faults::FaultRunner;
 
@@ -336,7 +336,7 @@ pub async fn signalled() {
         signal(SignalKind::hangup()),
         signal(SignalKind::interrupt()),
     ) else {
-        tracing::warn!("signal handlers could not be installed; stop the run with `vinc-distributed clean`");
+        tracing::warn!("signal handlers could not be installed; stop the run with `pinc-distributed clean`");
         return std::future::pending().await;
     };
     tokio::select! {
@@ -595,7 +595,7 @@ fn conditions(ctx: &Ctx, host: &HostInfo, reps_override: Option<u32>) -> Vec<Str
             ),
         },
         format!(
-            "Versions: {}; VINC at commit {}. Every stack compiled for {}.",
+            "Versions: {}; PINC at commit {}. Every stack compiled for {}.",
             versions()
                 .iter()
                 .map(|(k, v)| format!("{k} {v}"))
@@ -624,15 +624,15 @@ format!(
             .join("\n")
         },
     ];
-    if ctx.sc.vinc_endpoints == VincEndpoints::PerCore {
+    if ctx.sc.pinc_endpoints == PincEndpoints::PerCore {
         c.push(
-            "VINC endpoints: per-core. In the many test VINC runs one endpoint on each CPU of a node (one identity on \
+            "PINC endpoints: per-core. In the many test PINC runs one endpoint on each CPU of a node (one identity on \
              one port; the client spreads its connections over one endpoint per CPU)."
                 .into(),
         );
         c.push("The other stacks run their runtime over all the node's CPUs.".into());
         c.push(
-            "Each VINC endpoint has its own admission limits and socket buffers, so part of any gain at many \
+            "Each PINC endpoint has its own admission limits and socket buffers, so part of any gain at many \
              connections is that added capacity."
                 .into(),
         );
@@ -681,7 +681,7 @@ fn write_run(
         "built_for": built_for(),
         "git": git_commit(),
         "stack_code": {
-            "vinc": format!("this repository at {}", git_commit()),
+            "pinc": format!("this repository at {}", git_commit()),
             "iroh": versions().into_iter().find(|(k, _)| k == "iroh").map(|(_, v)| format!("crates.io iroh {v}")),
             "libp2p": versions().into_iter().find(|(k, _)| k == "libp2p").map(|(_, v)| format!("crates.io libp2p {v}")),
         },
@@ -693,7 +693,7 @@ fn write_run(
         "nodes": nodes,
         "shared_cpus": ctx.plan.shared_cpus,
         "repetitions": ctx.reps,
-        "vinc_endpoints": ctx.sc.vinc_endpoints.name(),
+        "pinc_endpoints": ctx.sc.pinc_endpoints.name(),
         "reduced": reps_override.is_some(),
         "started": started,
         "ended": now_s(),
@@ -704,7 +704,7 @@ fn write_run(
     Ok(())
 }
 
-/// The commit the harness and VINC were built from, with `+changes` when the tree had uncommitted changes.
+/// The commit the harness and PINC were built from, with `+changes` when the tree had uncommitted changes.
 fn git_commit() -> String {
     let git = |args: &[&str]| {
         std::process::Command::new("git")

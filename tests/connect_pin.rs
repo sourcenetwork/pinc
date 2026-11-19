@@ -11,10 +11,10 @@
 mod connect_common;
 
 use connect_common::{SEC, big_stack, ed, id};
-use vinc_connect::client::{Config, Connectivity, RelayCfg};
-use vinc_crypto::{Drbg, Software};
-use vinc_security::Env;
-use vinc_tests::Host;
+use pinc_connect::client::{Config, Connectivity, RelayCfg};
+use pinc_crypto::{Drbg, Software};
+use pinc_security::Env;
+use pinc_tests::Host;
 
 type Conn = Connectivity<Software, 3, 4>;
 

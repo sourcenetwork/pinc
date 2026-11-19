@@ -41,7 +41,7 @@ const MAX_MESSAGE: usize = 1 << 20;
 const BLOCK: u64 = 256 << 10;
 /// Block requests in flight per provider.
 const WINDOW: usize = 16;
-const BLOCKS: StreamProtocol = StreamProtocol::new("/vinc-distributed/blocks/1");
+const BLOCKS: StreamProtocol = StreamProtocol::new("/pinc-distributed/blocks/1");
 
 fn keypair(name: &str) -> Result<Keypair, String> {
     Keypair::ed25519_from_bytes(seed32(name, "libp2p-identity"))
@@ -575,7 +575,7 @@ impl Handler for App {
                 Ok(Value::Null)
             }
             Cmd::Suspend | Cmd::Resume => Err("libp2p has no notion of a node going to sleep: not available".into()),
-            Cmd::Reach { .. } => Err("the reach test is VINC's port mapping check: not available for libp2p".into()),
+            Cmd::Reach { .. } => Err("the reach test is PINC's port mapping check: not available for libp2p".into()),
             Cmd::HoldSet { .. } | Cmd::Reconcile { .. } => {
                 Err("set reconciliation is not available for libp2p: it has no protocol for it".into())
             }

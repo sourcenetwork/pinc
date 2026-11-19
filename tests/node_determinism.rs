@@ -14,7 +14,7 @@ mod node_common;
 use std::fmt::Write as _;
 
 use node_common::{World, big, secs};
-use vinc_tests::NCmd;
+use pinc_tests::NCmd;
 
 fn run(seed: u64) -> String {
     let mut w = World::build_with(seed, 2, 4, |w| w.trace = true);
@@ -64,11 +64,11 @@ fn trace_records_are_versioned_and_cover_every_layer() {
             it.write_ndjson(&mut line).unwrap();
             assert!(line.starts_with("{\"v\":1,\"t\":") && line.ends_with("}\n"), "{line}");
             kinds.insert(match it.body {
-                vinc_node::Body::Node(_) => "node",
-                vinc_node::Body::Membership(_) => "membership",
-                vinc_node::Body::Broadcast(_) => "broadcast",
-                vinc_node::Body::Core(_) => "core",
-                vinc_node::Body::Values(..) => "values",
+                pinc_node::Body::Node(_) => "node",
+                pinc_node::Body::Membership(_) => "membership",
+                pinc_node::Body::Broadcast(_) => "broadcast",
+                pinc_node::Body::Core(_) => "core",
+                pinc_node::Body::Values(..) => "values",
             });
         }
         assert!(kinds.contains("node") && kinds.contains("membership"), "{kinds:?}");

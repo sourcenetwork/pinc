@@ -16,13 +16,13 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use vinc_crypto::{Aead, IdentityAlg, Provider, Secret, Transcript, expand, extract};
-use vinc_security::ids::aead_tag;
-use vinc_security::labels;
-use vinc_security::message::{IdSig, Initial, MAX_SEALED_LEN, PrekeyField, Reply, ResumeReply};
-use vinc_security::{CreditRecord, PacketKey, TicketBatch};
-use vinc_transport::packet::{ConnId, LongHeader, LongType};
-use vinc_wire::{Reader, Writer};
+use pinc_crypto::{Aead, IdentityAlg, Provider, Secret, Transcript, expand, extract};
+use pinc_security::ids::aead_tag;
+use pinc_security::labels;
+use pinc_security::message::{IdSig, Initial, MAX_SEALED_LEN, PrekeyField, Reply, ResumeReply};
+use pinc_security::{CreditRecord, PacketKey, TicketBatch};
+use pinc_transport::packet::{ConnId, LongHeader, LongType};
+use pinc_wire::{Reader, Writer};
 
 use crate::Net;
 

@@ -1,6 +1,6 @@
 name = "sync-wan"
 about = "Syncing a value from one provider to one consumer across a WAN (50 ms round trip, 100 Mbit/s each way) through a hub, for sizes from 1 KiB to 256 MiB."
-stacks = ["vinc", "iroh", "libp2p"]
+stacks = ["pinc", "iroh", "libp2p"]
 repetitions = 3
 
 [resources]

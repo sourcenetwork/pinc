@@ -1,7 +1,7 @@
 ------------------------------ MODULE TraceExt ------------------------------
 (***************************************************************************)
 (* Trace validation of the extension frame registry and its dispatch:      *)
-(* vinc-transport frame/ext.rs and the Co::Extension arm of vinc-core      *)
+(* pinc-transport frame/ext.rs and the Co::Extension arm of pinc-core      *)
 (* events.rs.                                                              *)
 (*                                                                         *)
 (* The Rust test tests/trace_ext.rs reads the registry from the code       *)
@@ -27,13 +27,13 @@
 (* the Lean replay also reads ext_wide.ndjson (types up to 2^62 - 1).      *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds ext.ndjson.           *)
+(* variable PINC_TRACE_DIR, the directory that holds ext.ndjson.           *)
 (***************************************************************************)
 EXTENDS ExtOps, TLC, Json, IOUtils
 
 VARIABLE c
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/ext.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/ext.ndjson")
 
 Init == c = [t |-> "root"]
 

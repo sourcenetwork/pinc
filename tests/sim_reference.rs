@@ -1,4 +1,4 @@
-//! The reference profile of `vinc-sim`: time-based burst loss, LAN uplinks and downlinks with region delays, wire
+//! The reference profile of `pinc-sim`: time-based burst loss, LAN uplinks and downlinks with region delays, wire
 //! accounting before drops, driver modes, pluggable cost models and random sources, NAT details, middleboxes,
 //! LAN partitions, the IPv6 firewall and the local clock.
 #![allow(
@@ -18,8 +18,8 @@
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
-use vinc_sim::toy::{Probe, ProbeCmd, ProbeEvent};
-use vinc_sim::{
+use pinc_sim::toy::{Probe, ProbeCmd, ProbeEvent};
+use pinc_sim::{
     Call, Clock, CostModel, Cpu, Driver, DropReason, FlatCost, LanConfig, LanDir, LanId, LinkChange, LinkConfig, Loss,
     MS, NatConfig, NatKind, NodeId, PortPolicy, Random, Rng, SEC, Sim, SimConfig, Stream, Time, Work,
 };
@@ -239,7 +239,7 @@ fn wire_bytes_are_counted_before_drops_but_not_for_oversize_datagrams() {
 
 #[test]
 fn reference_driver_leaves_intents_unpumped_until_the_next_pump() {
-    for (driver, expect) in [(Driver::Vinc, vec![1]), (Driver::Reference, vec![])] {
+    for (driver, expect) in [(Driver::Pinc, vec![1]), (Driver::Reference, vec![])] {
         let mut sim: Sim<Probe> = Sim::with_config(1, SimConfig { driver, ..cfg(MS) });
         let (a, b) = (
             sim.add_node_at(Probe::new(), ip(1)),
@@ -416,7 +416,7 @@ fn nat_cfg(kind: NatKind, ports: PortPolicy, no_punch: bool) -> NatConfig {
     }
 }
 
-fn nat_world(seed: u64, c: NatConfig) -> (Sim<Probe>, vinc_sim::NatId, NodeId, NodeId) {
+fn nat_world(seed: u64, c: NatConfig) -> (Sim<Probe>, pinc_sim::NatId, NodeId, NodeId) {
     let mut sim = Sim::with_config(seed, cfg(MS));
     let nat = sim.add_nat(c);
     let a = sim.add_node(Probe::new());

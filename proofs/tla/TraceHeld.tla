@@ -1,6 +1,6 @@
 ------------------------------ MODULE TraceHeld ------------------------------
 (***************************************************************************)
-(* Trace validation of the held ring of a session: vinc-core slot.rs       *)
+(* Trace validation of the held ring of a session: pinc-core slot.rs       *)
 (* (Held).                                                                 *)
 (*                                                                         *)
 (* The Rust test tests/trace_held.rs drives real rings (built with the     *)
@@ -15,14 +15,14 @@
 (* them (at most 16 held, and then every 29th call and the end of the run).*)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds held.ndjson.          *)
+(* variable PINC_TRACE_DIR, the directory that holds held.ndjson.          *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, TLC, Json, IOUtils
 VARIABLES i, r, cap
 vars == <<i, r, cap>>
 INSTANCE HeldOps
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/held.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/held.ndjson")
 Ev0 == Trace[i]
 
 \* an event as the test records it: its kind, stream and error

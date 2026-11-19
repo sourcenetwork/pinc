@@ -935,6 +935,254 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
+name = "pinc"
+version = "0.1.0"
+dependencies = [
+ "hashbrown",
+ "nuclei",
+ "once_cell",
+ "pinc-broadcast",
+ "pinc-connect",
+ "pinc-core",
+ "pinc-crypto",
+ "pinc-keystore",
+ "pinc-node",
+ "pinc-portmap",
+ "pinc-security",
+ "pinc-transport",
+ "rapidhash",
+ "zeroize",
+]
+
+[[package]]
+name = "pinc-broadcast"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "pinc-crypto",
+ "pinc-dag",
+ "pinc-membership",
+ "pinc-wire",
+ "rapidhash",
+]
+
+[[package]]
+name = "pinc-connect"
+version = "0.1.0"
+dependencies = [
+ "pinc-core",
+ "pinc-crypto",
+ "pinc-security",
+ "pinc-transport",
+ "pinc-wire",
+]
+
+[[package]]
+name = "pinc-core"
+version = "0.1.0"
+dependencies = [
+ "pinc-crypto",
+ "pinc-security",
+ "pinc-transport",
+ "pinc-wire",
+ "proptest",
+]
+
+[[package]]
+name = "pinc-crypto"
+version = "0.1.0"
+dependencies = [
+ "aes",
+ "aes-gcm",
+ "blake3",
+ "chacha20",
+ "chacha20poly1305",
+ "cpufeatures",
+ "ed25519-dalek",
+ "ml-dsa",
+ "ml-kem",
+ "p256",
+ "pinc-wire",
+ "sha2",
+ "subtle",
+ "x25519-dalek",
+ "zeroize",
+]
+
+[[package]]
+name = "pinc-dag"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "pinc-wire",
+ "sha2",
+]
+
+[[package]]
+name = "pinc-dtn"
+version = "0.1.0"
+dependencies = [
+ "pinc-crypto",
+ "pinc-dag",
+ "pinc-wire",
+ "zeroize",
+]
+
+[[package]]
+name = "pinc-keystore"
+version = "0.1.0"
+dependencies = [
+ "getrandom",
+ "p256",
+ "pinc-crypto",
+ "pinc-security",
+ "tpm2-protocol",
+ "zeroize",
+]
+
+[[package]]
+name = "pinc-membership"
+version = "0.1.0"
+dependencies = [
+ "pinc-wire",
+]
+
+[[package]]
+name = "pinc-noalloc"
+version = "0.1.0"
+dependencies = [
+ "pinc-core",
+ "pinc-crypto",
+ "pinc-security",
+ "pinc-transport",
+]
+
+[[package]]
+name = "pinc-node"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "pinc-broadcast",
+ "pinc-connect",
+ "pinc-core",
+ "pinc-crypto",
+ "pinc-dag",
+ "pinc-dtn",
+ "pinc-membership",
+ "pinc-portmap",
+ "pinc-reconcile",
+ "pinc-security",
+ "pinc-transport",
+ "pinc-values",
+ "pinc-wire",
+ "proptest",
+]
+
+[[package]]
+name = "pinc-portmap"
+version = "0.1.0"
+
+[[package]]
+name = "pinc-reconcile"
+version = "0.1.0"
+dependencies = [
+ "pinc-crypto",
+ "pinc-wire",
+]
+
+[[package]]
+name = "pinc-security"
+version = "0.1.0"
+dependencies = [
+ "pinc-crypto",
+ "pinc-wire",
+ "zeroize",
+]
+
+[[package]]
+name = "pinc-sim"
+version = "0.1.0"
+dependencies = [
+ "blake2",
+ "blake3",
+ "pinc-connect",
+ "pinc-core",
+ "pinc-crypto",
+ "pinc-dag",
+ "pinc-membership",
+ "pinc-node",
+ "pinc-reconcile",
+ "pinc-security",
+ "pinc-transport",
+ "pinc-values",
+]
+
+[[package]]
+name = "pinc-table"
+version = "0.1.0"
+
+[[package]]
+name = "pinc-tests"
+version = "0.1.0"
+dependencies = [
+ "aes",
+ "blake3",
+ "chacha20",
+ "ed25519-dalek",
+ "ml-dsa",
+ "ml-kem",
+ "nuclei",
+ "p256",
+ "pinc",
+ "pinc-broadcast",
+ "pinc-connect",
+ "pinc-core",
+ "pinc-crypto",
+ "pinc-dag",
+ "pinc-dtn",
+ "pinc-keystore",
+ "pinc-membership",
+ "pinc-node",
+ "pinc-portmap",
+ "pinc-reconcile",
+ "pinc-security",
+ "pinc-sim",
+ "pinc-table",
+ "pinc-transport",
+ "pinc-values",
+ "pinc-wire",
+ "proptest",
+ "rapidhash",
+ "smol",
+ "tokio",
+ "tpm2-protocol",
+ "x25519-dalek",
+]
+
+[[package]]
+name = "pinc-transport"
+version = "0.1.0"
+dependencies = [
+ "pinc-crypto",
+ "pinc-security",
+ "pinc-wire",
+]
+
+[[package]]
+name = "pinc-values"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "pinc-dag",
+ "pinc-transport",
+ "pinc-wire",
+]
+
+[[package]]
+name = "pinc-wire"
+version = "0.1.0"
+
+[[package]]
 name = "piper"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1441,254 +1689,6 @@ dependencies = [
  "crypto-common",
  "ctutils",
 ]
-
-[[package]]
-name = "vinc"
-version = "0.1.0"
-dependencies = [
- "hashbrown",
- "nuclei",
- "once_cell",
- "rapidhash",
- "vinc-broadcast",
- "vinc-connect",
- "vinc-core",
- "vinc-crypto",
- "vinc-keystore",
- "vinc-node",
- "vinc-portmap",
- "vinc-security",
- "vinc-transport",
- "zeroize",
-]
-
-[[package]]
-name = "vinc-broadcast"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "rapidhash",
- "vinc-crypto",
- "vinc-dag",
- "vinc-membership",
- "vinc-wire",
-]
-
-[[package]]
-name = "vinc-connect"
-version = "0.1.0"
-dependencies = [
- "vinc-core",
- "vinc-crypto",
- "vinc-security",
- "vinc-transport",
- "vinc-wire",
-]
-
-[[package]]
-name = "vinc-core"
-version = "0.1.0"
-dependencies = [
- "proptest",
- "vinc-crypto",
- "vinc-security",
- "vinc-transport",
- "vinc-wire",
-]
-
-[[package]]
-name = "vinc-crypto"
-version = "0.1.0"
-dependencies = [
- "aes",
- "aes-gcm",
- "blake3",
- "chacha20",
- "chacha20poly1305",
- "cpufeatures",
- "ed25519-dalek",
- "ml-dsa",
- "ml-kem",
- "p256",
- "sha2",
- "subtle",
- "vinc-wire",
- "x25519-dalek",
- "zeroize",
-]
-
-[[package]]
-name = "vinc-dag"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "sha2",
- "vinc-wire",
-]
-
-[[package]]
-name = "vinc-dtn"
-version = "0.1.0"
-dependencies = [
- "vinc-crypto",
- "vinc-dag",
- "vinc-wire",
- "zeroize",
-]
-
-[[package]]
-name = "vinc-keystore"
-version = "0.1.0"
-dependencies = [
- "getrandom",
- "p256",
- "tpm2-protocol",
- "vinc-crypto",
- "vinc-security",
- "zeroize",
-]
-
-[[package]]
-name = "vinc-membership"
-version = "0.1.0"
-dependencies = [
- "vinc-wire",
-]
-
-[[package]]
-name = "vinc-noalloc"
-version = "0.1.0"
-dependencies = [
- "vinc-core",
- "vinc-crypto",
- "vinc-security",
- "vinc-transport",
-]
-
-[[package]]
-name = "vinc-node"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "proptest",
- "vinc-broadcast",
- "vinc-connect",
- "vinc-core",
- "vinc-crypto",
- "vinc-dag",
- "vinc-dtn",
- "vinc-membership",
- "vinc-portmap",
- "vinc-reconcile",
- "vinc-security",
- "vinc-transport",
- "vinc-values",
- "vinc-wire",
-]
-
-[[package]]
-name = "vinc-portmap"
-version = "0.1.0"
-
-[[package]]
-name = "vinc-reconcile"
-version = "0.1.0"
-dependencies = [
- "vinc-crypto",
- "vinc-wire",
-]
-
-[[package]]
-name = "vinc-security"
-version = "0.1.0"
-dependencies = [
- "vinc-crypto",
- "vinc-wire",
- "zeroize",
-]
-
-[[package]]
-name = "vinc-sim"
-version = "0.1.0"
-dependencies = [
- "blake2",
- "blake3",
- "vinc-connect",
- "vinc-core",
- "vinc-crypto",
- "vinc-dag",
- "vinc-membership",
- "vinc-node",
- "vinc-reconcile",
- "vinc-security",
- "vinc-transport",
- "vinc-values",
-]
-
-[[package]]
-name = "vinc-table"
-version = "0.1.0"
-
-[[package]]
-name = "vinc-tests"
-version = "0.1.0"
-dependencies = [
- "aes",
- "blake3",
- "chacha20",
- "ed25519-dalek",
- "ml-dsa",
- "ml-kem",
- "nuclei",
- "p256",
- "proptest",
- "rapidhash",
- "smol",
- "tokio",
- "tpm2-protocol",
- "vinc",
- "vinc-broadcast",
- "vinc-connect",
- "vinc-core",
- "vinc-crypto",
- "vinc-dag",
- "vinc-dtn",
- "vinc-keystore",
- "vinc-membership",
- "vinc-node",
- "vinc-portmap",
- "vinc-reconcile",
- "vinc-security",
- "vinc-sim",
- "vinc-table",
- "vinc-transport",
- "vinc-values",
- "vinc-wire",
- "x25519-dalek",
-]
-
-[[package]]
-name = "vinc-transport"
-version = "0.1.0"
-dependencies = [
- "vinc-crypto",
- "vinc-security",
- "vinc-wire",
-]
-
-[[package]]
-name = "vinc-values"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "vinc-dag",
- "vinc-transport",
- "vinc-wire",
-]
-
-[[package]]
-name = "vinc-wire"
-version = "0.1.0"
 
 [[package]]
 name = "wait-timeout"

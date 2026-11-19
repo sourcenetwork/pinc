@@ -1,4 +1,4 @@
-//! Benchmarks of `vinc-transport` recovery: acknowledgement processing, sending and the pacer.
+//! Benchmarks of `pinc-transport` recovery: acknowledgement processing, sending and the pacer.
 #![allow(
     missing_docs,
     clippy::unwrap_used,
@@ -10,7 +10,7 @@ use std::hint::black_box;
 use std::time::{Duration, Instant};
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use vinc_transport::recovery::{FrameRef, FrameRefs, MS, Pacer, Recovery, SECOND, Sent};
+use pinc_transport::recovery::{FrameRef, FrameRefs, MS, Pacer, Recovery, SECOND, Sent};
 
 type Rec = Recovery<1024>;
 

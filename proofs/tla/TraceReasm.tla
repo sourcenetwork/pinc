@@ -1,6 +1,6 @@
 ----------------------------- MODULE TraceReasm ------------------------------
 (***************************************************************************)
-(* Trace validation of the handshake fragment reassembly: vinc-transport   *)
+(* Trace validation of the handshake fragment reassembly: pinc-transport   *)
 (* conn/reasm.rs.                                                          *)
 (*                                                                         *)
 (* The Rust test tests/trace_reasm.rs drives real reassemblies (built with *)
@@ -12,14 +12,14 @@
 (* and the runs recorded must be the model's.                              *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds reasm.ndjson.         *)
+(* variable PINC_TRACE_DIR, the directory that holds reasm.ndjson.         *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, TLC, Json, IOUtils
 VARIABLES i, r, mx, nr
 vars == <<i, r, mx, nr>>
 INSTANCE ReasmOps
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/reasm.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/reasm.ndjson")
 Ev0 == Trace[i]
 RunsOf(l) == [k \in 1..Len(l) |-> <<l[k][1], l[k][2]>>]
 Same(y, v) == y.runs = RunsOf(v.runs) /\ y.total = v.total

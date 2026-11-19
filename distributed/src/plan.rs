@@ -23,7 +23,7 @@ use std::net::Ipv4Addr;
 use crate::scenario::{Nat, PortMap, Role, Scenario, Shape};
 
 /// The label every container of a run carries, with the run id as its value.
-pub const LABEL: &str = "vinc.distributed";
+pub const LABEL: &str = "pinc.distributed";
 /// What a router container gets.
 pub const ROUTER_MEMORY_MIB: u32 = 128;
 

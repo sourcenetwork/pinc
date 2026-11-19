@@ -15,11 +15,11 @@ scenario_target!(["S3"]);
 /// read, the hub judged node 8's session stale and the delivery was lost.
 #[test]
 fn a_member_heard_on_the_address_its_hub_just_validated_is_reached_by_the_hub_tunnel() {
-    let v = vinc_sim::suite::world::variants()
+    let v = pinc_sim::suite::world::variants()
         .into_iter()
         .find(|v| v.id == "S3" && v.seed == 55022)
         .unwrap();
-    let r = scenario_support::run_child(&v, vinc_sim::Driver::Vinc, "0").result;
+    let r = scenario_support::run_child(&v, pinc_sim::Driver::Pinc, "0").result;
     assert!(r.ran);
     assert!(
         r.gates.failed().is_empty(),

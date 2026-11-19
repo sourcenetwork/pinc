@@ -1,6 +1,6 @@
 name = "port-mapping"
 about = "A node behind a home router whose router maps ports with PCP (miniupnpd, NAT-PMP with it) is dialed by its node id from behind a symmetric translation, which cannot punch: the session runs on the mapped address with no relay. The dial waits 130 s, past two renewals of the 120 s lease."
-stacks = ["vinc"]
+stacks = ["pinc"]
 repetitions = 1
 
 [[sites]]

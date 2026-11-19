@@ -1,6 +1,6 @@
 ----------------------------- MODULE KeystoreTpm -----------------------------
 (***************************************************************************)
-(* The TPM store of vinc-keystore (tpm/client.rs, tpm/store.rs): how a     *)
+(* The TPM store of pinc-keystore (tpm/client.rs, tpm/store.rs): how a     *)
 (* response is read, how a command is laid out, the commands of every      *)
 (* store operation, the handles the TPM holds, the sealed blob header and  *)
 (* the order of the errors of unseal.                                      *)
@@ -27,7 +27,7 @@
 (* area and password session of every method), UnsealOrder, HeaderRules,   *)
 (* RangeRule, AuthRule.                                                    *)
 (* TraceKeystore.tla checks the recorded bytes and programs against the    *)
-(* operators. Lean counterpart: proofs/lean/Vinc/KeystoreTpm.lean          *)
+(* operators. Lean counterpart: proofs/lean/Pinc/KeystoreTpm.lean          *)
 (* (parseResp_ok_iff, cc_injective, programs_balance, unsealResult_ok_iff).*)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets

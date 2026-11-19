@@ -1,89 +1,89 @@
-import Vinc.Json
-import Vinc.Varint
-import Vinc.Ranges
-import Vinc.Layout
-import Vinc.TraceVerifier
-import Vinc.TraceBuilder
-import Vinc.SecurityTrace
-import Vinc.HandshakeTrace
-import Vinc.TraceKeyRoll
-import Vinc.TraceKeyLayer
-import Vinc.TraceStreams
-import Vinc.TraceRecovery
-import Vinc.TraceRx
-import Vinc.TraceCid
-import Vinc.TraceCc
-import Vinc.TracePn
-import Vinc.TraceReasm
-import Vinc.TraceEarly
-import Vinc.TraceHdr
-import Vinc.TraceFrame
-import Vinc.TraceFramePack
-import Vinc.TraceExt
-import Vinc.TraceOrphan
-import Vinc.TraceCoreTable
-import Vinc.TraceKeepalive
-import Vinc.TraceNodeBackoff
-import Vinc.TraceRtt
-import Vinc.TraceFacadeStandby
-import Vinc.TraceHalfOpen
-import Vinc.TraceHeap
-import Vinc.TraceCoreState
-import Vinc.TraceQueue
-import Vinc.TraceHeld
-import Vinc.TraceExtIn
-import Vinc.TraceReach
-import Vinc.TraceMtu
-import Vinc.TraceReplyPath
-import Vinc.TraceTimers
-import Vinc.TraceStores
-import Vinc.TraceValuesSys
-import Vinc.TraceValuesPlan
-import Vinc.TraceValuesSched
-import Vinc.ValuesWireTrace
-import Vinc.ValuesVerifyTrace
-import Vinc.ValuesTimeTrace
-import Vinc.TraceConnectMailbox
-import Vinc.TraceConnectPack
-import Vinc.TraceConnectTable
-import Vinc.TraceConnectCodec
-import Vinc.TraceIntegrationCodecs
-import Vinc.TraceConnectLink
-import Vinc.TraceConnectClient
-import Vinc.TraceConnectCarrier
-import Vinc.TraceConnectWs
-import Vinc.TraceConnect
-import Vinc.TraceConnectRecords
-import Vinc.TraceConnectOwn
-import Vinc.TraceTranscript
-import Vinc.TraceCrypto
-import Vinc.TraceKeystore
-import Vinc.TraceDtnStore
-import Vinc.TraceDtnForward
-import Vinc.TraceDtnRs
-import Vinc.TraceDtnCodec
-import Vinc.TraceDtnReception
-import Vinc.TraceDtnSeal
-import Vinc.TraceDtnScenario
-import Vinc.TraceDtnLayout
-import Vinc.TraceMembershipInc
-import Vinc.TraceMembershipCodec
-import Vinc.TraceMembership
-import Vinc.BroadcastTrace
-import Vinc.TraceReconcile
-import Vinc.TraceReconcileWire
+import Pinc.Json
+import Pinc.Varint
+import Pinc.Ranges
+import Pinc.Layout
+import Pinc.TraceVerifier
+import Pinc.TraceBuilder
+import Pinc.SecurityTrace
+import Pinc.HandshakeTrace
+import Pinc.TraceKeyRoll
+import Pinc.TraceKeyLayer
+import Pinc.TraceStreams
+import Pinc.TraceRecovery
+import Pinc.TraceRx
+import Pinc.TraceCid
+import Pinc.TraceCc
+import Pinc.TracePn
+import Pinc.TraceReasm
+import Pinc.TraceEarly
+import Pinc.TraceHdr
+import Pinc.TraceFrame
+import Pinc.TraceFramePack
+import Pinc.TraceExt
+import Pinc.TraceOrphan
+import Pinc.TraceCoreTable
+import Pinc.TraceKeepalive
+import Pinc.TraceNodeBackoff
+import Pinc.TraceRtt
+import Pinc.TraceFacadeStandby
+import Pinc.TraceHalfOpen
+import Pinc.TraceHeap
+import Pinc.TraceCoreState
+import Pinc.TraceQueue
+import Pinc.TraceHeld
+import Pinc.TraceExtIn
+import Pinc.TraceReach
+import Pinc.TraceMtu
+import Pinc.TraceReplyPath
+import Pinc.TraceTimers
+import Pinc.TraceStores
+import Pinc.TraceValuesSys
+import Pinc.TraceValuesPlan
+import Pinc.TraceValuesSched
+import Pinc.ValuesWireTrace
+import Pinc.ValuesVerifyTrace
+import Pinc.ValuesTimeTrace
+import Pinc.TraceConnectMailbox
+import Pinc.TraceConnectPack
+import Pinc.TraceConnectTable
+import Pinc.TraceConnectCodec
+import Pinc.TraceIntegrationCodecs
+import Pinc.TraceConnectLink
+import Pinc.TraceConnectClient
+import Pinc.TraceConnectCarrier
+import Pinc.TraceConnectWs
+import Pinc.TraceConnect
+import Pinc.TraceConnectRecords
+import Pinc.TraceConnectOwn
+import Pinc.TraceTranscript
+import Pinc.TraceCrypto
+import Pinc.TraceKeystore
+import Pinc.TraceDtnStore
+import Pinc.TraceDtnForward
+import Pinc.TraceDtnRs
+import Pinc.TraceDtnCodec
+import Pinc.TraceDtnReception
+import Pinc.TraceDtnSeal
+import Pinc.TraceDtnScenario
+import Pinc.TraceDtnLayout
+import Pinc.TraceMembershipInc
+import Pinc.TraceMembershipCodec
+import Pinc.TraceMembership
+import Pinc.BroadcastTrace
+import Pinc.TraceReconcile
+import Pinc.TraceReconcileWire
 
 /-!
 # Trace replay
 
 `replay <file>...` replays the ndjson traces written by the Rust test `trace_ranges` against the Lean model
-functions (`Vinc.Varint.decode`, `Vinc.Varint.encodeInto`, `Vinc.Ranges.insertFixed`, `insertVec`, `find`,
-`containsRange`, `coveredLen`, `Vinc.Layout.groupRange`, `groups`) and the traces written by `trace_verifier`
-(the verifier model `Vinc.Tree.feed`, see `Vinc.TraceVerifier`; the layout sizes). Any difference between what the code
+functions (`Pinc.Varint.decode`, `Pinc.Varint.encodeInto`, `Pinc.Ranges.insertFixed`, `insertVec`, `find`,
+`containsRange`, `coveredLen`, `Pinc.Layout.groupRange`, `groups`) and the traces written by `trace_verifier`
+(the verifier model `Pinc.Tree.feed`, see `Pinc.TraceVerifier`; the layout sizes). Any difference between what the code
 recorded and what the proved model computes exits with an error naming the line.
 -/
 
-open Vinc Vinc.Json
+open Pinc Pinc.Json
 
 /-- Replay one varint or layout event. -/
 private def replayPure (j : J) (t : String) : Except String Unit := do
@@ -244,7 +244,7 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
         | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
       | some t =>
         if TraceDtnStore.isTag t then
-          -- Delay-tolerant layer events (`trace_dtn_*`): the Lean models of `vinc-dtn`.
+          -- Delay-tolerant layer events (`trace_dtn_*`): the Lean models of `pinc-dtn`.
           match TraceDtnStore.replayEvent j dsw with
           | .ok w' =>
             dsw := w'
@@ -252,7 +252,7 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
             continue
           | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
         if TraceDtnForward.isTag t then
-          -- Delay-tolerant layer events (`trace_dtn_*`): the Lean models of `vinc-dtn`.
+          -- Delay-tolerant layer events (`trace_dtn_*`): the Lean models of `pinc-dtn`.
           match TraceDtnForward.replayEvent j dfw with
           | .ok w' =>
             dfw := w'
@@ -260,7 +260,7 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
             continue
           | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
         if TraceDtnRs.isTag t then
-          -- Delay-tolerant layer events (`trace_dtn_*`): the Lean models of `vinc-dtn`.
+          -- Delay-tolerant layer events (`trace_dtn_*`): the Lean models of `pinc-dtn`.
           match TraceDtnRs.replayEvent j drs with
           | .ok w' =>
             drs := w'
@@ -268,7 +268,7 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
             continue
           | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
         if TraceDtnCodec.isTag t then
-          -- Delay-tolerant layer events (`trace_dtn_*`): the Lean models of `vinc-dtn`.
+          -- Delay-tolerant layer events (`trace_dtn_*`): the Lean models of `pinc-dtn`.
           match TraceDtnCodec.replayEvent j dcx with
           | .ok w' =>
             dcx := w'
@@ -276,7 +276,7 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
             continue
           | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
         if TraceDtnReception.isTag t then
-          -- Delay-tolerant layer events (`trace_dtn_*`): the Lean models of `vinc-dtn`.
+          -- Delay-tolerant layer events (`trace_dtn_*`): the Lean models of `pinc-dtn`.
           match TraceDtnReception.replayEvent j drx with
           | .ok w' =>
             drx := w'
@@ -284,7 +284,7 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
             continue
           | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
         if TraceDtnSeal.isTag t then
-          -- Delay-tolerant layer events (`trace_dtn_*`): the Lean models of `vinc-dtn`.
+          -- Delay-tolerant layer events (`trace_dtn_*`): the Lean models of `pinc-dtn`.
           match TraceDtnSeal.replayEvent j dss with
           | .ok w' =>
             dss := w'
@@ -292,7 +292,7 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
             continue
           | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
         if TraceDtnScenario.isTag t then
-          -- Delay-tolerant layer events (`trace_dtn_*`): the Lean models of `vinc-dtn`.
+          -- Delay-tolerant layer events (`trace_dtn_*`): the Lean models of `pinc-dtn`.
           match TraceDtnScenario.replayEvent j dsc with
           | .ok w' =>
             dsc := w'
@@ -337,7 +337,7 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
             continue
           | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
         if t == "rw" then
-          -- Reconcile wire events (`rw`, written by `trace_reconcile_wire`): the codec of `vinc-reconcile`.
+          -- Reconcile wire events (`rw`, written by `trace_reconcile_wire`): the codec of `pinc-reconcile`.
           match TraceReconcileWire.replayEvent j with
           | .ok () =>
             count := count + 1
@@ -360,7 +360,7 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
             continue
           | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
         if t == "vsys" then
-          -- Value fetch system events (`vsys`, written by `trace_values_sys`): the model `Vinc.ValuesSys` of the whole fetch.
+          -- Value fetch system events (`vsys`, written by `trace_values_sys`): the model `Pinc.ValuesSys` of the whole fetch.
           match TraceValuesSys.replayEvent j vyw with
           | .ok w' =>
             vyw := w'
@@ -493,14 +493,14 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
             continue
           | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
         if TraceCrypto.isTag t then
-          -- `vinc-crypto` events (`cr`, written by `trace_crypto`): the KDF, identities, DRBG, provider and secrets.
+          -- `pinc-crypto` events (`cr`, written by `trace_crypto`): the KDF, identities, DRBG, provider and secrets.
           match TraceCrypto.replayEvent j with
           | .ok () =>
             count := count + 1
             continue
           | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
         if t == "ks" || t == "kt" then
-          -- `vinc-keystore` events (`ks`, `kt`, written by `trace_keystore` and `trace_keystore_tpm`).
+          -- `pinc-keystore` events (`ks`, `kt`, written by `trace_keystore` and `trace_keystore_tpm`).
           match TraceKeystore.replayEvent j ksw with
           | .ok w' =>
             ksw := w'

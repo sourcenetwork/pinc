@@ -47,7 +47,7 @@
 (* Witnesses of the rules the code had before (TLC must violate them):     *)
 (*  ConnectClient_w_homelower  HomeOnlyLower: the home moves only to a     *)
 (*              strictly lower round trip or away from an unhealthy relay  *)
-(* Lean: Vinc/ConnectClientThm.lean.                                       *)
+(* Lean: Pinc/ConnectClientThm.lean.                                       *)
 (***************************************************************************)
 EXTENDS ConnectClientOps
 

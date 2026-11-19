@@ -1,7 +1,7 @@
 //! Trace generation for the TPM store against a software TPM (`swtpm`): the bytes of every command the client sends and
 //! of every response it reads, the program of commands each store operation runs, the handles the TPM holds after it,
 //! the sealed blob and every error of `unseal`, recorded as ndjson (`keystore_tpm.ndjson`) for the TLA+ trace check
-//! (`TraceKeystore.tla`) and the Lean replay (`Vinc.TraceKeystore`).
+//! (`TraceKeystore.tla`) and the Lean replay (`Pinc.TraceKeystore`).
 //!
 //! A recording transport wraps the TPM link and logs every command with its response and keeps the set of transient
 //! handles the TPM holds (a handle is added by a successful `CreatePrimary` or `Load` and removed by a successful
@@ -15,7 +15,7 @@
 //! * `hnd`, `auth`: the refusals that send no command (a handle outside the persistent range, a key already
 //!   persistent, an auth value over 64 bytes).
 //!
-//! The trace is written to the directory in `VINC_TRACE_DIR` when it is set; otherwise nothing is written.
+//! The trace is written to the directory in `PINC_TRACE_DIR` when it is set; otherwise nothing is written.
 #![cfg(feature = "hwenc")]
 #![allow(
     clippy::unwrap_used,
@@ -32,10 +32,10 @@ use std::sync::{Arc, Mutex};
 use tpm2_protocol::TpmUnmarshal;
 use tpm2_protocol::data::{Tpm2bPrivate, Tpm2bPublic};
 use tpm2_protocol::frame::{TpmGetRandomResponse, TpmResponse};
-use vinc_crypto::IdentityAlg;
-use vinc_keystore::tpm::{SimTransport, TpmClient, Transport};
-use vinc_keystore::{KeyHandle, KeyStore, KeyStoreError, TpmConfig, TpmStore};
-use vinc_tests::Swtpm;
+use pinc_crypto::IdentityAlg;
+use pinc_keystore::tpm::{SimTransport, TpmClient, Transport};
+use pinc_keystore::{KeyHandle, KeyStore, KeyStoreError, TpmConfig, TpmStore};
+use pinc_tests::Swtpm;
 
 fn arr(b: &[u8]) -> String {
     format!("[{}]", b.iter().map(u8::to_string).collect::<Vec<_>>().join(","))
@@ -476,7 +476,7 @@ fn keystore_tpm_traces() {
     programs(&tpm, &mut run);
     auth_trace(&tpm, &mut run);
     assert!(run.out.lines().count() > 100);
-    if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
+    if let Ok(dir) = std::env::var("PINC_TRACE_DIR") {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(std::path::Path::new(&dir).join("keystore_tpm.ndjson"), run.out).unwrap();
     }

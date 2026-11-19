@@ -32,7 +32,7 @@ impl<A: SimApps> SimNode<A> {
         let mut did = false;
         while let Some(t) = self.node.poll_trace() {
             did = true;
-            if !matches!(t.body, vinc_node::Body::Core(_)) {
+            if !matches!(t.body, pinc_node::Body::Core(_)) {
                 self.traces.push((now, t));
             }
         }
@@ -65,7 +65,7 @@ impl<A: SimApps> SimNode<A> {
         match ev {
             Event::KeyRequest { session } => {
                 let owned = match self.node.endpoint().query(Query::KeyRequest(session)) {
-                    vinc_core::Answer::KeyRequest(req) => Some(answer_parts(
+                    pinc_core::Answer::KeyRequest(req) => Some(answer_parts(
                         &self.prov,
                         &self.kp,
                         &self.prekeys,
@@ -201,7 +201,7 @@ impl<A: SimApps> SimNode<A> {
         let mut buf = vec![0u8; 2048];
         while let Some((to, n)) = self.node.poll_udp(&mut buf) {
             did = true;
-            if to.port() == vinc_connect::local::PORT {
+            if to.port() == pinc_connect::local::PORT {
                 continue;
             }
             self.out.datagrams.push_back((self.addr, to, buf[..n].to_vec()));

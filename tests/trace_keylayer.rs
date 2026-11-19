@@ -1,6 +1,6 @@
 //! Trace generation for the flip and hold layer of the key roll: seeded random runs of two real connections
-//! (`vinc-transport` with the `trace` feature), recorded as ndjson (`keylayer.ndjson`) for the TLA+ trace check
-//! (`TraceKeyLayer.tla`) and the Lean replay (`Vinc/TraceKeyLayer.lean`).
+//! (`pinc-transport` with the `trace` feature), recorded as ndjson (`keylayer.ndjson`) for the TLA+ trace check
+//! (`TraceKeyLayer.tla`) and the Lean replay (`Pinc/TraceKeyLayer.lean`).
 //!
 //! A run connects a client and a server, then drives them datagram by datagram through a [`Pair`]: application data
 //! is written (every sealed packet counts toward the roll), packets are built, and any datagram of the pool is
@@ -10,13 +10,13 @@
 //! of its key layer: the phase bits, the sending, staged, current, previous and next keys (fingerprints, so equal
 //! ids mean equal secrets), the floors and the hold deadline, the packet numbers, the roll machine and the REKEY
 //! message waiting, with the time and probe timeout in force. The checkers replay each step with the operators of the
-//! model (`KeyRoll.tla` `BeginOp`, `SendOp`, `DeliverOp`, `RequeueAns`, `RequestLostOp`; `Vinc.KeyRollSys`) and
+//! model (`KeyRoll.tla` `BeginOp`, `SendOp`, `DeliverOp`, `RequeueAns`, `RequestLostOp`; `Pinc.KeyRollSys`) and
 //! require the state they compute to be the state recorded, with the keys related as symbolic terms (a bijection
 //! between ids and terms, as in `trace_keyroll`).
 //!
 //! The test asserts what it can itself (a packet that opens is the one that was sealed; a message processed is the
 //! one the packet carried) so it is meaningful without the proof tools. Times are nanoseconds from the start of the
-//! run and stay below 2^31 (the TLA+ checker has 32-bit integers). The trace is written to `VINC_TRACE_DIR` when it
+//! run and stay below 2^31 (the TLA+ checker has 32-bit integers). The trace is written to `PINC_TRACE_DIR` when it
 //! is set.
 #![allow(
     clippy::unwrap_used,
@@ -33,10 +33,10 @@
 
 use std::collections::HashMap;
 
-use vinc_crypto::IdentityAlg;
-use vinc_security::Rekey;
-use vinc_tests::*;
-use vinc_transport::conn::{KeyEvent, KeysView, Slot};
+use pinc_crypto::IdentityAlg;
+use pinc_security::Rekey;
+use pinc_tests::*;
+use pinc_transport::conn::{KeyEvent, KeysView, Slot};
 
 const TIME_LIMIT: u64 = (1 << 31) - 1;
 
@@ -356,7 +356,7 @@ fn key_layer_runs_match_the_models() {
         assert!(out.contains(r#""promoted":true"#), "no key was promoted");
         assert!(out.contains(r#""slot":1"#), "no packet opened under the previous key");
         assert!(out.contains(r#""forged":true"#), "no forged packet");
-        if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
+        if let Ok(dir) = std::env::var("PINC_TRACE_DIR") {
             std::fs::create_dir_all(&dir).unwrap();
             std::fs::write(std::path::Path::new(&dir).join("keylayer.ndjson"), &out).unwrap();
         }

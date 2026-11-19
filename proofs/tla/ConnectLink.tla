@@ -26,7 +26,7 @@
 (*  DownDials      a home carrier that is down dials                       *)
 (*  DialResolves   a dial that is never answered is closed by the watchdog *)
 (*  SilentOpenDies a home carrier that hears nothing is checked and reset  *)
-(* Lean: Vinc/ConnectLinkThm.lean.                                         *)
+(* Lean: Pinc/ConnectLinkThm.lean.                                         *)
 (***************************************************************************)
 EXTENDS ConnectLinkOps
 

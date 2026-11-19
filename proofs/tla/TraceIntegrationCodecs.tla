@@ -14,13 +14,13 @@
 (* properties of those operators). A stream id is four 16-bit limbs (TLC   *)
 (* integers are 32 bits wide).                                             *)
 (*                                                                         *)
-(* Needs the TLA+ CommunityModules (Json, IOUtils) and VINC_TRACE_DIR.     *)
+(* Needs the TLA+ CommunityModules (Json, IOUtils) and PINC_TRACE_DIR.     *)
 (***************************************************************************)
 EXTENDS IntegrationCodecsOps, Json, IOUtils
 
 VARIABLE c
 
-Dir == IOEnv.VINC_TRACE_DIR
+Dir == IOEnv.PINC_TRACE_DIR
 Trace == ndJsonDeserialize(Dir \o "/codecs_relay.ndjson") \o ndJsonDeserialize(Dir \o "/codecs_tag.ndjson")
          \o ndJsonDeserialize(Dir \o "/codecs_sid.ndjson")
 

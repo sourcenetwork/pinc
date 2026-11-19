@@ -1,12 +1,12 @@
 ----------------------------- MODULE TraceKeyLayer -----------------------------
 (***************************************************************************)
 (* Trace validation of the flip and hold layer of the key roll:            *)
-(* vinc-transport conn/keys.rs (RecvKeys, Keys), the sending and receiving *)
+(* pinc-transport conn/keys.rs (RecvKeys, Keys), the sending and receiving *)
 (* paths of conn/send.rs and conn/recv.rs that call it, and keyroll.rs     *)
 (* (Roll) under it.                                                        *)
 (*                                                                         *)
 (* The Rust test tests/trace_keylayer.rs connects a client and a server of *)
-(* vinc-transport (built with the cargo feature `trace`) and drives them   *)
+(* pinc-transport (built with the cargo feature `trace`) and drives them   *)
 (* datagram by datagram through seeded schedules: data written so that     *)
 (* rolls become due, packets built, any datagram of the pool delivered any *)
 (* number of times in any order or never, some with the phase bit flipped  *)
@@ -29,7 +29,7 @@
 (* say it does.                                                            *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds keylayer.ndjson.      *)
+(* variable PINC_TRACE_DIR, the directory that holds keylayer.ndjson.      *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
 
@@ -40,7 +40,7 @@ KR == INSTANCE KeyRoll WITH PTO <- 1, MaxTime <- 1, Cap0 <- 1, Cap1 <- 1, MaxPn 
                             ForgeOn <- TRUE,
                             nd <- 0, net <- 0, now <- 0, slog <- 0, ev <- 0, comp <- 0
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/keylayer.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/keylayer.ndjson")
 
 NONEROLL == [none |-> TRUE]
 Ev == Trace[i]

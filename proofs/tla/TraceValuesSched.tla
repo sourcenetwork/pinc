@@ -1,6 +1,6 @@
 ---------------------------- MODULE TraceValuesSched ----------------------------
 (***************************************************************************)
-(* Trace validation of the work scheduler of the value fetch: vinc-values   *)
+(* Trace validation of the work scheduler of the value fetch: pinc-values   *)
 (* fetch/sched.rs (begin, top_up with TAIL_SHRINK and take_chunk, steal     *)
 (* with the two idle corrections, evict) and the start/finish paths of      *)
 (* fetch/mod.rs and fetch/recv.rs.                                          *)
@@ -37,14 +37,14 @@
 (* bytes, less than a group beyond want) and not the exact spans.           *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment      *)
-(* variable VINC_TRACE_DIR, the directory that holds values_sched.ndjson.   *)
+(* variable PINC_TRACE_DIR, the directory that holds values_sched.ndjson.   *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils, ValuesSchedOps
 
 VARIABLES i, rs
 vars == <<i, rs>>
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/values_sched.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/values_sched.ndjson")
 Ev == Trace[i]
 
 Slots == 0..3

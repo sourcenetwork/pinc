@@ -1,0 +1,26 @@
+[package]
+name = "pinc-transport"
+description = "PINCER, the PINC transport: packets, frames, streams, datagrams, flow control, loss recovery, congestion control, pacing, path MTU, connection ids and migration"
+keywords = ["no_std", "transport", "streams", "congestion", "sans-io"]
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[features]
+default = []
+alloc = []
+# Test-only observation of the key layer for trace validation. Costs nothing when off.
+trace = ["alloc", "pinc-security/trace"]
+# Test hook: hand the connection the frames of an authenticated packet without sealing them.
+inject = []
+
+[dependencies]
+pinc-wire = { workspace = true }
+pinc-crypto = { workspace = true }
+pinc-security = { workspace = true }
+
+[lints]
+workspace = true

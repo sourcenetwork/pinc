@@ -1,6 +1,6 @@
 --------------------------- MODULE ConnectPackOps ---------------------------
 (***************************************************************************)
-(* The batch builder of vinc-connect/src/carrier/frame.rs (BatchBuilder,   *)
+(* The batch builder of pinc-connect/src/carrier/frame.rs (BatchBuilder,   *)
 (* BatchState) as pure operators over its state. ConnectPack.tla (the      *)
 (* model check) and TraceConnectPack.tla (the trace validation) both use   *)
 (* them, so the two cannot differ.                                         *)
@@ -22,7 +22,7 @@
 (* A put that does not fit the room left fails first: that is the wire     *)
 (* error BufferTooSmall.                                                   *)
 (*                                                                         *)
-(* Lean counterpart: Vinc/ConnectPack.lean and ConnectPackThm.lean.        *)
+(* Lean counterpart: Pinc/ConnectPack.lean and ConnectPackThm.lean.        *)
 (***************************************************************************)
 EXTENDS ConnectCodecOps
 

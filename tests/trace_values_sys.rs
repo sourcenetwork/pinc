@@ -1,6 +1,6 @@
 //! Trace generation for the multi-provider value fetch: real runs of `Fetch` against real `Server`s through the
 //! in-memory harness, recorded as ndjson (`values_sys.ndjson`) for the TLA+ trace check (`TraceValuesSys.tla`) and the
-//! Lean replay (`Vinc.TraceValuesSys`).
+//! Lean replay (`Pinc.TraceValuesSys`).
 //!
 //! A run is one fetch: a `start` line with its parameters (the value in groups, the wanted groups, the groups the store
 //! held, the providers named, the providers that lie, the deadline), then one line per event and per trace record the
@@ -15,7 +15,7 @@
 //! Times are in microseconds, rounded up, so a deadline that passed by a nanosecond is later than the deadline.
 //!
 //! Every scenario is asserted here, so the test is meaningful without the proof tools. The trace is written to
-//! `values_sys.ndjson` in the directory in `VINC_TRACE_DIR` when it is set; otherwise nothing is written.
+//! `values_sys.ndjson` in the directory in `PINC_TRACE_DIR` when it is set; otherwise nothing is written.
 //!
 //! The scenarios: 1, 2, 3 and 4 providers; a provider dropped mid-transfer (and one that returns); a slow provider
 //! whose work is stolen; a liar among honest providers (bad group, bad proof); every provider lying; a restart in the
@@ -44,10 +44,10 @@ use std::fmt::Write as _;
 use std::ops::Range;
 
 use values_support::*;
-use vinc_values::session::Provider;
-use vinc_values::span::Span;
-use vinc_values::trace::{Event, FailReason, Release, Trace};
-use vinc_values::wire::Req;
+use pinc_values::session::Provider;
+use pinc_values::span::Span;
+use pinc_values::trace::{Event, FailReason, Release, Trace};
+use pinc_values::wire::Req;
 
 /// What the checkers need to know about a run besides what the fetcher reports.
 struct Meta {
@@ -631,7 +631,7 @@ fn value_fetch_traces() {
     finish(&mut out, &mut id, sim, m);
 
     assert!(id >= 20);
-    if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
+    if let Ok(dir) = std::env::var("PINC_TRACE_DIR") {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(std::path::Path::new(&dir).join("values_sys.ndjson"), &out).unwrap();
     }

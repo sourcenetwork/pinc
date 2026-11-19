@@ -1,7 +1,7 @@
 //! Trace generation for the protected carrier: seeded runs of a real dialer and a real listener
-//! (`vinc_connect::carrier::session::ProtectedCarrier`) wired through two byte streams, recorded as ndjson
+//! (`pinc_connect::carrier::session::ProtectedCarrier`) wired through two byte streams, recorded as ndjson
 //! (`connect_carrier.ndjson`) for the TLA+ trace check (`TraceConnectCarrier.tla`) and the Lean replay
-//! (`Vinc/TraceConnectCarrier.lean`).
+//! (`Pinc/TraceConnectCarrier.lean`).
 //!
 //! A run handshakes over the streams with reads, transmits and polls of random sizes and in random order, then seals
 //! frames and raw bytes on both ends and carries them across. Some runs are attacked: a length of 0, one over the
@@ -40,15 +40,15 @@
 
 use std::fmt::Write as _;
 
-use vinc_connect::carrier::session::{self, ALPN, CarrierError, IN_LEN, MAX_UNIT_LEN, OUT_LEN, Poll, ProtectedCarrier};
-use vinc_connect::carrier::{Frame, FrameError, MAX_FRAME_LEN, MAX_PACKET_LEN};
-use vinc_crypto::{Aead, Drbg, IdentityAlg, Keypair, NodeId, Software};
-use vinc_security::message::MAX_MESSAGE_LEN;
-use vinc_security::{
+use pinc_connect::carrier::session::{self, ALPN, CarrierError, IN_LEN, MAX_UNIT_LEN, OUT_LEN, Poll, ProtectedCarrier};
+use pinc_connect::carrier::{Frame, FrameError, MAX_FRAME_LEN, MAX_PACKET_LEN};
+use pinc_crypto::{Aead, Drbg, IdentityAlg, Keypair, NodeId, Software};
+use pinc_security::message::MAX_MESSAGE_LEN;
+use pinc_security::{
     ConnId, CreditRecord, Env, InitiatorParams, KeyHandle, LocalIdentity, PrekeyPolicy, ResponderStores, SoftKeys,
     SoftPrekeys,
 };
-use vinc_tests::SplitMix64;
+use pinc_tests::SplitMix64;
 
 const NOW: u64 = 1_000_000_000_000;
 const TAG: usize = Aead::TAG_LEN;
@@ -671,7 +671,7 @@ fn carrier_calls_match_the_models() {
                     let _ = writeln!(all, "{line}");
                 }
             }
-            if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
+            if let Ok(dir) = std::env::var("PINC_TRACE_DIR") {
                 std::fs::create_dir_all(&dir).unwrap();
                 std::fs::write(std::path::Path::new(&dir).join("connect_carrier.ndjson"), &all).unwrap();
             }

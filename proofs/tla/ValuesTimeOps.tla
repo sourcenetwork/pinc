@@ -1,6 +1,6 @@
 ---------------------------- MODULE ValuesTimeOps ----------------------------
 (***************************************************************************)
-(* The time rules of the value fetch (vinc-values fetch/recv.rs and        *)
+(* The time rules of the value fetch (pinc-values fetch/recv.rs and        *)
 (* fetch/stall.rs), written step for step on the machine integers of       *)
 (* U64.tla, with no variables: ValuesTime.tla model checks them over all   *)
 (* inputs of a small world, TraceValuesTime.tla compares the recorded      *)
@@ -23,7 +23,7 @@
 (* order: <<"ver", off>>, <<"held", off>>, <<"rel", off, why>>, <<"rd",    *)
 (* off>>, <<"done">>, <<"fail", reason>>, <<"redial", wait, next>>.        *)
 (*                                                                         *)
-(* Lean counterpart: proofs/lean/Vinc/ValuesTime.lean (the same functions  *)
+(* Lean counterpart: proofs/lean/Pinc/ValuesTime.lean (the same functions  *)
 (* on natural numbers with saturation), proved in ValuesTimeHold, -Inv,    *)
 (* -Bound, -Stall and -Deadline.                                           *)
 (***************************************************************************)

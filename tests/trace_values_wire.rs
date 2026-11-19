@@ -1,7 +1,7 @@
-//! Trace generation for the value wire codecs (`vinc-values` `wire.rs`): REQ (`Req::parse`, `total_len`, `encode`), the
+//! Trace generation for the value wire codecs (`pinc-values` `wire.rs`): REQ (`Req::parse`, `total_len`, `encode`), the
 //! GROUP header (`GroupHeader::parse`, `encode`), PROOF (`ProofFrame::parse`, `write_head`) and `PROOF_REQ`
 //! (`ProofReq::parse`, `encode`), recorded as ndjson (`values_wire.ndjson`) for the TLA+ trace check
-//! (`TraceValuesWire.tla`) and the Lean replay (`Vinc/ValuesWireTrace.lean`).
+//! (`TraceValuesWire.tla`) and the Lean replay (`Pinc/ValuesWireTrace.lean`).
 //!
 //! The real codecs run on seeded random valid values, every cut length of valid inputs, mutated inputs (a flipped byte, a
 //! wrong type byte, a count over 32, a bad flag, a zero length, a non-whole proof, a non-canonical id, trailing bytes)
@@ -12,7 +12,7 @@
 //! without the proof tools: the accepted inputs and their fields, the error kind and the `Truncated` shortfall of every
 //! refusal, that an accepted input re-encodes to the bytes consumed, that `total_len` agrees with the parse, and that a
 //! failed encode leaves the buffer as it was.
-//! The trace is written to the directory in `VINC_TRACE_DIR` when it is set; otherwise nothing is written.
+//! The trace is written to the directory in `PINC_TRACE_DIR` when it is set; otherwise nothing is written.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -30,10 +30,10 @@
 
 use std::fmt::Write as _;
 
-use vinc_tests::SplitMix64;
-use vinc_values::span::Span;
-use vinc_values::wire::{GROUP_HDR, GroupHeader, ProofFrame, ProofReq, REQ_FIXED, REQ_MAX, Req};
-use vinc_wire::WireError;
+use pinc_tests::SplitMix64;
+use pinc_values::span::Span;
+use pinc_values::wire::{GROUP_HDR, GroupHeader, ProofFrame, ProofReq, REQ_FIXED, REQ_MAX, Req};
+use pinc_wire::WireError;
 
 const SENTINEL: u8 = 0xaa;
 
@@ -757,7 +757,7 @@ fn value_wire_trace() {
     }
     for body in &pfs {
         ev_pf(&mut tr, body);
-        let sid_len = vinc_wire::varint::decode(body).map_or(1, |(_, n)| n);
+        let sid_len = pinc_wire::varint::decode(body).map_or(1, |(_, n)| n);
         let head_len = sid_len + 21;
         for c in 0..head_len.min(body.len()) {
             ev_pf(&mut tr, &body[..c]);
@@ -884,7 +884,7 @@ fn value_wire_trace() {
         for c in 0..b.len() {
             ev_pr(&mut tr, &b[..c]);
         }
-        let sid_len = vinc_wire::varint::decode(b).map_or(1, |(_, n)| n);
+        let sid_len = pinc_wire::varint::decode(b).map_or(1, |(_, n)| n);
         for m in mutations(&mut rng, b, &[0, sid_len - 1, sid_len, sid_len + 7, sid_len + 15]) {
             ev_pr(&mut tr, &m);
         }
@@ -932,7 +932,7 @@ fn value_wire_trace() {
     }
 
     assert!(tr.0.lines().count() > 3000);
-    if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
+    if let Ok(dir) = std::env::var("PINC_TRACE_DIR") {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(std::path::Path::new(&dir).join("values_wire.ndjson"), &tr.0).unwrap();
     }

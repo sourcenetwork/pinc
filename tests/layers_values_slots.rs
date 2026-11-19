@@ -12,11 +12,11 @@
 mod layers_common;
 
 use layers_common::{LWorld, big, completes, data, ids, secs, values_on};
-use vinc_node::trace::Body;
-use vinc_sim::NodeId as SimId;
-use vinc_tests::NCmd;
-use vinc_values::knobs::code;
-use vinc_values::trace::Trace;
+use pinc_node::trace::Body;
+use pinc_sim::NodeId as SimId;
+use pinc_tests::NCmd;
+use pinc_values::knobs::code;
+use pinc_values::trace::Trace;
 
 /// The providers in use on node `n`.
 fn in_use(w: &LWorld, n: SimId) -> usize {
@@ -72,7 +72,7 @@ fn the_request_a_full_server_refuses_as_busy_gives_its_provider_back() {
     // Ten requesters ask one provider for eight values each over slow links: a session carries a few requests at
     // once, and together they are more than the server's 32 slots, so some are refused as busy. Once every fetch is
     // cancelled nothing is in use on any node, the refused requests' provider numbers included. The fetches are
-    // cancelled, not awaited, because a refused request keeps its stream slot on both ends (vinc#675); the test waits
+    // cancelled, not awaited, because a refused request keeps its stream slot on both ends (pinc#675); the test waits
     // for them once that is fixed.
     big(|| {
         let seed = 341u64;

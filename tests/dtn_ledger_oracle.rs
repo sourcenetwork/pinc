@@ -1,4 +1,4 @@
-//! A reference ledger for the delay-tolerant trace tests: the behaviour of `vinc_dtn::store::Ledger` written from its
+//! A reference ledger for the delay-tolerant trace tests: the behaviour of `pinc_dtn::store::Ledger` written from its
 //! documented rules, sharing no code with it. It is stated the way the proofs state it: after the expired items left,
 //! an admission is accepted exactly when the custody items leave room for it in bytes (summed in 128 bits, so nothing
 //! saturates) and in slots; it then evicts transit items, oldest admission first, only as many as needed. The order of

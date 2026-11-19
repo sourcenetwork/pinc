@@ -1,7 +1,7 @@
 ---------------------------- MODULE TraceConnectOwn ----------------------------
 (***************************************************************************)
 (* Trace validation of the node's own record and address discovery:        *)
-(* vinc-connect client/{conn,signing,timers,netcheck}.rs.                  *)
+(* pinc-connect client/{conn,signing,timers,netcheck}.rs.                  *)
 (*                                                                         *)
 (* The Rust test tests/trace_connect_own.rs drives the real Connectivity   *)
 (* (ten relay slots, local discovery off) through its public API: set_local*)
@@ -21,14 +21,14 @@
 (* the hints.                                                              *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds connect_own.ndjson.   *)
+(* variable PINC_TRACE_DIR, the directory that holds connect_own.ndjson.   *)
 (***************************************************************************)
 EXTENDS ConnectOwnOps, Json, IOUtils
 
 VARIABLES i, cf, S, hints, want, jobout
 vars == <<i, cf, S, hints, want, jobout>>
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/connect_own.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/connect_own.ndjson")
 Ev == Trace[i]
 
 Init == /\ i = 1 /\ cf = [cap |-> 8, udp |-> <<0>>] /\ S = NewNode(cf) /\ hints = <<>> /\ want = FALSE /\ jobout = FALSE

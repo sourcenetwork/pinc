@@ -1,6 +1,6 @@
-//! Trace generation for the connection id tables: seeded random runs of a real table (`vinc-transport`, built with
+//! Trace generation for the connection id tables: seeded random runs of a real table (`pinc-transport`, built with
 //! the `trace` feature) driven by the calls a connection makes, recorded as ndjson (`cid.ndjson`) for the TLA+ trace
-//! check (`TraceCid.tla`) and the Lean replay (`Vinc/TraceCid.lean`).
+//! check (`TraceCid.tla`) and the Lean replay (`Pinc/TraceCid.lean`).
 //!
 //! A run learns the peer's first id and installs the secret at random moments, authenticates packets addressed to
 //! the ids of indices near the highest seen (skipping some, repeating some, outside the lookahead, below the
@@ -33,9 +33,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
-use vinc_crypto::extract;
-use vinc_tests::SplitMix64;
-use vinc_transport::conn::{CidTable, CidView};
+use pinc_crypto::extract;
+use pinc_tests::SplitMix64;
+use pinc_transport::conn::{CidTable, CidView};
 
 fn b(x: bool) -> &'static str {
     if x { "true" } else { "false" }
@@ -344,11 +344,11 @@ fn connection_id_runs_match_the_models() {
         r#""op":"query""#,
     ] {
         assert!(
-            vinc_tests::soaking() || out.contains(needle),
+            pinc_tests::soaking() || out.contains(needle),
             "the runs never reach {needle}"
         );
     }
-    if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
+    if let Ok(dir) = std::env::var("PINC_TRACE_DIR") {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(std::path::Path::new(&dir).join("cid.ndjson"), &out).unwrap();
     }

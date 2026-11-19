@@ -11,12 +11,12 @@
     clippy::cast_possible_truncation
 )]
 
-use vinc_crypto::IdentityAlg;
-use vinc_tests::*;
-use vinc_transport::conn::credit_for_streams;
-use vinc_transport::stream;
-use vinc_transport::stream::pool::{BufferPool, CHUNK_SIZE};
-use vinc_transport::stream::{ControlFrame, StreamError};
+use pinc_crypto::IdentityAlg;
+use pinc_tests::*;
+use pinc_transport::conn::credit_for_streams;
+use pinc_transport::stream;
+use pinc_transport::stream::pool::{BufferPool, CHUNK_SIZE};
+use pinc_transport::stream::{ControlFrame, StreamError};
 
 type Table = stream::Streams<stream::NoSource, 8, 1025>;
 
@@ -163,7 +163,7 @@ fn the_configured_stream_window_is_the_one_advertised_and_the_one_the_streams_ru
         const LONG: usize = 1 << 20;
         for window in [64 * 1024u64, 2 << 20] {
             let mut w = World::new(IdentityAlg::Ed25519);
-            w.cfg.credit = vinc_security::CreditRecord::new(window, 100, u16::MAX);
+            w.cfg.credit = pinc_security::CreditRecord::new(window, 100, u16::MAX);
             let (mut sa, mut sb) = (Store::new(true), Store::new(false));
             let mut net = setup(&mut w, &mut sa, &mut sb, Link::new(53, Params::new(5 * MS)));
             assert!(net.connect(net.now + 10 * SEC), "{:?}", net.rx_drops);

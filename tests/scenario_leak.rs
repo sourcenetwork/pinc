@@ -13,9 +13,9 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 
-use vinc_sim::Driver;
-use vinc_sim::suite::run::{LayerSet, run};
-use vinc_sim::suite::world::{build, variants};
+use pinc_sim::Driver;
+use pinc_sim::suite::run::{LayerSet, run};
+use pinc_sim::suite::world::{build, variants};
 
 static LIVE: AtomicUsize = AtomicUsize::new(0);
 static PEAK: AtomicUsize = AtomicUsize::new(0);
@@ -86,7 +86,7 @@ fn a_rerun_world_does_not_grow_the_process() {
     let world = build(&v).unwrap();
     let mut live = Vec::new();
     for _ in 0..RUNS {
-        assert!(run(&world, Driver::Vinc, LayerSet::NODE).unwrap().ran);
+        assert!(run(&world, Driver::Pinc, LayerSet::NODE).unwrap().ran);
         live.push(LIVE.load(Relaxed));
         println!(
             "live {} peak {} resident {}",

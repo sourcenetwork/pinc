@@ -1,20 +1,20 @@
-//! The shared harness of the comparison benches (`compare_vinc`, `compare_iroh`, `compare_libp2p`), also built into the
+//! The shared harness of the comparison benches (`compare_pinc`, `compare_iroh`, `compare_libp2p`), also built into the
 //! distributed harness's node program, which runs the same scenarios between the nodes of an emulated or real network.
 //!
 //! One library is measured per process, and a process is either the server or the client of a scenario:
 //!
-//! - `server [--count-allocs]` binds on `VINC_BENCH_BIND` (an IP address; 127.0.0.1 when unset), prints `ADDR <text>`
+//! - `server [--count-allocs]` binds on `PINC_BENCH_BIND` (an IP address; 127.0.0.1 when unset), prints `ADDR <text>`
 //!   and serves until it is killed.
 //! - `client <addr> <scenario> [numbers]` runs one scenario against it and prints one JSON line per result.
 //!
-//! `--endpoints=per-core` (or `VINC_BENCH_ENDPOINTS=per-core`; the default is `1`) asks a library that can for one
+//! `--endpoints=per-core` (or `PINC_BENCH_ENDPOINTS=per-core`; the default is `1`) asks a library that can for one
 //! endpoint on every worker of its runtime: the server serves on all of them and the `many` test spreads its clients
 //! over them. Every result line of a per-core process says so (`endpoints`: `per-core`; a line without it ran on one
 //! endpoint); the default code path is untouched, and the other tests run on one endpoint either way.
 //!
 //! `--reading=undriven|driven` (the default is `undriven`; only the argument names it) is how the `many` test reads
-//! memory: `undriven` leaves VINC's client endpoints undriven and settles 500 ms, as the row was read before; `driven`
-//! runs every client endpoint's own driver while the connections are open (VINC's `run()`; the other libraries always
+//! memory: `undriven` leaves PINC's client endpoints undriven and settles 500 ms, as the row was read before; `driven`
+//! runs every client endpoint's own driver while the connections are open (PINC's `run()`; the other libraries always
 //! do) and settles 1.5 s before reading. Every `many` line says which (`reading`).
 //!
 //! The wire protocol is the same for every library: a bidirectional stream starts with a mode byte. `H` is answered
@@ -23,7 +23,7 @@
 //! server's own resource counters (resident memory, CPU time, allocations) so the client can read what the server paid
 //! for a phase. `B` is `T` after the server has reset its peak resident memory, so a peak read later starts from that
 //! point (the peak is 0 when it could not be reset). The scenarios are written once against the [`Lib`] trait; each
-//! library's module (`vinc`, `iroh`, `libp2p`) only maps its own endpoint, connection and stream types onto it.
+//! library's module (`pinc`, `iroh`, `libp2p`) only maps its own endpoint, connection and stream types onto it.
 //!
 //! Invariants: nothing here is specific to one library; a number is printed only when it was measured in this run;
 //! a failure is counted and printed, never dropped.
@@ -56,7 +56,7 @@ use futures::channel::mpsc;
 pub mod iroh;
 pub mod libp2p;
 mod many;
-pub mod vinc;
+pub mod pinc;
 
 /// The chunk every library moves bulk data in.
 pub const CHUNK: usize = 64 * 1024;
@@ -826,19 +826,19 @@ fn reading_option(args: &mut Vec<String>) -> Result<(), String> {
 static PER_CORE: AtomicBool = AtomicBool::new(false);
 
 /// Whether this process runs one endpoint on every worker of the runtime: the server serves on all of them and the
-/// many-connection test spreads its clients over them. Set by `--endpoints=per-core` or `VINC_BENCH_ENDPOINTS=per-core`
+/// many-connection test spreads its clients over them. Set by `--endpoints=per-core` or `PINC_BENCH_ENDPOINTS=per-core`
 /// for a library that can ([`Lib::PER_CORE`]); a per-core server or client on a runtime with no workers fails.
 pub fn per_core() -> bool {
     PER_CORE.load(Relaxed)
 }
 
-/// Read the endpoints option: the `--endpoints=` argument (removed from `args`), else `VINC_BENCH_ENDPOINTS`, else `1`.
+/// Read the endpoints option: the `--endpoints=` argument (removed from `args`), else `PINC_BENCH_ENDPOINTS`, else `1`.
 fn endpoints_option<L: Lib>(args: &mut Vec<String>) -> Result<(), String> {
     let arg = args
         .iter()
         .position(|a| a.starts_with("--endpoints="))
         .map(|i| args.remove(i).trim_start_matches("--endpoints=").to_owned());
-    let v = arg.or_else(|| std::env::var("VINC_BENCH_ENDPOINTS").ok());
+    let v = arg.or_else(|| std::env::var("PINC_BENCH_ENDPOINTS").ok());
     match v.as_deref() {
         None | Some("1") => {}
         Some("per-core") => PER_CORE.store(L::PER_CORE, Relaxed),
@@ -858,15 +858,15 @@ fn num<T: std::str::FromStr>(a: &[String], i: usize, default: T) -> T {
     a.get(i).and_then(|s| s.parse().ok()).unwrap_or(default)
 }
 
-/// The address every socket of this process binds: `VINC_BENCH_BIND`, loopback when it is not set.
+/// The address every socket of this process binds: `PINC_BENCH_BIND`, loopback when it is not set.
 ///
 /// # Errors
 /// The variable is set but is not an IP address.
 pub fn bind_ip() -> io::Result<IpAddr> {
-    match std::env::var("VINC_BENCH_BIND") {
+    match std::env::var("PINC_BENCH_BIND") {
         Ok(v) => v
             .parse()
-            .map_err(|_| io::Error::other(format!("VINC_BENCH_BIND is not an IP address: {v}"))),
+            .map_err(|_| io::Error::other(format!("PINC_BENCH_BIND is not an IP address: {v}"))),
         Err(_) => Ok(IpAddr::V4(Ipv4Addr::LOCALHOST)),
     }
 }
@@ -995,16 +995,16 @@ mod tests {
         assert!(!per_core(), "a library that cannot run per-core runs on one endpoint");
         assert!(!line().contains("endpoints"));
         assert_eq!(
-            endpoints_option::<vinc::Vinc1>(&mut vec!["--endpoints=1".to_owned()]),
+            endpoints_option::<pinc::Pinc1>(&mut vec!["--endpoints=1".to_owned()]),
             Ok(())
         );
         assert!(!per_core());
         assert_eq!(
-            endpoints_option::<vinc::Vinc1>(&mut vec!["--endpoints=per-core".to_owned()]),
+            endpoints_option::<pinc::Pinc1>(&mut vec!["--endpoints=per-core".to_owned()]),
             Ok(())
         );
         assert!(per_core());
         assert!(line().contains("\"endpoints\":\"per-core\""), "{}", line());
-        assert!(endpoints_option::<vinc::Vinc1>(&mut vec!["--endpoints=two".to_owned()]).is_err());
+        assert!(endpoints_option::<pinc::Pinc1>(&mut vec!["--endpoints=two".to_owned()]).is_err());
     }
 }

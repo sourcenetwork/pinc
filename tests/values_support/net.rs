@@ -18,16 +18,16 @@ use std::collections::{BTreeMap, BinaryHeap, HashMap, VecDeque};
 use std::ops::Range;
 use std::rc::Rc;
 
-use vinc_dag::ranges::VerifiedRanges;
-use vinc_dag::tree::{Cv, OutboardBuilder, build_outboard_vec};
-use vinc_tests::SplitMix64;
-use vinc_transport::stream::{StreamId, StreamSource};
-use vinc_values::fetch::{Fetch, FetchSpec, In, Io};
-use vinc_values::server::{Server, ServerIn};
-use vinc_values::session::{Inbound, OpenError, Outbound, PeerInfo, Provider, Session};
-use vinc_values::source::ValueSource;
-use vinc_values::store::{StoreError, ValueRead, ValueStore};
-use vinc_values::trace::{Event, Out, Trace};
+use pinc_dag::ranges::VerifiedRanges;
+use pinc_dag::tree::{Cv, OutboardBuilder, build_outboard_vec};
+use pinc_tests::SplitMix64;
+use pinc_transport::stream::{StreamId, StreamSource};
+use pinc_values::fetch::{Fetch, FetchSpec, In, Io};
+use pinc_values::server::{Server, ServerIn};
+use pinc_values::session::{Inbound, OpenError, Outbound, PeerInfo, Provider, Session};
+use pinc_values::source::ValueSource;
+use pinc_values::store::{StoreError, ValueRead, ValueStore};
+use pinc_values::trace::{Event, Out, Trace};
 
 use super::stores::*;
 
@@ -482,7 +482,7 @@ impl Sim {
         self.heap.push(Reverse(Item { t, seq: self.seq, ev }));
     }
 
-    pub fn spec<'a>(&self, ranges: &'a [vinc_values::span::Span], provs: &'a [Provider]) -> FetchSpec<'a> {
+    pub fn spec<'a>(&self, ranges: &'a [pinc_values::span::Span], provs: &'a [Provider]) -> FetchSpec<'a> {
         FetchSpec {
             root: self.root,
             length: self.length,
@@ -502,7 +502,7 @@ impl Sim {
         self.start_with(&[], &provs, None);
     }
 
-    pub fn start_with(&mut self, ranges: &[vinc_values::span::Span], provs: &[Provider], deadline: Option<u64>) {
+    pub fn start_with(&mut self, ranges: &[pinc_values::span::Span], provs: &[Provider], deadline: Option<u64>) {
         let mut spec = self.spec(ranges, provs);
         spec.deadline = deadline;
         for p in provs {

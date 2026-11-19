@@ -518,7 +518,7 @@ function drawFaults(body) {
       h("td", { style: { width: "7rem" } }, numField("", x, "at_s", { unit: "s", min: 0, onchange: () => changed({ topo: false }) })),
       h("td", {}, kindSel),
       h("td", {}, targets, a.do === "set" ? shapeFields(a.shape, { optional: true, onchange: () => changed({ topo: false }) }) : null,
-        a.do === "pause" || a.do === "resume" ? h("label", { class: "chip" }, h("input", { type: "checkbox", checked: !!a.graceful, onchange: (e) => { if (e.target.checked) a.graceful = true; else delete a.graceful; changed({ topo: false }); } }), "tell the group (VINC)") : null),
+        a.do === "pause" || a.do === "resume" ? h("label", { class: "chip" }, h("input", { type: "checkbox", checked: !!a.graceful, onchange: (e) => { if (e.target.checked) a.graceful = true; else delete a.graceful; changed({ topo: false }); } }), "tell the group (PINC)") : null),
       h("td", {}, h("button", { class: "x", type: "button", "aria-label": "remove fault", onclick: () => { f.splice(i, 1); redraw(); } }, "✕")));
   }))));
 }

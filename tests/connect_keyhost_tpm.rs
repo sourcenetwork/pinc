@@ -6,9 +6,9 @@ mod connect_common;
 mod connect_keyhost_common;
 mod connect_rig;
 
-use vinc_crypto::IdentityAlg;
-use vinc_keystore::{KeyHost, TpmConfig};
-use vinc_tests::Swtpm;
+use pinc_crypto::IdentityAlg;
+use pinc_keystore::{KeyHost, TpmConfig};
+use pinc_tests::Swtpm;
 
 #[test]
 fn a_tpm_signs_the_handshake_the_record_the_notice_and_the_beacon() {

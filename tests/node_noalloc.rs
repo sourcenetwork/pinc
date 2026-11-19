@@ -13,9 +13,9 @@
 mod node_common;
 
 use node_common::{World, big, secs};
-use vinc_tests::{meter_endpoint_calls, take_metered_allocs};
+use pinc_tests::{meter_endpoint_calls, take_metered_allocs};
 
-vinc_tests::install_counting_allocator!();
+pinc_tests::install_counting_allocator!();
 
 #[test]
 fn the_node_allocates_nothing_in_steady_state() {

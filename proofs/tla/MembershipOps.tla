@@ -9,7 +9,7 @@
 (* and drains the output queues. The trace check and the system models     *)
 (* apply exactly these operators.                                           *)
 (*                                                                         *)
-(* Lean counterpart: Vinc/MembershipModel*.lean.                            *)
+(* Lean counterpart: Pinc/MembershipModel*.lean.                            *)
 (***************************************************************************)
 EXTENDS Membership
 

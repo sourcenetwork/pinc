@@ -1,6 +1,6 @@
 ---------------------------- MODULE KeystoreStore ----------------------------
 (***************************************************************************)
-(* The software stores and the key host of vinc-keystore (software.rs,     *)
+(* The software stores and the key host of pinc-keystore (software.rs,     *)
 (* host.rs, lib.rs): the request and answer state machine.                 *)
 (*                                                                         *)
 (* A handle comes from one counter shared by all stores (KeyHandle::next), *)
@@ -30,7 +30,7 @@
 (*   GenerateBounded  key generation draws at most 8 seeds, one for every  *)
 (*                   algorithm but P-256                                   *)
 (* TraceKeystore.tla checks the recorded calls against the operators.      *)
-(* Lean counterpart: proofs/lean/Vinc/KeystoreStore.lean (add_fresh,       *)
+(* Lean counterpart: proofs/lean/Pinc/KeystoreStore.lean (add_fresh,       *)
 (* add_inv, remove_removes, bind_nodup, answer_signature_iff,              *)
 (* answer_sign_not_secret, answer_decap_not_signature, generate_bounded).  *)
 (***************************************************************************)

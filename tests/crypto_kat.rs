@@ -8,13 +8,13 @@
 )]
 
 use proptest::prelude::*;
-use vinc_crypto::{Aead, CryptoError, Provider, Software};
-use vinc_tests::SplitMix64;
+use pinc_crypto::{Aead, CryptoError, Provider, Software};
+use pinc_tests::SplitMix64;
 
 mod hexutil;
 use hexutil::{arr, hex};
 
-vinc_tests::install_counting_allocator!();
+pinc_tests::install_counting_allocator!();
 
 const ALGS: [Aead; 2] = [Aead::ChaCha20Poly1305, Aead::Aes128Gcm];
 
@@ -329,7 +329,7 @@ fn provider_operations_do_not_allocate() {
         let mut buf = [3u8; 1200];
         let mut tag = [0u8; 16];
         let mut mask = [0u8; 5];
-        let stats = vinc_tests::measure(|| {
+        let stats = pinc_tests::measure(|| {
             tag = p.seal(&k, &[1; 12], b"aad", &mut buf).unwrap();
             p.open(&k, &[1; 12], b"aad", &mut buf, &tag).unwrap();
             mask = p.hp_mask(&hp, &[2; 16]);
@@ -341,7 +341,7 @@ fn provider_operations_do_not_allocate() {
     let secret = p.x25519_secret(&[8; 32]);
     let peer = p.x25519_public(&p.x25519_secret(&[9; 32]));
     let mut digest = [0u8; 32];
-    let stats = vinc_tests::measure(|| {
+    let stats = pinc_tests::measure(|| {
         let _ = p.x25519_dh(&secret, &peer).unwrap();
         let _ = p.x25519_public(&secret);
         digest = p.sha256(b"abc");

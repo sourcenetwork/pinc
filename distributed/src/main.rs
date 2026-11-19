@@ -1,42 +1,42 @@
-//! `vinc-distributed`: one binary, several modes.
+//! `pinc-distributed`: one binary, several modes.
 //!
 //! ```text
-//! vinc-distributed serve [--bind <addr:port>] [--token <token>] [--image <image>] [--hosts <fleet.toml>]
+//! pinc-distributed serve [--bind <addr:port>] [--token <token>] [--image <image>] [--hosts <fleet.toml>]
 //!     [--quiet-other <% of a core>] [--quiet-steal <%>] [--quiet-wait <s>]
-//! vinc-distributed run <scenario.toml> [--image <image>] [--results <dir>] [--reps <n>]
+//! pinc-distributed run <scenario.toml> [--image <image>] [--results <dir>] [--reps <n>]
 //!     [--quiet-other <% of a core>] [--quiet-steal <%>] [--quiet-wait <s>]
-//! vinc-distributed validate <scenario.toml>
-//! vinc-distributed plan <scenario.toml>
-//! vinc-distributed summarize <results dir>...
-//! vinc-distributed clean
-//! vinc-distributed node transport --stack <vinc|iroh|libp2p> server|client ...
-//! vinc-distributed helper          (started by the orchestrator through sudo; not for direct use)
+//! pinc-distributed validate <scenario.toml>
+//! pinc-distributed plan <scenario.toml>
+//! pinc-distributed summarize <results dir>...
+//! pinc-distributed clean
+//! pinc-distributed node transport --stack <pinc|iroh|libp2p> server|client ...
+//! pinc-distributed helper          (started by the orchestrator through sudo; not for direct use)
 //! ```
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use vinc_distributed::backend::containers::{self, default_image};
-use vinc_distributed::backend::fleet::Fleet;
-use vinc_distributed::backend::ssh;
-use vinc_distributed::orchestrate::{self, Options};
-use vinc_distributed::plan::Plan;
-use vinc_distributed::quiet::Thresholds;
-use vinc_distributed::results;
-use vinc_distributed::scenario::Scenario;
-use vinc_distributed::serve::{ServeOptions, serve};
-use vinc_distributed::{helper, node};
+use pinc_distributed::backend::containers::{self, default_image};
+use pinc_distributed::backend::fleet::Fleet;
+use pinc_distributed::backend::ssh;
+use pinc_distributed::orchestrate::{self, Options};
+use pinc_distributed::plan::Plan;
+use pinc_distributed::quiet::Thresholds;
+use pinc_distributed::results;
+use pinc_distributed::scenario::Scenario;
+use pinc_distributed::serve::{ServeOptions, serve};
+use pinc_distributed::{helper, node};
 
 const USAGE: &str = "usage:
-  vinc-distributed serve [--bind <addr:port>] [--token <token>] [--image <image>] [--hosts <fleet.toml>]
+  pinc-distributed serve [--bind <addr:port>] [--token <token>] [--image <image>] [--hosts <fleet.toml>]
       [--quiet-other <% of a core>] [--quiet-steal <%>] [--quiet-wait <s>]
-  vinc-distributed run <scenario.toml> [--image <image>] [--hosts <fleet.toml>] [--results <dir>] [--reps <n>]
+  pinc-distributed run <scenario.toml> [--image <image>] [--hosts <fleet.toml>] [--results <dir>] [--reps <n>]
       [--quiet-other <% of a core>] [--quiet-steal <%>] [--quiet-wait <s>]
-  vinc-distributed validate <scenario.toml>
-  vinc-distributed plan <scenario.toml>
-  vinc-distributed summarize <results dir>...
-  vinc-distributed clean [--hosts <fleet.toml>]
-  vinc-distributed node transport --stack <vinc|iroh|libp2p> server|client ...";
+  pinc-distributed validate <scenario.toml>
+  pinc-distributed plan <scenario.toml>
+  pinc-distributed summarize <results dir>...
+  pinc-distributed clean [--hosts <fleet.toml>]
+  pinc-distributed node transport --stack <pinc|iroh|libp2p> server|client ...";
 
 fn flag(args: &[String], name: &str) -> Option<String> {
     args.iter()
@@ -91,7 +91,7 @@ fn run(args: &[String]) -> Result<(), String> {
     println!("results: {}", out.dir.display());
     if !out.left.is_empty() {
         return Err(format!(
-            "the teardown left {}; run `vinc-distributed clean`",
+            "the teardown left {}; run `pinc-distributed clean`",
             out.left.join(", ")
         ));
     }
@@ -164,7 +164,7 @@ fn plan(args: &[String]) -> Result<(), String> {
     if !problems.is_empty() {
         return Err(problems.iter().map(ToString::to_string).collect::<Vec<_>>().join("\n"));
     }
-    let cpus = vinc_distributed::quiet::host_cpus();
+    let cpus = pinc_distributed::quiet::host_cpus();
     let p = Plan::new(&sc, "RUN", cpus);
     for s in &p.sites {
         println!(

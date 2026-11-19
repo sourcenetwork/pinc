@@ -55,7 +55,7 @@
 (* nodes of a custody cycle and no node keeps custody (the bundle stays as  *)
 (* transit in the ledgers, evictable). Ranked = 1 (custody is offered only  *)
 (* to a higher node) rules it out, which the Lean theorem custody_chain     *)
-(* proves for every number of nodes. Lean: proofs/lean/Vinc/DtnScenario*.lean*)
+(* proves for every number of nodes. Lean: proofs/lean/Pinc/DtnScenario*.lean*)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC
 

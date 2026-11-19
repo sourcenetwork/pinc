@@ -1,6 +1,6 @@
 ------------------------------ MODULE ConnectCodec ------------------------------
 (***************************************************************************)
-(* Model check of the wire formats of vinc-connect (ConnectCodecOps.tla):  *)
+(* Model check of the wire formats of pinc-connect (ConnectCodecOps.tla):  *)
 (* a systematic finite domain of valid frames, datagrams, records,         *)
 (* beacons, notices, tickets and candidate lists, with the field           *)
 (* boundaries of every width, and the properties below over it.            *)
@@ -26,7 +26,7 @@
 (*  Text        the base32 text of a ticket decodes to the ticket, in     *)
 (*              either case, and a text with a stray bit, a stray         *)
 (*              character or an impossible length is refused              *)
-(* Lean: Vinc/ConnectFrame*.lean, ConnectBatch.lean, ConnectDatagram.lean, *)
+(* Lean: Pinc/ConnectFrame*.lean, ConnectBatch.lean, ConnectDatagram.lean, *)
 (* ConnectRecord.lean, ConnectSigned.lean, ConnectTicket*.lean.            *)
 (***************************************************************************)
 EXTENDS ConnectCodecOps

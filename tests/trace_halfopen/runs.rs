@@ -1,9 +1,9 @@
 //! The runs of the half-open trace: the big endpoint (floors, the cap, a resumption at the cap, replays, a close and the
 //! lifetime) and the small one (a full slot table, no protocol, a stalled queue, a clock that steps back).
 
-use vinc_core::{Command, CommandError, MAX_DATAGRAM, Role};
-use vinc_security::message::{FULL_INITIAL_MIN, RESUME_HELLO_MIN, SHORT_INITIAL_MIN};
-use vinc_tests::*;
+use pinc_core::{Command, CommandError, MAX_DATAGRAM, Role};
+use pinc_security::message::{FULL_INITIAL_MIN, RESUME_HELLO_MIN, SHORT_INITIAL_MIN};
+use pinc_tests::*;
 
 use crate::common::{BK, HOLD, MAX, SK, craft, floor, kind_of, source};
 use crate::duo::{Duo, pick_time};

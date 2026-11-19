@@ -2,7 +2,7 @@
 
 use std::net::SocketAddr;
 
-use vinc_sim::suite::rec::NS;
+use pinc_sim::suite::rec::NS;
 
 pub const DUR: u64 = 600 * NS;
 

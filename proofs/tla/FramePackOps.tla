@@ -1,6 +1,6 @@
 ---------------------------- MODULE FramePackOps ----------------------------
 (***************************************************************************)
-(* The VINCER packet builder of vinc-transport (conn/send.rs) as operators *)
+(* The PINCER packet builder of pinc-transport (conn/send.rs) as operators *)
 (* over the frame codecs of FrameOps.tla, call for call.                   *)
 (*                                                                         *)
 (* ImplicitStreamLen is implicit_stream_len: the varint at at + head is    *)
@@ -49,7 +49,7 @@
 (* it; the rule before #433, where build_app takes the repair when the     *)
 (* build starts, so a build that ends without a packet loses it).          *)
 (*                                                                         *)
-(* Lean counterpart: Vinc/TransportFramePack.lean, with the theorems of    *)
+(* Lean counterpart: Pinc/TransportFramePack.lean, with the theorems of    *)
 (* TransportFramePackThm.lean.                                             *)
 (***************************************************************************)
 EXTENDS FrameOps

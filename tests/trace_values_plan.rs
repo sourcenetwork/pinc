@@ -1,9 +1,9 @@
 //! Trace generation for the response geometry and the value server: seeded random runs of the real `Plan`,
 //! `ValueSource::read_at`, `proof_k` and `Server` proof frames, recorded as ndjson (`values_plan.ndjson`, and
 //! `values_plan_small.ndjson` with the runs whose numbers fit TLC's 32-bit integers) for the TLA+ trace check
-//! (`TraceValuesPlan.tla`) and the Lean replay (`Vinc/TraceValuesPlan.lean`).
+//! (`TraceValuesPlan.tla`) and the Lean replay (`Pinc/TraceValuesPlan.lean`).
 //!
-//! What is checked here against `vinc-dag`, with no proof tool involved: the reference response of a request is built
+//! What is checked here against `pinc-dag`, with no proof tool involved: the reference response of a request is built
 //! from `RangeEncoder` steps (header, the pairs the previous group leaves open, the group) and its range
 //! encodings equal `encode_range`; `Plan::new` gives that total (or the right refusal), every frame of `Plan` is the
 //! reference frame at the reference offset, `locate` finds the frame of every offset and inverts `frame`,
@@ -21,7 +21,7 @@
 //! (served over the rounded ranges of its plan, or refused), a stream finished or reset, a session closed. Each event
 //! holds the whole table before and after (a free slot `[]`, a request being collected `[stream, peer]`, a response
 //! `[stream, peer, root, ranges]`) and the resets the server sent, so the checks need no state of their own.
-//! The trace is written to the directory in `VINC_TRACE_DIR` when it is set; otherwise nothing is written.
+//! The trace is written to the directory in `PINC_TRACE_DIR` when it is set; otherwise nothing is written.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -45,18 +45,18 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use values_support::*;
-use vinc_dag::tree::{Layout, PARENT_LEN, RangeEncoder, Step, encode_range};
-use vinc_tests::SplitMix64;
-use vinc_transport::frame::ext;
-use vinc_transport::stream::StreamSource;
-use vinc_values::knobs::{GROUP, GROUP_LOG, WT_LEAD, WT_MAXF, WT_PMAX};
-use vinc_values::plan::{Frame, Plan, PlanError, range_pairs};
-use vinc_values::server::{Server, ServerIn, proof_k};
-use vinc_values::session::Provider;
-use vinc_values::source::ValueSource;
-use vinc_values::span::Span;
-use vinc_values::store::ValueRead;
-use vinc_values::wire::{GROUP_HDR, GroupHeader, PROOF_BODY_MAX, ProofFrame, ProofReq, Req};
+use pinc_dag::tree::{Layout, PARENT_LEN, RangeEncoder, Step, encode_range};
+use pinc_tests::SplitMix64;
+use pinc_transport::frame::ext;
+use pinc_transport::stream::StreamSource;
+use pinc_values::knobs::{GROUP, GROUP_LOG, WT_LEAD, WT_MAXF, WT_PMAX};
+use pinc_values::plan::{Frame, Plan, PlanError, range_pairs};
+use pinc_values::server::{Server, ServerIn, proof_k};
+use pinc_values::session::Provider;
+use pinc_values::source::ValueSource;
+use pinc_values::span::Span;
+use pinc_values::store::ValueRead;
+use pinc_values::wire::{GROUP_HDR, GroupHeader, PROOF_BODY_MAX, ProofFrame, ProofReq, Req};
 
 /// TLC integers are 32 bits: a run is "small" when every number of it is under this.
 const SMALL: u64 = 1 << 26;
@@ -110,7 +110,7 @@ fn arr(items: impl Iterator<Item = String>) -> String {
 }
 
 // ---------------------------------------------------------------------------------------------------------------
-// The reference response, from the encoder of vinc-dag
+// The reference response, from the encoder of pinc-dag
 // ---------------------------------------------------------------------------------------------------------------
 
 /// A frame of the reference: the outboard offsets of the pairs it opens, the group offset and length.
@@ -982,7 +982,7 @@ fn plan_source_and_server_agree_with_the_encoder_and_are_traced() {
 
     slot_runs(&mut |line, nums| sink.line(line, nums), &mut rng);
 
-    let Some(dir) = std::env::var_os("VINC_TRACE_DIR") else {
+    let Some(dir) = std::env::var_os("PINC_TRACE_DIR") else {
         return;
     };
     let dir = std::path::PathBuf::from(dir);

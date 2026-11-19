@@ -1,6 +1,6 @@
 --------------------------------- MODULE Cc ---------------------------------
 (***************************************************************************)
-(* Congestion control and pacing of vinc-transport recovery/cubic.rs,      *)
+(* Congestion control and pacing of pinc-transport recovery/cubic.rs,      *)
 (* round_exit.rs, delivery.rs and pacer.rs over every interleaving of the   *)
 (* calls the recovery engine makes on them, at small sizes (CcOps.tla has  *)
 (* the operators and the scaling).                                         *)
@@ -26,7 +26,7 @@
 (*    waits long enough for a burst to be slow (Cc_pacer*.cfg); a sender  *)
 (*    the window does not limit breaks the packet-by-packet rate          *)
 (*    (Cc_pacer_strict.cfg is the witness).                                *)
-(* Lean counterpart: proofs/lean/Vinc/TransportCc*.lean.                   *)
+(* Lean counterpart: proofs/lean/Pinc/TransportCc*.lean.                   *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
 CONSTANTS MS, SEC, TOP, MAXC, MINC, INITC, BETALIM, MINMSS, MAXMSS, MINSAMP, EXITCW, GFAST, GMID, U32MAX, IRTT, BURST,

@@ -1,6 +1,6 @@
 ---------------------------- MODULE TraceDtnStore ----------------------------
 (***************************************************************************)
-(* Trace validation of the charged store (vinc-dtn/src/store.rs).           *)
+(* Trace validation of the charged store (pinc-dtn/src/store.rs).           *)
 (*                                                                          *)
 (* The Rust test tests/trace_dtn_store.rs drives the real Ledger through the*)
 (* public API with seeded random admissions, expiries, releases and        *)
@@ -19,7 +19,7 @@
 (* in dtn_store_edge.ndjson and are replayed by Lean only (exact u64).      *)
 (*                                                                          *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment      *)
-(* variable VINC_TRACE_DIR, the directory that holds dtn_store.ndjson.     *)
+(* variable PINC_TRACE_DIR, the directory that holds dtn_store.ndjson.     *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
 
@@ -28,7 +28,7 @@ vars == <<i, L>>
 
 O == INSTANCE DtnStoreOps WITH MaxU <- 1073741823
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/dtn_store.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/dtn_store.ndjson")
 
 \* a recorded entry without its (unobservable) admission number
 Ent(j) == [key |-> <<j.s, j.i>>, bytes |-> j.b, cls |-> IF j.c = 0 THEN "custody" ELSE "transit", exp |-> j.x]

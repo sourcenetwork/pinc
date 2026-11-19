@@ -1,6 +1,6 @@
 ------------------------------ MODULE CoreState ------------------------------
 (***************************************************************************)
-(* The saved state of the endpoint (vinc-core state.rs): the tickets, the  *)
+(* The saved state of the endpoint (pinc-core state.rs): the tickets, the  *)
 (* round trip of each peer and the peers that cache this node's prekey,    *)
 (* written by `export_state` and loaded by `restore_state`. The operators  *)
 (* are CoreStateOps.tla, which follow the code field by field and stage by *)
@@ -35,7 +35,7 @@
 (* tickets are already stored) and CoreState_tail.cfg (bytes after the     *)
 (* state accepted: `Canon` and `Strict` fail).                             *)
 (*                                                                         *)
-(* Lean counterpart: proofs/lean/Vinc/CoreState.lean, CoreStateThm.lean.   *)
+(* Lean counterpart: proofs/lean/Pinc/CoreState.lean, CoreStateThm.lean.   *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC
 

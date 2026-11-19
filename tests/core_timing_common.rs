@@ -11,10 +11,10 @@
     clippy::cast_precision_loss
 )]
 
-use vinc_core::{Event, Role, SessionId};
-use vinc_tests::*;
-use vinc_transport::packet::LongHeader;
-use vinc_wire::Reader;
+use pinc_core::{Event, Role, SessionId};
+use pinc_tests::*;
+use pinc_transport::packet::LongHeader;
+use pinc_wire::Reader;
 
 pub const S: u64 = SEC_NS;
 

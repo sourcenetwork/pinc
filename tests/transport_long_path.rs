@@ -10,20 +10,20 @@
     clippy::manual_assert_eq // a failing comparison of megabytes must not print them
 )]
 
-use vinc_crypto::IdentityAlg;
-use vinc_security::CreditRecord;
-use vinc_tests::*;
-use vinc_transport::recovery::SENT_PACKETS;
-use vinc_transport::stream;
+use pinc_crypto::IdentityAlg;
+use pinc_security::CreditRecord;
+use pinc_tests::*;
+use pinc_transport::recovery::SENT_PACKETS;
+use pinc_transport::stream;
 
 /// `streams` streams of `each` bytes at once from A on a clean path of `rtt_ms` round trip at `bps`, with the sizes of
 /// the facade and the limits `limits`; the virtual time until B has every byte.
-fn transfer(bps: u64, rtt_ms: u64, streams: usize, each: usize, limits: vinc::Limits) -> u64 {
+fn transfer(bps: u64, rtt_ms: u64, streams: usize, each: usize, limits: pinc::Limits) -> u64 {
     let mut w = World::new(IdentityAlg::Ed25519);
     w.cfg.send_window = limits.send_window;
     w.cfg.credit = CreditRecord::new(limits.stream_window, limits.streams, u16::MAX);
-    let mut sa = Store::<{ vinc::RING }, SENT_PACKETS>::sized(limits.pool_chunks, &stream::Config::new(true));
-    let mut sb = Store::<{ vinc::RING }, SENT_PACKETS>::sized(limits.pool_chunks, &stream::Config::new(false));
+    let mut sa = Store::<{ pinc::RING }, SENT_PACKETS>::sized(limits.pool_chunks, &stream::Config::new(true));
+    let mut sb = Store::<{ pinc::RING }, SENT_PACKETS>::sized(limits.pool_chunks, &stream::Config::new(false));
     let mut link = Params::new(rtt_ms * MS / 2);
     link.bps = bps;
     let mut net = setup(&mut w, &mut sa, &mut sb, Link::new(7, link));
@@ -67,7 +67,7 @@ fn mib_s(total: usize, elapsed: u64) -> f64 {
 #[test]
 fn the_facade_defaults_fill_long_paths() {
     big_stack(|| {
-        let l = vinc::Limits::default;
+        let l = pinc::Limits::default;
         for (bps, total, one, many, label) in [
             (200_000_000u64, 32usize << 20, 10.0, 10.0, "200 Mbit/s"),
             (1_000_000_000, 128 << 20, 16.0, 32.0, "1 Gbit/s"),
@@ -87,17 +87,17 @@ fn the_facade_defaults_fill_long_paths() {
 /// The transport's default is the reference's cap, and the facade's is not: the same 16 streams on the same path.
 #[test]
 fn the_transports_send_window_is_the_references_and_the_facades_lets_the_congestion_window_bind() {
-    use vinc_transport::conn::{Config, DEFAULT_SEND_WINDOW};
+    use pinc_transport::conn::{Config, DEFAULT_SEND_WINDOW};
     big_stack(|| {
         assert_eq!(DEFAULT_SEND_WINDOW, 1_310_720);
         assert_eq!(Config::new().send_window, DEFAULT_SEND_WINDOW);
-        assert_eq!(vinc::Limits::default().send_window, 16 << 20);
-        let reference = vinc::Limits {
+        assert_eq!(pinc::Limits::default().send_window, 16 << 20);
+        let reference = pinc::Limits {
             send_window: DEFAULT_SEND_WINDOW,
-            ..vinc::Limits::default()
+            ..pinc::Limits::default()
         };
         let held = transfer(200_000_000, 150, 16, 2 << 20, reference);
-        let free = transfer(200_000_000, 150, 16, 2 << 20, vinc::Limits::default());
+        let free = transfer(200_000_000, 150, 16, 2 << 20, pinc::Limits::default());
         // 1.25 MiB over 150 ms is 8.3 MiB/s: 32 MiB take 3.8 s and the slow start.
         assert!(
             held >= 3800 * MS,
@@ -117,7 +117,7 @@ fn the_transports_send_window_is_the_references_and_the_facades_lets_the_congest
 fn the_default_pool_carries_every_stream_the_connection_opens() {
     big_stack(|| {
         // 32 streams of 1 MiB at once, each granted the window of 1.25 MiB: none is refused and all arrive.
-        let elapsed = transfer(200_000_000, 150, 32, 1 << 20, vinc::Limits::default());
+        let elapsed = transfer(200_000_000, 150, 32, 1 << 20, pinc::Limits::default());
         assert!(elapsed < 4 * SEC, "32 MiB over 32 streams took {} ms", elapsed / MS);
     });
 }

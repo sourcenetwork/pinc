@@ -1,6 +1,6 @@
 ---------------------------- MODULE MembershipSys ---------------------------
 (***************************************************************************)
-(* A bounded system model of vinc-membership: hubs and members, each a      *)
+(* A bounded system model of pinc-membership: hubs and members, each a      *)
 (* Membership node (the operators of MembershipOps.tla, validated against   *)
 (* the real code by TraceMembership.tla), a network of reliable ordered     *)
 (* streams, the host environment the machines read, and an adversary that   *)
@@ -44,7 +44,7 @@
 (* words only go up, strictly across a restart), okBounds (tables within    *)
 (* their capacity).                                                         *)
 (*                                                                         *)
-(* Lean counterpart: Vinc/MembershipSys*.lean.                              *)
+(* Lean counterpart: Pinc/MembershipSys*.lean.                              *)
 (***************************************************************************)
 EXTENDS MembershipOps
 
@@ -159,7 +159,7 @@ HeadPair(x) == IF {p \in Nodes \X Nodes : x.net[p] # <<>>} = {} THEN <<>>
                         \A q \in {q \in Nodes \X Nodes : x.net[q] # <<>>} : p[1] < q[1] \/ (p[1] = q[1] /\ p[2] <= q[2])>>
 InboxDue(x) == {n \in Nodes : x.inbox[n] # <<>> /\ Ge(x.now, x.inbox[n][1].due)}
 \* A node that left keeps no membership timer: on_timeout does nothing once it is leaving, so the host neither asks its
-\* deadline nor calls it (vinc-node Node::mem_timed, vinc#551). LeftTimed is that rule. The witness
+\* deadline nor calls it (pinc-node Node::mem_timed, pinc#551). LeftTimed is that rule. The witness
 \* MembershipSys_w_lefttimer overrides it with OldLeftTimed, the node before the fix, which kept asking the deadline of a
 \* node that left: the deadline stays due, every call leaves it due, and the host calls again at once (TimerMoves fails).
 LeftTimed(S) == ~S.leaving
@@ -403,7 +403,7 @@ PrimaryStable == \A n \in Members : w.hist.primN[n] <= 2
 \* #284: a removal that a quiet window deferred moves only on its own schedule; no heal defers it again (only a late
 \* timer does, the reference model's rule)
 WaitKept == w.hist.okWait
-\* vinc#551: every timer call the host makes moves the node's membership deadline past now, so a host that serves due
+\* pinc#551: every timer call the host makes moves the node's membership deadline past now, so a host that serves due
 \* timers first (the facade's run_as, under Endpoint::close) always gets past membership's; the other layers'
 \* deadlines are not in this model
 TimerMoves == w.hist.okTimer

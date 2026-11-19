@@ -18,9 +18,9 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use common::{S, dial, message_type};
-use vinc_core::{Command, EndReason, Event, Role, SessionId};
-use vinc_tests::*;
-use vinc_transport::conn::CloseReason;
+use pinc_core::{Command, EndReason, Event, Role, SessionId};
+use pinc_tests::*;
+use pinc_transport::conn::CloseReason;
 
 fn unanswered(e: &Event) -> bool {
     matches!(

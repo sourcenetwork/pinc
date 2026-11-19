@@ -1,4 +1,4 @@
-//! The writer of the wire format trace of `vinc-connect` (`trace_connect_codec`): the tags of the errors, the JSON of a
+//! The writer of the wire format trace of `pinc-connect` (`trace_connect_codec`): the tags of the errors, the JSON of a
 //! byte sequence and the recorder that runs one call of the real decoder or encoder and appends its event.
 #![allow(
     clippy::unwrap_used,
@@ -18,15 +18,15 @@ use std::fmt::Write as _;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use crate::connect_common::node_bytes;
-use vinc_connect::carrier::frame::{DnsAnswer, Frame, FrameError, MAX_FRAME_LEN};
-use vinc_connect::client::punch;
-use vinc_connect::local::{self, Beacon, BeaconError};
-use vinc_connect::record::{self, Record, RecordError, RecordFields};
-use vinc_connect::relay::datagram::{Datagram, DatagramError};
-use vinc_connect::relay::sleep::{self, Notice, SleepError};
-use vinc_connect::ticket::{Ticket, TicketError};
-use vinc_crypto::NodeId;
-use vinc_wire::WireError;
+use pinc_connect::carrier::frame::{DnsAnswer, Frame, FrameError, MAX_FRAME_LEN};
+use pinc_connect::client::punch;
+use pinc_connect::local::{self, Beacon, BeaconError};
+use pinc_connect::record::{self, Record, RecordError, RecordFields};
+use pinc_connect::relay::datagram::{Datagram, DatagramError};
+use pinc_connect::relay::sleep::{self, Notice, SleepError};
+use pinc_connect::ticket::{Ticket, TicketError};
+use pinc_crypto::NodeId;
+use pinc_wire::WireError;
 
 pub fn wtag(e: WireError) -> String {
     match e {

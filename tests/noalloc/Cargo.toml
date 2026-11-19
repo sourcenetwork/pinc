@@ -1,5 +1,5 @@
 [package]
-name = "vinc-noalloc"
+name = "pinc-noalloc"
 description = "A program that links for the bare-metal targets with no allocator: two endpoints set up from static storage, a handshake and one stream between them"
 version.workspace = true
 authors.workspace = true
@@ -8,10 +8,10 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
-vinc-core = { workspace = true }
-vinc-crypto = { workspace = true }
-vinc-security = { workspace = true }
-vinc-transport = { workspace = true }
+pinc-core = { workspace = true }
+pinc-crypto = { workspace = true }
+pinc-security = { workspace = true }
+pinc-transport = { workspace = true }
 
 [lints]
 workspace = true

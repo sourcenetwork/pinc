@@ -1,13 +1,13 @@
-//! Tests of vinc-wire: varint, reader, writer and the strict DAG-CBOR codec.
+//! Tests of pinc-wire: varint, reader, writer and the strict DAG-CBOR codec.
 // Tests assert freely; the production lints on panics and indexing do not apply here.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
 
 use proptest::prelude::*;
-use vinc_tests::SplitMix64;
+use pinc_tests::SplitMix64;
 
-vinc_tests::install_counting_allocator!();
-use vinc_wire::cbor::{Decoder, Encoder, Item, MAX_DEPTH, MapReader};
-use vinc_wire::{Reader, WireError, Writer, varint};
+pinc_tests::install_counting_allocator!();
+use pinc_wire::cbor::{Decoder, Encoder, Item, MAX_DEPTH, MapReader};
+use pinc_wire::{Reader, WireError, Writer, varint};
 
 fn hex(s: &str) -> Vec<u8> {
     (0..s.len())
@@ -647,7 +647,7 @@ fn decoding_a_nested_document_allocates_nothing() {
     ]);
     let bytes = encode_to_vec(&doc);
 
-    let info = vinc_tests::measure(|| {
+    let info = pinc_tests::measure(|| {
         let mut d = Decoder::new(&bytes);
         let mut items = 0usize;
         while !d.is_empty() {

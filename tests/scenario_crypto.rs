@@ -17,11 +17,11 @@
 mod net;
 
 use net::{Host, Net, ancestry, has};
-use vinc_core::{Command, Event, Role, Value};
-use vinc_crypto::{Aead, Provider, Software, expand, extract};
-use vinc_security::{labels, roll_secret};
-use vinc_sim::suite::crypto::{BLOCK_LEN, DeviceCosts, MsgId, PayloadKind, Registry, Term, Tracked, Work};
-use vinc_tests::{ALPN_A, SEC_NS, SplitMix64, big_stack};
+use pinc_core::{Command, Event, Role, Value};
+use pinc_crypto::{Aead, Provider, Software, expand, extract};
+use pinc_security::{labels, roll_secret};
+use pinc_sim::suite::crypto::{BLOCK_LEN, DeviceCosts, MsgId, PayloadKind, Registry, Term, Tracked, Work};
+use pinc_tests::{ALPN_A, SEC_NS, SplitMix64, big_stack};
 
 // ---------------------------------------------------------------- payload
 
@@ -178,7 +178,7 @@ fn a_real_handshake_and_exchange_have_known_keys_and_clean_verdicts() {
 
         // A compromise of node a after the exchange: what its exported state holds does not open the session.
         let now = net.now;
-        let mut state = vec![0u8; vinc_core::state_len(8)];
+        let mut state = vec![0u8; pinc_core::state_len(8)];
         let n = net.hosts[a].ep.export_state(now, &mut state).unwrap();
         reg.note_compromise(a, now, &net.hosts[a].identity_seed, &state[..n]);
         let comp = reg.compromises();
@@ -226,7 +226,7 @@ fn resumption_with_early_data_keeps_every_key_tracked() {
         // Node a restarts with its saved state; the next dial resumes and carries payload as early data.
         let now = net.now;
         assert!(!net.hosts[a].ep.tickets().is_empty(), "no ticket was issued");
-        let mut state = vec![0u8; vinc_core::state_len(8)];
+        let mut state = vec![0u8; pinc_core::state_len(8)];
         let n = net.hosts[a].ep.export_state(now, &mut state).unwrap();
         net.hosts[a].cmd(now, Command::Close { session: sa, error: 0 });
         net.run_for(SEC_NS);
@@ -515,7 +515,7 @@ fn a_key_roll_chains_the_old_secret_and_the_fresh_dh() {
     let e1 = p1.x25519_secret(&[0x62; 32]);
     let pk1 = p1.x25519_public(&e1);
     let dh = p0.x25519_dh(&e0, &pk1).unwrap();
-    let rolled = roll_secret(&vinc_crypto::Secret::new(secret), &dh);
+    let rolled = roll_secret(&pinc_crypto::Secret::new(secret), &dh);
     let t = reg.term_of(rolled.expose()).unwrap();
     assert!(!reg.is_unknown(t));
     let Term::Hkdf { inputs, .. } = reg.term(t).unwrap() else {
