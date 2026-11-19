@@ -454,6 +454,9 @@ impl<K: KeyStore, D: Discovery, A: Admission, C: Carriers<Pf>, Q: RoleSpec<K>, P
             return Err(Error::config("at most four relays"));
         }
         let wall = platform.wall_ns();
+        if <Q::Built as Role>::ON && wall == 0 {
+            return Err(Error::config("the relay role needs the platform's wall clock"));
+        }
         let mut identity = identity.ok_or(Error::config("the system has no randomness for a node identity"))?;
         let map_keys = Keys::draw(|out| identity.random(out))?;
         let (seed, secrets) = map_keys.parts();

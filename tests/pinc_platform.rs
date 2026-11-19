@@ -303,6 +303,28 @@ impl RelayCarriers for Idle {
 }
 
 #[nuclei::test]
+async fn a_relay_role_needs_a_wall_clock() {
+    let build = |pf: Fake, relay: bool| {
+        let b = Pinc::builder_on(pf).hub().local_addr(([127, 0, 0, 1], 4434).into());
+        let recv = async |_buf: &mut [u8]| pending::<pinc::Result<(usize, SocketAddr)>>().await;
+        let send = async |pkt: &[u8], _to: SocketAddr| -> pinc::Result<usize> { Ok(pkt.len()) };
+        let sleep = async |_at: u64| pending::<()>().await;
+        if relay {
+            b.relay_role(RelayHost::builder(), Idle)
+                .build(recv, send, sleep)
+                .map(drop)
+        } else {
+            b.build(recv, send, sleep).map(drop)
+        }
+    };
+    let e = build(Fake::new(0), true).unwrap_err();
+    assert_eq!(e.kind(), ErrorKind::Config);
+    assert_eq!(e.to_string(), "the relay role needs the platform's wall clock");
+    build(Fake::new(0), false).unwrap();
+    build(Fake::new(WALL_MS * 1_000_000), true).unwrap();
+}
+
+#[nuclei::test]
 async fn the_relay_binary_chain_builds_unchanged() {
     let sock = Arc::new(Handle::<UdpSocket>::bind(lo()).await.unwrap());
     let (r, s) = (Arc::clone(&sock), Arc::clone(&sock));
