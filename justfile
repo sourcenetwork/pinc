@@ -118,6 +118,7 @@ fmt-check:
 # Lints on every target and feature, warnings as errors.
 clippy:
     cargo clippy --workspace --all-targets --all-features -- -D warnings
+    cargo clippy -p pinc -p pinc-keystore --no-default-features --all-targets -- -D warnings
     cargo clippy {{benches}} --all-targets --all-features -- -D warnings
     cargo clippy {{dist}} --all-targets --all-features -- -D warnings
 
@@ -131,15 +132,21 @@ build:
 # Build the docs, warnings as errors.
 doc:
     RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features
+    RUSTDOCFLAGS="-D warnings" cargo doc -p pinc --no-default-features --no-deps
     RUSTDOCFLAGS="-D warnings" cargo doc {{dist}} --no-deps
 
 # Build every no_std crate for a microcontroller and for wasm, then link a program with no allocator for each target.
 # The program (tests/noalloc) runs an endpoint from caller storage, a handshake and a stream between two endpoints in
 # one program, so a crate it reaches that asks for the heap fails the link. It does not cover membership, broadcast,
-# reconcile, the node crate, the keystore or the facade, which still need an allocator (pinc#640). The targets without
+# reconcile or the node crate, which still need an allocator (pinc#640). The facade and the keystore build for the
+# targets too, but they need an allocator as well, so the no-allocator program does not cover them. The targets without
 # compare-and-swap build the program's crates (wire, crypto, security, transport, core) and pinc-table.
 no-std:
-    for c in $(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(" ".join(p["name"] for p in json.load(sys.stdin)["packages"] if "no_std" in (p.get("keywords") or [])))'); do \
+    list=$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(" ".join(p["name"] for p in json.load(sys.stdin)["packages"] if "no_std" in (p.get("keywords") or [])))'); \
+    for c in pinc pinc-keystore; do \
+        case " $list " in *" $c "*) ;; *) echo "no-std: $c is not in the list of crates built for the targets; give its manifest the no_std keyword" >&2; exit 1;; esac; \
+    done; \
+    for c in $list; do \
         for t in {{no_std_targets}}; do cargo build -q -p "$c" --no-default-features --target "$t"; done; \
     done
     for t in {{cas_less_targets}}; do cargo build -q -p pinc-table --no-default-features --target "$t"; done
@@ -161,6 +168,7 @@ compare *args:
 # Every test, hwenc included (the TPM tests need `swtpm`). Extra arguments go to nextest.
 test *args:
     cargo nextest run --workspace --all-features --profile ci {{args}}
+    cargo nextest run -p pinc --no-default-features --lib --profile ci {{args}}
 
 # The stack tests in an application's debug build: every crate at opt-level 0 (`--cargo-profile` is cargo's profile,
 # nextest's own `--profile` is its configuration).
