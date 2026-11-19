@@ -23,13 +23,32 @@
 (* Witness (scripts/proofs.sh witness_tlc): SeqCheck = FALSE keeps whatever *)
 (* verified record was fetched last; a replayed older record then rolls the *)
 (* endpoint back and NoRollback fails.                                      *)
+(*                                                                         *)
+(* The known table is bounded as the code has it: at most KMAX nodes       *)
+(* (records.rs `KNOWN_MAX`, 4096); `remember` forgets one other node's      *)
+(* record (whichever the map yields first: any) to take a new node when it *)
+(* is full. A forgotten node's next lookup takes whatever verifies, so a    *)
+(* replay older than what was once believed is believed again: NoRollback  *)
+(* holds only while no node is forgotten, and FacadeRecords_evict.cfg      *)
+(* (KMAX 1) shows NoReplayBelieved failing (finding a).                    *)
+(*                                                                         *)
+(* RELAYS: the endpoint knows relays (a node that carries the relay role, *)
+(* ordinary or deployed from the relay binary). When the store yields      *)
+(* nothing that verifies and nothing is known, `Endpoint::lookup`          *)
+(* (endpoint/records.rs 105-114) answers with the record the relays found  *)
+(* (`relay_record`), which the connectivity client verified, but neither   *)
+(* weighs it against nor keeps it in the known table (RelayLookup).        *)
+(* FacadeRecords_relay.cfg shows LookupNewest failing (finding b); the      *)
+(* answers stay genuine (AnswerGenuine, FacadeRecords_bounded.cfg).         *)
 (***************************************************************************)
-EXTENDS Naturals
+EXTENDS Naturals, FiniteSets
 
 CONSTANTS
     Nodes,     \* the nodes that publish
     MaxSeq,    \* the most records a node publishes
-    SeqCheck   \* FALSE: the fetched record always replaces the known one (a witness config)
+    SeqCheck,  \* FALSE: the fetched record always replaces the known one (a witness config)
+    KMAX,      \* the most nodes the known table holds (KNOWN_MAX)
+    RELAYS     \* the endpoint knows relays, which answer a lookup the store misses
 
 \* A record: who signed it, its sequence number, and whether its signature verifies. Seq 0 stands for "none".
 Recs == [signer : Nodes, seq : 0..MaxSeq, sound : BOOLEAN]
@@ -74,16 +93,34 @@ Tamper(n) ==
         /\ store' = [store EXCEPT ![n] = r]
     /\ UNCHANGED <<published, known, peak, answer>>
 
+Held(k) == {m \in Nodes : k[m] # NoRec}
+\* `remember`: a node not held, at a full table, first forgets one other node's record (any)
+Remember(n, best) ==
+    IF n \notin Held(known) /\ Cardinality(Held(known)) >= KMAX
+    THEN \E m \in Held(known) : known' = [known EXCEPT ![m] = NoRec, ![n] = best]
+    ELSE known' = [known EXCEPT ![n] = best]
+
 \* The endpoint looks `n` up: what verifies is weighed against what it knew; the answer is what it now believes.
+\* Nothing verified and nothing known: `find` returns None before `remember`, the table is unchanged.
 Lookup(n) ==
     LET f == store[n]
         best == IF Verified(n, f) THEN Newest(known[n], f) ELSE known[n]
-    IN /\ known' = [known EXCEPT ![n] = best]
+    IN /\ ~(RELAYS /\ best = NoRec)
+       /\ IF best = NoRec THEN UNCHANGED known ELSE Remember(n, best)
        /\ peak' = [peak EXCEPT ![n] = IF best.seq > @ THEN best.seq ELSE @]
        /\ answer' = [node |-> n, rec |-> best]
        /\ UNCHANGED <<published, store>>
 
-Next == \E n \in Nodes : Publish(n) \/ Tamper(n) \/ Lookup(n)
+\* The store yields nothing for `n` and the endpoint has relays: the answer is a genuine record of `n` the relays
+\* found (any published one, possibly older than one answered before) or none; the known table is not touched.
+RelayLookup(n) ==
+    /\ RELAYS
+    /\ ~Verified(n, store[n]) /\ known[n] = NoRec
+    /\ \E r \in {NoRec} \cup {[signer |-> n, seq |-> q, sound |-> TRUE] : q \in 1..published[n]} :
+          answer' = [node |-> n, rec |-> r]
+    /\ UNCHANGED <<published, store, known, peak>>
+
+Next == \E n \in Nodes : Publish(n) \/ Tamper(n) \/ Lookup(n) \/ RelayLookup(n)
 
 Spec == Init /\ [][Next]_vars
 
@@ -94,4 +131,12 @@ KnownGenuine ==
 NoRollback == \A n \in Nodes : known[n].seq = peak[n]
 \* A lookup answers with the newest genuine record seen of that node, or nothing if none was.
 LookupNewest == answer.rec = known[answer.node]
+\* A lookup answers with a record its node signed and published, or nothing.
+AnswerGenuine == answer.rec.seq > 0 => answer.rec.signer = answer.node /\ answer.rec.sound
+                                       /\ answer.rec.seq <= published[answer.node]
+\* The known table holds at most KMAX nodes.
+Bounded == Cardinality(Held(known)) <= KMAX
+\* What the endpoint believes about a node is never older than something it believed before (unlike NoRollback, a
+\* node forgotten by a full table is allowed to hold nothing).
+NoReplayBelieved == \A n \in Nodes : known[n].seq > 0 => known[n].seq >= peak[n]
 =============================================================================
