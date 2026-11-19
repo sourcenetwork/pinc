@@ -21,6 +21,7 @@ use pinc_connect::relay::{CloseReason, Config, SessionId, Trace, UdpTarget};
 use pinc_crypto::{Drbg, NodeId, Software};
 use pinc_keystore::KeyStore;
 use pinc_security::{ConnId, Env, KeyRequest, KeyResponse, LocalIdentity, PrekeyInfo, ResponderStores};
+use zeroize::Zeroizing;
 
 use super::access::Access;
 use super::carriers::{Completion, Done, Tag};
@@ -120,8 +121,10 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
         let mut cfg = Config::new(id, u64::from_le_bytes(key));
         cfg.quota = limits.quota;
         cfg.mailbox_max_age_ns = limits.mailbox_max_age_ns;
-        let mut prekeys = Prekeys::new()?;
-        let dial_prekey = prekeys.rotate(now)?;
+        let mut entropy = Zeroizing::new([0u8; 32]);
+        identity.borrow_mut().random(entropy.as_mut_slice())?;
+        let mut prekeys = Prekeys::new(*entropy);
+        let dial_prekey = prekeys.rotate(now, &mut |out| identity.borrow_mut().random(out))?;
         let peers = mesh::slots(&id, peers, now);
         Ok(Self {
             sm: new_machine(cfg),

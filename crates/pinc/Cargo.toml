@@ -22,10 +22,10 @@ pinc-broadcast = { workspace = true, features = ["alloc"] }
 once_cell = { workspace = true, features = ["race", "alloc"] }
 hashbrown = { workspace = true, features = ["inline-more"] }
 rapidhash = { workspace = true }
+zeroize = { workspace = true }
 
 [dev-dependencies]
 nuclei = { workspace = true }
-zeroize = { workspace = true }
 
 [features]
 # Lets a TPM key store (`pinc-keystore`) hold the identity: pass it to `Builder::key_store`.

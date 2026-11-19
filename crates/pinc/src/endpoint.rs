@@ -71,7 +71,7 @@ impl Pinc {
     /// takes its instant.
     pub fn builder_on<Pf: Platform>(platform: Pf) -> Builder<SoftwareStore, NoDiscovery, AllowAll, NoCarriers, (), Pf> {
         Builder {
-            identity: Identity::generate().ok(),
+            identity: platform.key_store().ok().and_then(|s| Identity::generate_in(s).ok()),
             alpns: Vec::new(),
             relays: Vec::new(),
             discovery: NoDiscovery,
@@ -121,13 +121,17 @@ impl<S, D, A, C, Q, Pf> core::fmt::Debug for Builder<S, D, A, C, Q, Pf> {
     }
 }
 
-impl<D, A, C, Q, Pf> Builder<SoftwareStore, D, A, C, Q, Pf> {
+impl<D, A, C, Q, Pf: Platform> Builder<SoftwareStore, D, A, C, Q, Pf> {
     /// Use the Ed25519 identity made from this 32-byte seed. The node id is its public key.
     ///
     /// # Errors
     /// [`crate::ErrorKind::Config`] if the key store cannot start.
     pub fn seed(mut self, seed: &[u8; 32]) -> Result<Self> {
-        self.identity = Some(Identity::from_seed(seed)?);
+        let store = self
+            .platform
+            .key_store()
+            .map_err(|_| Error::new(ErrorKind::Config, "the key store refused the request"))?;
+        self.identity = Some(Identity::in_store(store, seed)?);
         Ok(self)
     }
 }

@@ -15,6 +15,9 @@
 use core::convert::Infallible;
 use core::time::Duration;
 
+use pinc_keystore::SoftwareStore;
+use zeroize::Zeroizing;
+
 use crate::error::{Error, ErrorKind};
 
 /// A point of the host's monotonic clock.
@@ -78,8 +81,21 @@ pub trait Platform {
     /// Fill `out` with unpredictable bytes.
     ///
     /// # Errors
-    /// The host's error when it has no randomness to give.
+    /// The host's error when it has no randomness to give. An error at a prekey rotation leaves the generator on the
+    /// entropy it has.
     fn random(&self, out: &mut [u8]) -> Result<(), Self::Error>;
+
+    /// The key store the facade makes for this host: a generator seeded with 32 bytes of [`Platform::random`], which
+    /// a host without an operating system has no other source for. [`System`] draws from the operating system.
+    ///
+    /// # Errors
+    /// The host's error when it has no randomness to give.
+    #[doc(hidden)]
+    fn key_store(&self) -> Result<SoftwareStore, Self::Error> {
+        let mut entropy = Zeroizing::new([0u8; 32]);
+        self.random(entropy.as_mut_slice())?;
+        Ok(SoftwareStore::from_entropy(*entropy))
+    }
 }
 
 /// Whole milliseconds of `ns` nanoseconds: the unit of the records' sequence numbers and of the suspend call.
@@ -142,6 +158,10 @@ impl Platform for System {
     fn random(&self, out: &mut [u8]) -> Result<(), std::io::Error> {
         // From a kind: no message, so no allocation.
         pinc_keystore::os_random(out).map_err(|_| std::io::ErrorKind::Other.into())
+    }
+
+    fn key_store(&self) -> Result<SoftwareStore, std::io::Error> {
+        SoftwareStore::new().map_err(|_| std::io::ErrorKind::Other.into())
     }
 }
 

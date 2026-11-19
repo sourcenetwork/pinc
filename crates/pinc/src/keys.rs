@@ -4,18 +4,20 @@
 //! handshake) and the application (signing its own messages, as a request to the engine) sign, one at a time on the
 //! engine's task, so no lock is needed. The ML-KEM prekeys always live in the engine's own [`SoftwareStore`], as a TPM
 //! cannot hold them; the two newest generations are kept so a handshake that began under the old prekey still
-//! completes.
+//! completes. The seeds of a prekey are drawn from the identity's store, so a host that seeds that store from its own
+//! entropy gets prekeys from it too.
 //!
-//! Invariants: no private key leaves a store; a rotated-out prekey is removed, which zeroizes it; errors name the
-//! failed operation and never a key.
+//! Invariants: no private key leaves a store; a rotated-out prekey is removed, which zeroizes it, and the seeds of a
+//! prekey are zeroized once the key is made; errors name the failed operation and never a key.
 
 use alloc::boxed::Box;
 use alloc::rc::Rc;
 use alloc::vec::Vec;
 
-use pinc_crypto::{IdentityAlg, Keypair, NodeId};
+use pinc_crypto::{IdentityAlg, Keypair, NodeId, Provider, Software};
 use pinc_keystore::{KeyHandle, KeyStore, SoftwareStore};
 use pinc_security::{KeyHandle as WireHandle, LocalIdentity, PrekeyInfo};
+use zeroize::Zeroizing;
 
 use crate::error::{Error, ErrorKind, Result};
 
@@ -55,13 +57,17 @@ impl Identity {
     /// # Errors
     /// [`ErrorKind::Config`] if the store cannot start or the seed is refused.
     pub fn from_seed(seed: &[u8; 32]) -> Result<Self> {
-        let mut store = SoftwareStore::new().map_err(key_error)?;
-        let kp = Keypair::from_seed(IdentityAlg::Ed25519, seed)
-            .map_err(|_| Error::config("the identity seed is not valid"))?;
-        let handle = store.insert(kp);
-        let mut id = Self::from_store(store, handle)?;
-        id.seed = Some(*seed);
-        Ok(id)
+        Self::in_store(SoftwareStore::new().map_err(key_error)?, seed)
+    }
+
+    /// As [`from_seed`](Self::from_seed), in a store whose random bytes come from a generator seeded with `entropy`:
+    /// for a host without an operating system. The host gives fresh entropy at every start; the same entropy gives
+    /// the same store keys and nonces.
+    ///
+    /// # Errors
+    /// [`ErrorKind::Config`] if the seed is refused.
+    pub fn from_seed_with(seed: &[u8; 32], entropy: &[u8; 32]) -> Result<Self> {
+        Self::in_store(SoftwareStore::from_entropy(*entropy), seed)
     }
 
     /// A new Ed25519 identity from operating system randomness, held in a new in-memory store.
@@ -69,14 +75,34 @@ impl Identity {
     /// # Errors
     /// [`ErrorKind::Config`] if the operating system has no randomness or the store cannot start.
     pub fn generate() -> Result<Self> {
-        let mut seed = [0u8; 32];
-        SoftwareStore::new()
-            .map_err(key_error)?
-            .random(&mut seed)
-            .map_err(key_error)?;
-        let id = Self::from_seed(&seed);
-        seed.fill(0);
-        id
+        Self::generate_in(SoftwareStore::new().map_err(key_error)?)
+    }
+
+    /// A new Ed25519 identity whose seed and store come from a generator seeded with `entropy`: for a host without an
+    /// operating system. The host gives fresh entropy at every start; the same entropy gives the same identity, store
+    /// keys and nonces.
+    ///
+    /// # Errors
+    /// [`ErrorKind::Config`] if the generator cannot give the seed.
+    pub fn generate_with(entropy: &[u8; 32]) -> Result<Self> {
+        Self::generate_in(SoftwareStore::from_entropy(*entropy))
+    }
+
+    /// A new identity whose seed is drawn from `store`, which then holds the key.
+    pub(crate) fn generate_in(mut store: SoftwareStore) -> Result<Self> {
+        let mut seed = Zeroizing::new([0u8; 32]);
+        store.random(seed.as_mut_slice()).map_err(key_error)?;
+        Self::in_store(store, &seed)
+    }
+
+    /// The identity of the Ed25519 key made from `seed`, held in `store`.
+    pub(crate) fn in_store(mut store: SoftwareStore, seed: &[u8; 32]) -> Result<Self> {
+        let kp = Keypair::from_seed(IdentityAlg::Ed25519, seed)
+            .map_err(|_| Error::config("the identity seed is not valid"))?;
+        let handle = store.insert(kp);
+        let mut id = Self::from_store(store, handle)?;
+        id.seed = Some(*seed);
+        Ok(id)
     }
 }
 
@@ -143,6 +169,20 @@ impl<S: KeyStore> Identity<S> {
         self.store.unseal(sealed).map(|z| z.to_vec()).map_err(key_error)
     }
 
+    /// Mix `entropy` into the generator of the identity's store, for a host that runs a relay part without an
+    /// endpoint and keeps the identity it shares with it fresh. A store with a source of its own ignores it.
+    pub fn refresh(&mut self, entropy: &[u8; 32]) {
+        self.refresh_with(&mut |out| {
+            *out = *entropy;
+            true
+        });
+    }
+
+    /// Offer the store fresh entropy through `fresh`, which a store with a source of its own never calls.
+    pub(crate) fn refresh_with(&mut self, fresh: &mut dyn FnMut(&mut [u8; 32]) -> bool) {
+        self.store.refresh(fresh);
+    }
+
     /// Fill `out` with random bytes from the store.
     pub(crate) fn random(&mut self, out: &mut [u8]) -> Result<()> {
         self.store.random(out).map_err(key_error)
@@ -165,19 +205,26 @@ pub(crate) struct Prekeys {
 }
 
 impl Prekeys {
-    pub(crate) fn new() -> Result<Self> {
-        Ok(Self {
-            store: SoftwareStore::new().map_err(key_error)?,
+    /// Prekeys held in a store made from `entropy`, which only holds the keys.
+    pub(crate) fn new(entropy: [u8; 32]) -> Self {
+        Self {
+            store: SoftwareStore::from_entropy(entropy),
             held: Vec::new(),
             next: 1,
             rotate_at: 0,
             used: 0,
-        })
+        }
     }
 
-    /// A new prekey to set on the endpoint; drops all but the previous one.
-    pub(crate) fn rotate(&mut self, now: u64) -> Result<PrekeyInfo> {
-        let (h, ek) = self.store.generate_kem().map_err(key_error)?;
+    /// A new prekey to set on the endpoint, its two seeds drawn through `random`; drops all but the previous one.
+    pub(crate) fn rotate(&mut self, now: u64, random: &mut dyn FnMut(&mut [u8]) -> Result<()>) -> Result<PrekeyInfo> {
+        let mut d = Zeroizing::new([0u8; 32]);
+        let mut z = Zeroizing::new([0u8; 32]);
+        random(d.as_mut_slice())?;
+        random(z.as_mut_slice())?;
+        let (dk, ek) = Software.kem_keygen(&d, &z);
+        let h = self.store.insert_kem(dk);
+        let ek = Software.kem_encaps_key_bytes(&ek);
         let gen_id = self.next;
         self.next += 1;
         self.held.push((gen_id, h));
@@ -210,15 +257,16 @@ pub(crate) const fn is_identity(key: WireHandle) -> bool {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, reason = "tests assert")]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "tests assert")]
 mod tests {
     use super::*;
 
     #[test]
     fn a_prekey_is_replaced_after_64_handshakes_or_its_lifetime() {
-        let mut p = Prekeys::new().unwrap();
+        let mut p = Prekeys::new([5; 32]);
+        let mut os = |out: &mut [u8]| pinc_keystore::os_random(out).map_err(key_error);
         assert!(p.due(0), "no prekey yet");
-        p.rotate(1).unwrap();
+        p.rotate(1, &mut os).unwrap();
         assert!(!p.due(2));
         let newest = WireHandle(1);
         for _ in 0..PREKEY_USES - 1 {
@@ -227,11 +275,58 @@ mod tests {
         assert!(!p.due(2), "63 handshakes");
         let _ = p.decapsulate(newest, &[]);
         assert!(p.due(2), "the 64th");
-        p.rotate(3).unwrap();
+        p.rotate(3, &mut os).unwrap();
         assert!(!p.due(4), "a new prekey starts at zero");
         // A handshake that began under the previous prekey does not count against the new one.
         let _ = p.decapsulate(newest, &[]);
         assert!(!p.due(4));
         assert!(p.due(3 + PREKEY_LIFE), "its lifetime");
+    }
+
+    /// A `random` that replays `stream`, 32 bytes at a time.
+    fn replay(stream: &[u8]) -> impl FnMut(&mut [u8]) -> Result<()> + '_ {
+        let mut at = 0;
+        move |out| {
+            out.copy_from_slice(&stream[at..at + out.len()]);
+            at += out.len();
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_prekey_follows_the_bytes_drawn_for_it() {
+        let key = |stream: &[u8]| Prekeys::new([1; 32]).rotate(1, &mut replay(stream)).unwrap();
+        let a: Vec<u8> = (0..64).collect();
+        let mut b = a.clone();
+        b[0] ^= 1;
+        let (first, again, other) = (key(&a), key(&a), key(&b));
+        assert_eq!(first.encaps_key(), again.encaps_key());
+        assert_ne!(first.encaps_key(), other.encaps_key());
+    }
+
+    #[test]
+    fn an_operating_system_identity_is_not_offered_fresh_entropy() {
+        let mut id = Identity::from_seed(&[2; 32]).unwrap();
+        let mut asked = 0;
+        id.refresh_with(&mut |_| {
+            asked += 1;
+            true
+        });
+        assert_eq!(asked, 0);
+        let mut seeded = Identity::generate_with(&[3; 32]).unwrap();
+        seeded.refresh_with(&mut |_| {
+            asked += 1;
+            true
+        });
+        assert_eq!(asked, 1);
+    }
+
+    #[test]
+    fn the_same_entropy_gives_the_same_identity_and_other_entropy_another() {
+        let node = |e: u8| Identity::generate_with(&[e; 32]).unwrap().node_id();
+        assert_eq!(node(1), node(1));
+        assert_ne!(node(1), node(2));
+        let seeded = |e: u8| Identity::from_seed_with(&[9; 32], &[e; 32]).unwrap().node_id();
+        assert_eq!(seeded(1), seeded(2));
     }
 }

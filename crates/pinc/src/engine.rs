@@ -428,12 +428,19 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
 
     /// Handle everything waiting: due timers, events and the answers they need, until none is left or the budget runs
     /// out. Returns how many items it handled; the caller goes on until it returns 0.
-    pub(crate) fn service(&mut self, now: u64) -> usize {
-        if self.prekeys.due(now)
-            && let Ok(p) = self.prekeys.rotate(now)
-        {
-            self.node.endpoint_mut().set_prekey(p.clone());
-            self.node.set_prekey(p);
+    pub(crate) fn service(&mut self, now: u64, fresh: &mut dyn FnMut(&mut [u8; 32]) -> bool) -> usize {
+        if self.prekeys.due(now) {
+            // The identity's store takes the platform's fresh bytes first, then the prekey draws from it. If the
+            // identity is borrowed, nothing rotates and the next call tries again.
+            let prekeys = &mut self.prekeys;
+            let rotated = self.identity.try_borrow_mut().ok().and_then(|mut id| {
+                id.refresh_with(fresh);
+                prekeys.rotate(now, &mut |out| id.random(out)).ok()
+            });
+            if let Some(p) = rotated {
+                self.node.endpoint_mut().set_prekey(p.clone());
+                self.node.set_prekey(p);
+            }
         }
         let mut n = 0;
         if self.node.poll_timeout().is_some_and(|d| d <= now) {

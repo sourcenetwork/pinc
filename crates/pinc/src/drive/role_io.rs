@@ -72,7 +72,7 @@ impl<H: Hosted> Shared<H> {
             // core's to take, and may name more members.
             core.node.relay_events(now, &out);
             out.clear();
-            core.service(now);
+            self.service(core, now);
         }
         if let Some(at) = role.due(rnow) {
             core.add_deadline(at.saturating_sub(self.role_off));

@@ -3786,6 +3786,7 @@ dependencies = [
  "pinc-security",
  "pinc-transport",
  "rapidhash",
+ "zeroize",
 ]
 
 [[package]]

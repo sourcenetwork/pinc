@@ -418,7 +418,7 @@ impl<H: Hosted> Shared<H> {
                 let Some(rest) = s.inbuf.get(s.inoff..) else { break };
                 let n = core.carrier_in(now, r, rest);
                 // A key request the carrier handshake waits for is answered by the next service, then the rest is taken.
-                let moved = core.service(now);
+                let moved = self.service(&mut core, now);
                 s.inoff += n;
                 if n == 0 && moved == 0 {
                     break;

@@ -66,7 +66,7 @@ fn named(c: &C) -> Option<usize> {
 /// One turn of the driver at `now`: everything waiting is handled.
 fn turn(c: &mut C, now: u64) {
     for _ in 0..4 {
-        c.service(now);
+        c.service(now, &mut |_| false);
     }
 }
 

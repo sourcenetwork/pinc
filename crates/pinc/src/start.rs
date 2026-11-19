@@ -18,6 +18,7 @@ use pinc_connect::client::Config as ConnectConfig;
 use pinc_crypto::{Drbg, Software};
 use pinc_keystore::KeyStore;
 use pinc_node::{Config as NodeConfig, Ep as _, HUB_ALPN, Node};
+use zeroize::Zeroizing;
 
 use crate::engine::{Admit, Core, CoreConfig};
 use crate::error::{Error, Result};
@@ -109,8 +110,10 @@ pub(crate) fn build<S: KeyStore, A: Admit>(mut cfg: CoreConfig<S, A>, now: u64, 
         cfg.limits.pool_chunks,
     )
     .ok_or_else(|| Error::config("a limit is out of range"))?;
-    let mut prekeys = Prekeys::new()?;
-    let prekey = prekeys.rotate(now)?;
+    let mut prekey_entropy = Zeroizing::new([0u8; 32]);
+    cfg.identity.random(prekey_entropy.as_mut_slice())?;
+    let mut prekeys = Prekeys::new(*prekey_entropy);
+    let prekey = prekeys.rotate(now, &mut |out| cfg.identity.random(out))?;
     ep.set_prekey(prekey.clone());
     for a in &cfg.alpns {
         if !ep.register_alpn(a) {
@@ -284,6 +287,24 @@ mod tests {
     }
 
     const MS: u64 = 1_000_000;
+
+    /// A core whose identity is in an operating system store is never offered fresh entropy, at a rotation or after.
+    #[test]
+    fn a_core_with_an_operating_system_identity_does_not_ask_for_entropy_at_a_rotation() {
+        let (mut c, _) = end(5, 9);
+        let mut asked = 0;
+        for at in [
+            MS,
+            MS + crate::keys::PREKEY_LIFE + 1,
+            MS + 2 * crate::keys::PREKEY_LIFE + 2,
+        ] {
+            c.service(at, &mut |_| {
+                asked += 1;
+                true
+            });
+        }
+        assert_eq!(asked, 0);
+    }
     type C = Core<SoftwareStore, AllowAll>;
     fn end(seed: u8, port: u16) -> (C, SocketAddr) {
         let local: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
@@ -310,7 +331,7 @@ mod tests {
                 } else {
                     (&mut b[0], &mut a[0])
                 };
-                tx.0.service(*now);
+                tx.0.service(*now, &mut |_| false);
                 while let Some(t) = tx.0.node.poll_transmit(*now, &mut buf) {
                     log.push((from, t.len));
                     rx.0.node

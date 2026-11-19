@@ -14,7 +14,7 @@
 
 mod pinc_common;
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::future::{pending, poll_fn};
 use std::net::{SocketAddr, UdpSocket};
 use std::rc::Rc;
@@ -34,6 +34,9 @@ use pinc_crypto::IdentityAlg;
 
 /// The wall clock the fake platform reports, in milliseconds: a time the system's clock is not at.
 const WALL_MS: u64 = 1_700_000_000_000;
+
+/// How long a prekey serves new dials, in nanoseconds: 10 minutes.
+const PREKEY_LIFE: u64 = 600_000_000_000;
 
 /// A platform whose instant is nanoseconds in a `u64` and whose error is the facade's own.
 #[derive(Clone)]
@@ -343,6 +346,158 @@ async fn the_relay_binary_chain_builds_unchanged() {
     // `run` starts and keeps running: it is still pending after some turns of the executor.
     assert!(poll_drop(ep.run(), 10).await.is_none());
     assert!(ep.relay_stats().is_some());
+}
+
+/// A platform whose randomness is a stream from `entropy` (an error if there is none), on the system's clock or on a
+/// virtual one; it records the length of every draw.
+#[derive(Clone)]
+struct Gen {
+    origin: Option<Instant>,
+    now: Rc<Cell<u64>>,
+    entropy: Option<u8>,
+    draws: Rc<RefCell<Vec<usize>>>,
+}
+
+impl Gen {
+    fn new(entropy: Option<u8>, origin: Option<Instant>) -> Self {
+        Self {
+            origin,
+            now: Rc::default(),
+            entropy,
+            draws: Rc::default(),
+        }
+    }
+}
+
+impl Platform for Gen {
+    type Instant = u64;
+    type Error = Error;
+
+    fn now(&self) -> u64 {
+        self.origin.map_or_else(
+            || self.now.get(),
+            |o| u64::try_from(o.elapsed().as_nanos()).unwrap_or(u64::MAX),
+        )
+    }
+
+    fn wall_ns(&self) -> u64 {
+        WALL_MS * 1_000_000
+    }
+
+    fn random(&self, out: &mut [u8]) -> Result<(), Error> {
+        let e = self.entropy.ok_or(Error::new(ErrorKind::Config, "no randomness"))?;
+        let mut draws = self.draws.borrow_mut();
+        for (i, b) in out.iter_mut().enumerate() {
+            *b = e.wrapping_add(i as u8).wrapping_add(draws.len() as u8);
+        }
+        draws.push(out.len());
+        Ok(())
+    }
+}
+
+#[nuclei::test]
+async fn a_platform_without_randomness_gives_no_identity() {
+    let e = Pinc::builder_on(Gen::new(None, None))
+        .build(
+            async |_buf: &mut [u8]| pending::<pinc::Result<(usize, SocketAddr)>>().await,
+            async |pkt: &[u8], _to: SocketAddr| -> pinc::Result<usize> { Ok(pkt.len()) },
+            async |_at: u64| pending::<()>().await,
+        )
+        .map(drop)
+        .unwrap_err();
+    assert_eq!(e.kind(), ErrorKind::Config);
+}
+
+/// An endpoint on `pf`, with the identity of `seed`, serving the echo protocol on a loopback UDP socket of nuclei.
+async fn on_gen(pf: Gen, origin: Instant, seed: [u8; 32]) -> Endpoint<impl Hosted> {
+    let sock = Arc::new(Handle::<UdpSocket>::bind(lo()).await.unwrap());
+    let (r, s) = (Arc::clone(&sock), Arc::clone(&sock));
+    let ep = Pinc::builder_on(pf)
+        .seed(&seed)
+        .unwrap()
+        .alpn(ECHO)
+        .local_addr(sock.local_addr().unwrap())
+        .build(
+            async move |buf: &mut [u8]| -> pinc::Result<(usize, SocketAddr)> { r.recv_from(buf).await.map_err(failed) },
+            async move |pkt: &[u8], to: SocketAddr| -> pinc::Result<usize> { s.send_to(pkt, to).await.map_err(failed) },
+            async move |at: u64| nuclei::time::sleep_until_precise(origin + Duration::from_nanos(at)).await,
+        )
+        .unwrap();
+    let e = ep.clone();
+    nuclei::spawn_local(async move {
+        let _ = e.run().await;
+    })
+    .detach();
+    let e = ep.clone();
+    nuclei::spawn_local(async move {
+        while let Some(i) = e.accept().await {
+            nuclei::spawn_local(serve_conn(i.into_connection())).detach();
+        }
+    })
+    .detach();
+    ep
+}
+
+#[nuclei::test]
+async fn two_endpoints_with_one_seed_and_different_entropy_connect() {
+    let origin = Instant::now();
+    let a = on_gen(Gen::new(Some(1), Some(origin)), origin, [0x42; 32]).await;
+    let b = on_gen(Gen::new(Some(2), Some(origin)), origin, [0x42; 32]).await;
+    assert_eq!(a.addr().node, b.addr().node);
+    let third = on_clock(Clock { origin }, None).await;
+    within(30, async {
+        for server in [&a, &b] {
+            let c = third.connect(server.addr(), ECHO).await.unwrap();
+            assert_eq!(echo(&c).await, b"ping");
+        }
+    })
+    .await;
+}
+
+#[nuclei::test]
+async fn a_prekey_rotation_asks_the_platform_for_fresh_entropy() {
+    let pf = Gen::new(Some(5), None);
+    let (clock, draws) = (Rc::clone(&pf.now), Rc::clone(&pf.draws));
+    let waker: Rc<RefCell<Option<std::task::Waker>>> = Rc::default();
+    let (parked, once) = (Rc::clone(&waker), Cell::new(true));
+    let wake_clock = Rc::clone(&clock);
+    let ep = Pinc::builder_on(pf)
+        .seed(&[9; 32])
+        .unwrap()
+        .local_addr(([127, 0, 0, 1], 4435).into())
+        .build(
+            // Quiet until the clock is past the prekey's life, then one busy receive, then quiet again.
+            async move |_buf: &mut [u8]| {
+                poll_fn(|cx| {
+                    if wake_clock.get() > PREKEY_LIFE && once.take() {
+                        return Poll::Ready(Err(Error::new(ErrorKind::Busy, "busy")));
+                    }
+                    *parked.borrow_mut() = Some(cx.waker().clone());
+                    Poll::Pending
+                })
+                .await
+            },
+            async |pkt: &[u8], _to: SocketAddr| -> pinc::Result<usize> { Ok(pkt.len()) },
+            async |_at: u64| pending::<()>().await,
+        )
+        .unwrap();
+    let before = draws.borrow().len();
+    let e = ep.clone();
+    nuclei::spawn_local(async move {
+        let _ = e.run().await;
+    })
+    .detach();
+    for _ in 0..8 {
+        yield_once().await;
+    }
+    assert_eq!(draws.borrow().len(), before, "nothing is drawn while no prekey is due");
+    clock.set(PREKEY_LIFE + 1);
+    waker.borrow_mut().take().unwrap().wake();
+    for _ in 0..8 {
+        yield_once().await;
+    }
+    let fresh = draws.borrow()[before..].iter().filter(|n| **n == 32).count();
+    assert!(fresh >= 1, "draws since build: {:?}", &draws.borrow()[before..]);
 }
 
 /// The sizes of the default builder, of the built endpoint and of its `run` future, in an unoptimised build, as they

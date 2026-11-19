@@ -15,6 +15,7 @@ use pinc_crypto::Drbg;
 use pinc_keystore::KeyStore;
 use pinc_node::Ep as NodeEp;
 use pinc_security::{KeyRequest, KeyResponse, LocalIdentity};
+use zeroize::Zeroizing;
 
 use super::access::Access;
 use super::carriers::Carriers;
@@ -73,8 +74,10 @@ impl Hub {
         }
         ep.add_iface(local)
             .ok_or_else(|| Error::config("the hub could not use the UDP address"))?;
-        let mut prekeys = Prekeys::new()?;
-        ep.set_prekey(prekeys.rotate(now)?);
+        let mut entropy = Zeroizing::new([0u8; 32]);
+        identity.borrow_mut().random(entropy.as_mut_slice())?;
+        let mut prekeys = Prekeys::new(*entropy);
+        ep.set_prekey(prekeys.rotate(now, &mut |out| identity.borrow_mut().random(out))?);
         Ok(Self {
             ep,
             prekeys,
@@ -112,7 +115,9 @@ impl Hub {
     {
         for _ in 0..ROUNDS {
             if self.prekeys.due(now)
-                && let Ok(info) = self.prekeys.rotate(now)
+                && let Ok(info) = self
+                    .prekeys
+                    .rotate(now, &mut |out| part.identity().borrow_mut().random(out))
             {
                 self.ep.set_prekey(info);
             }

@@ -60,7 +60,8 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
             return Err(stream);
         };
         if self.prekeys.due(now) {
-            let Ok(info) = self.prekeys.rotate(now) else {
+            let identity = &self.identity;
+            let Ok(info) = self.prekeys.rotate(now, &mut |out| identity.borrow_mut().random(out)) else {
                 self.dial_failed(i, now);
                 return Err(stream);
             };

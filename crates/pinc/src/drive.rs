@@ -227,6 +227,11 @@ impl<H: Hosted> Shared<H> {
         self.core.try_borrow_mut().ok()
     }
 
+    /// Serve `core` at `now`; a prekey rotation offers the identity's store 32 fresh bytes of the platform's randomness.
+    pub(crate) fn service(&self, core: &mut Core<H::Keys, H::Access>, now: u64) -> usize {
+        core.service(now, &mut |out| self.host.platform().random(out).is_ok())
+    }
+
     /// The endpoint's clock: nanoseconds since the endpoint was made, after a fixed offset.
     pub(crate) fn now(&self) -> u64 {
         let since = self.host.platform().now().since(self.start);
@@ -287,7 +292,7 @@ impl<H: Hosted> Shared<H> {
                 };
                 // What was served is sent before the attempt runs. Not once the endpoint is stopping: an attempt that
                 // ends with the endpoint must not wait for the timers to have nothing due (pinc#551, pinc#569).
-                let served = core.service(now) > 0;
+                let served = self.service(&mut core, now) > 0;
                 if served && !core.stopping() {
                     return Poll::Ready(Step::Io);
                 }
@@ -424,7 +429,7 @@ impl<H: Hosted> Shared<H> {
             let (to, len, segment, b) = {
                 let now = self.now();
                 let Some(mut core) = self.lock() else { return };
-                let moved = core.service(now);
+                let moved = self.service(&mut core, now);
                 let mut b = buf.take().unwrap_or_else(|| self.tx_buf());
                 let mut next = core
                     .node

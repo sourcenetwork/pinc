@@ -260,7 +260,11 @@ fn refresh_changes_what_a_generator_store_gives_next() {
     });
     let plain = next_draw(&mut plain);
     assert_ne!(next_draw(&mut a), plain, "the refreshed store left its stream");
-    assert_eq!(next_draw(&mut seeded_refreshed(1)), next_draw(&mut b), "the same bytes agree");
+    assert_eq!(
+        next_draw(&mut seeded_refreshed(1)),
+        next_draw(&mut b),
+        "the same bytes agree"
+    );
     // A refusal mixes nothing in.
     let mut c = seeded(7);
     c.refresh(&mut |_| false);
