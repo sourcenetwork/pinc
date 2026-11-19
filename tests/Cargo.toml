@@ -1506,3 +1506,24 @@ path = "trace_facade_records.rs"
 [[test]]
 name = "mbt_facade_open"
 path = "mbt_facade_open.rs"
+
+[[test]]
+name = "trace_table_array"
+path = "trace_table_array.rs"
+
+[[test]]
+name = "trace_table_bytes"
+path = "trace_table_bytes.rs"
+
+[[test]]
+name = "trace_table_pool"
+path = "trace_table_pool.rs"
+
+[[test]]
+name = "trace_table_ring"
+path = "trace_table_ring.rs"
+
+[[test]]
+name = "trace_table_slab"
+path = "trace_table_slab.rs"
+

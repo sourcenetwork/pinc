@@ -285,3 +285,14 @@ impl SortedSlab {
         len - kept
     }
 }
+
+/// The index of the slab, for trace validation (cargo feature `trace`, off by default).
+#[cfg(feature = "trace")]
+impl SortedSlab {
+    /// The slot (the record's place in the block) of the record at position `pos` in key order, for `pos` below
+    /// [`Self::len`].
+    #[must_use]
+    pub fn trace_slot(&self, pos: usize) -> Option<usize> {
+        (pos < self.len).then(|| self.slot(pos))
+    }
+}

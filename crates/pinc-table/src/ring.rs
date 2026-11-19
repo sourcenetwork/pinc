@@ -116,6 +116,16 @@ impl Ring {
     }
 }
 
+/// The ring's head, for trace validation (cargo feature `trace`, off by default).
+#[cfg(feature = "trace")]
+impl Ring {
+    /// The place in the block of the oldest record (0 for an empty ring that was never popped or was cleared).
+    #[must_use]
+    pub fn trace_head(&self) -> usize {
+        self.head
+    }
+}
+
 #[cfg(all(test, feature = "alloc"))]
 #[allow(clippy::unwrap_used, reason = "tests assert")]
 mod tests {

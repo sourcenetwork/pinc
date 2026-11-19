@@ -273,6 +273,28 @@ impl<K> Pool<K> {
     }
 }
 
+/// Views of the pool's block, for trace validation (cargo feature `trace`, off by default).
+#[cfg(feature = "trace")]
+impl<K> Pool<K> {
+    /// The slot number in entry `k` of the free stack (entry 0 at the bottom), for `k` below [`Self::free`].
+    #[must_use]
+    pub fn trace_stack(&self, k: usize) -> Option<usize> {
+        (k < self.free).then(|| rd32(self.mem.as_slice(), k) as usize)
+    }
+
+    /// The generation of slot `i`, for `i` below the capacity.
+    #[must_use]
+    pub fn trace_generation(&self, i: usize) -> Option<u32> {
+        (i < self.slots).then(|| self.gen_of(i))
+    }
+
+    /// The written length of slot `i`, for `i` below the capacity.
+    #[must_use]
+    pub fn trace_written(&self, i: usize) -> Option<usize> {
+        (i < self.slots).then(|| self.written(i))
+    }
+}
+
 #[cfg(all(test, feature = "alloc"))]
 #[allow(clippy::unwrap_used, reason = "tests assert")]
 mod tests {
