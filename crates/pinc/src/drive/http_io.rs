@@ -22,13 +22,13 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::future::Future;
 use core::task::Context;
-use std::io;
 
 use super::carrier_io::Op;
 use crate::carrier::CarrierKind;
 use crate::carriers::{Carriers, Relay};
 use crate::drive::Shared;
 use crate::host::Hosted;
+use crate::platform::Platform;
 
 /// The answer an exchange ends with: the bytes read, or none when it failed.
 type Answer = Option<Vec<u8>>;
@@ -54,7 +54,7 @@ enum Phase {
 }
 
 /// The exchange of an endpoint of host type `H`, boxed in the shared state while one runs.
-pub(super) type Held<H> = Option<Box<Exchange<<<H as Hosted>::Carriers as Carriers>::Stream>>>;
+pub(super) type Held<H> = Option<Box<Exchange<<<H as Hosted>::Carriers as Carriers<<H as Hosted>::Platform>>::Stream>>>;
 
 /// One exchange in progress.
 pub(crate) struct Exchange<S> {
@@ -90,15 +90,18 @@ pub(super) enum Step<S> {
 }
 
 /// What the host answered.
-pub(super) enum Done<S> {
-    Opened(io::Result<S>),
-    Wrote(io::Result<usize>),
-    Read(io::Result<usize>, Vec<u8>),
+pub(super) enum Done<S, E> {
+    Opened(Result<S, E>),
+    Wrote(Result<usize, E>),
+    Read(Result<usize, E>, Vec<u8>),
     Closed,
 }
 
 /// One host operation.
-pub(super) async fn host_step<C: Carriers>(c: &C, step: Step<C::Stream>) -> Done<C::Stream> {
+pub(super) async fn host_step<C: Carriers<Pf>, Pf: Platform>(
+    c: &C,
+    step: Step<C::Stream>,
+) -> Done<C::Stream, Pf::Error> {
     match step {
         Step::Open(r) => Done::Opened(c.open(&r, CarrierKind::Tcp).await),
         Step::Write(s, buf, from) => Done::Wrote(c.write(&s, buf, from).await.0),
@@ -124,10 +127,10 @@ impl<H: Hosted> Shared<H> {
         &self,
         cx: &mut Context<'_>,
         hop: &mut Op<F>,
-        mut make: impl FnMut(Step<<H::Carriers as Carriers>::Stream>) -> F,
+        mut make: impl FnMut(Step<<H::Carriers as Carriers<H::Platform>>::Stream>) -> F,
     ) -> bool
     where
-        F: Future<Output = Done<<H::Carriers as Carriers>::Stream>>,
+        F: Future<Output = Done<<H::Carriers as Carriers<H::Platform>>::Stream, <H::Platform as Platform>::Error>>,
     {
         if !self.port_mapping {
             return false;
@@ -172,6 +175,11 @@ impl<H: Hosted> Shared<H> {
         let mut finished: Option<Answer> = None;
         let mut done = false;
         match ex.phase {
+            Phase::Open if <H::Carriers as Carriers<H::Platform>>::NONE => {
+                // No carriers: the exchange fails in this pass, as an open that answers at once would.
+                moved = true;
+                finished = Some(None);
+            }
             Phase::Open => {
                 if !hop.running(OPEN) {
                     hop.start(OPEN, make(Step::Open(ex.relay)));

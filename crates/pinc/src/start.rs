@@ -19,7 +19,6 @@ use pinc_crypto::{Drbg, Software};
 use pinc_keystore::KeyStore;
 use pinc_node::{Config as NodeConfig, Ep as _, HUB_ALPN, Node};
 
-use crate::clock::wall_ms;
 use crate::engine::{Admit, Core, CoreConfig};
 use crate::error::{Error, Result};
 use crate::keys::Prekeys;
@@ -42,6 +41,7 @@ fn endpoint_config<S, A>(cfg: &CoreConfig<S, A>, seed: u64) -> pinc_core::Endpoi
 fn node_config<S: KeyStore, A: Admit>(
     cfg: &CoreConfig<S, A>,
     now: u64,
+    wall_ms: u64,
 ) -> Result<(NodeConfig<RELAYS>, core::net::SocketAddr)> {
     let local = *cfg
         .locals
@@ -74,18 +74,18 @@ fn node_config<S: KeyStore, A: Admit>(
             ..BroadcastLimits::default()
         },
         map_keys: IdKey::new(seed, secrets).map_err(|_| Error::config("the endpoint's map keys are not usable"))?,
-        wall_ms: wall_ms(),
+        wall_ms,
         local,
         trace: false,
     };
     Ok((node_cfg, local))
 }
 
-/// Build a core at time `now`.
+/// Build a core at time `now`, with the wall clock at `wall_ms` milliseconds since the Unix epoch.
 ///
 /// # Errors
 /// [`ErrorKind::Config`](crate::ErrorKind::Config) if the limits or the keys are not usable.
-pub(crate) fn build<S: KeyStore, A: Admit>(mut cfg: CoreConfig<S, A>, now: u64) -> Result<Core<S, A>> {
+pub(crate) fn build<S: KeyStore, A: Admit>(mut cfg: CoreConfig<S, A>, now: u64, wall_ms: u64) -> Result<Core<S, A>> {
     cfg.limits.check()?;
     if cfg.alpns.len() > crate::mem::MAX_PROTOCOLS {
         return Err(Error::config("an endpoint serves at most eight protocols"));
@@ -121,7 +121,7 @@ pub(crate) fn build<S: KeyStore, A: Admit>(mut cfg: CoreConfig<S, A>, now: u64) 
     let key = cfg.identity.take_signer().ok_or_else(|| {
         Error::config("the identity key is held where the broadcast layer cannot sign with it; use a seed or a generated identity")
     })?;
-    let (node_cfg, local) = node_config(&cfg, now)?;
+    let (node_cfg, local) = node_config(&cfg, now, wall_ms)?;
     let mut node = Node::<AnyEp, Software, (), RELAYS, PEERS>::new(
         &node_cfg,
         ep,
@@ -200,6 +200,9 @@ mod tests {
     use crate::keys::Identity;
     use crate::mem::Limits;
 
+    /// A wall clock of some recent year, in milliseconds.
+    const WALL_MS: u64 = 1_700_000_000_000;
+
     fn cfg(connections: usize) -> CoreConfig<SoftwareStore, AllowAll> {
         CoreConfig {
             identity: Identity::from_seed(&[3; 32]).unwrap(),
@@ -240,14 +243,14 @@ mod tests {
     #[test]
     fn the_broadcast_key_is_the_endpoints_map_keys() {
         let c = cfg(1);
-        let (node_cfg, _) = node_config(&c, 0).unwrap();
+        let (node_cfg, _) = node_config(&c, 0, WALL_MS).unwrap();
         let (seed, secrets) = c.map_keys.parts();
         assert_eq!(node_cfg.map_keys, IdKey::new(seed, secrets).unwrap());
         let other = CoreConfig {
             map_keys: crate::maps::Keys::for_tests(4),
             ..cfg(1)
         };
-        assert_ne!(node_config(&other, 0).unwrap().0.map_keys, node_cfg.map_keys);
+        assert_ne!(node_config(&other, 0, WALL_MS).unwrap().0.map_keys, node_cfg.map_keys);
     }
 
     /// A node repairs the tail of its bursts; an endpoint that is a hub or runs the relay role does not, on any
@@ -271,13 +274,13 @@ mod tests {
     /// The endpoint is built into the heap and ended there: a 1 MiB stack builds and drops one for a few sessions.
     #[test]
     fn a_small_endpoint_builds_and_drops_on_a_one_mebibyte_stack() {
-        on_stack(1024, || drop(build(cfg(4), 1).unwrap()));
+        on_stack(1024, || drop(build(cfg(4), 1, WALL_MS).unwrap()));
     }
 
     /// The default 1024 sessions build and drop on a 1 MiB stack: the tables are built on the heap, piece by piece.
     #[test]
     fn a_default_endpoint_builds_and_drops_on_a_one_mebibyte_stack() {
-        on_stack(1024, || drop(build(cfg(1024), 1).unwrap()));
+        on_stack(1024, || drop(build(cfg(1024), 1, WALL_MS).unwrap()));
     }
 
     const MS: u64 = 1_000_000;
@@ -287,7 +290,7 @@ mod tests {
         let mut c = cfg(4);
         c.identity = Identity::from_seed(&[seed; 32]).unwrap();
         c.locals = vec![local];
-        (build(c, MS).unwrap(), local)
+        (build(c, MS, WALL_MS).unwrap(), local)
     }
     /// Carry datagrams both ways until both ends are at rest, a millisecond a round; the sizes sent go to `log`.
     #[allow(

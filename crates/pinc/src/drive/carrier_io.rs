@@ -16,7 +16,6 @@ use alloc::vec::Vec;
 use core::future::{Future, poll_fn};
 use core::pin::Pin;
 use core::task::{Context, Poll};
-use std::io;
 
 use pinc_connect::carrier::ws::{self, Decoder, Opcode, Role as WsRole, WsFrame};
 use pinc_connect::client::Io as CarrierIo;
@@ -28,6 +27,7 @@ use crate::carriers::{Carriers, Relay};
 use crate::engine::Core;
 use crate::host::Hosted;
 use crate::node::RELAYS;
+use crate::platform::Platform;
 
 /// The most bytes the node may have queued for one carrier that the host has not yet taken.
 pub(crate) const OUT_CAP: usize = 256 * 1024;
@@ -201,19 +201,32 @@ impl<F: Future> Op<F> {
     }
 }
 
-async fn open_owned<C: Carriers>(c: &C, relay: Relay, kind: CarrierKind) -> io::Result<C::Stream> {
+async fn open_owned<C: Carriers<Pf>, Pf: Platform>(
+    c: &C,
+    relay: Relay,
+    kind: CarrierKind,
+) -> Result<C::Stream, Pf::Error> {
     c.open(&relay, kind).await
 }
 
-async fn read_owned<C: Carriers>(c: &C, s: Rc<C::Stream>, buf: Vec<u8>) -> (io::Result<usize>, Vec<u8>) {
+async fn read_owned<C: Carriers<Pf>, Pf: Platform>(
+    c: &C,
+    s: Rc<C::Stream>,
+    buf: Vec<u8>,
+) -> (Result<usize, Pf::Error>, Vec<u8>) {
     c.read(&s, buf).await
 }
 
-async fn write_owned<C: Carriers>(c: &C, s: Rc<C::Stream>, buf: Vec<u8>, from: usize) -> (io::Result<usize>, Vec<u8>) {
+async fn write_owned<C: Carriers<Pf>, Pf: Platform>(
+    c: &C,
+    s: Rc<C::Stream>,
+    buf: Vec<u8>,
+    from: usize,
+) -> (Result<usize, Pf::Error>, Vec<u8>) {
     c.write(&s, buf, from).await
 }
 
-async fn close_owned<C: Carriers>(c: &C, s: C::Stream) {
+async fn close_owned<C: Carriers<Pf>, Pf: Platform>(c: &C, s: C::Stream) {
     c.close(s).await;
 }
 
@@ -225,7 +238,7 @@ enum View<S> {
     Closing,
 }
 
-type Stream<H> = <<H as Hosted>::Carriers as Carriers>::Stream;
+type Stream<H> = <<H as Hosted>::Carriers as Carriers<<H as Hosted>::Platform>>::Stream;
 
 impl<H: Hosted> Shared<H> {
     fn view(&self, r: usize) -> Option<(u64, View<Stream<H>>)> {
@@ -351,7 +364,7 @@ impl<H: Hosted> Shared<H> {
         }
     }
 
-    fn carrier_opened(&self, r: usize, ver: u64, res: io::Result<Stream<H>>) {
+    fn carrier_opened(&self, r: usize, ver: u64, res: Result<Stream<H>, <H::Platform as Platform>::Error>) {
         match res {
             Ok(st) => {
                 let now = self.now();
@@ -532,14 +545,20 @@ impl<H: Hosted> Shared<H> {
                         read.cancel();
                         write.cancel();
                         close.cancel();
-                        if !open.running(ver)
-                            && let Some(rel) = self.relays.get(r)
-                        {
-                            open.start(ver, open_owned(c, *rel, kind));
-                        }
-                        if let Some(res) = open.poll(cx, ver) {
+                        if <H::Carriers as Carriers<H::Platform>>::NONE {
+                            // No carriers: the open fails in this pass, as an open that answers at once would.
                             moved = true;
-                            self.carrier_opened(r, ver, res);
+                            self.fail_carrier(r, ver);
+                        } else {
+                            if !open.running(ver)
+                                && let Some(rel) = self.relays.get(r)
+                            {
+                                open.start(ver, open_owned::<_, H::Platform>(c, *rel, kind));
+                            }
+                            if let Some(res) = open.poll(cx, ver) {
+                                moved = true;
+                                self.carrier_opened(r, ver, res);
+                            }
                         }
                     }
                     View::Open(st) => {
@@ -558,7 +577,7 @@ impl<H: Hosted> Shared<H> {
                                     b
                                 })
                                 .unwrap_or_default();
-                            read.start(ver, read_owned(c, Rc::clone(&st), buf));
+                            read.start(ver, read_owned::<_, H::Platform>(c, Rc::clone(&st), buf));
                         }
                         if let Some((res, buf)) = read.poll(cx, ver) {
                             moved = true;
@@ -567,12 +586,12 @@ impl<H: Hosted> Shared<H> {
                         if !write.running(ver)
                             && let Some(buf) = self.carrier_write_start(r, ver)
                         {
-                            write.start(ver, write_owned(c, Rc::clone(&st), buf, 0));
+                            write.start(ver, write_owned::<_, H::Platform>(c, Rc::clone(&st), buf, 0));
                         }
                         if let Some((res, buf)) = write.poll(cx, ver) {
                             moved = true;
                             if let Some((buf, from)) = self.carrier_write_done(r, ver, res.ok(), buf) {
-                                write.start(ver, write_owned(c, Rc::clone(&st), buf, from));
+                                write.start(ver, write_owned::<_, H::Platform>(c, Rc::clone(&st), buf, from));
                             }
                         }
                     }
@@ -583,7 +602,7 @@ impl<H: Hosted> Shared<H> {
                         if !close.running(ver) {
                             let taken = self.carrier_take_closing(r, ver).map(Rc::try_unwrap);
                             if let Some(Ok(st)) = taken {
-                                close.start(ver, close_owned(c, st));
+                                close.start(ver, close_owned::<_, H::Platform>(c, st));
                             } else {
                                 moved = true;
                                 self.carrier_closed(r, ver);
@@ -596,7 +615,7 @@ impl<H: Hosted> Shared<H> {
                     }
                 }
             }
-            moved |= self.http_drive(cx, &mut hop, |step| http_io::host_step(c, step));
+            moved |= self.http_drive(cx, &mut hop, |step| http_io::host_step::<_, H::Platform>(c, step));
             if moved {
                 // What finished may let the next step start: look again at once.
                 cx.waker().wake_by_ref();

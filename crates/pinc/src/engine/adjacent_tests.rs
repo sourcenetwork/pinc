@@ -43,7 +43,7 @@ pub(super) fn core() -> C {
             gateway: None,
         },
     };
-    crate::start::build(cfg, 1).unwrap()
+    crate::start::build(cfg, 1, 1_700_000_000_000).unwrap()
 }
 
 pub(super) fn peer(i: u64) -> NodeId {

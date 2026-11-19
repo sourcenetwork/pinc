@@ -11,7 +11,7 @@ use super::{Builder, Discovery, Endpoint};
 use crate::host::Hosted;
 use crate::role::{RelayRole, Role};
 
-impl<S, D, A, C, Q> Builder<S, D, A, C, Q> {
+impl<S, D, A, C, Q, Pf> Builder<S, D, A, C, Q, Pf> {
     /// Give the endpoint the relay role: it serves as a relay for other nodes beside being a node itself, on its own
     /// identity, socket and clock. `relay` holds the relay's limits, record store and access rule (start it with
     /// [`relay::Relay::builder`](crate::relay::Relay::builder); its identity and tunnel are the endpoint's), and
@@ -28,7 +28,7 @@ impl<S, D, A, C, Q> Builder<S, D, A, C, Q> {
         self,
         relay: crate::relay::Builder<SoftwareStore, St, RA>,
         carriers: RC,
-    ) -> Builder<S, D, A, C, RelayRole<RC, St, RA>>
+    ) -> Builder<S, D, A, C, RelayRole<RC, St, RA>, Pf>
     where
         RC: crate::relay::Carriers,
         St: crate::relay::Store,
@@ -53,6 +53,7 @@ impl<S, D, A, C, Q> Builder<S, D, A, C, Q> {
                 builder: relay,
                 carriers,
             },
+            platform: self.platform,
         }
     }
 }

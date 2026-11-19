@@ -28,8 +28,6 @@ use core::net::{IpAddr, SocketAddr};
 use core::pin::pin;
 use core::task::Poll;
 use core::time::Duration;
-use std::io;
-use std::time::Instant;
 
 mod carrier_io;
 mod http_io;
@@ -41,6 +39,7 @@ use crate::carriers::{Carriers, Relay};
 use crate::engine::{Core, Try, Wait};
 use crate::error::Error;
 use crate::host::Hosted;
+use crate::platform::{HostError, HostInstant, Platform};
 use crate::role::Role;
 use crate::standby::Ticket;
 
@@ -63,7 +62,7 @@ std::thread_local! {
 /// The state every handle of an endpoint shares.
 pub(crate) struct Shared<H: Hosted> {
     pub(crate) host: H,
-    start: Instant,
+    start: <H::Platform as Platform>::Instant,
     local: SocketAddr,
     driving: Cell<bool>,
     /// The access hook, the same one the core asks; it holds no endpoint state, so it is asked without the core.
@@ -72,7 +71,7 @@ pub(crate) struct Shared<H: Hosted> {
     /// The relays, in the order the node numbers them.
     relays: Vec<Relay>,
     /// The state of the carriers to the relays; see [`carrier_io`].
-    carriers: RefCell<carrier_io::Slots<<H::Carriers as Carriers>::Stream>>,
+    carriers: RefCell<carrier_io::Slots<<H::Carriers as Carriers<H::Platform>>::Stream>>,
     /// A carrier moved bytes or changed state during the last poll: the endpoint has more to do.
     cdirty: Cell<bool>,
     /// The host turned port mapping on: only then is there an HTTP exchange to advance.
@@ -118,13 +117,8 @@ enum Step<T> {
     Io,
 }
 
-/// The errors of a receive that lose one datagram and nothing else.
-fn transient(e: &io::Error) -> bool {
-    matches!(
-        e.kind(),
-        io::ErrorKind::Interrupted | io::ErrorKind::ConnectionReset | io::ErrorKind::ConnectionRefused
-    )
-}
+/// The I/O error of a host's platform.
+type HostErr<H> = <<H as Hosted>::Platform as Platform>::Error;
 
 /// The address as the endpoint sees it: a mapped IPv4 address on a dual-stack socket is IPv4.
 fn canon(a: SocketAddr) -> SocketAddr {
@@ -148,12 +142,15 @@ fn pooled(home: &RefCell<Vec<Vec<u8>>>, len: usize) -> Buf<'_> {
     Buf { v, home }
 }
 
-async fn recv_owned<'a, H: Hosted>(host: &H, mut buf: Buf<'a>) -> (io::Result<(usize, SocketAddr, usize)>, Buf<'a>) {
+async fn recv_owned<'a, H: Hosted>(
+    host: &H,
+    mut buf: Buf<'a>,
+) -> (Result<(usize, SocketAddr, usize), HostErr<H>>, Buf<'a>) {
     let r = host.recv(buf.v.as_mut_slice()).await;
     (r, buf)
 }
 
-async fn sleep_owned<H: Hosted>(host: &H, at: Instant) {
+async fn sleep_owned<H: Hosted>(host: &H, at: <H::Platform as Platform>::Instant) {
     host.sleep(at).await;
 }
 
@@ -198,9 +195,10 @@ impl<H: Hosted> Shared<H> {
         role_off: u64,
     ) -> Self {
         let port_mapping = core.node.has_port_mapping();
+        let start = host.platform().now();
         Self {
             host,
-            start: Instant::now(),
+            start,
             local,
             driving: Cell::new(false),
             admit: core.hook(),
@@ -231,11 +229,12 @@ impl<H: Hosted> Shared<H> {
 
     /// The endpoint's clock: nanoseconds since the endpoint was made, after a fixed offset.
     pub(crate) fn now(&self) -> u64 {
-        T0.saturating_add(u64::try_from(self.start.elapsed().as_nanos()).unwrap_or(u64::MAX))
+        let since = self.host.platform().now().since(self.start);
+        T0.saturating_add(u64::try_from(since.as_nanos()).unwrap_or(u64::MAX))
     }
 
-    fn instant(&self, at: u64) -> Instant {
-        self.start + Duration::from_nanos(at.saturating_sub(T0))
+    fn instant(&self, at: u64) -> <H::Platform as Platform>::Instant {
+        self.start.add(Duration::from_nanos(at.saturating_sub(T0)))
     }
 
     fn rx_buf(&self) -> Buf<'_> {
@@ -381,7 +380,7 @@ impl<H: Hosted> Shared<H> {
                                 }
                             }
                         }
-                        Err(e) if transient(&e) => {}
+                        Err(e) if e.is_transient() => {}
                         Err(_) => {
                             if let Some(mut core) = self.lock() {
                                 core.fail(Error::new(crate::ErrorKind::Unreachable, "the socket failed"));

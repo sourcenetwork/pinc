@@ -7,6 +7,9 @@
 //! progress. A host with nothing else to await on the endpoint (a server between accepts, connections that only need
 //! their keepalives) awaits [`Endpoint::run`].
 //!
+//! A host that is not on the standard library starts from [`Pinc::builder_on`] with its own [`Platform`]: its clock, its
+//! instant and the error type of its closures.
+//!
 //! The endpoint is `Clone` and `!Send`: one endpoint per core, and its handles stay on the thread that built it, where the host
 //! spawns the futures with its executor's local spawn. It lives while any handle to it, to a
 //! connection of it or to a stream of it lives; dropping the last handle drops its state without sending anything, so
@@ -21,7 +24,6 @@ use core::net::{Ipv4Addr, SocketAddr};
 use core::pin::pin;
 use core::task::Poll;
 use core::time::Duration;
-use std::time::Instant;
 
 use pinc_crypto::NodeId;
 use pinc_keystore::{KeyHandle, KeyStore, SoftwareStore};
@@ -40,6 +42,7 @@ use crate::keys::Identity;
 use crate::maps::Keys;
 use crate::mem::Limits;
 use crate::node::RELAYS;
+use crate::platform::{HostInstant, Platform, System, ns_to_ms};
 use crate::protocol::{Protocol, Registered};
 use crate::role::{Role, RoleSpec};
 use crate::start::{PortMapping, build, interfaces};
@@ -58,8 +61,15 @@ pub use discovery::{Discovery, NoDiscovery};
 pub struct Pinc;
 
 impl Pinc {
-    /// A builder with a fresh random identity.
+    /// A builder on the standard library's platform ([`System`]) with a fresh random identity.
     pub fn builder() -> Builder {
+        Self::builder_on(System)
+    }
+
+    /// A builder on the host's `platform`, which gives the endpoint its clock and its I/O error type, with a fresh
+    /// random identity. The closures of [`Builder::build`] then return the platform's error and the sleep closure
+    /// takes its instant.
+    pub fn builder_on<Pf: Platform>(platform: Pf) -> Builder<SoftwareStore, NoDiscovery, AllowAll, NoCarriers, (), Pf> {
         Builder {
             identity: Identity::generate().ok(),
             alpns: Vec::new(),
@@ -76,6 +86,7 @@ impl Pinc {
             connect_timeout: DEFAULT_CONNECT_TIMEOUT,
             port_mapping: PortMapping::OFF,
             role: (),
+            platform,
         }
     }
 }
@@ -85,7 +96,7 @@ const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// Collects the settings of an endpoint. The key store `S`, the discovery `D` and the access hook `A` are types the
 /// setters change; the defaults are an in-memory store, no discovery and a hook that admits everyone.
-pub struct Builder<S = SoftwareStore, D = NoDiscovery, A = AllowAll, C = NoCarriers, Q = ()> {
+pub struct Builder<S = SoftwareStore, D = NoDiscovery, A = AllowAll, C = NoCarriers, Q = (), Pf = System> {
     identity: Option<Identity<S>>,
     alpns: Vec<Vec<u8>>,
     relays: Vec<Relay>,
@@ -101,15 +112,16 @@ pub struct Builder<S = SoftwareStore, D = NoDiscovery, A = AllowAll, C = NoCarri
     connect_timeout: Duration,
     port_mapping: PortMapping,
     role: Q,
+    platform: Pf,
 }
 
-impl<S, D, A, C, Q> core::fmt::Debug for Builder<S, D, A, C, Q> {
+impl<S, D, A, C, Q, Pf> core::fmt::Debug for Builder<S, D, A, C, Q, Pf> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Builder").finish_non_exhaustive()
     }
 }
 
-impl<D, A, C, Q> Builder<SoftwareStore, D, A, C, Q> {
+impl<D, A, C, Q, Pf> Builder<SoftwareStore, D, A, C, Q, Pf> {
     /// Use the Ed25519 identity made from this 32-byte seed. The node id is its public key.
     ///
     /// # Errors
@@ -120,18 +132,18 @@ impl<D, A, C, Q> Builder<SoftwareStore, D, A, C, Q> {
     }
 }
 
-impl<S, D, A, C, Q> Builder<S, D, A, C, Q> {
+impl<S, D, A, C, Q, Pf> Builder<S, D, A, C, Q, Pf> {
     /// Use the identity key `handle` of `store`, such as a TPM store (`hwenc` feature of `pinc-keystore`).
     ///
     /// # Errors
     /// [`crate::ErrorKind::Config`] if the store holds no identity key under `handle`.
-    pub fn key_store<K: KeyStore>(self, store: K, handle: KeyHandle) -> Result<Builder<K, D, A, C, Q>> {
+    pub fn key_store<K: KeyStore>(self, store: K, handle: KeyHandle) -> Result<Builder<K, D, A, C, Q, Pf>> {
         Ok(self.identity(Identity::from_store(store, handle)?))
     }
 
     /// Use an identity built elsewhere.
     #[must_use]
-    pub fn identity<K: KeyStore>(self, identity: Identity<K>) -> Builder<K, D, A, C, Q> {
+    pub fn identity<K: KeyStore>(self, identity: Identity<K>) -> Builder<K, D, A, C, Q, Pf> {
         Builder {
             identity: Some(identity),
             alpns: self.alpns,
@@ -148,6 +160,7 @@ impl<S, D, A, C, Q> Builder<S, D, A, C, Q> {
             connect_timeout: self.connect_timeout,
             port_mapping: self.port_mapping,
             role: self.role,
+            platform: self.platform,
         }
     }
 
@@ -195,11 +208,12 @@ impl<S, D, A, C, Q> Builder<S, D, A, C, Q> {
         read: R,
         write: W,
         close: Cl,
-    ) -> Builder<S, D, A, CarrierFns<O, R, W, Cl, St>, Q>
+    ) -> Builder<S, D, A, CarrierFns<O, R, W, Cl, St>, Q, Pf>
     where
-        O: AsyncFn(&Relay, CarrierKind) -> std::io::Result<St>,
-        R: AsyncFn(&St, Vec<u8>) -> (std::io::Result<usize>, Vec<u8>),
-        W: AsyncFn(&St, Vec<u8>, usize) -> (std::io::Result<usize>, Vec<u8>),
+        Pf: Platform,
+        O: AsyncFn(&Relay, CarrierKind) -> Result<St, Pf::Error>,
+        R: AsyncFn(&St, Vec<u8>) -> (Result<usize, Pf::Error>, Vec<u8>),
+        W: AsyncFn(&St, Vec<u8>, usize) -> (Result<usize, Pf::Error>, Vec<u8>),
         Cl: AsyncFn(St),
     {
         Builder {
@@ -218,12 +232,13 @@ impl<S, D, A, C, Q> Builder<S, D, A, C, Q> {
             connect_timeout: self.connect_timeout,
             port_mapping: self.port_mapping,
             role: self.role,
+            platform: self.platform,
         }
     }
 
     /// Find addresses for nodes dialed without any.
     #[must_use]
-    pub fn discovery<N: Discovery>(self, discovery: N) -> Builder<S, N, A, C, Q> {
+    pub fn discovery<N: Discovery>(self, discovery: N) -> Builder<S, N, A, C, Q, Pf> {
         Builder {
             identity: self.identity,
             alpns: self.alpns,
@@ -240,6 +255,7 @@ impl<S, D, A, C, Q> Builder<S, D, A, C, Q> {
             connect_timeout: self.connect_timeout,
             port_mapping: self.port_mapping,
             role: self.role,
+            platform: self.platform,
         }
     }
 
@@ -286,7 +302,7 @@ impl<S, D, A, C, Q> Builder<S, D, A, C, Q> {
 
     /// Set the access hook: it is asked for the protocol and direction of each session on accept and on dial, and by [`Endpoint::admit`] for gossip neighbours; see [`Admission`].
     #[must_use]
-    pub fn acp<N: Admission>(self, hook: N) -> Builder<S, D, N, C, Q> {
+    pub fn acp<N: Admission>(self, hook: N) -> Builder<S, D, N, C, Q, Pf> {
         Builder {
             identity: self.identity,
             alpns: self.alpns,
@@ -303,6 +319,7 @@ impl<S, D, A, C, Q> Builder<S, D, A, C, Q> {
             connect_timeout: self.connect_timeout,
             port_mapping: self.port_mapping,
             role: self.role,
+            platform: self.platform,
         }
     }
 
@@ -325,19 +342,22 @@ impl<S, D, A, C, Q> Builder<S, D, A, C, Q> {
 }
 
 /// The endpoint that [`Builder::build`] makes over the closures `R`, `S` and `Z`.
-pub type Built<R, S, Z, K, D, A, C = NoCarriers, P = ()> = Endpoint<Host<R, S, Z, K, A, C, P>, D>;
+pub type Built<R, S, Z, K, D, A, C = NoCarriers, P = (), Pf = System> = Endpoint<Host<R, S, Z, K, A, C, P, Pf>, D>;
 
 /// The endpoint that [`Builder::build_io`] makes over a host `N`.
-pub type IoBuilt<N, K, D, A, C = NoCarriers, P = ()> = Endpoint<IoHost<N, K, A, C, P>, D>;
+pub type IoBuilt<N, K, D, A, C = NoCarriers, P = (), Pf = System> = Endpoint<IoHost<N, K, A, C, P, Pf>, D>;
 
 /// The endpoint that [`Builder::build_batched`] makes over the closures `R`, `S` and `Z`.
-pub type BatchBuilt<R, S, Z, K, D, A, C = NoCarriers, P = ()> = Endpoint<BatchHost<R, S, Z, K, A, C, P>, D>;
+pub type BatchBuilt<R, S, Z, K, D, A, C = NoCarriers, P = (), Pf = System> =
+    Endpoint<BatchHost<R, S, Z, K, A, C, P, Pf>, D>;
 
 #[allow(
     clippy::type_complexity,
     reason = "the endpoint's type names the host's closures and the builder's choices"
 )]
-impl<K: KeyStore, D: Discovery, A: Admission, C: Carriers, Q: RoleSpec<K>> Builder<K, D, A, C, Q> {
+impl<K: KeyStore, D: Discovery, A: Admission, C: Carriers<Pf>, Q: RoleSpec<K>, Pf: Platform>
+    Builder<K, D, A, C, Q, Pf>
+{
     /// Make the endpoint over the host's I/O, one datagram per call: `recv` receives one datagram into the buffer and
     /// returns its length and sender, `send` sends one datagram to an address, `sleep` sleeps until an instant. The
     /// closures are called from whichever task polls a future of the endpoint. `recv` must lose no datagram when its
@@ -349,16 +369,16 @@ impl<K: KeyStore, D: Discovery, A: Admission, C: Carriers, Q: RoleSpec<K>> Build
     ///
     /// # Errors
     /// [`crate::ErrorKind::Config`] for an invalid setting or no identity.
-    pub fn build<R, S, Z>(self, recv: R, send: S, sleep: Z) -> Result<Built<R, S, Z, K, D, A, C, Q::Built>>
+    pub fn build<R, S, Z>(self, recv: R, send: S, sleep: Z) -> Result<Built<R, S, Z, K, D, A, C, Q::Built, Pf>>
     where
-        R: AsyncFn(&mut [u8]) -> std::io::Result<(usize, SocketAddr)>,
-        S: AsyncFn(&[u8], SocketAddr) -> std::io::Result<usize>,
-        Z: AsyncFn(Instant),
+        R: AsyncFn(&mut [u8]) -> Result<(usize, SocketAddr), Pf::Error>,
+        S: AsyncFn(&[u8], SocketAddr) -> Result<usize, Pf::Error>,
+        Z: AsyncFn(Pf::Instant),
     {
         // One datagram per send: the endpoint does not batch for a host that sends one at a time.
-        let (inner, carriers, role, core, local) = self.assemble(1)?;
+        let (inner, carriers, role, core, local, platform) = self.assemble(1)?;
         Ok(Endpoint(Rc::new(inner.finish(
-            Host::new(recv, send, sleep, carriers, role),
+            Host::new(recv, send, sleep, carriers, role, platform),
             core,
             local,
             1,
@@ -373,16 +393,21 @@ impl<K: KeyStore, D: Discovery, A: Admission, C: Carriers, Q: RoleSpec<K>> Build
     ///
     /// # Errors
     /// As [`build`](Self::build).
-    pub fn build_batched<R, S, Z>(self, recv: R, send: S, sleep: Z) -> Result<BatchBuilt<R, S, Z, K, D, A, C, Q::Built>>
+    pub fn build_batched<R, S, Z>(
+        self,
+        recv: R,
+        send: S,
+        sleep: Z,
+    ) -> Result<BatchBuilt<R, S, Z, K, D, A, C, Q::Built, Pf>>
     where
-        R: AsyncFn(&mut [u8]) -> std::io::Result<(usize, SocketAddr, usize)>,
-        S: AsyncFn(&[u8], SocketAddr, usize) -> std::io::Result<usize>,
-        Z: AsyncFn(Instant),
+        R: AsyncFn(&mut [u8]) -> Result<(usize, SocketAddr, usize), Pf::Error>,
+        S: AsyncFn(&[u8], SocketAddr, usize) -> Result<usize, Pf::Error>,
+        Z: AsyncFn(Pf::Instant),
     {
         let batch = self.batch;
-        let (inner, carriers, role, core, local) = self.assemble(batch)?;
+        let (inner, carriers, role, core, local, platform) = self.assemble(batch)?;
         Ok(Endpoint(Rc::new(inner.finish(
-            BatchHost::new(recv, send, sleep, carriers, role),
+            BatchHost::new(recv, send, sleep, carriers, role, platform),
             core,
             local,
             batch,
@@ -394,11 +419,11 @@ impl<K: KeyStore, D: Discovery, A: Admission, C: Carriers, Q: RoleSpec<K>> Build
     ///
     /// # Errors
     /// As [`build`](Self::build).
-    pub fn build_io<N: Io>(self, io: N) -> Result<IoBuilt<N, K, D, A, C, Q::Built>> {
+    pub fn build_io<N: Io<Pf>>(self, io: N) -> Result<IoBuilt<N, K, D, A, C, Q::Built, Pf>> {
         let batch = self.batch;
-        let (inner, carriers, role, core, local) = self.assemble(batch)?;
+        let (inner, carriers, role, core, local, platform) = self.assemble(batch)?;
         Ok(Endpoint(Rc::new(inner.finish(
-            IoHost::new(io, carriers, role),
+            IoHost::new(io, carriers, role, platform),
             core,
             local,
             batch,
@@ -406,7 +431,7 @@ impl<K: KeyStore, D: Discovery, A: Admission, C: Carriers, Q: RoleSpec<K>> Build
     }
 
     /// Everything but the host: the core, built with transmits of up to `gso` datagrams.
-    fn assemble(self, gso: usize) -> Result<Assembled<D, C, Q::Built, K, A>> {
+    fn assemble(self, gso: usize) -> Result<Assembled<D, C, Q::Built, K, A, Pf>> {
         let Builder {
             identity,
             alpns,
@@ -423,10 +448,12 @@ impl<K: KeyStore, D: Discovery, A: Admission, C: Carriers, Q: RoleSpec<K>> Build
             connect_timeout,
             port_mapping,
             role,
+            platform,
         } = self;
         if relays.len() > RELAYS {
             return Err(Error::config("at most four relays"));
         }
+        let wall = platform.wall_ns();
         let mut identity = identity.ok_or(Error::config("the system has no randomness for a node identity"))?;
         let map_keys = Keys::draw(|out| identity.random(out))?;
         let (seed, secrets) = map_keys.parts();
@@ -449,10 +476,10 @@ impl<K: KeyStore, D: Discovery, A: Admission, C: Carriers, Q: RoleSpec<K>> Build
             connect_timeout: u64::try_from(connect_timeout.as_nanos()).unwrap_or(u64::MAX),
             port_mapping,
         };
-        let core = build(cfg, T0)?;
+        let core = build(cfg, T0, ns_to_ms(wall))?;
         // The relay's clock is the wall clock; the endpoint's is the same time from another origin, a fixed offset away.
         let offset = if <Q::Built as Role>::ON {
-            crate::clock::wall_ns().saturating_sub(T0)
+            wall.saturating_sub(T0)
         } else {
             0
         };
@@ -471,12 +498,13 @@ impl<K: KeyStore, D: Discovery, A: Admission, C: Carriers, Q: RoleSpec<K>> Build
             role,
             core,
             local,
+            platform,
         ))
     }
 }
 
-/// What `assemble` makes: the endpoint's parts, the host's carriers, the core and the bound address.
-type Assembled<D, C, P, K, A> = (Parts<D>, C, P, Core<K, A>, SocketAddr);
+/// What `assemble` makes: the endpoint's parts, the host's carriers, the core, the bound address and the platform.
+type Assembled<D, C, P, K, A, Pf> = (Parts<D>, C, P, Core<K, A>, SocketAddr, Pf);
 
 /// What an endpoint holds besides its host and its core.
 struct Parts<D> {
@@ -632,7 +660,7 @@ impl<H: Hosted, D: Discovery> Endpoint<H, D> {
     /// `f`'s output, or `None` if `wait` passes first; the wait is the host's sleep.
     async fn within<T>(&self, wait: Duration, f: impl Future<Output = T>) -> Option<T> {
         let mut f = pin!(f);
-        let mut sleep = pin!(self.0.shared.host.sleep(Instant::now() + wait));
+        let mut sleep = pin!(self.0.shared.host.sleep(self.0.shared.host.platform().now().add(wait)));
         poll_fn(|cx| {
             if let Poll::Ready(v) = f.as_mut().poll(cx) {
                 return Poll::Ready(Some(v));
@@ -731,7 +759,7 @@ impl<H: Hosted, D: Discovery> Endpoint<H, D> {
     /// The node sleeps: established sessions tell their peers.
     pub async fn suspend(&self) {
         let sh = &self.0.shared;
-        let wall = crate::clock::wall_ms();
+        let wall = ns_to_ms(sh.host.platform().wall_ns());
         sh.run(|core, now| {
             core.suspend(now, wall);
             Try::Done(())
@@ -823,6 +851,7 @@ pub const LOOKUP_WAIT: Duration = Duration::from_secs(3);
 #[allow(clippy::unwrap_used, reason = "tests assert")]
 mod tests {
     use std::io;
+    use std::time::Instant;
 
     use pinc_crypto::IdentityAlg;
 

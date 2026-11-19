@@ -11,7 +11,7 @@ use super::{Builder, Discovery, Endpoint};
 use crate::engine::Try;
 use crate::host::Hosted;
 
-impl<S, D, A, C, Q> Builder<S, D, A, C, Q> {
+impl<S, D, A, C, Q, Pf> Builder<S, D, A, C, Q, Pf> {
     /// Ask the home gateway for a UDP mapping of the endpoint's socket, so peers behind address translation of their
     /// own reach it directly (off by default). The endpoint tries PCP, then NAT-PMP, then `UPnP-IGD`, renews the lease
     /// before it ends, and deletes the mapping when it closes. A mapped address is published, first in the endpoint's

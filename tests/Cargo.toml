@@ -1457,3 +1457,7 @@ path = "table_array_pool.rs"
 [[test]]
 name = "table_noalloc"
 path = "table_noalloc.rs"
+
+[[test]]
+name = "pinc_platform"
+path = "pinc_platform.rs"

@@ -56,7 +56,7 @@
 #![forbid(unsafe_code)]
 
 extern crate alloc;
-// The host clock and I/O types are still the standard library's.
+// `System`, the default platform, is the standard library's.
 extern crate std;
 
 /// The README's examples, compiled and run as doctests so they cannot drift.
@@ -68,7 +68,6 @@ mod addr;
 mod body;
 pub mod carrier;
 mod carriers;
-mod clock;
 mod conn;
 mod drive;
 mod endpoint;
@@ -82,6 +81,7 @@ mod keys;
 mod maps;
 mod mem;
 mod node;
+mod platform;
 mod protocol;
 mod records;
 pub mod relay;
@@ -107,6 +107,7 @@ pub use host::{BatchHost, Host, Hosted, Io, IoHost};
 pub use keys::Identity;
 pub use mem::{Limits, MAX_CONNECTIONS, MAX_PROTOCOLS, RING, STREAMS};
 pub use node::CAPACITIES;
+pub use platform::{HostError, HostInstant, Platform, System};
 pub use protocol::{MAX_TAG, Protocol, Registered, read_tag, write_tag};
 pub use records::{KNOWN_MAX, MAX_HINTS, PeerRecord, Records, Rendezvous};
 pub use role::{RelayRole, Role, RoleSpec};
