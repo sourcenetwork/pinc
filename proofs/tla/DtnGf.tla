@@ -28,6 +28,8 @@ EXTENDS DtnGfOps, FiniteSets
 \* One state per first operand a, so TLC spreads the 256 rows over its workers.
 VARIABLE row
 Init == TabInit /\ row \in 0..255
+\* the quick profile (proofs/tla/quick): the rows of Spread, not all 256
+InitQuick == TabInit /\ row \in {0, 1, 2, 3, 29, 77, 128, 200, 254, 255}
 Next == UNCHANGED <<row, tabs>>
 
 Bytes == 0..255
@@ -55,6 +57,8 @@ Field ==
 Alpha == {0, 1, 129, 255}
 Seqs(n) == [1..n -> Alpha]
 AllSeqs == UNION {Seqs(n) : n \in 0..3}
+\* the quick profile (proofs/tla/quick): slices of every length up to 2, not 3
+AllSeqsQuick == UNION {Seqs(n) : n \in 0..2}
 
 Kernels ==
     \A d, s \in AllSeqs, c \in Spread :

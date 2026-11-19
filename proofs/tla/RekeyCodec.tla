@@ -51,6 +51,8 @@ RkDecode(buf) ==
 
 (* ---- the checked domain ---- *)
 Shares == {[i \in 1..32 |-> 0], [i \in 1..32 |-> 255], [i \in 1..32 |-> i]}
+\* the quick profile (proofs/tla/quick): one share, the bytes of a share are only copied
+SharesQuick == {[i \in 1..32 |-> i]}
 Echoes == {[i \in 1..8 |-> 0], [i \in 1..8 |-> 255 - i]}
 (* the widths around every varint length boundary (2^(7k) - 1, 2^(7k), 2^(7k) + 1), 2^63 and 2^64 included *)
 Widths == {0, 1, 2, 6, 7, 8, 13, 14, 15, 20, 21, 22, 27, 28, 29, 34, 35, 36, 41, 42, 43, 48, 49, 50, 55, 56, 57, 62, 63, 64}

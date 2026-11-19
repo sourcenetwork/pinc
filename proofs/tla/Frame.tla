@@ -86,12 +86,38 @@ Frames ==
     \cup {[k |-> "NewTickets", es |-> es] : es \in Batches}
     \cup {[k |-> "Extension", ty |-> t, body |-> d] : t \in {0, 63, 64, 127, 128, LIMIT - 1, LIMIT}, d \in Datas \cup {Long}}
 
+\* the frames of the quick profile (proofs/tla/quick): every kind, each field at its varint edges with the others held,
+\* and the 130-byte payload in seven frames only
+FramesQuick ==
+    {[k |-> "Padding", len |-> n] : n \in {1, 64, 65}}
+    \cup {[k |-> x] : x \in {"Ping", "Sleep", "Wake", "Ready"}}
+    \cup {[k |-> "ResetStream", id |-> a, error |-> b, fs |-> d] : a \in {0, 128, LIMIT - 1, LIMIT}, b, d \in {0, LIMIT}}
+    \cup {[k |-> "StopSending", id |-> a, error |-> b] : a \in {127, 128, LIMIT - 1, LIMIT}, b \in {0, LIMIT}}
+    \cup {[k |-> "Stream", id |-> a, off |-> o, fin |-> fi, data |-> d, imp |-> im] :
+            a \in {0, LIMIT}, o \in {0, 1, MAXEND - 1, MAXEND, LIMIT}, fi \in BOOLEAN, d \in {<<>>, <<7, 0>>}, im \in BOOLEAN}
+    \cup {[k |-> "Stream", id |-> 128, off |-> o, fin |-> FALSE, data |-> Long, imp |-> im] : o \in {0, 1}, im \in BOOLEAN}
+    \cup {[k |-> "MaxStreamData", id |-> a, max |-> b] : a \in {127, 128, LIMIT - 1, LIMIT}, b \in {0, LIMIT}}
+    \cup {[k |-> "MaxStreams", limit |-> a] : a \in Vals}
+    \cup {[k |-> x, d |-> d] : x \in {"PathChallenge", "PathResponse"}, d \in B8}
+    \cup {[k |-> "Close", error |-> a] : a \in Vals}
+    \cup {[k |-> "Datagram", data |-> d, imp |-> im] : d \in Datas \cup {Long}, im \in BOOLEAN}
+    \cup {[k |-> "MtuProbeEcho", mtu |-> m] : m \in {0, 255, 256, 1200, 65535}}
+    \cup {[k |-> "Rekey", ans |-> a, sh |-> [i \in 1..32 |-> i], echo |-> e, spn |-> p] :
+            a \in BOOLEAN, e \in B8, p \in {127, 128, LIMIT}}
+    \cup {[k |-> "NewTickets", es |-> es] : es \in {<<>>, <<T1>>, <<T2, T1>>, <<T1, T2, T2>>}}
+    \cup {[k |-> "Extension", ty |-> t, body |-> d] : t \in {63, 64, 128, LIMIT}, d \in {<<>>, <<7, 0>>}}
+    \cup {[k |-> "Extension", ty |-> 64, body |-> Long]}
+
 PNs == 0..(MAXPN + 1)
 Ranges == PNs \X PNs
 RangeLists == UNION {[1..n -> Ranges] : n \in 0..(MAXRANGES + 1)}
+\* the range lists of the quick profile: every list of up to MAXRANGES ranges, and one past it after two valid ranges
+RangeListsQuick == UNION {[1..n -> Ranges] : n \in 0..MAXRANGES} \cup {<<<<2, 2>>, <<0, 0>>, r>> : r \in Ranges}
 
 Alphabet == {0, 1, 2, 3, 4, 5, 8, 10, 12, 14, 17, 28, 48, 49, 58, 63, 64, 128, 129, 255}
 Strings == UNION {[1..n -> Alphabet] : n \in 0..4} \cup {<<2>> \o s : s \in [1..5 -> {0, 1, 2, 3, 5, 128}]}
+\* the quick profile (proofs/tla/quick): strings of up to 3 bytes, and ack bytes of 4 after the type
+StringsQuick == UNION {[1..n -> Alphabet] : n \in 0..3} \cup {<<2>> \o s : s \in [1..4 -> {0, 1, 2, 3, 5, 128}]}
 
 Cases ==
     CASE MODE = "frames" -> {[t |-> "frame", f |-> f] : f \in Frames}

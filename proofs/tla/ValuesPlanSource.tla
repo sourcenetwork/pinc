@@ -124,6 +124,12 @@ Reqs == {<<3 * G + 1, <<<<0, 3 * G + 1>>>>>>, <<2 * G, <<<<0, 2 * G>>, <<G, G>>>
 Holes(l) == {<<{}, {}>>, <<{0}, {}>>, <<{PAR}, {}>>, <<{}, {1}>>, <<{}, {l - 1}>>, <<{}, {G}>>}
 CaseSet == UNION {{[len |-> r[1], spans |-> r[2], obSize |-> PAR * (Ops!Groups(r[1]) - 1), holeO |-> h[1], holeV |-> h[2]]
                    : h \in Holes(r[1])} : r \in Reqs}
+\* the cases of the quick profile (proofs/tla/quick): a value of one span, two spans and three spans, with no hole, the
+\* first header byte missing and the value byte at G missing
+CaseSetQuick ==
+    UNION {{[len |-> r[1], spans |-> r[2], obSize |-> PAR * (Ops!Groups(r[1]) - 1), holeO |-> h[1], holeV |-> h[2]]
+            : h \in Holes(r[1]) \cap {<<{}, {}>>, <<{0}, {}>>, <<{}, {G}>>}}
+           : r \in {rq \in Reqs : rq[2] \in {<<<<0, 3 * G + 1>>>>, <<<<0, 2 * G>>, <<G, G>>>>, <<<<G - 1, 2>>, <<0, 1>>, <<3 * G, G - 1>>>>}}}
 
 (* ---- the machine ---- *)
 Plan(c0) == Ops!PlanNew(c0.len, c0.spans)

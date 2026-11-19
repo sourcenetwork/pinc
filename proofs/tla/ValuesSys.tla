@@ -529,4 +529,8 @@ Terminates == <>(S.run = "done")
 Completes == <>(S.fin = "Complete")
 CompletesOrDeadline == <>(S.fin \in {"Complete", "Deadline"})
 
+(* The quick profile of ValuesSys_n4 (quick/ValuesSys_n4.cfg names it as its CONSTRAINT): behaviours of at most 28
+   steps, with the deep constants *)
+ValuesSys_n4QuickBound == TLCGet("level") <= 28
+
 =============================================================================

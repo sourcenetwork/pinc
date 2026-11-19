@@ -76,6 +76,10 @@ StepsD == {10 * SEC, 25 * SEC}
 StepsE == {600000, 3 * SEC}
 StepsB == {SEC \div 2, 3 * SEC, 30 * SEC}
 StepsF == {3 * SEC, 30 * SEC}
+\* the quick profile of ConnectLink.cfg: the longer step of StepsC alone
+StepsCQuick == {30 * SEC}
+\* the quick profile of ConnectLink_ridesHome.cfg: the longer step of StepsF alone
+StepsFQuick == {30 * SEC}
 LDown == NewLink
 LDialing == [NewLink EXCEPT !.st = "dialing", !.ds = 0]
 LOpen == [NewLink EXCEPT !.st = "open", !.lrx = 0, !.hlt = 0, !.was = TRUE]

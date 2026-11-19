@@ -100,6 +100,11 @@ Lower(m) == [i \in 1..Len(m) |-> IF m[i] >= 65 /\ m[i] <= 90 THEN m[i] + 32 ELSE
 
 Small(S, n) == {f \in S : Len(FrameBytes(f)) <= n}
 
+(* The quick profile (quick/ConnectCodec.cfg substitutes these for Vals and Small): a byte mutated to 0, 13 (the batch
+   type) or 255, and the canonical-form check of the frames of up to half the bytes *)
+ValsQuick == {0, 13, 255}
+SmallQuick(S, n) == {f \in S : Len(FrameBytes(f)) <= n \div 2}
+
 (* ---- the properties ---- *)
 Shortfall(r) == r.ok = FALSE /\ "small" \in DOMAIN r /\ r.small > 0
 

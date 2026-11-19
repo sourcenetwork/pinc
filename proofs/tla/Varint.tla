@@ -134,6 +134,29 @@ Next ==
        \/ c.a = 3 /\ Len(c.in) >= 5 /\ \E b \in {0, 1, 127} : c' = [c EXCEPT !.a = 4, !.in = Append(c.in, b)]
        \/ c.a = 4 /\ \E b \in {0, 255} : c' = [c EXCEPT !.a = 5, !.in = Append(c.in, b)])
 
+(* the quick profile (quick/Varint.cfg substitutes it for Next): Next with mode 1 cut to strings of 0..3 bytes, mode 2
+   to strings of 0..1 bytes and the runs of mode 3 made of one continuation byte (all 128 or all 255) *)
+NextQuick ==
+    \/ c.t = "root" /\ \E sd \in Seeds : c' = [t |-> "seed", sd |-> sd]
+    \/ c.t = "seed" /\ \E x \in Expand(c.sd) : c' = x
+    \/ c.t = "dec" /\ (
+       \/ c.a = 1 /\ Len(c.in) < 3 /\ \E b \in Alpha : c' = [c EXCEPT !.in = Append(c.in, b)]
+       \/ c.a = 2 /\ Len(c.in) < 1 /\ \E b \in 0..255 : c' = [c EXCEPT !.in = Append(c.in, b)]
+       \/ c.a = 3 /\ Len(c.in) < 10 /\ \E b \in {128, 255} : (IF c.in = <<>> THEN TRUE ELSE b = c.in[1]) /\ c' = [c EXCEPT !.in = Append(c.in, b)]
+       \/ c.a = 3 /\ Len(c.in) >= 5 /\ \E b \in {0, 1, 127} : c' = [c EXCEPT !.a = 4, !.in = Append(c.in, b)]
+       \/ c.a = 4 /\ \E b \in {0, 255} : c' = [c EXCEPT !.a = 5, !.in = Append(c.in, b)])
+
+(* the quick profile (quick/Varint.cfg substitutes Alpha <- AlphaQuick and Seeds <- SeedsQuick): the class alphabet
+   of mode 1 without 2, 64 and 129 (zero, small, 127 and continuation bytes with the low bits clear, set and mixed
+   stay), and the boundary values 2^j - 1, 2^j, 2^j + 1 only where the encoded length changes (j next to a multiple
+   of 7, 63 and 64) instead of every j in 0..64 *)
+AlphaQuick == {0, 1, 127, 128, 192, 255}
+SeedsQuick ==
+    {[f |-> "blk", b |-> b] : b \in 0..((SmallMax - 1) \div 64)}
+    \cup {[f |-> "edge", j |-> j, d |-> d] : j \in {0, 1, 6, 7, 8, 13, 14, 20, 21, 27, 28, 34, 35, 41, 42, 48, 49, 55,
+                                                     56, 62, 63, 64}, d \in -1..1}
+    \cup {[f |-> "dec", a |-> a] : a \in 1..3}
+
 Spec == Init /\ [][Next]_c
 
 (* ---- the properties ---- *)

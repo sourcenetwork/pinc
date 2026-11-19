@@ -228,6 +228,13 @@ Seeds ==
             gp \in {<<2, 1>>, <<2, 2>>, <<4, 3>>}})
     \cup {[f |-> "real", g |-> g, bits |-> bits] : g \in {1024, 2048}, bits \in {32, 64}}
     \cup {[f |-> "gib", bits |-> bits] : bits \in {32, 64}}
+\* the quick profile (proofs/tla/quick): every small value of up to 2 groups + 1 byte (not 3) with groups of 2 bytes,
+\* up to 1 group + 1 byte with groups of 4, groups of 1 KiB (not 2 KiB) on both usizes, every GiB case
+SeedsQuick ==
+    (UNION {{[f |-> "small", g |-> gp[1], p |-> gp[2], len |-> len] : len \in 0..(gp[3] * gp[1] + 1)} :
+            gp \in {<<2, 1, 2>>, <<2, 2, 2>>, <<4, 3, 1>>}})
+    \cup {[f |-> "real", g |-> 1024, bits |-> bits] : bits \in {32, 64}}
+    \cup {[f |-> "gib", bits |-> bits] : bits \in {32, 64}}
 
 (* the configurations of a seed: the value, the requested groups and the tampered item (-1 for none) *)
 Tampers(c0) == {c0} \cup {[c0 EXCEPT !.tam = t] : t \in 0..(Len(Items(c0)) - 1)}

@@ -113,13 +113,21 @@ CallOK(ln, st, vfront, window, from, upto, failAt) ==
 
 (* ---- the machine: a served response in any state its invariants allow, and one event fed to it ---- *)
 LNs == {1, 17 * G, 100 * G + 1, 4097 * G, 65536 * G, 65536 * G + 1}
+\* the quick profile (proofs/tla/quick/ValuesPlanProofs.cfg): the length of 4097 groups dropped
+LNsQuick == {1, 17 * G, 100 * G + 1, 65536 * G, 65536 * G + 1}
 
 Offs(l) == {0, l \div 2, l, l + 3 * G}
 Wins == {0, 64, 400}
+\* the quick profile (proofs/tla/quick/ValuesPlanProofs.cfg): l is dropped from Offs (a frontier past the end is
+\* capped to l anyway), 64 from Wins
+OffsQuick(l) == {0, l \div 2, l + 3 * G}
+WinsQuick == {0, 400}
 Fails == {1, 99}
 
 \* what the invariants allow of pf_to: on a group, or at the end of the value (or past it after a request beyond it)
 PfTos(l) == {0, 8 * G, l, l + 5 * G}
+\* the quick profile: pf_to past the end dropped
+PfTosQuick(l) == {0, 8 * G, l}
 
 VARIABLES ln, st, vfront, window, armed, ok, fired
 vars == <<ln, st, vfront, window, armed, ok, fired>>

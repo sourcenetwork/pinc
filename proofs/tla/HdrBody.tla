@@ -120,6 +120,30 @@ Next ==
 
 Spec == Init /\ [][Next]_c
 
+(* The quick profile (quick/HdrBody.cfg substitutes NextQuick for Next): the same cases over fewer values, keeping  *)
+(* the varint edges (one to two bytes, two to four, the largest accepted and the first refused) of the total and of *)
+(* the offset, each against a one-byte other and both equal; the ids empty, one byte and 20 bytes, each against an  *)
+(* empty other and both equal; a body length of two varint bytes; a total over MX; byte strings of up to 3 bytes.   *)
+WordsQuick == IF Big THEN {U!W(1)}
+              ELSE {U!W(k) : k \in {0, 5, 63, 64}} \cup {V!EdgeVal(j, d) : j \in {14, 62}, d \in {-1, 0}}
+HsWordsQuick == IF Big THEN {<<U!W(1), U!W(0)>>}
+                ELSE {<<w, U!W(5)>> : w \in WordsQuick} \cup {<<U!W(5), w>> : w \in WordsQuick} \cup {<<w, w>> : w \in WordsQuick}
+HsCidsQuick == {<<d, <<>>>> : d \in Cids2} \cup {<<<<>>, s>> : s \in Cids2} \cup {<<d, d>> : d \in Cids2}
+DlensQuick == IF Big THEN {16384} ELSE {0, 3, 130}
+RTotalsQuick == {U!W(k) : k \in {0, 1, 5, 6, 7}} \cup {U!Pw(62)}
+ROffsQuick == {U!W(k) : k \in {0, 1, 3, 4, 5, 6}} \cup {U!Pw(62)}
+RDlensQuick == {0, 1, 2, 10}
+NextQuick ==
+    \/ c.t = "root" /\ \E f \in {"hs", "recv", "bytes", "pad", "smp"} : c' = [t |-> "seed", f |-> f]
+    \/ c.t = "seed" /\ c.f = "hs" /\ \E ds \in HsCidsQuick, wo \in HsWordsQuick, dl \in DlensQuick :
+           c' = [t |-> "hs", d |-> ds[1], s |-> ds[2], tw |-> wo[1], ow |-> wo[2], dl |-> dl]
+    \/ c.t = "seed" /\ c.f = "recv" /\ \E r \in RStates, tw \in RTotalsQuick, ow \in ROffsQuick, dl \in RDlensQuick :
+           c' = [t |-> "recv", r |-> r, tw |-> tw, ow |-> ow, dl |-> dl]
+    \/ c.t = "seed" /\ c.f = "bytes" /\ c' = [t |-> "bytes", in |-> <<>>]
+    \/ c.t = "bytes" /\ Len(c.in) < 3 /\ \E b \in Alpha : c' = [c EXCEPT !.in = Append(c.in, b)]
+    \/ c.t = "seed" /\ c.f = "pad" /\ c' = [t |-> "pad"]
+    \/ c.t = "seed" /\ c.f = "smp" /\ c' = [t |-> "smp"]
+
 Fill(n, b) == [i \in 1..n |-> b]
 Prefix(s, n) == SubSeq(s, 1, n)
 Rest(s, n) == SubSeq(s, n + 1, Len(s))

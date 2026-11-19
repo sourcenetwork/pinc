@@ -55,7 +55,13 @@ EXTENDS ConnectRelayOps
 CONSTANTS Times, MaxNs, Depth, WithSleep, WithReady, OldHeld, HoldBehind, StopFirst, Seed, Lens, MBytes, FullUdp, LoudSpu
 cf == [me |-> 9, C |-> 2, R |-> 2, MN |-> 1, MB |-> MBytes, Bytes |-> 3, Window |-> 3, SessT |-> 4, Age |-> 40,
        old |-> OldHeld, hb |-> HoldBehind, stop |-> StopFirst]
+\* the quick profile: cf with a window quota of 1 byte, so that the second frame of a window is refused at a small depth
+cfQuick == [me |-> 9, C |-> 2, R |-> 2, MN |-> 1, MB |-> MBytes, Bytes |-> 1, Window |-> 3, SessT |-> 4, Age |-> 40,
+            old |-> OldHeld, hb |-> HoldBehind, stop |-> StopFirst]
 Cl == {1, 2}
+\* the quick profile: one node that opens carriers (node 2, or node 1 for the configs whose member is 1)
+ClQuick2 == {2}
+ClQuick1 == {1}
 
 \* the earlier SPU, for a witness only (LoudSpu): a full UDP table is traced as a refusal and the datagram goes on
 SpuLoud(cf0, R0, now, m, dst, flag, len) ==
@@ -65,6 +71,12 @@ SpuLoud(cf0, R0, now, m, dst, flag, len) ==
          IF dst = cf0.me THEN After(uh.ef, Fail(uh.R, "noroute", m))
          ELSE After(uh.ef, Route(cf0, uh.R, now, m, dst, flag, len, "tunnel"))
 Peers == {5, 6}
+\* the quick profile: one peer relay
+PeersQuick == {5}
+\* the quick profile: the peer table and the alias tables of ConnectRelayOps (MAX_PEERS 32, ALIAS_MAX 32) cut to what the
+\* model can fill: at most two peer relays (5, 6) are ever added and a carrier learns at most three sources (1, 2, 3)
+MAXPEERSQuick == 2
+AMQuick == 4
 VARIABLES R, clock, last, steps, ref, fw, heard, step, quiet
 vars == <<R, clock, last, steps, ref, fw, heard, step, quiet>>
 

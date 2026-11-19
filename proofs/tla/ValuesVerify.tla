@@ -221,6 +221,28 @@ Next ==
 
 Spec == Init /\ [][Next]_<<cfg, its, vs, pos, rem, stop, j, gs, agree, op>>
 
+(* ---- the quick profile (quick/ValuesVerify*.cfg substitute NextQuick for Next) ---- *)
+MySeedsQuick ==
+    CASE SeedSet = "tiny" -> {[f |-> "small", g |-> 2, p |-> 1, len |-> len] : len \in {0, 1, 3, 5}}
+      [] SeedSet = "small" -> {[f |-> "small", g |-> 2, p |-> 2, len |-> len] : len \in {0, 3, 7}}
+                              \cup {[f |-> "small", g |-> 4, p |-> 3, len |-> len] : len \in {5, 13}}
+      [] SeedSet = "small_skip" -> {[f |-> "small", g |-> 2, p |-> 2, len |-> len] : len \in {0, 1, 3, 5}}
+      [] SeedSet \in {"real64", "real32"} -> MySeeds
+CfgsOfQuick(sd) ==
+    IF sd.f = "real"
+    THEN UNION {VB!Tampers(VB!MkCfg(U!W(3 * sd.g), U!W(sd.g), 64, sd.bits, 0, 2, -1))}
+    ELSE VB!CfgsOf(sd)
+NextQuick ==
+    \/ cfg.k = "root" /\ \E sd \in MySeedsQuick : cfg' = [k |-> "seed", sd |-> sd] /\ UNCHANGED <<its, vs, pos, rem, stop, j, gs, agree, op>>
+    \/ cfg.k = "seed" /\ \E x \in CfgsOfQuick(cfg.sd) :
+           /\ cfg' = x
+           /\ its' = VB!Items(x)
+           /\ vs' = VB!InitVs(x, VB!Items(x))
+           /\ gs' = GInit(x, VB!Items(x))
+           /\ UNCHANGED <<pos, rem, stop, j, agree, op>>
+    \/ cfg.k = "cfg" /\ ~stop /\ \E k \in (IF rem = U!Zero THEN VB!PieceSizes(cfg, its, pos) ELSE {rem}) : Fed(k)
+    \/ Skipped
+
 (* ---- the properties ---- *)
 
 Inv ==

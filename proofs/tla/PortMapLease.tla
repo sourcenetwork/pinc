@@ -399,4 +399,7 @@ TypeOK == /\ now \in 0..MaxT /\ boot \in 0..MaxT /\ restarts \in 0..MaxRestarts
           /\ floorEnd \in 0..(MaxT + 3 * Floor) /\ annNext \in -1..(MaxT + 3 * Floor)
           /\ lastBrought \in -1..(MaxT + 3 * Floor)
           /\ fast \in BOOLEAN /\ dropBad \in BOOLEAN
+
+\* the quick profile (proofs/tla/quick): every behaviour up to a depth, as a CONSTRAINT
+PortMapLeaseQuickBound == TLCGet("level") <= 14
 =============================================================================

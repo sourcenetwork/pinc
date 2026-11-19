@@ -215,6 +215,10 @@ Inv == OneDriver /\ TicketsLive /\ WakerOwner /\ WaitArmed /\ QueueOnce /\ Waker
 
 RoleTaken == (~flag /\ WaitAny) ~> (flag \/ ~WaitAny)
 
+\* the quick profile of FacadeTurn_wrap (proofs/tla/quick): the owner starts once and keeps its slot while the other
+\* future is started, waits and is dropped STARTS times
+FacadeTurn_wrapQuickBound == starts[OWNER] <= 1
+
 \* a reachability witness: a poll stops at DRAIN with datagrams still at the host
 NotCut == ~(took = DRAIN /\ sock # <<>>)
 =============================================================================

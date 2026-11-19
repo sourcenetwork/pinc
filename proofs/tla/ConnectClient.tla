@@ -146,6 +146,19 @@ DoNet ==
     \/ NC' = NRestart(NC)
     \/ \E fr \in -1..1 : NC' = NMissing(NC, fr).N
 
+\* the quick profile of ConnectClient_net: DoNet with the probes sent at instant 0 only and the answers carrying address
+\* 1 only. A probe sent later and answered later has the round trip of one sent at 0 and answered at 0, and the address
+\* is read only as answered (refl >= 0), so every home, round trip, order and counter DoNet reaches is reached; what is
+\* left out is a send instant (sent, fp) other than 0 and the address 2
+DoNetQuick ==
+    \/ \E rl \in 0..1, nc \in 1..1, w \in BOOLEAN : NC' = NProbeSent(NC, 0, rl, <<nc>>, w)
+    \/ \E now \in Times, rl \in 0..1, nc \in 1..1 : NC' = Ans(NC, now, rl, <<nc>>, 1).N
+    \/ \E rl \in 0..1 : NC' = NFailed(NC, rl)
+    \/ \E rl \in 0..1 : NC' = NHealthy(NC, rl)
+    \/ \E us \in {<<TRUE, TRUE>>, <<TRUE, FALSE>>, <<FALSE, TRUE>>}, op \in BOOLEAN \X BOOLEAN : NC' = NFailover(NC, us, op).N
+    \/ NC' = NRestart(NC)
+    \/ \E fr \in -1..1 : NC' = NMissing(NC, fr).N
+
 Next == \/ (Mode = "pending" /\ DoPending /\ UNCHANGED <<LK, NC>>)
         \/ (Mode = "lookups" /\ DoLookups /\ UNCHANGED <<P, NC>>)
         \/ (Mode = "net" /\ DoNet /\ UNCHANGED <<P, LK>>)
@@ -209,4 +222,9 @@ AnswerOK ==
 
 \* the miss and try counters saturate at 255 in the code; one past the threshold covers every branch
 Bounded == (\A i \in 1..2 : NC.missed[i] <= MISSLIMIT + 1) /\ NC.tries <= HOMETRIES + 1
+\* the quick profile: the counters stop at the threshold itself (unhealthy, and the fallback home), not one past it
+BoundedQuick == (\A i \in 1..2 : NC.missed[i] <= MISSLIMIT) /\ NC.tries <= HOMETRIES
+\* the quick profiles: behaviours of at most 3 calls (ConnectClient_lookups) and 4 calls (ConnectClient_net: two probes and their two answers)
+ConnectClient_lookupsQuickBound == TLCGet("level") <= 3
+ConnectClient_netQuickBound == TLCGet("level") <= 4
 =============================================================================

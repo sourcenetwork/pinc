@@ -464,6 +464,8 @@ ScrMove == <<<<"move", 40, 4>>>>
 \* primary hub: member 3 starts with hubs at 100 ms and 90 ms (inside the hysteresis), then hub 2 gets to 40 ms
 ScrPrimaryHyst == <<<<"rtt", 1, 3, 1, 100>>, <<"rtt", 1, 3, 2, 90>>, <<"rtt", 100, 3, 2, 40>>>>
 ScrPrimaryFlat == <<<<"rtt", 1, 3, 1, 100>>, <<"rtt", 1, 3, 2, 90>>>>
+\* quick profile: ScrPrimaryHyst with hub 2's drop to 40 ms at 20 s instead of 100 s
+ScrPrimaryHystQuick == <<<<"rtt", 1, 3, 1, 100>>, <<"rtt", 1, 3, 2, 90>>, <<"rtt", 20, 3, 2, 40>>>>
 \* #343: hub 1 is cut from hub 2 and hub 2 from member 4 from the start; member 3 homes on hub 1 (100 ms against 120 ms)
 \* and lists 4, which hub 2 never hears of; at 100 s hub 2 drops to 40 ms and 3 moves its home there; 4 crashes at 130 s
 \* and only hub 1 learns it; every cut heals at 250 s. Hub 2's complete snapshot omits 4, so 3 must let 4 go too.

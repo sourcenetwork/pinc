@@ -67,6 +67,9 @@ Empty == [tk |-> <<>>, kr |-> <<>>, ek |-> <<>>]
 Lives == {Empty,
           [tk |-> <<Tk(7, 1, 1, 500)>>, kr |-> <<Kr(7, 1, 3)>>, ek |-> <<Ek(7, 1, 6)>>],
           [tk |-> <<Tk(7, 1, 1, 500), Tk(8, 2, 4, 600)>>, kr |-> <<Kr(7, 1, 3), Kr(8, 2, 4)>>, ek |-> <<Ek(7, 1, 6), Ek(8, 2, 6)>>]}
+\* the quick profile (proofs/tla/quick): the empty endpoint and the one with one entry per table, not the full one (a
+\* restore of a case of 2 or 3 entries over it still passes the bounds)
+LivesQuick == {Empty, [tk |-> <<Tk(7, 1, 1, 500)>>, kr |-> <<Kr(7, 1, 3)>>, ek |-> <<Ek(7, 1, 6)>>]}
 
 Take(bs, k) == SubSeq(bs, 1, k)
 Mutate(bs, i, d) == [bs EXCEPT ![i] = IF d = 0 THEN 0 ELSE IF d = 1 THEN 255 ELSE (bs[i] + 1) % 256]
@@ -86,6 +89,9 @@ Offs(s) == {1, 2, 3, 4, 5, 6, 7, K0(s) - 2, K0(s) - 1, E0(s) - 2, E0(s) - 1}
            \cup AlgPos(s) \cup TkLen(s.tk, 8) \cup TkAead(s.tk, 8)
 
 Positions(s, n) == ((1..24) \cup ((n - 9)..n) \cup Offs(s) \cup {p \in 25..n : p % 7 = 0}) \cap (1..n)
+\* the quick profile: every 21st byte past the first 24, not every 7th (21 is prime to 8, so each of the 16 mutation
+\* checks still gets middle bytes); the head, the tail and every tag, length and count offset kept
+PositionsQuick(s, n) == ((1..24) \cup ((n - 9)..n) \cup Offs(s) \cup {p \in 25..n : p % 21 = 0}) \cap (1..n)
 
 \* canonical: one entry per peer, within the bounds, round trips above 0, tickets not expired
 Distinct(l) == \A i, j \in 1..Len(l) : i # j => O!Peer(l[i]) # O!Peer(l[j])

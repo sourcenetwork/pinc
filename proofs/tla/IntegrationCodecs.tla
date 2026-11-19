@@ -109,6 +109,29 @@ SidRT ==
 
 SidAll == \A b \in Bodies, sid \in Ids : SidOK(b, sid)
 
+(* ---- the quick profile (quick/IntegrationCodecs*.cfg substitute these for the sets and properties named) ---- *)
+(* the IPv6 addresses with each segment over the values relay_parts tells apart: the right one and a wrong one for   *)
+(* the fixed segments, every slot value up to B for the relay slot, the alphabet for the peer (the IPv4 ones whole)  *)
+AddrsQuick == {[v6 |-> FALSE, s |-> f] : f \in [1..4 -> 0..(B - 1)]}
+              \cup {[v6 |-> TRUE, s |-> <<a1, a2, a3, a4, a5, a6, a7, a8>>] :
+                      a1 \in {S0, 0}, a2 \in {S1, 0}, a3 \in {S2, 0}, a4 \in {0, 1}, a5 \in {0, 1}, a6 \in 0..B,
+                      a7 \in {0, 1}, a8 \in Seg}
+(* the stream ids around the one-byte and two-byte limits, the longest encodings and the refused ones *)
+WdQuick == {0, 7, 8, 56, 63, 64}
+(* TLC builds every constant set of the module when it starts, read or not; at the real widths (B = 256, MAXTAG = 64)  *)
+(* Addrs, Built and TagStrs hold billions of values. The quick configs whose properties do not read them substitute  *)
+(* this empty set for them.                                                                                          *)
+UnreadQuick == {}
+(* TLC also evaluates every constant property of the module when it starts, checked or not: at B = 256 RelayRT alone *)
+(* is 2 * 256 * 65536 cases. The quick configs substitute this for the properties they do not check.              *)
+UncheckedQuick == TRUE
+(* the rests after an old id: none, one byte, and the lengths around where a new id of 1, 2, 8 or 9 bytes stops     *)
+(* fitting EXTMAX                                                                                                    *)
+SRestsQuick == {[i \in 1..n |-> 5] : n \in {0, 1} \cup {EXTMAX - l + e : l \in {1, 2, 8, 9}, e \in {0, 1}}}
+               \cup {<<255, 1, 2>>}
+(* old ids of one, two and nine bytes *)
+OldsQuick == {V!EdgeVal(j, 0) : j \in {0, 7}} \cup {V!EdgeVal(63, -1)}
+
 (* the invariants of the configs: a constant property is checked on the one state, so TLC names it as violated *)
 cRelayRT == x = 0 /\ RelayRT
 cRelayInv == x = 0 /\ RelayInv

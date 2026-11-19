@@ -318,4 +318,9 @@ NoCrossAllow == (last.done /\ last.up) => (last.gate \/ last.cov)
 NoCrossDeny == \A p \in Peers : cache[p] = "deny" => \A q \in Held(p) : ~Gate(p, q)
 \* No refusal closed a session whose question the gate allowed at that moment.
 NoCut == ~cut
+
+\* The quick profile (proofs/tla/quick) of FacadeAcpForget_two: every behaviour up to a depth, as a CONSTRAINT. Two
+\* peers and one listed protocol are already the least that configuration is about, so the depth is the one bound left.
+LOCAL QuickTLC == INSTANCE TLC
+FacadeAcpForget_twoQuickBound == QuickTLC!TLCGet("level") <= 5
 =============================================================================

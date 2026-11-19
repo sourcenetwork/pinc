@@ -428,4 +428,7 @@ ClosedTold == \A h \in Hubs : (said[h] <=> closed[h]) /\ refd[h] \subseteq heard
 StaysClosed == \A h \in Hubs : refd[h] /= {} => closed[h]
 \* once the sessions stop changing, every hub's components are the sessions' components (honest members only)
 Converges == <>[](\A h \in Hubs : \A u, v \in Nodes : (lab[h][u] = lab[h][v]) <=> Linked(sess, u, v))
+\* the quick profiles of BroadcastReach_table and BroadcastReach_hubs3 (proofs/tla/quick): runs of at most 8 steps
+BroadcastReach_tableQuickBound == TLCGet("level") <= 8
+BroadcastReach_hubs3QuickBound == TLCGet("level") <= 8
 =============================================================================

@@ -245,6 +245,60 @@ Expand(sd) ==
                \cup {[t |-> "canonlong", last |-> last, r |-> <<k>> \o Venc(m) \o Zeros(m) \o <<9>>, mx |-> 400] :
                        k \in {0, 1, 253, 254, 255}, m \in {0, 1, 2}}
 
+(* the quick profile (quick/ReconcileWire*.cfg substitute Seeds <- SeedsQuick and Expand <- ExpandQuick): the
+   same kinds of case of Mode "small" (the only mode with a quick config) over smaller literal domains. It leaves
+   out: previous bounds longer than one byte for the head, seq, headcanon and big cases (headcanon: only the empty
+   one and <<1>>); the repeated frame, hdr, parts and items seeds that expand to the same cases; head kinds 1 and 7
+   and the rests other than <<1, 1>> (big: other than <<0, 0>>); headcanon strings with byte 2; sequences of more
+   than two bounds; frame strings with byte 2 or longer than 4 and zero bodies longer than 3; header lengths 4..253
+   and 258..300; part counts other than 0..2, 62..66 and 126..130 besides the varint boundaries, and the rest <<0>>;
+   pcanon byte 129; item lists of more than two items, with limit 3 or a rest other than <<1, 1>>; icanon strings
+   with byte 3 or longer than 4 *)
+SeedsQuick ==
+    {[f |-> "bound", last |-> l] : l \in Strs(Alpha, BLen)}
+      \cup {[f |-> "canon", last |-> l] : l \in Strs(Alpha, BLen)}
+      \cup {[f |-> "head", last |-> l] : l \in Strs(Alpha, 1)}
+      \cup {[f |-> "seq", last |-> l] : l \in Strs(Alpha, 1)}
+      \cup {[f |-> "headcanon", last |-> l] : l \in {<<>>, <<1>>}}
+      \cup {[f |-> "big", last |-> l] : l \in Strs(Alpha, 1)}
+      \cup {[f |-> "frame", k |-> 0], [f |-> "hdr", k |-> 0], [f |-> "parts", k |-> 0], [f |-> "pcanon"],
+            [f |-> "items", k |-> 0], [f |-> "icanon"]}
+
+(* written out in full, not through Expand: the quick config substitutes Expand itself *)
+ExpandQuick(sd) ==
+    CASE sd.f = "bound" ->
+            {[t |-> "bound", last |-> sd.last, b |-> b, mx |-> mx, rest |-> rs] :
+                 b \in Strs(Alpha, BLen), mx \in 0..BLen, rs \in Rests}
+      [] sd.f = "canon" ->
+            {[t |-> "canon", last |-> sd.last, r |-> r, mx |-> mx] : r \in Strs(RAlpha, RLen), mx \in 0..BLen}
+      [] sd.f = "head" ->
+            {[t |-> "head", last |-> sd.last, kind |-> kd, lo |-> lo, hi |-> hi, mx |-> BLen, rest |-> <<1, 1>>] :
+                 kd \in {0, 127}, lo \in Strs(Alpha, BLen), hi \in Opts}
+      [] sd.f = "headcanon" ->
+            {[t |-> "headcanon", last |-> sd.last, r |-> r] : r \in Strs({0, 1, 129}, 5)}
+      [] sd.f = "seq" ->
+            {[t |-> "seq", last |-> sd.last, bs |-> bs, rest |-> <<1, 1>>] : bs \in Strs(Strs(Alpha, 2), 2)}
+      [] sd.f = "big" ->
+            {[t |-> "big", last |-> sd.last, r |-> <<cb>> \o vb \o <<0, 0>>, mx |-> mx] :
+                 cb \in {0, 1, 2}, vb \in BigVarints, mx \in {0, 3}}
+      [] sd.f = "frame" ->
+            {[t |-> "frame", msg |-> m] : m \in Strs({0, 1, 255}, 4)}
+              \cup {[t |-> "frame", msg |-> <<0, 0, k>> \o Zeros(k)] : k \in 0..3}
+      [] sd.f = "hdr" ->
+            {[t |-> "hdr", len |-> len] : len \in (0..3) \cup {254, 255, 256, 257, 65535, 65536, 65537, FrameMax - 1,
+                                                                 FrameMax, FrameMax + 1, FrameMax + 2, 2 ^ 30}}
+      [] sd.f = "parts" ->
+            {[t |-> "parts", cnt |-> cnt, more |-> m, rest |-> rs] :
+                 cnt \in (0..2) \cup (62..66) \cup (126..130)
+                         \cup {2 ^ 14 - 1, 2 ^ 14, 2 ^ 21 - 1, 2 ^ 21, 2 ^ 28 - 1},
+                 m \in BOOLEAN, rs \in {<<>>, <<1, 1>>}}
+      [] sd.f = "pcanon" ->
+            {[t |-> "pcanon", r |-> r] : r \in Strs({0, 1, 2, 128, 255}, 3)}
+      [] sd.f = "items" ->
+            {[t |-> "items", xs |-> xs, mx |-> mx, rest |-> <<1, 1>>] : xs \in Strs(Strs({0, 1}, 2), 2), mx \in 0..2}
+      [] sd.f = "icanon" ->
+            {[t |-> "icanon", r |-> r, mx |-> mx] : r \in Strs({0, 1, 2}, 4), mx \in {1, 2}}
+
 Next ==
     \/ c.t = "root" /\ \E sd \in Seeds : c' = [t |-> "seed", sd |-> sd]
     \/ c.t = "seed" /\ \E x \in Expand(c.sd) : c' = x

@@ -136,6 +136,12 @@ Algs == {<<1, 1>>, <<2, 3>>, <<3, 2>>, <<4, 4>>}
 
 Cases == {[kind |-> "head", sa |-> a[1], da |-> a[2], ones |-> o, ly |-> ly] : a \in Algs, o \in BOOLEAN, ly \in Layouts}
          \cup {[kind |-> "ack", sa |-> a[1], da |-> a[2], ones |-> o, ly |-> <<1, 0, 0, U!One>>] : a \in Algs, o \in BOOLEAN}
+\* the quick profile (proofs/tla/quick): a head with zero words and the valid layout, and one with the largest words
+\* and the refused layout (each word value and each layout once, not every pair), on every pair of algorithms
+CasesQuick ==
+    {[kind |-> "head", sa |-> a[1], da |-> a[2], ones |-> ol[1], ly |-> ol[2]] :
+        a \in Algs, ol \in {<<FALSE, <<4, 2, 2, U!W(100000)>>>>, <<TRUE, <<255, 0, 4, U!Pw(40)>>>>}}
+    \cup {[kind |-> "ack", sa |-> a[1], da |-> a[2], ones |-> o, ly |-> <<1, 0, 0, U!One>>] : a \in Algs, o \in BOOLEAN}
 
 HeadOf(c) == MkHead(c.sa, c.da, c.ones, c.ly)
 SignedOf(c) == [h |-> HeadOf(c), e |-> MkEnd(c.sa)]
@@ -156,10 +162,21 @@ Positions(c, n) ==
         near == (1..40) \cup ((n - 5)..n) \cup {ends + k : k \in 1..8} \cup {33, 66} \cup {99 + k : k \in 0..7}
         pk == {ends + 6 + PkLen(c.sa) + k : k \in -1..3} \cup {ends + 4 + PkLen(c.sa) + k : k \in -1..4}
     IN (near \cup pk \cup {p \in 41..n : p % (IF c.sa <= 2 THEN 11 ELSE 97) = 0}) \cap (1..n)
+\* the quick profile: the stride of the post-quantum keys and signatures every 291st byte, not every 97th (odd, so each
+\* of the 8 mutation checks still gets stride bytes); every named position kept
+PositionsQuick(c, n) ==
+    LET ends == IF c.kind = "head" THEN HeadLen ELSE AckBodyLen
+        near == (1..40) \cup ((n - 5)..n) \cup {ends + k : k \in 1..8} \cup {33, 66} \cup {99 + k : k \in 0..7}
+        pk == {ends + 6 + PkLen(c.sa) + k : k \in -1..3} \cup {ends + 4 + PkLen(c.sa) + k : k \in -1..4}
+    IN (near \cup pk \cup {p \in 41..n : p % (IF c.sa <= 2 THEN 11 ELSE 291) = 0}) \cap (1..n)
 
 Truncs(c, n) ==
     ((0..70) \cup ((n - 70)..(n - 1)) \cup {HeadLen + k : k \in 0..8} \cup {AckBodyLen + k : k \in 0..8} \cup {n \div 2}
      \cup {k \in 71..n : k % (IF c.sa <= 2 THEN 11 ELSE 211) = 0}) \cap (0..(n - 1))
+\* the quick profile: cuts of the post-quantum ends every 633rd byte, not every 211th; every named cut kept
+TruncsQuick(c, n) ==
+    ((0..70) \cup ((n - 70)..(n - 1)) \cup {HeadLen + k : k \in 0..8} \cup {AckBodyLen + k : k \in 0..8} \cup {n \div 2}
+     \cup {k \in 71..n : k % (IF c.sa <= 2 THEN 11 ELSE 633) = 0}) \cap (0..(n - 1))
 
 Canon(c, bs) == LET r == Dec(c, bs) IN r.ok => (IF c.kind = "head" THEN SignedBytes(r.v) = bs ELSE AckBytes(r.v) = bs)
 

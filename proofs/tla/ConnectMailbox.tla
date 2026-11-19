@@ -162,4 +162,7 @@ DrainFresh == \A m \in Range(lastDrain.kept) : Sat(lastDrain.now - m.t) < Age
 DrainSteps == lastDrain.same
 \* bounds the refusal counters, which no step of the model otherwise limits
 Bound == mb.st.oversize <= 1 /\ mb.st.members <= 1
+\* the quick profiles: behaviours of at most 5 calls (ConnectMailbox) and 3 calls (ConnectMailbox_drain: push, push, drain)
+ConnectMailboxQuickBound == TLCGet("level") <= 5
+ConnectMailbox_drainQuickBound == TLCGet("level") <= 3
 =============================================================================

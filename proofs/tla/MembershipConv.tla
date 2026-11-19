@@ -44,6 +44,9 @@ Fold(S) ==
 
 Cells2 == [{3, 4} -> Cells]
 Init == c1 \in Cells2 /\ c2 \in Cells2 /\ v1 \in Cells2 /\ v2 \in Cells2 /\ done = FALSE
+\* the quick profile (proofs/tla/quick): the second view starts empty. Agreement is equality of the member sets, so
+\* every first view agreeing with the empty one is every pair agreeing; ViewIsUnion still takes every first view
+InitQuick == c1 \in Cells2 /\ c2 \in Cells2 /\ v1 \in Cells2 /\ v2 = [m \in {3, 4} |-> 0] /\ done = FALSE
 Next == done' = TRUE /\ UNCHANGED <<c1, c2, v1, v2>>
 Spec == Init /\ [][Next]_vars
 

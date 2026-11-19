@@ -112,6 +112,10 @@ MdsCauchy(k, m, o) ==
 Mds == /\ MdsGen(2, 3) /\ MdsGen(3, 3) /\ MdsGen(4, 3) /\ MdsGen(3, 5) /\ MdsGen(5, 2)
        /\ MdsCauchy(8, 8, 4)
 
+\* the quick profile (proofs/tla/quick): the Cauchy minors up to 3 x 3
+MdsQuick == /\ MdsGen(2, 3) /\ MdsGen(3, 3) /\ MdsGen(4, 3) /\ MdsGen(3, 5) /\ MdsGen(5, 2)
+            /\ MdsCauchy(8, 8, 3)
+
 \* ---- the parameter bounds ----
 Bounds ==
     /\ \A k, m \in 0..300 :

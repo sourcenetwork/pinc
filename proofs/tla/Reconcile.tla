@@ -117,11 +117,37 @@ AllSeq == SortedSeq(UniAll)
 MkOracle(idm) == [H |-> [i \in 1..Len(AllSeq) |-> <<AllSeq[i], HashOf(i - 1)>>],
                   idb |-> [i \in 1..Len(AllSeq) |-> <<AllSeq[i], BeBytes(IDLEN, (i - 1) % idm)>>]]
 
+(* the quick profile (quick/Reconcile_real*.cfg substitute UniSeq <- UniSeqQuick, AllSeq <- AllSeqQuick and
+   IdxOf <- IdxOfQuick): the words in the order of LexLt built directly (the empty word, then the words under each
+   letter in turn) and the index of a word counted from its letters, equal to SortedSeq(UniAll), its first UniMax
+   words and IdxOf, so that every word is not sorted at start-up *)
+RECURSIVE AlphaSeq(_)
+AlphaSeq(X) == IF X = {} THEN <<>> ELSE LET m == CHOOSE m \in X : \A y \in X : m <= y IN <<m>> \o AlphaSeq(X \ {m})
+RECURSIVE LexWords(_)
+LexWords(k) ==
+    IF k = 0 THEN <<<<>>>>
+    ELSE LET sub == LexWords(k - 1)
+             al == AlphaSeq(ALPHA)
+         IN <<<<>>>> \o Flat([i \in 1..Len(al) |-> [j \in 1..Len(sub) |-> <<al[i]>> \o sub[j]]])
+AllSeqQuick == LexWords(MAXLEN)
+UniSeqQuick == Take(AllSeqQuick, UniMax)
+RECURSIVE WordsUpTo(_)
+WordsUpTo(m) == IF m < 0 THEN 0 ELSE 1 + Cardinality(ALPHA) * WordsUpTo(m - 1)
+RECURSIVE WordRank(_, _)
+WordRank(w, j) ==
+    IF j > Len(w) THEN 0
+    ELSE 1 + Cardinality({b \in ALPHA : b < w[j]}) * WordsUpTo(MAXLEN - j) + WordRank(w, j + 1)
+IdxOfQuick == [x \in UniAll |-> WordRank(x, 1)]
+
 (* ---- the cases ---- *)
 
 Pick(pred(_)) == SelectSeq(UniSeq, pred)
 IdxIn(x, lo, hi, step) == IdxOf[x] >= lo /\ IdxOf[x] < hi /\ (IdxOf[x] - lo) % step = 0
 SubSets == {SortedSeq(X) : X \in SUBSET Universe}
+(* the quick profile of the real cases (quick/Reconcile_real*.cfg substitute SubSets <- SubSetsQuick): the same set,
+   the strictly ascending sequences of words of the universe, as a set TLC does not enumerate at start-up (it tries to
+   enumerate SubSets over a universe of the real cases until it runs out of memory; the real cases never read it) *)
+SubSetsQuick == {s \in Seq(Universe) : Len(s) <= UniMax /\ \A i \in 1..(Len(s) - 1) : LexLt(s[i], s[i + 1])}
 
 Pairs ==
     CASE Scenario = "all" -> SubSets \X SubSets
@@ -425,5 +451,4 @@ NotTooLarge == err # "messageTooLarge"
 NotChunk == ~(pc = "rr")
 NotExhausted == pc # "exhausted"
 NotRefused == ~(Garbage /\ pc = "failed" /\ err = "truncated")
-
 =============================================================================

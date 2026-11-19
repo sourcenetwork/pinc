@@ -251,6 +251,22 @@ Seeds ==
     \cup {[f |-> "encbig", j |-> j, d |-> d, log |-> log, bits |-> bits] :
            j \in 0..64, d \in -1..1, log \in {0, 20}, bits \in {32, 64}}
 
+(* The quick profile (quick/Encoder.cfg substitutes it for Seeds): every family of Seeds, the powers of two only
+   around the edges (1, 10, 32, 54, 63 and 64), the multiples of the overflow walk only 0, 1, 2 and 30, the encoded
+   multiples 0..2, the big layouts at the logs 0 and 20 *)
+EdgeJsQuick == {0, 1, 10, 11, 31, 32, 33, 53, 54, 55, 62, 63, 64}
+SeedsQuick ==
+    {[f |-> "walk", k |-> k, d |-> d, log |-> log] : k \in 0..WalkK, d \in -1..1, log \in {0, 1, 20}}
+    \cup {[f |-> "big", j |-> j, d |-> d, log |-> log] :
+           j \in EdgeJsQuick, d \in -1..1, log \in {0, 20}}
+    \cup {[f |-> "fold", a |-> a] : a \in Addends}
+    \cup {[f |-> "toolong", j |-> j, d |-> d] : j \in EdgeJsQuick, d \in -1..1}
+    \cup {[f |-> "toolongk", k |-> k, d |-> d] : k \in {0, 1, 2, 30}, d \in -1..1}
+    \cup {[f |-> "encode", k |-> k, d |-> d, log |-> log, bits |-> bits] :
+           k \in 0..2, d \in -1..1, log \in {0, 1}, bits \in {32, 64}}
+    \cup {[f |-> "encbig", j |-> j, d |-> d, log |-> log, bits |-> bits] :
+           j \in EdgeJsQuick, d \in -1..1, log \in {0, 20}, bits \in {32, 64}}
+
 Expand(sd) ==
     CASE sd.f = "walk" ->
             LET len == MultVal(sd.k, sd.d, sd.log)

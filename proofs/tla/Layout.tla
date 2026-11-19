@@ -287,6 +287,24 @@ Seeds ==
     \cup {[f |-> "fgb"]}
     \cup {[f |-> "new"]}
 
+(* The quick profile (quick/Layout.cfg substitutes it for Seeds): every family of Seeds over fewer values, the
+   boundary ones kept (the multiples 0..3 and 40, the powers of two around 1, 10, 31, 54, 63 and 64, the logs 0 and
+   MaxLog for the ranges, the counts below 70, the trees of up to 8 groups with hi <= 9 at 1, 2, 5 and 8, the paths
+   of the trees of 2, 3, 2^53 and 2^54 groups). *)
+SeedsQuick ==
+    {[f |-> "small", k |-> k] : k \in 0..SmallLen}
+    \cup {[f |-> "mult", k |-> k, d |-> d] : k \in {0, 1, 2, 3, 40}, d \in -1..1}
+    \cup {[f |-> "edge", j |-> j, d |-> d] : j \in {0, 1, 10, 11, 31, 54, 63, 64}, d \in -1..1}
+    \cup {[f |-> "rmult", k |-> k, d |-> d, log |-> log] : k \in {0, 1, 3}, d \in -1..1, log \in {0, MaxLog}}
+    \cup {[f |-> "redge", j |-> j, d |-> d, log |-> log] : j \in {0, 1, 11, 31, 63, 64}, d \in -1..1, log \in {0, MaxLog}}
+    \cup {[f |-> "left", k |-> k] : k \in 0..70}
+    \cup {[f |-> "ledge", j |-> j, d |-> d] : j \in {0, 1, 2, 31, 32, 62, 63, 64}, d \in -1..1}
+    \cup {[f |-> "pre", n |-> n] : n \in 1..PreN}
+    \cup {[f |-> "pre8", n |-> n] : n \in {1, 2, 5, 8}}
+    \cup {[f |-> "path", j |-> j, d |-> d] : j \in {1, 2, 53, 54}, d \in -1..1}
+    \cup {[f |-> "fgb"]}
+    \cup {[f |-> "new"]}
+
 Expand(sd) ==
     CASE sd.f = "small" -> {[t |-> "lay", len |-> U!W(sd.k), log |-> log] : log \in 0..1}
       [] sd.f = "mult" -> {[t |-> "lay", len |-> MultVal(sd.k, sd.d, log), log |-> log] : log \in 0..MaxLog}

@@ -117,6 +117,9 @@ Heads == {0, 2, 3, 4, 5}
 KeysOf(a) == {Key(l, h, i) : l \in {0, PkLen[a] - 1, PkLen[a], PkLen[a] + 1}, h \in Heads, i \in 1..2}
 SigsOf(a) == {[len |-> l] : l \in {0, SigLen[a] - 1, SigLen[a], SigLen[a] + 1}}
 Flags == {F(<<a, b, c, d>>) : a, b, c, d \in BOOLEAN}
+\* the quick profile (proofs/tla/quick): every flag on, each one off alone, and every flag off (6 of the 16)
+FlagsQuick == {F(<<TRUE, TRUE, TRUE, TRUE>>), F(<<FALSE, TRUE, TRUE, TRUE>>), F(<<TRUE, FALSE, TRUE, TRUE>>),
+               F(<<TRUE, TRUE, FALSE, TRUE>>), F(<<TRUE, TRUE, TRUE, FALSE>>), F(<<FALSE, FALSE, FALSE, FALSE>>)}
 
 TagsOK ==
     /\ \A t \in 0..255 : FromTag(t).ok = (t \in 1..4)

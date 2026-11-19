@@ -87,6 +87,13 @@ Syms == {B(0), B(1), B(2), B(9)}
 (* a representative set of genuine blobs for the alteration checks *)
 Reps == {g \in Genuine : g.k = "k1" /\ g.h \in {<<B(1)>>, <<B(1), B(2)>>} /\ g.p \in {<<>>, <<B(0)>>}}
 
+(* The quick profile (quick/KeystoreSealed.cfg substitutes these for Syms and Reps): the symbols of the blobs of    *)
+(* key k1 only, and the representatives with the one-symbol header.                                               *)
+SymsQuick == {B(0), B(1), B(2), B(9)}
+             \cup UNION {{Blob(g)[i] : i \in 1..Len(Blob(g))} :
+                         g \in {g \in Genuine : g.k = "k1" /\ g.h = <<B(1)>> /\ g.p = <<B(0), B(1)>>}}
+RepsQuick == {g \in Genuine : g.k = "k1" /\ g.h = <<B(1)>> /\ g.p \in {<<>>, <<B(0)>>}}
+
 Replace(s, i, y) == [j \in 1..Len(s) |-> IF j = i THEN y ELSE s[j]]
 Without(s, i) == SubSeq(s, 1, i - 1) \o SubSeq(s, i + 1, Len(s))
 Insert(s, i, y) == SubSeq(s, 1, i - 1) \o <<y>> \o SubSeq(s, i, Len(s))

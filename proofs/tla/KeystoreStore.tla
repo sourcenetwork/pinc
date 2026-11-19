@@ -43,6 +43,7 @@ Stores == {0, 1}
 Kinds == {"ed", "p256", "kem"}
 Secs == {1, 2}
 MaxSteps == 6
+MaxStepsQuick == 3       \* the quick profile (quick/KeystoreStore.cfg substitutes it for MaxSteps)
 Idle == [kind |-> "none"]
 
 Init == /\ next = 1

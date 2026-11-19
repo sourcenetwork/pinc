@@ -139,6 +139,23 @@ Other ==
     {y \in [sel : Sels, cap : {24, 40, 64}, full : BOOLEAN, ack : {<<>>, <<A1>>, <<A2>>}, wakeUntil : BOOLEAN,
             streams : Streams, rroom : {30, 600}, ackDue : BOOLEAN, end : Ends, gone : BOOLEAN] :
         PickOf(y.sel).mode # "normal" /\ (PickOf(y.sel).mode # "repair" => y.end = "none" /\ ~y.gone)}
+\* the quick profile (proofs/tla/quick). NormalQuick: every control, stream and datagram source together under an ACK
+\* with every path frame, the sent ring, window and pacer open and nothing forced; and beside it every switch (ring,
+\* window, forced packet, ACK due) and path set over one stream with one datagram and no control frame.
+NormalQuick ==
+    [mode : {"normal"}, cap : Caps, full : BOOLEAN, ack : {<<A2>>}, ctl : Ctls,
+     path : {[resp |-> TRUE, pping |-> TRUE, chal |-> TRUE]}, ring : {TRUE}, cc : {TRUE}, streams : Streams,
+     dgrams : Dgrams, sc2 : {<<>>, <<MS>>}, force : {FALSE}, ackDue : {FALSE}]
+    \cup
+    [mode : {"normal"}, cap : Caps, full : {FALSE}, ack : {<<>>, <<A1>>}, ctl : {x \in Ctls : x.ext = <<>>},
+     path : {[resp |-> FALSE, pping |-> FALSE, chal |-> FALSE], [resp |-> TRUE, pping |-> TRUE, chal |-> TRUE]},
+     ring : BOOLEAN, cc : BOOLEAN, streams : {<<S1>>, <<SL>>}, dgrams : {<<<<1, 2>>>>}, sc2 : {<<>>}, force : BOOLEAN,
+     ackDue : BOOLEAN]
+\* OtherQuick: the room of 40 bytes, the first ACK and the stream S1 alone left out
+OtherQuick ==
+    {y \in [sel : Sels, cap : {24, 64}, full : BOOLEAN, ack : {<<>>, <<A2>>}, wakeUntil : BOOLEAN,
+            streams : {<<>>, <<S1, S2>>, <<SL>>}, rroom : {30, 600}, ackDue : BOOLEAN, end : Ends, gone : BOOLEAN] :
+        PickOf(y.sel).mode # "normal" /\ (PickOf(y.sel).mode # "repair" => y.end = "none" /\ ~y.gone)}
 
 \* a case as the operators read it (the fields a mode does not use are fixed)
 Flat(x) ==

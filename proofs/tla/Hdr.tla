@@ -78,6 +78,8 @@ Edges == UNION {{V!EdgeVal(j, d) : d \in {x \in -1..1 : V!EdgeOK(j, x)}} : j \in
 Bls == {U!W(k) : k \in SmallBl} \cup Edges
 Pns == {<<>>, <<7>>, <<1, 2>>, <<0, 0>>, <<255, 254, 253>>, <<1, 2, 3, 4>>}
 Alpha == {0, 1, 2, 64, 128, 192, 209}
+\* the quick profile (proofs/tla/quick): padding, a version byte, a short and both long first bytes
+AlphaQuick == {0, 1, 64, 192, 209}
 Pieces == <<
     <<192, 1, 0, 0, 0>>,                      \* the smallest handshake packet
     <<192, 1, 1, 9, 1, 8, 2, 5, 6>>,          \* a handshake packet with ids and a body of 2
@@ -89,6 +91,15 @@ Pieces == <<
     <<1>>,                                    \* no packet
     <<209, 1, 0, 0, 20>> \o [i \in 1..20 |-> i] >>  \* a 0-RTT packet long enough to open
 Dls == {0, 1, 2, 21}
+\* the pieces of the quick profile (proofs/tla/quick): the smallest handshake packet, a short packet, padding, a cut
+\* long packet, no packet and the 0-RTT packet long enough to open
+PiecesQuick == <<
+    <<192, 1, 0, 0, 0>>,
+    <<64, 9, 1, 2, 3>>,
+    <<0, 0>>,
+    <<192, 1, 0, 0, 2, 1>>,
+    <<1>>,
+    <<209, 1, 0, 0, 20>> \o [i \in 1..20 |-> i] >>
 
 Next ==
     \/ c.t = "root" /\ \E f \in {"long", "short", "bytes", "cat"} : c' = [t |-> "seed", f |-> f]

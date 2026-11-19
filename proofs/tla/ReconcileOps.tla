@@ -77,6 +77,11 @@ Xor8Slow(a, b) ==
 (* the byte XOR as a table, computed once *)
 XorTab == [a \in 0..255 |-> [b \in 0..255 |-> Xor8Slow(a, b)]]
 Xor8(a, b) == XorTab[a][b]
+(* the quick profile (quick/Reconcile*.cfg substitute Xor8 <- Xor8Quick and XorTab <- XorTabQuick): the byte XOR from
+   the table of the 16 x 16 pairs of half bytes, equal to Xor8 on every pair of bytes, so the 65536 entries of XorTab
+   are not built at start-up *)
+XorTabQuick == [a \in 0..15 |-> [b \in 0..15 |-> Xor8Slow(a, b)]]
+Xor8Quick(a, b) == XorTabQuick[a \div 16][b \div 16] * 16 + XorTabQuick[a % 16][b % 16]
 
 Zero16 == [i \in 1..FPLEN |-> 0]
 XorFp(f, g) == [i \in 1..FPLEN |-> Xor8(f[i], g[i])]

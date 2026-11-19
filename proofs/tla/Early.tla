@@ -74,6 +74,26 @@ RecvStep == \E q \in Pkts, room \in BOOLEAN, dlen \in 1..2 :
        /\ held' = IF x.out = "held" THEN held \cup {p.id} ELSE held
        /\ att' = IF x.out \in {"held", "full"} THEN att + 1 ELSE att
 
+\* the quick profile (proofs/tla/quick): RecvStep with datagrams of one length (1), not 1 or 2; the length only adds
+\* to the count of bytes received, which Amp checks either way
+RecvStepQuick == \E q \in Pkts, room \in BOOLEAN, dlen \in {1} :
+    LET p == [id |-> nid + 1, kind |-> q.kind, fate |-> q.fate]
+        base == IF RULE = "anyphase" /\ p.kind = "z" /\ c.client /\ c.ph = "hs" /\ ~c.er
+                THEN HoldPkt([c EXCEPT !.rx = c.rx + dlen], CAP, room, p)
+                ELSE Recv(c, CAP, room, p, dlen)
+        x == IF RULE = "oldest" /\ base.out = "full" /\ room /\ Len(c.q) = CAP
+             THEN [out |-> "held", c |-> [base.c EXCEPT !.q = Append(Tail(c.q), p)]]
+             ELSE IF RULE = "ampopen" /\ base.out # "ok" /\ c.ph # "closed"
+             THEN [out |-> base.out, c |-> [base.c EXCEPT !.rx = c.rx]]
+             ELSE IF RULE = "anyframe" /\ base.out = "refused"
+             THEN [out |-> "ok", c |-> [base.c EXCEPT !.nr = c.nr]]
+             ELSE base
+    IN /\ nid < KMAX
+       /\ c' = x.c /\ prev' = c /\ nid' = nid + 1
+       /\ lst' = [op |-> "recv", out |-> x.out, p |-> p, dlen |-> dlen, room |-> room]
+       /\ held' = IF x.out = "held" THEN held \cup {p.id} ELSE held
+       /\ att' = IF x.out \in {"held", "full"} THEN att + 1 ELSE att
+
 KeysStep == /\ ~c.client /\ c.ph = "hs" /\ ~c.er
             /\ c' = EarlyKeys(c) /\ prev' = c /\ lst' = [op |-> "keys"]
             /\ UNCHANGED <<nid, held, att>>

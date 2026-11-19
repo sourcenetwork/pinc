@@ -58,6 +58,9 @@ Parse(b) ==
 Write(h) == h.mid \o h.org \o <<h.tag>> \o h.pk \o h.sig \o <<h.flag, Len(h.body)>> \o h.ts \o h.body
 
 AllBytes == UNION {[1..n -> Sym] : n \in 0..MaxLen}
+\* the quick profile (proofs/tla/quick): every string with the message id byte, which is only copied, held at 0 past
+\* the first byte
+AllBytesQuick == UNION {[1..n -> Sym] : n \in 0..1} \cup {<<0>> \o s : s \in UNION {[1..n -> Sym] : n \in 1..(MaxLen - 1)}}
 HeadsOf(t) == {[mid |-> m, org |-> o, tag |-> t, pk |-> k, sig |-> sg, flag |-> f, ts |-> ts, body |-> bd] :
                  m \in [1..MidW -> Sym], o \in [1..OrgW -> Sym], k \in [1..PkW(t) -> Sym],
                  sg \in [1..SigW(t) -> Sym], f \in {0, 1}, ts \in [1..2 -> Sym], bd \in {<<>>, <<0>>, <<1>>}}

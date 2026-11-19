@@ -215,6 +215,8 @@ Payloads(k, m, log) ==
     UNION {Around(D, log) : D \in SmallD \cup {U!W(k), U!W(k + 1)} \cup PowD \cup FitD(k, m, log)}
 
 Seeds == {<<km, log>> : km \in KMs, log \in Logs}
+\* the quick profile (proofs/tla/quick): k = 0, k + m = 255 and 256; the largest valid log and one past it
+SeedsQuick == {<<km, log>> : km \in {<<0, 5>>, <<1, 254>>, <<1, 255>>}, log \in {4, 5}}
 
 VARIABLE c
 Init == c = [t |-> "root"]

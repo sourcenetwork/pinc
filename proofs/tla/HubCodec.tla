@@ -197,6 +197,8 @@ SnapEntries == {[m |-> Seq1(32), inc |-> Edge(32), ver |-> 1, th |-> th, a |-> 1
 RECURSIVE EntrySeqs(_)
 EntrySeqs(n) == IF n = 0 THEN {<<>>} ELSE {<<e>> \o s : e \in SnapEntries, s \in EntrySeqs(n - 1)}
 Snaps == {[k |-> "snap", part |-> p, more |-> m, es |-> es] : p \in BOOLEAN, m \in BOOLEAN, es \in UNION {EntrySeqs(n) : n \in 0..3}}
+\* the quick profile (proofs/tla/quick): snapshots of up to 2 entries, not 3
+SnapsQuick == {[k |-> "snap", part |-> p, more |-> m, es |-> es] : p \in BOOLEAN, m \in BOOLEAN, es \in UNION {EntrySeqs(n) : n \in 0..2}}
 DProbes == {[age |-> U!Zero, path |-> 0], [age |-> Edge(32), path |-> 1], [age |-> U!W(1000), path |-> 2]}
 RECURSIVE ProbeSeqs(_)
 ProbeSeqs(n) == IF n = 0 THEN {<<>>} ELSE {<<p>> \o s : p \in DProbes, s \in ProbeSeqs(n - 1)}
@@ -229,6 +231,11 @@ FixedErr(x) == CASE x.k = "hello" -> "helloLen" [] x.k = "ack" -> "ackLen" [] x.
 (* every byte of a short body; of a long one the header, the ends and the entry and probe boundaries *)
 MutPos(body) == {j \in 1..Len(body) : Len(body) <= 60 \/ j <= 8 \/ j >= Len(body) - 6 \/ j % EntryLen \in {0, 1, 2, 50} \/ j \in 44..52}
 CutPos(body) == {j \in 0..(Len(body) - 1) : Len(body) <= 60 \/ j <= 8 \/ j >= Len(body) - 6 \/ (j - 3) % EntryLen \in {0, 1, 50} \/ j \in 44..52}
+\* the quick profile (proofs/tla/quick): of a long body, the entry boundaries of the first 3 and the last 3 entries,
+\* not of every entry; every byte of a short body, the header, the ends and the probe boundaries kept
+NearEnds(body, j) == j <= 3 + 3 * EntryLen \/ j >= Len(body) - 3 * EntryLen
+MutPosQuick(body) == {j \in 1..Len(body) : Len(body) <= 60 \/ j <= 8 \/ j >= Len(body) - 6 \/ (j % EntryLen \in {0, 1, 2, 50} /\ NearEnds(body, j)) \/ j \in 44..52}
+CutPosQuick(body) == {j \in 0..(Len(body) - 1) : Len(body) <= 60 \/ j <= 8 \/ j >= Len(body) - 6 \/ ((j - 3) % EntryLen \in {0, 1, 50} /\ NearEnds(body, j)) \/ j \in 44..52}
 Cuts(body) == {SubSeq(body, 1, j) : j \in CutPos(body)}
 Extras(body) == {body \o <<x>> : x \in {0, 1, 128, 255}}
 

@@ -68,6 +68,8 @@ Init == cfg = [k |-> "root"] /\ its = <<>> /\ pos = U!Zero /\ gs = <<>> /\ ph = 
         /\ fi = 1 /\ frames = <<>> /\ bad = FALSE /\ noconsume = FALSE /\ stored = FALSE /\ adv = FALSE /\ feeds = 0
 
 Genuine(sd) == {x \in V!VB!CfgsOf(sd) : x.tam = -1}
+\* the quick profile (proofs/tla/quick): values of 0, 1, 3 and 5 bytes in groups of 2, of 5 and 9 bytes in groups of 4
+GenuineQuick(sd) == IF sd.len \in (IF sd.g = 2 THEN {0, 1, 3, 5} ELSE {5, 9}) THEN {x \in V!VB!CfgsOf(sd) : x.tam = -1} ELSE {}
 
 (* enter_data for the frame fr on the verifier g0 at the stream position p0: the checks, and skip_group when stored;
    sets gs, pos, ph, left, skipf, bad *)

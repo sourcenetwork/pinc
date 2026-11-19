@@ -34,6 +34,9 @@ Serving(st, p, r, rg) == [stream |-> st, peer |-> p, root |-> r, ranges |-> rg]
 
 Spans == {<<0, 1>>, <<1, 2>>, <<3, 1>>}
 Reqs == {sp \in SUBSET Spans : Cardinality(sp) <= 2}
+\* the quick profile (proofs/tla/quick/ValuesPlanServer.cfg): two one-span requests, rounded to disjoint groups (one
+\* overlaps a range of the other's rounding, the other does not)
+ReqsQuick == {{<<0, 1>>}, {<<3, 1>>}}
 
 \* the rounded range of a span (whole groups of G)
 Round(sp) == <<(sp[1] \div G) * G, (((sp[1] + sp[2] + G - 1) \div G) * G) - (sp[1] \div G) * G>>

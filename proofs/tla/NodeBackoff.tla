@@ -56,6 +56,10 @@ vars == <<F, C, op, right, seen>>
 INSTANCE NodeBackoffOps
 
 TimesDef == {Zero, Sec(70), U!Max64}
+\* the times of the quick profile (proofs/tla/quick): the bottom and the top of the clock
+TimesDefQuick == {Zero, U!Max64}
+\* the quick profile of NodeBackoff: runs of at most 8 steps
+NodeBackoffQuickBound == TLCGet("level") <= 8
 
 Conn == {p \in PEERS : op[p] # None}
 Hub(p) == p \in HUBS

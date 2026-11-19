@@ -83,6 +83,12 @@ Max(a, b) == IF a > b THEN a ELSE b
 \* are off), and what each part would take.
 Inputs == [p : PathSizes, f : Ifaces, v6 : BOOLEAN, o : Outs, a : Amps, q : Probes, fl : Flights,
            hs : HsWants, app : AppWants, pad : PadOweds]
+\* The quick profile (quick/DgramSize*.cfg substitute it for Inputs): the same fields over fewer values, keeping the
+\* floor and first probe paths, a 1280-byte and a 1500-byte interface, the buffer and amplification edges, both probes,
+\* no flight, a resumed Hello, a flight around the 1280-byte room and one too large to go whole.
+InputsQuick == [p : {MinMtu, ProbeMtu}, f : {1280, 1500}, v6 : BOOLEAN, o : {MinRoom - 1, 1300, 65536},
+                a : {MinRoom, 1250, 1000000}, q : Probes, fl : {0, 149, 1269, ProbeMtu + 1},
+                hs : {0, 149, 1269, ProbeMtu}, app : {0, 30, 9000}, pad : PadOweds]
 \* probe_size returns a probe only above the path's size (Mtu::target) and only when the buffer holds it.
 Valid(i) == i.q = 0 \/ (i.q > i.p /\ i.q <= i.o)
 

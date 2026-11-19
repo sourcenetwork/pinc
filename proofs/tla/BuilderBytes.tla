@@ -269,6 +269,13 @@ Seeds ==
     \cup {[f |-> "kib", g |-> g, bits |-> bits] : g \in {1024, 2048}, bits \in {32, 64}}
     \cup {[f |-> "gib", i |-> i, bits |-> bits] : i \in 1..5, bits \in {32, 64}}
     \cup {[f |-> "arith", j |-> j, d |-> d] : j \in 0..54, d \in -1..1}
+\* the quick profile (proofs/tla/quick): group sizes 1 and 2 bytes up to 3 groups + 1 byte, 1 KiB on both usizes, every
+\* GiB case, and the arithmetic at the low powers, around 2^32 and at the top
+SeedsQuick ==
+    (UNION {{[f |-> "small", g |-> g, len |-> len] : len \in 0..(3 * g + 1)} : g \in {1, 2}})
+    \cup {[f |-> "kib", g |-> 1024, bits |-> bits] : bits \in {32, 64}}
+    \cup {[f |-> "gib", i |-> i, bits |-> bits] : i \in 1..5, bits \in {32, 64}}
+    \cup {[f |-> "arith", j |-> j, d |-> d] : j \in {0, 1, 2, 31, 32, 53, 54}, d \in -1..1}
 
 Expand(sd) ==
     CASE sd.f = "small" -> {MkLay(U!W(sd.len), U!W(sd.g), 64)}
