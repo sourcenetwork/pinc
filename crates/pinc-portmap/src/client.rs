@@ -863,3 +863,79 @@ impl PortMap {
         self.enter(first, now);
     }
 }
+
+/// What the trace and model-based tests compare against their models.
+#[cfg(feature = "trace")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Probe {
+    /// The step, lowercase: "pcp", "nataddr", "natmap", "ssdp", "desc", "extip", "add", "delete", "held", "idle",
+    /// "stopped".
+    pub step: &'static str,
+    /// The tries of the request asked.
+    pub tries: u8,
+    /// A datagram is due.
+    pub send: bool,
+    /// The HTTP exchange: "none", "due", "sent".
+    pub http: &'static str,
+    /// A renewal is in flight.
+    pub renewing: bool,
+    /// The mapping held: its protocol, renewal and end (nanoseconds).
+    pub held: Option<(Proto, u64, u64)>,
+    /// The IGD: control URL known, permanent leases only, conflicts met, the external port asked for.
+    pub igd: Option<(bool, bool, u8, u16)>,
+    /// The protocols of the two release slots.
+    pub releases: [Option<Proto>; 2],
+    /// Stop was called.
+    pub halted: bool,
+    /// The time the request asked first left (nanoseconds).
+    pub started: u64,
+    /// The next time the client wants to run, its own deadline only.
+    pub next: Option<u64>,
+    /// The epoch last noted: the client's time (ns) and the gateway's seconds.
+    pub epoch: Option<(u64, u32)>,
+    /// The earliest time an announce may start another brought-forward renewal.
+    pub floor_end: u64,
+    /// The time an announce kept for after the renewal in flight may start its brought-forward renewal.
+    pub announce_next: Option<u64>,
+}
+
+#[cfg(feature = "trace")]
+impl PortMap {
+    /// The state the trace and model-based tests read.
+    pub fn probe(&self) -> Probe {
+        Probe {
+            step: match self.step {
+                Step::Pcp => "pcp",
+                Step::NatAddr => "nataddr",
+                Step::NatMap => "natmap",
+                Step::Ssdp => "ssdp",
+                Step::Desc => "desc",
+                Step::ExtIp => "extip",
+                Step::Add => "add",
+                Step::Delete => "delete",
+                Step::Held => "held",
+                Step::Idle => "idle",
+                Step::Stopped => "stopped",
+            },
+            tries: self.tries,
+            send: self.send,
+            http: match self.http {
+                Http::None => "none",
+                Http::Due => "due",
+                Http::Sent => "sent",
+            },
+            renewing: self.renewing,
+            held: self.held.map(|l| (l.proto, l.renew, l.expiry)),
+            igd: self
+                .igd
+                .map(|i| (i.ctl.is_some(), i.permanent, i.conflicts, i.external)),
+            releases: self.releases.map(|r| r.map(|l| l.proto)),
+            halted: self.halted,
+            started: self.started,
+            next: self.next,
+            epoch: self.epoch.map(|e| (e.at, e.server)),
+            floor_end: self.floor_end,
+            announce_next: self.announce_next,
+        }
+    }
+}

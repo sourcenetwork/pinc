@@ -66,6 +66,63 @@ impl<'a> Out<'a> {
     }
 }
 
+/// Public wrappers over this module's items for the trace test; each calls the real item and nothing else.
+#[cfg(feature = "trace")]
+pub mod trace {
+    use core::net::Ipv4Addr;
+
+    use super::Out;
+
+    /// Run `puts` through one `Out` over `buf`; the result of `done()`.
+    pub fn out_run(buf: &mut [u8], puts: &[&[u8]]) -> Option<usize> {
+        let mut o = Out::new(buf);
+        for p in puts {
+            o.put(p);
+        }
+        o.done()
+    }
+
+    /// `Out::new(buf).dec(v).done()`.
+    pub fn out_dec(buf: &mut [u8], v: u32) -> Option<usize> {
+        Out::new(buf).dec(v).done()
+    }
+
+    /// `Out::new(buf).ip4(ip).done()`.
+    pub fn out_ip4(buf: &mut [u8], ip: Ipv4Addr) -> Option<usize> {
+        Out::new(buf).ip4(ip).done()
+    }
+
+    /// `parse_u32`.
+    pub fn parse_u32(b: &[u8]) -> Option<u32> {
+        super::parse_u32(b)
+    }
+
+    /// `parse_ip4`.
+    pub fn parse_ip4(b: &[u8]) -> Option<Ipv4Addr> {
+        super::parse_ip4(b)
+    }
+
+    /// `find`.
+    pub fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
+        super::find(hay, needle)
+    }
+
+    /// `trim`.
+    pub fn trim(b: &[u8]) -> &[u8] {
+        super::trim(b)
+    }
+
+    /// `header`.
+    pub fn header<'a>(head: &'a [u8], name: &[u8]) -> Option<&'a [u8]> {
+        super::header(head, name)
+    }
+
+    /// `element`.
+    pub fn element<'a>(body: &'a [u8], from: usize, name: &[u8]) -> Option<(&'a [u8], usize)> {
+        super::element(body, from, name)
+    }
+}
+
 /// The first position of `needle` in `hay`.
 pub(crate) fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
     if needle.is_empty() {

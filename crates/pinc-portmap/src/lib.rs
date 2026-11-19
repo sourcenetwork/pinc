@@ -20,7 +20,11 @@ pub mod pcp;
 mod text;
 pub mod upnp;
 
+#[cfg(feature = "trace")]
+pub use client::Probe;
 pub use client::{Config, PortMap, Proto, Stats};
+#[cfg(feature = "trace")]
+pub use text::trace as text_trace;
 
 /// The most bytes of an HTTP answer the host hands over; a longer answer is cut there.
 pub const MAX_RESPONSE: usize = 16 * 1024;

@@ -1508,6 +1508,10 @@ name = "mbt_facade_open"
 path = "mbt_facade_open.rs"
 
 [[test]]
+name = "mbt_portmap_fallback"
+path = "mbt_portmap_fallback.rs"
+
+[[test]]
 name = "trace_dag_block"
 path = "trace_dag_block.rs"
 
@@ -1522,6 +1526,26 @@ path = "trace_dag_cid.rs"
 [[test]]
 name = "trace_dag_sizes"
 path = "trace_dag_sizes.rs"
+
+[[test]]
+name = "trace_portmap_addr"
+path = "trace_portmap_addr.rs"
+
+[[test]]
+name = "trace_portmap_codec"
+path = "trace_portmap_codec.rs"
+
+[[test]]
+name = "trace_portmap_lease"
+path = "trace_portmap_lease.rs"
+
+[[test]]
+name = "trace_portmap_text"
+path = "trace_portmap_text.rs"
+
+[[test]]
+name = "trace_portmap_upnp"
+path = "trace_portmap_upnp.rs"
 
 [[test]]
 name = "trace_table_array"
