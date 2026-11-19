@@ -9,6 +9,8 @@ extern crate alloc;
 pub mod block;
 pub mod car;
 mod cbor_len;
+#[cfg(feature = "trace")]
+pub use cbor_len::trace as cbor_len_trace;
 pub mod cid;
 pub mod ranges;
 pub mod tree;
