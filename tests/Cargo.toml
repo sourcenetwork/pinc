@@ -1527,3 +1527,10 @@ path = "trace_table_ring.rs"
 name = "trace_table_slab"
 path = "trace_table_slab.rs"
 
+[[test]]
+name = "trace_wire_cbor"
+path = "trace_wire_cbor.rs"
+
+[[test]]
+name = "trace_wire_cursor"
+path = "trace_wire_cursor.rs"
