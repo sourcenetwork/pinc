@@ -197,9 +197,14 @@ test-default *args:
 doctest:
     cargo test --workspace --doc --all-features -q
 
-# Lean proofs, TLC model checking, trace validation and model-based tests of the Rust code.
+# Lean proofs, TLC model checking, trace validation and model-based tests of the Rust code. The models with a file under
+# proofs/tla/quick/ are checked over the smaller bounds of that file, so this takes minutes.
 proofs:
     scripts/proofs.sh
+
+# The same with every model over its full bounds (the ones docs/PROOFS.md states). Hours of processor time.
+proofs-deep:
+    scripts/proofs.sh deep
 
 # Record the trace tests under fresh seeds and replay them in the Lean model until a mismatch: `just trace-soak -n 20`.
 trace-soak *args:

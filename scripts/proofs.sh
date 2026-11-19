@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
 # The proofs step of the gate: the Lean proofs, TLC on every TLA+ model, trace validation of the Rust code against the
 # TLA+ spec and the Lean model, and model-based tests (the Rust code driven along TLC's state graph of a model).
-# Usage: scripts/proofs.sh
+# Usage: scripts/proofs.sh [deep]
+# Without an argument it runs the quick profile: a model with a file under proofs/tla/quick/ is checked over the
+# smaller bounds of that file (the same specification and the same properties), so the whole step takes minutes.
+# `deep` checks every model over the bounds docs/PROOFS.md states for it.
 set -euo pipefail
+PROFILE="${1:-quick}"
+case "$PROFILE" in quick|deep) ;; *) echo "usage: scripts/proofs.sh [deep]" >&2; exit 2 ;; esac
 cd "$(dirname "$0")/.."
 export PATH="$HOME/.elan/bin:$HOME/.local/bin:$PATH"
 
@@ -16,9 +21,22 @@ COMMUNITY="$TLA_HOME/CommunityModules-deps-202611060952.jar"
 # TLC unpacks its standard modules into the JVM's temporary directory; runs that share one race on those files, so
 # every run gets its own. The JVM's default heap bound is a quarter of the memory it sees, so 3 parallel runs could
 # take 75% of the machine; 15% each keeps the 3 under half (of the cgroup limit, when the run has one).
+# A quick model is small and its run is mostly TLC's start: it gets one worker, and one check runs per processor (16 at
+# most), each with its share of the same half. A deep model gets every processor, 3 at a time.
+if [ "$PROFILE" = quick ]; then
+    JOBS=$(getconf _NPROCESSORS_ONLN); [ "$JOBS" -le 16 ] || JOBS=16
+    WORKERS=1; HEAP=$((45 / JOBS)); [ "$HEAP" -ge 2 ] || HEAP=2
+    # A run of a second or two never repays the optimising compiler: the first tier alone starts a third faster.
+    JIT=' -XX:TieredStopAtLevel=1'
+else
+    JOBS=3; WORKERS=auto; HEAP=15; JIT=''
+fi
 jtmp_root=$(mktemp -d)
 trap 'rm -rf "$jtmp_root"' EXIT
-jopts() { printf -- '-XX:MaxRAMPercentage=15 -Djava.io.tmpdir=%s' "$(mktemp -d "$jtmp_root/XXXXXX")"; }
+jopts() { printf -- '-XX:MaxRAMPercentage=%s%s -Djava.io.tmpdir=%s' "$HEAP" "$JIT" "$(mktemp -d "$jtmp_root/XXXXXX")"; }
+cfg() { # cfg <config> : the file TLC reads for <config> in this profile
+    if [ "$PROFILE" = quick ] && [ -f "proofs/tla/quick/$1.cfg" ]; then echo "proofs/tla/quick/$1.cfg"; else echo "proofs/tla/$1.cfg"; fi
+}
 
 
 # `wait -n` (bash 4.3) runs the model checks in parallel; macOS ships bash 3.2.
@@ -43,40 +61,40 @@ fi
 (cd proofs/lean && lake build)
 
 run_tlc() { # run_tlc <name> <spec> <cfg> : model check one config, show the summary lines
-    local out
-    out=$(JAVA_TOOL_OPTIONS="$(jopts)" tlc -workers auto -metadir "proofs/tla/states/$1" -config "proofs/tla/$3.cfg" "proofs/tla/$2.tla" 2>&1) \
+    local out t0=$SECONDS
+    out=$(JAVA_TOOL_OPTIONS="$(jopts)" tlc -workers "$WORKERS" -metadir "proofs/tla/states/$1" -config "$(cfg "$3")" "proofs/tla/$2.tla" 2>&1) \
         || { echo "$out" >&2; echo "proofs: TLC failed on $3" >&2; exit 1; }
-    echo "tlc $3: $(echo "$out" | grep -E 'states generated, ' | tail -1)"
+    echo "tlc $3: $(echo "$out" | grep -E 'states generated, ' | tail -1) [$((SECONDS - t0))s]"
 }
 run_tlc_deep() { # run_tlc_deep <name> <spec> <cfg> : like run_tlc, with the deep thread stack the word arithmetic of the specs needs
-    local out
-    out=$(JAVA_TOOL_OPTIONS="$(jopts)" java -Xss256m -XX:+UseParallelGC -cp "$TLA_HOME/tla2tools.jar" tlc2.TLC -workers auto \
-        -metadir "proofs/tla/states/$1" -config "proofs/tla/$3.cfg" "proofs/tla/$2.tla" 2>&1) \
+    local out t0=$SECONDS
+    out=$(JAVA_TOOL_OPTIONS="$(jopts)" java -Xss256m -XX:+UseParallelGC -cp "$TLA_HOME/tla2tools.jar" tlc2.TLC -workers "$WORKERS" \
+        -metadir "proofs/tla/states/$1" -config "$(cfg "$3")" "proofs/tla/$2.tla" 2>&1) \
         || { echo "$out" >&2; echo "proofs: TLC failed on $3" >&2; exit 1; }
-    echo "tlc $3: $(echo "$out" | grep -E 'states generated, ' | tail -1)"
+    echo "tlc $3: $(echo "$out" | grep -E 'states generated, ' | tail -1) [$((SECONDS - t0))s]"
 }
 witness_tlc() { # witness_tlc <name> <spec> <cfg> <property> : TLC must find a violation of <property> (a reachability witness or a documented finding)
-    local out
-    if out=$(JAVA_TOOL_OPTIONS="$(jopts)" tlc -workers auto -metadir "proofs/tla/states/$1" -config "proofs/tla/$3.cfg" "proofs/tla/$2.tla" 2>&1); then
+    local out t0=$SECONDS
+    if out=$(JAVA_TOOL_OPTIONS="$(jopts)" tlc -workers "$WORKERS" -metadir "proofs/tla/states/$1" -config "$(cfg "$3")" "proofs/tla/$2.tla" 2>&1); then
         echo "$out" >&2; echo "proofs: TLC found no violation of $4 in $3: the witness is gone" >&2; exit 1
     fi
     grep -q "$4 is violated" <<<"$out" \
         || { echo "$out" >&2; echo "proofs: TLC failed on $3 for another reason than $4" >&2; exit 1; }
-    echo "tlc $3: finds the expected violation of $4"
+    echo "tlc $3: finds the expected violation of $4 [$((SECONDS - t0))s]"
 }
 witness_live_tlc() { # witness_live_tlc <name> <spec> <cfg> : TLC must find a counterexample to the liveness property (the stuck states the code had)
-    local out
-    if out=$(JAVA_TOOL_OPTIONS="$(jopts)" tlc -workers auto -metadir "proofs/tla/states/$1" -config "proofs/tla/$3.cfg" "proofs/tla/$2.tla" 2>&1); then
+    local out t0=$SECONDS
+    if out=$(JAVA_TOOL_OPTIONS="$(jopts)" tlc -workers "$WORKERS" -metadir "proofs/tla/states/$1" -config "$(cfg "$3")" "proofs/tla/$2.tla" 2>&1); then
         echo "$out" >&2; echo "proofs: TLC found no liveness violation in $3: the witness is gone" >&2; exit 1
     fi
     grep -q "Temporal properties were violated" <<<"$out" \
         || { echo "$out" >&2; echo "proofs: TLC failed on $3 for another reason than a liveness violation" >&2; exit 1; }
-    echo "tlc $3: finds the expected liveness violation"
+    echo "tlc $3: finds the expected liveness violation [$((SECONDS - t0))s]"
 }
 echo "-- tlc"
-# The independent model checks run at most 3 at a time; a failure of any stops the script.
+# The independent model checks run at most $JOBS at a time; a failure of any stops the script.
 par() {
-    while [ "$(jobs -rp | wc -l)" -ge 3 ]; do wait -n || exit 1; done
+    while [ "$(jobs -rp | wc -l)" -ge "$JOBS" ]; do wait -n || exit 1; done
     "$@" &
 }
 par run_tlc ranges VerifiedRanges VerifiedRanges
@@ -836,88 +854,89 @@ dir=$(mktemp -d)
 trap 'rm -rf "$dir" "$jtmp_root"' EXIT
 PINC_TRACE_DIR="$dir" cargo test -q -p pinc-tests --features hwenc --test trace_ranges --test trace_verifier --test trace_builder --test trace_tla --test trace_handshake --test trace_security --test trace_keyroll --test trace_keylayer --test trace_stores --test trace_values_sched --test trace_values_sys --test trace_values_verify --test trace_values_wire --test trace_values_time --test trace_values_plan --test trace_connect_mailbox --test trace_connect_pack --test trace_connect_table --test trace_connect --test trace_connect_records --test trace_connect_own --test trace_transcript --test trace_dtn_store --test trace_dtn_custody --test trace_dtn_forward --test trace_dtn_rs --test trace_dtn_layout --test trace_dtn_codec --test trace_dtn_reception --test trace_dtn_seal --test trace_dtn_scenario --test trace_membership --test trace_streams --test trace_recovery --test trace_broadcast --test trace_reconcile_wire --test trace_reconcile --test trace_crypto --test trace_keystore --test trace_keystore_tpm --test trace_connect_codec --test trace_connect_link --test trace_connect_client --test trace_rx --test trace_cid --test trace_cc --test trace_pn --test trace_reasm --test trace_early --test trace_hdr --test trace_frame --test trace_framepack --test trace_ext --test trace_orphan --test trace_keepalive --test trace_node_backoff --test trace_rtt --test trace_standby --test trace_halfopen --test trace_core_table --test trace_heap --test trace_core_state --test trace_queue --test trace_held --test trace_ext_in --test trace_reach --test trace_mtu --test trace_reply_path --test trace_timers --test trace_connect_carrier --test trace_connect_ws --test trace_integration_codecs
 trace_tlc() { # trace_tlc <spec> <what> : TLC of the newer era over the recorded ndjson in $dir
-    local out
+    local out t0=$SECONDS
     # -Xss: TLC's evaluator recurses deeply on the larger builder tables, which overflows the default thread stack.
-    out=$(JAVA_TOOL_OPTIONS="$(jopts)" PINC_TRACE_DIR="$dir" java -Xss256m -XX:+UseParallelGC -cp "$TRACE_TLC:$COMMUNITY" tlc2.TLC -workers auto \
-        -metadir "proofs/tla/states/$1" -config "proofs/tla/$1.cfg" "proofs/tla/$1.tla" 2>&1) \
+    out=$(JAVA_TOOL_OPTIONS="$(jopts)" PINC_TRACE_DIR="$dir" java -Xss256m -XX:+UseParallelGC -cp "$TRACE_TLC:$COMMUNITY" tlc2.TLC -workers "$WORKERS" \
+        -metadir "proofs/tla/states/$1" -config "$(cfg "$1")" "proofs/tla/$1.tla" 2>&1) \
         || { echo "$out" >&2; echo "proofs: the recorded $2 trace is not a behaviour of its TLA+ model" >&2; exit 1; }
-    echo "tlc $1: $(echo "$out" | grep -E 'states generated, ' | tail -1)"
+    echo "tlc $1: $(echo "$out" | grep -E 'states generated, ' | tail -1) [$((SECONDS - t0))s]"
 }
-trace_tlc TraceVerifiedRanges ranges
-trace_tlc TraceVarint varint
-trace_tlc TraceLayout layout
-trace_tlc TraceEncoder encoder
-trace_tlc TraceRangeVerifier verifier
-trace_tlc TraceBuilder builder
-trace_tlc TraceHandshake handshake
-trace_tlc TraceSecurity security
-trace_tlc TraceKeyRoll keyroll
-trace_tlc TraceKeyLayer "key layer"
-trace_tlc TraceStores stores
-trace_tlc TraceValuesPlan values_plan
-trace_tlc TraceValuesSched values_sched
-trace_tlc TraceValuesSys values_sys
-trace_tlc TraceValuesTime values_time
-trace_tlc TraceValuesVerify valuesverify
-trace_tlc TraceValuesWire valueswire
-trace_tlc TraceConnectMailbox mailbox
-trace_tlc TraceConnectPack connect-pack
-trace_tlc TraceConnectTable table
-trace_tlc TraceConnect relay
-trace_tlc TraceConnectRecords connect-records
-trace_tlc TraceConnectOwn connect-own
-trace_tlc TraceConnectCodec connect-codec
-trace_tlc TraceConnectLink connect-link
-trace_tlc TraceConnectClient connect-client
-trace_tlc TraceConnectCarrier connect-carrier
-trace_tlc TraceConnectWs connect-ws
-trace_tlc TraceTranscript transcript
-trace_tlc TraceDtnStore dtn-store
-trace_tlc TraceDtnCustody dtn-custody
-trace_tlc TraceDtnForward dtn-forward
-trace_tlc TraceDtnRs dtn-rs
-trace_tlc TraceDtnLayout dtn-layout
-trace_tlc TraceDtnCodec dtn-codec
-trace_tlc TraceDtnReception dtn-reception
-trace_tlc TraceDtnSeal dtn-seal
-trace_tlc TraceDtnScenario dtn-scenario
-trace_tlc TraceHubCodec hubcodec
-trace_tlc TraceIncarnation incarnation
-trace_tlc TraceMembership membership
-trace_tlc TraceStreams "stream table"
-trace_tlc TraceRecovery "loss recovery"
-trace_tlc TraceRx "received packets"
-trace_tlc TraceCid "connection ids"
-trace_tlc TraceCc "congestion control"
-trace_tlc TracePn "packet numbers"
-trace_tlc TraceReasm "handshake fragments"
-trace_tlc TraceEarly "early packets"
-trace_tlc TraceHdr "packet headers"
-trace_tlc TraceFrame "frame codecs"
-trace_tlc TraceFramePack "packet builder"
-trace_tlc TraceExt "extension frames"
-trace_tlc TraceOrphan "held fragments"
-trace_tlc TraceKeepalive "keepalive schedule"
-trace_tlc TraceNodeBackoff "failed dials"
-trace_tlc TraceRtt "node round trips"
-trace_tlc TraceFacadeStandby "standby slab"
-trace_tlc TraceHalfOpen "half-open cap"
-trace_tlc TraceCoreTable "connection-id table"
-trace_tlc TraceHeap "deadline heap"
-trace_tlc TraceCoreState "saved state"
-trace_tlc TraceQueue "event queue"
-trace_tlc TraceHeld "held ring"
-trace_tlc TraceExtIn "extension ring"
-trace_tlc TraceReach "reach ring"
-trace_tlc TraceMtu "path MTU"
-trace_tlc TraceReplyPath "reply path"
-trace_tlc TraceTimers "timers and closing"
-trace_tlc TraceIntegrationCodecs "integration codecs"
-trace_tlc TraceBroadcast broadcast
-trace_tlc TraceReconcileWire reconcile-wire
-trace_tlc TraceReconcile reconcile
-trace_tlc TraceCrypto crypto
-trace_tlc TraceKeystore keystore
+par trace_tlc TraceVerifiedRanges ranges
+par trace_tlc TraceVarint varint
+par trace_tlc TraceLayout layout
+par trace_tlc TraceEncoder encoder
+par trace_tlc TraceRangeVerifier verifier
+par trace_tlc TraceBuilder builder
+par trace_tlc TraceHandshake handshake
+par trace_tlc TraceSecurity security
+par trace_tlc TraceKeyRoll keyroll
+par trace_tlc TraceKeyLayer "key layer"
+par trace_tlc TraceStores stores
+par trace_tlc TraceValuesPlan values_plan
+par trace_tlc TraceValuesSched values_sched
+par trace_tlc TraceValuesSys values_sys
+par trace_tlc TraceValuesTime values_time
+par trace_tlc TraceValuesVerify valuesverify
+par trace_tlc TraceValuesWire valueswire
+par trace_tlc TraceConnectMailbox mailbox
+par trace_tlc TraceConnectPack connect-pack
+par trace_tlc TraceConnectTable table
+par trace_tlc TraceConnect relay
+par trace_tlc TraceConnectRecords connect-records
+par trace_tlc TraceConnectOwn connect-own
+par trace_tlc TraceConnectCodec connect-codec
+par trace_tlc TraceConnectLink connect-link
+par trace_tlc TraceConnectClient connect-client
+par trace_tlc TraceConnectCarrier connect-carrier
+par trace_tlc TraceConnectWs connect-ws
+par trace_tlc TraceTranscript transcript
+par trace_tlc TraceDtnStore dtn-store
+par trace_tlc TraceDtnCustody dtn-custody
+par trace_tlc TraceDtnForward dtn-forward
+par trace_tlc TraceDtnRs dtn-rs
+par trace_tlc TraceDtnLayout dtn-layout
+par trace_tlc TraceDtnCodec dtn-codec
+par trace_tlc TraceDtnReception dtn-reception
+par trace_tlc TraceDtnSeal dtn-seal
+par trace_tlc TraceDtnScenario dtn-scenario
+par trace_tlc TraceHubCodec hubcodec
+par trace_tlc TraceIncarnation incarnation
+par trace_tlc TraceMembership membership
+par trace_tlc TraceStreams "stream table"
+par trace_tlc TraceRecovery "loss recovery"
+par trace_tlc TraceRx "received packets"
+par trace_tlc TraceCid "connection ids"
+par trace_tlc TraceCc "congestion control"
+par trace_tlc TracePn "packet numbers"
+par trace_tlc TraceReasm "handshake fragments"
+par trace_tlc TraceEarly "early packets"
+par trace_tlc TraceHdr "packet headers"
+par trace_tlc TraceFrame "frame codecs"
+par trace_tlc TraceFramePack "packet builder"
+par trace_tlc TraceExt "extension frames"
+par trace_tlc TraceOrphan "held fragments"
+par trace_tlc TraceKeepalive "keepalive schedule"
+par trace_tlc TraceNodeBackoff "failed dials"
+par trace_tlc TraceRtt "node round trips"
+par trace_tlc TraceFacadeStandby "standby slab"
+par trace_tlc TraceHalfOpen "half-open cap"
+par trace_tlc TraceCoreTable "connection-id table"
+par trace_tlc TraceHeap "deadline heap"
+par trace_tlc TraceCoreState "saved state"
+par trace_tlc TraceQueue "event queue"
+par trace_tlc TraceHeld "held ring"
+par trace_tlc TraceExtIn "extension ring"
+par trace_tlc TraceReach "reach ring"
+par trace_tlc TraceMtu "path MTU"
+par trace_tlc TraceReplyPath "reply path"
+par trace_tlc TraceTimers "timers and closing"
+par trace_tlc TraceIntegrationCodecs "integration codecs"
+par trace_tlc TraceBroadcast broadcast
+par trace_tlc TraceReconcileWire reconcile-wire
+par trace_tlc TraceReconcile reconcile
+par trace_tlc TraceCrypto crypto
+par trace_tlc TraceKeystore keystore
+while [ -n "$(jobs -rp)" ]; do wait -n || exit 1; done
 proofs/lean/.lake/build/bin/replay "$dir"/*.ndjson
 
 echo "-- model-based tests"
