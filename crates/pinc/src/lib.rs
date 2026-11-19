@@ -30,7 +30,15 @@
 //! With the `std` feature (on by default) the standard library is the host's platform: `Pinc::builder` needs nothing
 //! else. Without it the crate is `no_std` plus `alloc`: the host brings an allocator and a [`Platform`] (its clock, its
 //! randomness and its error type) and starts from [`Pinc::builder_on`]; [`System`], `Pinc::builder` and
-//! `Identity::from_seed` are the standard library's and exist only with `std`.
+//! `Identity::from_seed` are the standard library's and exist only with `std`. `Limits::wasm` is the preset for a host
+//! with a 32-bit address space (the default limits cannot be addressed there and the build refuses them), and
+//! `examples/platform.rs` is a complete host on a platform of its own, in memory, to copy.
+//!
+//! The memory and the stack of such a host are measured on the 64-bit build host, not on a microcontroller, and a
+//! 32-bit target is not measured yet. An endpoint with one session slot and 8 pool chunks holds about 0.8 MB with no
+//! session; one connected session adds about 2.8 MB, the room reserved for its tables, which is written only as the
+//! session uses it. Building, connecting, echoing 64 bytes and closing run on 1 MiB of stack and fail on 512 KiB. The
+//! tests `pinc_nostd_memory` and `pinc_nostd_stack` hold them.
 //!
 //! # The shape
 //!

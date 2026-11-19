@@ -97,7 +97,10 @@ The `std` feature is on by default. A microcontroller or wasm host takes `pinc` 
 is `no_std` plus an allocator, and brings a `Platform` (its clock, its randomness and its I/O error type) to
 `Pinc::builder_on` in place of `Pinc::builder`. Each endpoint then holds its own buffers, reserved when it is built.
 The gate builds `pinc` and `pinc-keystore` for `thumbv7em-none-eabihf` and `wasm32-unknown-unknown`: it proves the
-build. The memory one session needs on a microcontroller is not measured yet.
+build. The memory one session needs on a microcontroller is not measured yet. Measured on the 64-bit build host, not
+on a microcontroller: an endpoint with one session slot and 8 pool chunks holds about 0.8 MB with no session, one
+connected session adds about 2.8 MB (room reserved for its tables, written as it is used), and build, connect, echo
+and close run on 1 MiB of stack and fail on 512 KiB. `Limits::wasm()` is the preset for a 32-bit address space.
 
 ## Layout
 

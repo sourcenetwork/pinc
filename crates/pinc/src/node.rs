@@ -224,3 +224,32 @@ macro_rules! define {
     };
 }
 ladder!(define);
+
+#[cfg(test)]
+mod tests {
+    use core::mem::size_of;
+
+    use super::*;
+
+    /// The sizes of the node and of the endpoint of each of the smallest rungs, in bytes, on the 64-bit build host
+    /// (the figures of a 32-bit target are not measured yet): the ceilings are about a tenth above what was measured,
+    /// 3,424 for the node and 96,440 for each endpoint (the tables of the slots are on the heap, so the three shapes
+    /// are one size).
+    const NODE_MAX: usize = 3_770;
+    const ENDPOINT_MAX: [usize; 3] = [106_100; 3];
+
+    #[test]
+    fn the_node_and_the_endpoints_of_the_smallest_rungs_keep_their_sizes() {
+        let endpoint = [
+            size_of::<Ep<'static, 'static, 1, 10>>(),
+            size_of::<Ep<'static, 'static, 2, 20>>(),
+            size_of::<Ep<'static, 'static, 4, 40>>(),
+        ];
+        let node = size_of::<FacadeNode>();
+        std::println!("sizes on the 64-bit build host: node {node} B, endpoint for 1, 2 and 4 sessions {endpoint:?} B");
+        assert!(node <= NODE_MAX, "the node is {node} B, above {NODE_MAX}");
+        for (size, max) in endpoint.into_iter().zip(ENDPOINT_MAX) {
+            assert!(size <= max, "an endpoint is {size} B, above {max}");
+        }
+    }
+}

@@ -1461,3 +1461,11 @@ path = "table_noalloc.rs"
 [[test]]
 name = "pinc_platform"
 path = "pinc_platform.rs"
+
+[[test]]
+name = "pinc_nostd_memory"
+path = "pinc_nostd_memory.rs"
+
+[[test]]
+name = "pinc_nostd_stack"
+path = "pinc_nostd_stack.rs"
