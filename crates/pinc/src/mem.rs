@@ -138,10 +138,12 @@ impl Default for Limits {
 
 /// The store a node of `connections` sessions of up to `pool_chunks` chunks gets by default: a floor for every slot of
 /// the endpoint (the rung of [`CAPACITIES`](crate::CAPACITIES) that holds the connections), held from the start, and a
-/// floor of burst room for each connection, shared by the sessions that need more than theirs. 16,384 chunks, 256 MiB,
-/// for the default limits; the system commits only what sessions come to use at once.
+/// floor of burst room for each connection, and one whole pool more, shared by the sessions that need more than their
+/// floor. A whole pool is what one busy session may hold, so a node with few connections moves as fast as a pool of its
+/// own lets it: without it a one-connection client had 16 chunks, 256 KiB, for all its streams, a window of 256 KiB per
+/// round trip. 17,408 chunks, 272 MiB, for the default limits; the system commits only what sessions come to use at once.
 pub const fn default_memory_chunks(connections: usize, pool_chunks: usize) -> usize {
-    (rung(connections) + connections) * pinc_transport::stream::store::floor_chunks(pool_chunks)
+    (rung(connections) + connections) * pinc_transport::stream::store::floor_chunks(pool_chunks) + pool_chunks
 }
 
 impl Limits {
@@ -215,5 +217,23 @@ mod tests {
         assert!(limits(1 << 30).check().is_ok());
         assert!(limits(0).check().is_err());
         assert!(limits((1 << 30) + 1).check().is_err());
+    }
+
+    #[test]
+    fn the_default_store_holds_a_whole_pool_beyond_every_floor_however_few_the_connections() {
+        for connections in [1, 2, 3, 1024] {
+            let limits = Limits {
+                connections,
+                ..Limits::default()
+            };
+            let floors = rung(connections) * pinc_transport::stream::store::floor_chunks(limits.pool_chunks);
+            assert!(
+                limits.store_chunks() >= floors + limits.pool_chunks,
+                "{connections} connections: a store of {} chunks leaves one session less than its pool",
+                limits.store_chunks()
+            );
+            assert!(limits.check().is_ok());
+        }
+        assert_eq!(Limits::default().store_chunks(), 17_408);
     }
 }
