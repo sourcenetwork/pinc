@@ -1740,6 +1740,31 @@ name = "trace_wire_cursor"
 path = "trace_wire_cursor.rs"
 
 [[test]]
+name = "trace_node_silence"
+path = "trace_node_silence.rs"
+
+[[test]]
+name = "trace_node_timer_bound"
+path = "trace_node_timer_bound.rs"
+
+[[test]]
+name = "trace_node_event_queue"
+path = "trace_node_event_queue.rs"
+
+[[test]]
+name = "trace_node_dtn_backoff"
+path = "trace_node_dtn_backoff.rs"
+
+[[test]]
+name = "trace_node_dtn_codec"
+path = "trace_node_dtn_codec.rs"
+
+[[test]]
+name = "trace_keystore_template"
+path = "trace_keystore_template.rs"
+required-features = ["hwenc"]
+
+[[test]]
 name = "trace_dgram_size"
 path = "trace_dgram_size.rs"
 
@@ -1759,3 +1784,10 @@ path = "trace_core_route_index.rs"
 name = "trace_core_backlog"
 path = "trace_core_backlog.rs"
 
+[[test]]
+name = "trace_dtn_want"
+path = "trace_dtn_want.rs"
+
+[[test]]
+name = "trace_dtn_request"
+path = "trace_dtn_request.rs"

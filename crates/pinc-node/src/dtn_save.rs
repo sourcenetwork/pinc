@@ -109,6 +109,114 @@ fn take_head(c: &mut Cur<'_>) -> Option<SignedHead> {
     SignedHead::decode(c.take(len)?).ok().filter(|s| s.verify().is_ok())
 }
 
+/// A record as read back, before any check against the node's state.
+#[allow(clippy::large_enum_variant, reason = "read once and consumed at once")]
+pub(crate) enum Record<'a> {
+    /// The memory that a bundle was delivered here, until `expires` (wall milliseconds).
+    Received {
+        /// When the memory ends.
+        expires: u64,
+    },
+    /// A held bundle: the copies this node holds, the custody it owes and to whom, the bytes charged, its head.
+    Held {
+        /// The copies held.
+        copies: u16,
+        /// Whether custody is owed to a previous holder.
+        custody: bool,
+        /// The previous holder (this node when no custody is owed).
+        prev: FullId,
+        /// The bytes charged to the ledger.
+        bytes: u64,
+        /// The signed head.
+        signed: SignedHead,
+    },
+    /// A partial bundle: its head and its runs, not yet read.
+    Partial {
+        /// The signed head.
+        signed: SignedHead,
+        /// The runs, as [`check_runs`] and [`take_runs`] read them.
+        runs: &'a [u8],
+    },
+}
+
+/// Read a record whole: `None` for another version or kind, a byte short or too many, a custody byte other than 0
+/// or 1, an unknown algorithm, or a head that does not decode and verify. A partial record's runs are read by
+/// [`check_runs`] and [`take_runs`].
+pub(crate) fn read_record(rec: &[u8]) -> Option<Record<'_>> {
+    let mut c = Cur(rec);
+    if c.u8()? != VERSION {
+        return None;
+    }
+    match c.u8()? {
+        RECEIVED => {
+            let expires = c.u64()?;
+            c.0.is_empty().then_some(Record::Received { expires })
+        }
+        HELD => {
+            let copies = c.u16()?;
+            let custody = match c.u8()? {
+                0 => false,
+                1 => true,
+                _ => return None,
+            };
+            let prev = c.node()?;
+            let bytes = c.u64()?;
+            let signed = take_head(&mut c)?;
+            c.0.is_empty().then_some(Record::Held {
+                copies,
+                custody,
+                prev,
+                bytes,
+                signed,
+            })
+        }
+        PARTIAL => {
+            let signed = take_head(&mut c)?;
+            Some(Record::Partial { signed, runs: c.0 })
+        }
+        _ => None,
+    }
+}
+
+/// The record of a bundle delivered here.
+pub(crate) fn received_record(expires: u64) -> Vec<u8> {
+    let mut rec = Vec::with_capacity(10);
+    rec.extend_from_slice(&[VERSION, RECEIVED]);
+    rec.extend_from_slice(&expires.to_be_bytes());
+    rec
+}
+
+/// The record of a held bundle; `None` when its head does not fit the length field.
+pub(crate) fn held_record(
+    copies: u16,
+    custody: bool,
+    prev: &FullId,
+    bytes: u64,
+    signed: &SignedHead,
+) -> Option<Vec<u8>> {
+    let mut rec = Vec::with_capacity(signed.encoded_len() + 64);
+    rec.extend_from_slice(&[VERSION, HELD]);
+    rec.extend_from_slice(&copies.to_be_bytes());
+    rec.push(u8::from(custody));
+    put_node(&mut rec, prev);
+    rec.extend_from_slice(&bytes.to_be_bytes());
+    put_head(&mut rec, signed).then_some(rec)
+}
+
+/// The start of a partial bundle's record, with room for `cap` bytes; `None` when its head does not fit.
+pub(crate) fn partial_head(signed: &SignedHead, cap: usize) -> Option<Vec<u8>> {
+    let mut rec = Vec::with_capacity(cap);
+    rec.extend_from_slice(&[VERSION, PARTIAL]);
+    put_head(&mut rec, signed).then_some(rec)
+}
+
+/// Append the run `a..b` and its bytes.
+pub(crate) fn put_run(out: &mut Vec<u8>, a: u64, b: u64, bytes: &[u8]) {
+    out.extend_from_slice(&a.to_be_bytes());
+    out.extend_from_slice(&b.to_be_bytes());
+    out.extend_from_slice(bytes);
+}
+
 impl<E, P, St, const R: usize, const PEERS: usize, A> Node<E, P, St, R, PEERS, A>
 where
     E: Ep,
@@ -126,24 +234,15 @@ where
             return;
         };
         let bytes = d.led.get(&id.store_key()).map_or(0, |e| e.bytes);
-        let mut rec = Vec::with_capacity(signed.encoded_len() + 64);
-        rec.extend_from_slice(&[VERSION, HELD]);
-        rec.extend_from_slice(&copies.to_be_bytes());
-        let (custody, prev) = d.book.owed_to(id).map_or((0, self.ident), |p| (1, p));
-        rec.push(custody);
-        put_node(&mut rec, &prev);
-        rec.extend_from_slice(&bytes.to_be_bytes());
-        if put_head(&mut rec, signed) {
+        let (custody, prev) = d.book.owed_to(id).map_or((false, self.ident), |p| (true, p));
+        if let Some(rec) = held_record(copies, custody, &prev, bytes, signed) {
             self.apps.dtn().save_record(id, &rec);
         }
     }
 
     /// Write the memory that `id` was delivered here, until `expires`.
     pub(crate) fn dtn_save_received(&mut self, id: &BundleId, expires: u64) {
-        let mut rec = Vec::with_capacity(10);
-        rec.extend_from_slice(&[VERSION, RECEIVED]);
-        rec.extend_from_slice(&expires.to_be_bytes());
-        self.apps.dtn().save_record(id, &rec);
+        self.apps.dtn().save_record(id, &received_record(expires));
     }
 
     /// Save the runs of a partial bundle verified since its last save: the first save writes the record with the
@@ -156,21 +255,21 @@ where
             return;
         };
         let runs = p.unsaved.len() * 16;
-        let mut rec = Vec::with_capacity(usize::try_from(p.unsaved_bytes).unwrap_or(0) + runs + 64);
-        if !p.recorded {
-            rec.extend_from_slice(&[VERSION, PARTIAL]);
-            if !put_head(&mut rec, &p.signed) {
+        let cap = usize::try_from(p.unsaved_bytes).unwrap_or(0) + runs + 64;
+        let mut rec = if p.recorded {
+            Vec::with_capacity(cap)
+        } else {
+            let Some(r) = partial_head(&p.signed, cap) else {
                 return;
-            }
-        }
+            };
+            r
+        };
         for r in &p.unsaved {
             let (Ok(a), Ok(b)) = (usize::try_from(r.start), usize::try_from(r.end)) else {
                 return;
             };
             let Some(bytes) = p.sealed.get(a..b) else { return };
-            rec.extend_from_slice(&r.start.to_be_bytes());
-            rec.extend_from_slice(&r.end.to_be_bytes());
-            rec.extend_from_slice(bytes);
+            put_run(&mut rec, r.start, r.end, bytes);
         }
         p.unsaved.clear();
         p.unsaved_bytes = 0;
@@ -242,34 +341,23 @@ where
         gone: &mut BTreeSet<BundleId>,
     ) -> Option<()> {
         let wall = self.io.wall_ms();
-        let mut c = Cur(rec);
-        if c.u8()? != VERSION {
-            return None;
-        }
-        let kind = c.u8()?;
+        let record = read_record(rec)?;
         let d = self.dtn.as_deref_mut()?;
-        match kind {
-            RECEIVED => {
-                let expires = c.u64()?;
-                if !c.0.is_empty() || expires <= wall {
+        match record {
+            Record::Received { expires } => {
+                if expires <= wall {
                     return None;
                 }
                 d.received.insert(*id, expires);
                 out.received += 1;
             }
-            HELD => {
-                let copies = c.u16()?;
-                let custody = match c.u8()? {
-                    0 => false,
-                    1 => true,
-                    _ => return None,
-                };
-                let prev = c.node()?;
-                let bytes = c.u64()?;
-                let signed = take_head(&mut c)?;
-                if !c.0.is_empty() {
-                    return None;
-                }
+            Record::Held {
+                copies,
+                custody,
+                prev,
+                bytes,
+                signed,
+            } => {
                 let h = *signed.head();
                 if h.id != *id || h.is_expired(wall) || copies == 0 || self.apps.dtn().get(id).is_none() {
                     return None;
@@ -323,8 +411,7 @@ where
                 d.heads.insert(*id, signed);
                 out.held += 1;
             }
-            PARTIAL => {
-                let signed = take_head(&mut c)?;
+            Record::Partial { signed, runs } => {
                 let h = *signed.head();
                 if h.id != *id || h.is_expired(wall) {
                     return None;
@@ -335,7 +422,7 @@ where
                 let outboard_len = usize::try_from(layout.outboard_len().ok()?).ok()?;
                 let charge = partial_charge(&layout)?;
                 // The runs are checked whole before the charge can evict anything.
-                check_runs(&mut Cur(c.0), total, layout.slice_len())?;
+                check_runs(&mut Cur(runs), total, layout.slice_len())?;
                 // Charged before any buffer of it exists, as on an offer.
                 let mut evicted: Vec<Key> = Vec::new();
                 let admitted = d
@@ -350,8 +437,9 @@ where
                     gone.insert(gone_id);
                 }
                 admitted.ok()?;
-                let runs = take_runs(&mut c, total, sealed_len, &layout);
-                let Some((sealed, have)) = runs else {
+                let mut c = Cur(runs);
+                let taken = take_runs(&mut c, total, sealed_len, &layout);
+                let Some((sealed, have)) = taken else {
                     let _ = d.led.release(&id.store_key());
                     return None;
                 };
@@ -365,7 +453,6 @@ where
                     self.apps.dtn().save_record(id, whole);
                 }
             }
-            _ => return None,
         }
         Some(())
     }
@@ -416,4 +503,135 @@ fn take_runs(
         have.insert(a..b).ok()?;
     }
     Some((sealed, have))
+}
+
+/// A probe of the resume records, for the trace check (cargo feature `trace`): the node's own writers and readers.
+#[cfg(feature = "trace")]
+#[doc(hidden)]
+pub mod probe {
+    use alloc::vec::Vec;
+
+    use pinc_crypto::{IdentityAlg, NodeId as FullId};
+    use pinc_dtn::head::SignedHead;
+
+    /// A record as read back.
+    pub enum Read {
+        /// A bundle delivered here, remembered until `expires`.
+        Received {
+            /// When the memory ends (wall milliseconds).
+            expires: u64,
+        },
+        /// A held bundle.
+        Held {
+            /// The copies held.
+            copies: u16,
+            /// Whether custody is owed.
+            custody: bool,
+            /// The algorithm tag of the previous holder.
+            alg: u8,
+            /// The key bytes of the previous holder.
+            key: [u8; 32],
+            /// The bytes charged.
+            bytes: u64,
+            /// The signed head.
+            signed: SignedHead,
+        },
+        /// A partial bundle.
+        Partial {
+            /// The signed head.
+            signed: SignedHead,
+            /// The runs part, unread.
+            runs: Vec<u8>,
+        },
+    }
+
+    /// The record of a bundle delivered here.
+    #[must_use]
+    pub fn received(expires: u64) -> Vec<u8> {
+        super::received_record(expires)
+    }
+
+    /// The record of a held bundle; `None` when its head does not fit.
+    #[must_use]
+    pub fn held(
+        copies: u16,
+        custody: bool,
+        alg: IdentityAlg,
+        key: [u8; 32],
+        bytes: u64,
+        signed: &SignedHead,
+    ) -> Option<Vec<u8>> {
+        super::held_record(copies, custody, &FullId { alg, bytes: key }, bytes, signed)
+    }
+
+    /// The first save of a partial bundle: its head and these runs.
+    #[must_use]
+    pub fn partial(signed: &SignedHead, runs: &[(u64, u64, &[u8])]) -> Option<Vec<u8>> {
+        let mut rec = super::partial_head(signed, 0)?;
+        for &(a, b, bytes) in runs {
+            super::put_run(&mut rec, a, b, bytes);
+        }
+        Some(rec)
+    }
+
+    /// A later save of a partial bundle: these runs, appended.
+    #[must_use]
+    pub fn append(runs: &[(u64, u64, &[u8])]) -> Vec<u8> {
+        let mut rec = Vec::new();
+        for &(a, b, bytes) in runs {
+            super::put_run(&mut rec, a, b, bytes);
+        }
+        rec
+    }
+
+    /// Read a record whole.
+    #[must_use]
+    pub fn read(rec: &[u8]) -> Option<Read> {
+        Some(match super::read_record(rec)? {
+            super::Record::Received { expires } => Read::Received { expires },
+            super::Record::Held {
+                copies,
+                custody,
+                prev,
+                bytes,
+                signed,
+            } => Read::Held {
+                copies,
+                custody,
+                alg: prev.alg.tag(),
+                key: prev.bytes,
+                bytes,
+                signed,
+            },
+            super::Record::Partial { signed, runs } => Read::Partial {
+                signed,
+                runs: runs.to_vec(),
+            },
+        })
+    }
+
+    /// The bundle's total length and slice length, from its head.
+    #[must_use]
+    pub fn layout(signed: &SignedHead) -> Option<(u64, u64)> {
+        let l = signed.head().layout().ok()?;
+        Some((l.total_len(), l.slice_len()))
+    }
+
+    /// `check_runs` over `runs`.
+    #[must_use]
+    pub fn check_runs(runs: &[u8], total: u64, slice_len: u64) -> bool {
+        super::check_runs(&mut super::Cur(runs), total, slice_len).is_some()
+    }
+
+    /// `take_runs` over `runs` for the bundle of `signed`: the buffer, the slices held after it (0-based) and the
+    /// length of the torn tail left.
+    #[must_use]
+    pub fn take_runs(signed: &SignedHead, runs: &[u8]) -> Option<(Vec<u8>, Vec<u64>, usize)> {
+        let layout = signed.head().layout().ok()?;
+        let total = layout.total_len();
+        let mut c = super::Cur(runs);
+        let (sealed, have) = super::take_runs(&mut c, total, usize::try_from(total).ok()?, &layout)?;
+        let held = (0..total / layout.slice_len()).filter(|&i| have.holds(i)).collect();
+        Some((sealed, held, c.0.len()))
+    }
 }

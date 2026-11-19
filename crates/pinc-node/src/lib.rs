@@ -98,6 +98,10 @@ pub use config::{
 };
 pub use dtn::{BUNDLES, DtnPlan, DtnSendError};
 pub use dtn_save::DtnRestored;
+#[cfg(feature = "trace")]
+pub use dtn_save::probe as dtn_save_probe;
+#[cfg(feature = "trace")]
+pub use dtn_wire::probe as dtn_wire_probe;
 pub use ep::Ep;
 pub use event::{NodeEvent, ReconcileFailure};
 pub use layer::Layer;
@@ -109,13 +113,18 @@ pub use pinc_values::{source::ValueSource, store::ValueRead};
 pub use portmap::PmView;
 pub use portmap::PortMapStats;
 #[cfg(feature = "trace")]
-pub use probe::BackoffProbe;
+pub use probe::{BackoffProbe, DtnBackoffProbe, EventQueueProbe, Popped};
 pub use reconcile::{ATTEMPTS, RESPONDERS, ROUNDS, SetsError};
 pub use relay::{MemberNotice, is_relay_request};
+#[cfg(feature = "trace")]
+pub use timers::probe as timers_probe;
 pub use timers::{Timed, TimerStats};
 pub use trace::{Body, NodeTrace, TRACE_VERSION, TraceItem};
 #[cfg(feature = "trace")]
 pub use values_frames::probe as values_frames_probe;
+#[cfg(feature = "trace")]
+#[doc(hidden)]
+pub mod dtn_want_probe;
 #[cfg(feature = "trace")]
 pub use values_net::probe as values_net_probe;
 pub use values_provide::PROVIDED_MAX;

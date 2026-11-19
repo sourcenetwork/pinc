@@ -103,6 +103,30 @@ impl Bound {
             _ => due,
         }
     }
+
+    /// The check of a timer call at `now` that left the deadlines `dues` (the endpoint's, then each layer's, in the
+    /// order of [`Timed::ALL`]): updates the bound and returns, per deadline, whether it is stuck for the first time
+    /// (the call records it in the trace).
+    pub(crate) fn check(&mut self, now: Nanos, dues: [Option<Nanos>; Timed::ALL.len()]) -> [bool; Timed::ALL.len()] {
+        let mut first = [false; Timed::ALL.len()];
+        let last = self.last.replace(now);
+        self.held = None;
+        let slots = self.left.iter_mut().zip(&mut self.stats.stuck).zip(&mut first);
+        for (due, ((left, n), first)) in dues.into_iter().zip(slots) {
+            let due = due.filter(|d| *d <= now);
+            // Due already at the last timer call, which left it due, and left due again: not moved. A deadline named
+            // since then is a layer asking to be called again at once.
+            let stuck = *left && last.is_some_and(|l| due.is_some_and(|d| d <= l));
+            *left = due.is_some();
+            if !stuck {
+                continue;
+            }
+            *first = *n == 0;
+            *n = n.saturating_add(1);
+            self.held = Some(now.saturating_add(TIMER_TICK));
+        }
+        first
+    }
 }
 
 impl<E, P, St, const R: usize, const PEERS: usize, A> Node<E, P, St, R, PEERS, A>
@@ -137,26 +161,68 @@ where
 
     /// Check the deadlines the timer call at `now` left, as its last step.
     pub(crate) fn bound_timer(&mut self, now: Nanos) {
-        let dues = [self.ep_deadline()]
-            .into_iter()
-            .chain(self.layer_deadlines(self.io.now));
-        let last = self.timers.last.replace(now);
-        self.timers.held = None;
-        let slots = self.timers.left.iter_mut().zip(&mut self.timers.stats.stuck);
-        for (due, (timer, (left, n))) in dues.zip(Timed::ALL.into_iter().zip(slots)) {
-            let due = due.filter(|d| *d <= now);
-            // Due already at the last timer call, which left it due, and left due again: not moved. A deadline named
-            // since then is a layer asking to be called again at once.
-            let stuck = *left && last.is_some_and(|l| due.is_some_and(|d| d <= l));
-            *left = due.is_some();
-            if !stuck {
-                continue;
-            }
-            if *n == 0 {
+        let ep = self.ep_deadline();
+        let [l0, l1, l2, l3, l4, l5, l6, l7] = self.layer_deadlines(self.io.now);
+        let first = self.timers.check(now, [ep, l0, l1, l2, l3, l4, l5, l6, l7]);
+        for (timer, first) in Timed::ALL.into_iter().zip(first) {
+            if first {
                 self.io.trace(NodeTrace::TimerStuck { timer: timer as u64 });
             }
-            *n = n.saturating_add(1);
-            self.timers.held = Some(now.saturating_add(TIMER_TICK));
+        }
+    }
+}
+
+/// A probe of the bound on the node's timer, for the trace check (cargo feature `trace`): a real [`Bound`] driven
+/// through the check of a timer call and the answer between two calls.
+#[cfg(feature = "trace")]
+#[doc(hidden)]
+pub mod probe {
+    use super::{Bound, Timed};
+    use crate::config::{Nanos, TIMER_TICK};
+
+    /// The number of deadlines the node combines.
+    pub const TIMERS: usize = Timed::ALL.len();
+    /// The tick the node answers after a timer call that left a deadline stuck.
+    pub const TICK: Nanos = TIMER_TICK;
+
+    /// The bound of a node that has not had a timer call.
+    #[derive(Debug, Default)]
+    pub struct TimerProbe(Bound);
+
+    impl TimerProbe {
+        /// The bound of a node that has not had a timer call.
+        #[must_use]
+        pub fn new() -> Self {
+            Self::default()
+        }
+
+        /// The check of a timer call at `now` that left `dues`; per deadline, whether the call records it.
+        pub fn check(&mut self, now: Nanos, dues: [Option<Nanos>; TIMERS]) -> [bool; TIMERS] {
+            self.0.check(now, dues)
+        }
+
+        /// The deadline the node answers when its layers name `due`.
+        #[must_use]
+        pub fn answer(&self, due: Option<Nanos>) -> Option<Nanos> {
+            self.0.answer(due)
+        }
+
+        /// The time the node answers no earlier than, until the next timer call.
+        #[must_use]
+        pub const fn held(&self) -> Option<Nanos> {
+            self.0.held
+        }
+
+        /// The counters, in the order of `Timed::ALL`.
+        #[must_use]
+        pub fn stuck(&self) -> [u64; TIMERS] {
+            Timed::ALL.map(|t| self.0.stats.stuck(t))
+        }
+
+        /// The total of the counters.
+        #[must_use]
+        pub fn total(&self) -> u64 {
+            self.0.stats.total()
         }
     }
 }

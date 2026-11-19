@@ -57,7 +57,7 @@ const LEDGER: usize = 64;
 /// The most transfer streams open at once.
 pub(crate) const STREAMS: usize = 64;
 /// The bytes of symbols one request asks for.
-const CHUNK_BYTES: u64 = 64 << 10;
+pub(crate) const CHUNK_BYTES: u64 = 64 << 10;
 
 type Fwd = Forwarder<BUNDLES, 32, 64, 64>;
 type Book = CustodyBook<BUNDLES>;
@@ -221,6 +221,17 @@ pub(crate) struct Dtn {
     pub(crate) tx: Vec<u8>,
 }
 
+/// The redial time after a failed dial whose wait ends at `at`: the earlier of the two.
+#[allow(clippy::unnecessary_wraps, reason = "the redial time is an Option the caller stores")]
+pub(crate) fn sooner(cur: Option<Nanos>, at: Nanos) -> Option<Nanos> {
+    Some(cur.map_or(at, |t| t.min(at)))
+}
+
+/// Whether the redial time has come at `now`.
+pub(crate) fn redial_due(cur: Option<Nanos>, now: Nanos) -> bool {
+    cur.is_some_and(|t| now >= t)
+}
+
 impl Dtn {
     pub(crate) fn new(policy: Policy, budget: u64, wall_ms: u64) -> Self {
         Self {
@@ -290,18 +301,23 @@ impl Dtn {
     /// held nor `lost` from this holder. A block's data comes before its parity, so with no loss exactly the data not
     /// yet held is asked for, and parity only ever stands in for a lost symbol, one for one.
     pub(crate) fn want(layout: &SliceLayout, p: &mut Partial, lost: &mut Vec<u64>) -> Want {
+        Self::want_held(layout, &p.have, &mut p.cursor, lost)
+    }
+
+    /// [`Self::want`] over the held set and the cursor of a partial bundle.
+    pub(crate) fn want_held(layout: &SliceLayout, have: &Symbols, cursor: &mut u64, lost: &mut Vec<u64>) -> Want {
         let max = (CHUNK_BYTES / layout.slice_len()).max(1);
         let blocks = layout.blocks();
-        while p.cursor < blocks && p.have.count(p.cursor) >= layout.block_k(p.cursor) {
-            p.cursor += 1;
+        while *cursor < blocks && have.count(*cursor) >= layout.block_k(*cursor) {
+            *cursor += 1;
         }
-        lost.retain(|s| layout.locate(*s).is_some_and(|at| p.have.count(at.block) < at.block_k));
-        let open = |s: &u64| !p.have.holds(*s) && !lost.contains(s);
+        lost.retain(|s| layout.locate(*s).is_some_and(|at| have.count(at.block) < at.block_k));
+        let open = |s: &u64| !have.holds(*s) && !lost.contains(s);
         let mut run: Option<(u64, u64)> = None;
-        for b in p.cursor..blocks {
+        for b in *cursor..blocks {
             let start = layout.block_start(b);
             let end = start + u64::try_from(layout.block_n(b)).unwrap_or(0);
-            let mut need = layout.block_k(b).saturating_sub(p.have.count(b));
+            let mut need = layout.block_k(b).saturating_sub(have.count(b));
             if need == 0 {
                 if run.is_some() {
                     break;
@@ -543,7 +559,7 @@ where
         let Some(d) = self.dtn.as_deref_mut() else {
             return;
         };
-        if d.redial_at.is_some_and(|t| now >= t) {
+        if redial_due(d.redial_at, now) {
             d.redial_at = None;
             d.contacts_due = true;
         }

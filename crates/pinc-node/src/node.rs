@@ -465,7 +465,7 @@ where
             did = true;
             self.dtn_contacts_changed();
             if let Some(member) = member_of(&e) {
-                self.io.lfailed.remove(&(Layer::Dtn, member));
+                self.io.dtn_forget(&member);
             }
             self.io.emit(NodeEvent::Member(e));
         }

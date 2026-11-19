@@ -12,9 +12,7 @@ use pinc_core::{Command, Event, Role, SessionId};
 use pinc_membership::NodeId;
 
 use crate::apps::Apps;
-use crate::config::{
-    BACKOFF_CAP, BACKOFF_FIRST, DTN_ALPN, Nanos, SESSION_LIVED, SETS_ALPN, Store, TABLE_MAX, VALUES_ALPN,
-};
+use crate::config::{DTN_ALPN, Nanos, SESSION_LIVED, SETS_ALPN, Store, TABLE_MAX, VALUES_ALPN};
 use crate::ep::Ep;
 use crate::event::NodeEvent;
 use crate::node::Node;
@@ -164,7 +162,7 @@ where
             self.layer_failed(now, layer, peer);
             return;
         }
-        if layer == Layer::Dtn && io.lfailed.get(&key).is_some_and(|(until, _)| now < *until) {
+        if layer == Layer::Dtn && io.dtn_waits(now, peer) {
             return;
         }
         let id = io.full_id(peer);
@@ -233,18 +231,9 @@ where
             Layer::Values => self.values_failed(now, peer),
             Layer::Sets => self.sets_failed(now, peer),
             Layer::Dtn => {
-                let key = (layer, *peer);
-                let back = self
-                    .io
-                    .lfailed
-                    .get(&key)
-                    .map_or(BACKOFF_FIRST, |(_, b)| b.saturating_mul(2).min(BACKOFF_CAP));
-                if self.io.lfailed.len() < TABLE_MAX || self.io.lfailed.contains_key(&key) {
-                    self.io.lfailed.insert(key, (now.saturating_add(back), back));
-                }
+                let at = self.io.dtn_failed(now, peer);
                 if let Some(d) = self.dtn.as_deref_mut() {
-                    let at = now.saturating_add(back);
-                    d.redial_at = Some(d.redial_at.map_or(at, |t| t.min(at)));
+                    d.redial_at = crate::dtn::sooner(d.redial_at, at);
                 }
             }
         }

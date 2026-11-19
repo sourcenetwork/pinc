@@ -102,6 +102,47 @@ pub(crate) fn take_u16(b: &[u8]) -> Option<(u16, &[u8])> {
     Some((u16::from_be_bytes(*head), rest))
 }
 
+/// A probe of the frames, for the trace check (cargo feature `trace`).
+#[cfg(feature = "trace")]
+#[doc(hidden)]
+pub mod probe {
+    use alloc::vec::Vec;
+
+    /// The longest frame body.
+    pub const BODY_MAX: usize = super::BODY_MAX;
+
+    /// A frame of type `ty` around `body`, as the writers make it (`start`, the body, `finish`).
+    #[must_use]
+    pub fn frame(ty: u8, body: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        super::start(&mut out, ty);
+        out.extend_from_slice(body);
+        super::finish(&mut out);
+        out
+    }
+
+    /// The frame at the front of `inb`: its type and total length, `None` if it is not whole yet.
+    ///
+    /// # Errors
+    /// `()` if the frame announces a body over the cap.
+    #[allow(clippy::result_unit_err, reason = "the parser's own error")]
+    pub fn next(inb: &[u8]) -> Result<Option<(u8, usize)>, ()> {
+        super::next(inb)
+    }
+
+    /// The value and the length of the rest.
+    #[must_use]
+    pub fn take_u64(b: &[u8]) -> Option<(u64, usize)> {
+        super::take_u64(b).map(|(v, r)| (v, r.len()))
+    }
+
+    /// The value and the length of the rest.
+    #[must_use]
+    pub fn take_u16(b: &[u8]) -> Option<(u16, usize)> {
+        super::take_u16(b).map(|(v, r)| (v, r.len()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

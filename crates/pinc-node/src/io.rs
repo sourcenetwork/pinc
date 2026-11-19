@@ -135,9 +135,15 @@ impl EventQueue {
         self.q.is_empty() && self.lost == 0
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "trace"))]
     pub(crate) fn len(&self) -> usize {
         self.q.len()
+    }
+
+    /// The count of lost events not yet delivered (a probe).
+    #[cfg(feature = "trace")]
+    pub(crate) const fn lost(&self) -> u32 {
+        self.lost
     }
 }
 
@@ -658,6 +664,33 @@ impl<E: Ep, St: Store> Io<E, St> {
             .get(peer)
             .map_or(BACKOFF_FIRST, |(_, b)| b.saturating_mul(2).min(cap));
         self.set_failed(peer, back, false);
+    }
+
+    /// A delay-tolerant dial of `peer` failed at `now`: the wait is `BACKOFF_FIRST`, then twice the last up to
+    /// `BACKOFF_CAP`; the entry is stored when the table has room or holds the peer. Returns when the wait ends
+    /// (saturating), also when the full table refused the entry.
+    pub(crate) fn dtn_failed(&mut self, now: Nanos, peer: &NodeId) -> Nanos {
+        let key = (Layer::Dtn, *peer);
+        let back = self
+            .lfailed
+            .get(&key)
+            .map_or(BACKOFF_FIRST, |(_, b)| b.saturating_mul(2).min(BACKOFF_CAP));
+        if self.lfailed.len() < TABLE_MAX || self.lfailed.contains_key(&key) {
+            self.lfailed.insert(key, (now.saturating_add(back), back));
+        }
+        now.saturating_add(back)
+    }
+
+    /// Whether a delay-tolerant dial of `peer` waits out its backoff at `now`.
+    pub(crate) fn dtn_waits(&self, now: Nanos, peer: &NodeId) -> bool {
+        self.lfailed
+            .get(&(Layer::Dtn, *peer))
+            .is_some_and(|(until, _)| now < *until)
+    }
+
+    /// Forget the delay-tolerant backoff of `peer`.
+    pub(crate) fn dtn_forget(&mut self, peer: &NodeId) {
+        self.lfailed.remove(&(Layer::Dtn, *peer));
     }
 
     /// The peer's access check refused us: an authorization decision, not a path problem. Redial rarely.
