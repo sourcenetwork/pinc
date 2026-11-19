@@ -91,6 +91,14 @@ An endpoint with no future being polled makes no progress, which is the SANS-IO 
 while it waits; a host with nothing else pending on it (a server between accepts, connections that only need their
 keepalives) awaits `Endpoint::run()`.
 
+## Without `std`
+
+The `std` feature is on by default. A microcontroller or wasm host takes `pinc` with `default-features = false`, which
+is `no_std` plus an allocator, and brings a `Platform` (its clock, its randomness and its I/O error type) to
+`Pinc::builder_on` in place of `Pinc::builder`. Each endpoint then holds its own buffers, reserved when it is built.
+The gate builds `pinc` and `pinc-keystore` for `thumbv7em-none-eabihf` and `wasm32-unknown-unknown`: it proves the
+build. The memory one session needs on a microcontroller is not measured yet.
+
 ## Layout
 
 | Path | What |
@@ -107,11 +115,11 @@ keepalives) awaits `Endpoint::run()`.
 
 | Crate | What it does | `no_std` | Status |
 |---|---|---|---|
-| `pinc` | the facade: builder, connections, streams, datagrams, topics, lookup by id, the hub and relay roles, over the host's three closures | std ([#99](https://github.com/sourcenetwork/pinc/issues/99)) | built |
+| `pinc` | the facade: builder, connections, streams, datagrams, topics, lookup by id, the hub and relay roles, over the host's three closures | yes, with an allocator and a `Platform` (the `std` feature is on by default) | built |
 | `pinc-wire` | varints and a strict canonical DAG-CBOR codec, parsed in place | yes | built; varints proven, the codec tested ([#606](https://github.com/sourcenetwork/pinc/issues/606)) |
 | `pinc-dag` | content-addressed blocks and CIDs, value roots, range proofs | yes, heap-free | built; roots and range proofs proven, CIDs, blocks and CAR tested ([#606](https://github.com/sourcenetwork/pinc/issues/606)) |
 | `pinc-crypto` | RustCrypto primitives behind one `Provider`: AEADs, X25519, ML-KEM-768, four identity algorithms, BLAKE3 | yes | built |
-| `pinc-keystore` | long-term keys behind a `KeyStore` trait; a software store and a pure-Rust TPM 2.0 store (`hwenc`) | no | built |
+| `pinc-keystore` | long-term keys behind a `KeyStore` trait; a software store and a pure-Rust TPM 2.0 store (`hwenc`) | yes, with an allocator (the TPM store needs `std`) | built |
 | `pinc-security` | hybrid post-quantum handshake, resumption with 0-RTT, key schedule, packet protection, key roll | yes | built, proven |
 | `pinc-transport` | PINCER: streams, datagrams, flow and congestion control, loss recovery, pacing, path MTU, migration | yes | built |
 | `pinc-core` | the SANS-IO endpoint: host interface, protocol dispatch, commands, events, queries | yes | built |
