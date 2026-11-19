@@ -130,6 +130,12 @@ impl Scope<'_> {
 }
 
 impl Reach {
+    /// The record held of `n`: its sequence number, whether it is live, and the peers it names; for the trace test.
+    #[cfg(feature = "trace")]
+    pub(crate) fn record(&self, n: &NodeId) -> Option<(u64, bool, Vec<NodeId>)> {
+        self.recs.get(n).map(|r| (r.seq, r.live(), r.peers.clone()))
+    }
+
     /// A table charged at most `budget` bytes; `hubs` are never scoped.
     pub(crate) fn new(hubs: Vec<NodeId>, budget: usize) -> Self {
         Self {

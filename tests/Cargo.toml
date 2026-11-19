@@ -803,6 +803,38 @@ name = "trace_broadcast"
 path = "trace_broadcast.rs"
 
 [[test]]
+name = "trace_broadcast_adj_record"
+path = "trace_broadcast_adj_record.rs"
+
+[[test]]
+name = "trace_broadcast_auth2"
+path = "trace_broadcast_auth2.rs"
+
+[[test]]
+name = "trace_broadcast_push"
+path = "trace_broadcast_push.rs"
+
+[[test]]
+name = "trace_broadcast_reach"
+path = "trace_broadcast_reach.rs"
+
+[[test]]
+name = "trace_broadcast_repair"
+path = "trace_broadcast_repair.rs"
+
+[[test]]
+name = "trace_broadcast_statement"
+path = "trace_broadcast_statement.rs"
+
+[[test]]
+name = "trace_broadcast_subs"
+path = "trace_broadcast_subs.rs"
+
+[[test]]
+name = "trace_broadcast_wire2"
+path = "trace_broadcast_wire2.rs"
+
+[[test]]
 name = "broadcast_fixes"
 path = "broadcast_fixes.rs"
 

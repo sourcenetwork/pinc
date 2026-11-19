@@ -73,3 +73,44 @@ pub(super) fn verify(v: &View<'_>) -> bool {
     let pk: &[u8] = if v.alg == IdentityAlg::Ed25519 { v.origin } else { v.pk };
     verify_node(&id, pk, &digest(v.signed), v.sig).is_ok()
 }
+
+/// What `parse` and `verify` make of a record's bytes, for the trace test.
+#[cfg(feature = "trace")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdjProbe {
+    /// The origin's node id.
+    pub origin: NodeId,
+    /// The algorithm's tag.
+    pub alg: u8,
+    /// The public key carried (empty for Ed25519).
+    pub pk: alloc::vec::Vec<u8>,
+    /// The incarnation.
+    pub inc: u64,
+    /// The sequence number.
+    pub seq: u64,
+    /// The peers named.
+    pub peers: alloc::vec::Vec<NodeId>,
+    /// How many bytes the signature is over.
+    pub signed_len: usize,
+    /// The signature.
+    pub sig: alloc::vec::Vec<u8>,
+    /// Whether `verify` accepts it.
+    pub verified: bool,
+}
+
+/// [`parse`] and [`verify`] of `rest`, for the trace test.
+#[cfg(feature = "trace")]
+pub(crate) fn probe(rest: &[u8]) -> Option<AdjProbe> {
+    let v = parse(rest)?;
+    Some(AdjProbe {
+        origin: *v.origin,
+        alg: v.alg.tag(),
+        pk: v.pk.to_vec(),
+        inc: v.inc,
+        seq: v.seq,
+        peers: v.peers.to_vec(),
+        signed_len: v.signed.len(),
+        sig: v.sig.to_vec(),
+        verified: verify(&v),
+    })
+}

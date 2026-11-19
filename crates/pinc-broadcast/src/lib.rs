@@ -57,6 +57,8 @@ mod log;
 mod msg;
 #[cfg(feature = "alloc")]
 mod node;
+#[cfg(feature = "trace")]
+mod probe;
 #[cfg(feature = "alloc")]
 mod publish;
 #[cfg(feature = "alloc")]
@@ -72,6 +74,8 @@ pub use event::{HoldWhy, PublishMode, Reject, RejectStats, SubsDrop, Tag, Trace,
 pub use host::{Event, Host, Lane};
 #[cfg(feature = "alloc")]
 pub use node::{Config, Limits, Refused, StartError, Topics};
+#[cfg(feature = "trace")]
+pub use reach::AdjProbe;
 #[cfg(feature = "alloc")]
 pub use reach::ReachStats;
 #[cfg(feature = "alloc")]

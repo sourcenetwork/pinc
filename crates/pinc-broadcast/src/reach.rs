@@ -67,6 +67,8 @@ use crate::host::{Event, Host, Lane};
 use crate::log::HubLog;
 use crate::node::{Refused, Topics};
 use crate::wire::{self, Head, ty};
+#[cfg(feature = "trace")]
+pub use record::AdjProbe;
 pub(crate) use table::Reach;
 pub use table::ReachStats;
 
@@ -252,5 +254,29 @@ impl Topics {
                 h.send(hub, Lane::Main, &frame);
             }
         }
+    }
+}
+
+#[cfg(feature = "trace")]
+impl Topics {
+    /// For the trace test: what the hub's parser and signature check make of the bytes after an ADJ frame's header.
+    pub fn adj_probe(rest: &[u8]) -> Option<AdjProbe> {
+        record::probe(rest)
+    }
+
+    /// For the trace test: the digest an adjacency record's signature is over.
+    pub fn adj_digest(signed: &[u8]) -> [u8; 32] {
+        record::digest(signed)
+    }
+
+    /// For the trace test: the hub's record of `member` (sequence number, live, peers), or `None`.
+    pub fn reach_record(&self, member: &NodeId) -> Option<(u64, bool, Vec<NodeId>)> {
+        self.reach.record(member)
+    }
+
+    /// For the trace test: the reach timer alone at `now` (on a hub: the expiry of its records, the drop of
+    /// released members, the reopening of its table).
+    pub fn reach_sweep<H: Host>(&mut self, h: &mut H, now: Nanos) {
+        self.reach_timer(h, now);
     }
 }

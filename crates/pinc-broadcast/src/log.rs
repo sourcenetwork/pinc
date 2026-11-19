@@ -76,6 +76,12 @@ impl HubLog {
         self.entries.len()
     }
 
+    /// The ring bytes in use, for the trace probe.
+    #[cfg(feature = "trace")]
+    pub(crate) const fn used(&self) -> usize {
+        self.used
+    }
+
     pub(crate) fn contains(&self, mid: u64) -> bool {
         self.index.get(mid).is_some()
     }
