@@ -1560,6 +1560,10 @@ name = "mbt_endpoint"
 path = "mbt_endpoint.rs"
 
 [[test]]
+name = "mbt_node_sets"
+path = "mbt_node_sets.rs"
+
+[[test]]
 name = "mbt_outbox"
 path = "mbt_outbox.rs"
 
@@ -1626,6 +1630,18 @@ path = "trace_ledger.rs"
 [[test]]
 name = "trace_message"
 path = "trace_message.rs"
+
+[[test]]
+name = "trace_node_portmap"
+path = "trace_node_portmap.rs"
+
+[[test]]
+name = "trace_node_values"
+path = "trace_node_values.rs"
+
+[[test]]
+name = "trace_node_values_net"
+path = "trace_node_values_net.rs"
 
 [[test]]
 name = "trace_portmap_addr"

@@ -66,3 +66,20 @@ pub struct ValuesStats {
     /// Fetches refused because the node was at its provider limit ([`ValuesError::Providers`]).
     pub providers_refused: u64,
 }
+
+/// The values sessions and tables of a node, as `values_view` gives them.
+#[cfg(feature = "trace")]
+#[doc(hidden)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ValuesView {
+    /// The values sessions of the layer table: (session, peer, incoming).
+    pub sessions: alloc::vec::Vec<(pinc_core::SessionId, [u8; 32], bool)>,
+    /// The values session this node dialed, per peer: (peer, session).
+    pub dialed: alloc::vec::Vec<([u8; 32], pinc_core::SessionId)>,
+    /// The provider table, slot by slot: `None` free, else the peer and its use count.
+    pub provs: alloc::vec::Vec<Option<([u8; 32], u32)>>,
+    /// Every stream: (layer number, provider number, owner: the fetch id or 0 for the server, its session).
+    pub streams: alloc::vec::Vec<(u64, u32, u32, pinc_core::SessionId)>,
+    /// Every running fetch with the provider numbers it holds, in order.
+    pub held: alloc::vec::Vec<(u32, alloc::vec::Vec<u32>)>,
+}

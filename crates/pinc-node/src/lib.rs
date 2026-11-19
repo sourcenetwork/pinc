@@ -105,6 +105,8 @@ pub use node::{Node, StartError};
 pub use pinc_broadcast::IdKey;
 /// The two types [`ServeSource`] is written in, for a host that names its own stream source.
 pub use pinc_values::{source::ValueSource, store::ValueRead};
+#[cfg(feature = "trace")]
+pub use portmap::PmView;
 pub use portmap::PortMapStats;
 #[cfg(feature = "trace")]
 pub use probe::BackoffProbe;
@@ -114,5 +116,9 @@ pub use timers::{Timed, TimerStats};
 pub use trace::{Body, NodeTrace, TRACE_VERSION, TraceItem};
 #[cfg(feature = "trace")]
 pub use values_frames::probe as values_frames_probe;
+#[cfg(feature = "trace")]
+pub use values_net::probe as values_net_probe;
 pub use values_provide::PROVIDED_MAX;
+#[cfg(feature = "trace")]
+pub use values_types::ValuesView;
 pub use values_types::{FETCHES, ValuesError, ValuesRequest, ValuesStats};

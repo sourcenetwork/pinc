@@ -46,6 +46,8 @@ use crate::node::Node;
 use crate::trace::{Body, NodeTrace, tag};
 use crate::values_frames::{AHEAD_RUNS, EXT_MAX, head_sid, new_parts, stored_runs, with_sid};
 use crate::values_net::{Net, Owner, Pace, VStream, next_fetch_id};
+#[cfg(feature = "trace")]
+use crate::values_types::ValuesView;
 use crate::values_types::{FETCHES, ValuesError, ValuesRequest, ValuesStats};
 
 /// The most requests the server holds at once.
@@ -427,6 +429,33 @@ where
             providers_in_use: v.net.in_use(),
             providers_refused: v.net.refused(),
         })
+    }
+
+    /// The values layer's tables joined to the sessions, as a probe (with the `trace` feature, which the tests enable).
+    #[cfg(feature = "trace")]
+    #[doc(hidden)]
+    pub fn values_view(&self) -> ValuesView {
+        let mut v = ValuesView {
+            sessions: self
+                .io
+                .lsess
+                .iter()
+                .filter(|(_, s)| s.layer == Layer::Values)
+                .map(|(sid, s)| (*sid, s.peer, s.incoming))
+                .collect(),
+            dialed: self
+                .io
+                .lout
+                .iter()
+                .filter(|((layer, _), _)| *layer == Layer::Values)
+                .map(|((_, peer), sid)| (*peer, *sid))
+                .collect(),
+            ..ValuesView::default()
+        };
+        if let Some(vals) = self.vals.as_deref() {
+            vals.net.fill_view(&mut v);
+        }
+        v
     }
 
     // ---------------------------------------------------------------- the node's events

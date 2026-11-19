@@ -27,6 +27,34 @@ pub struct PortMapStats {
     pub release_overflows: u64,
 }
 
+/// What [`Node::pm_view`] gives.
+#[cfg(feature = "trace")]
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools, reason = "independent flags of the view")]
+pub struct PmView {
+    /// The host turned port mapping on (a `Pm` exists).
+    pub on: bool,
+    /// The client exists (its nonce was drawn).
+    pub client: bool,
+    /// The address the client holds (`PortMap::mapped`).
+    pub held: Option<SocketAddr>,
+    /// The address the connectivity client was last given.
+    pub given: Option<SocketAddr>,
+    /// The first mapped address the connectivity client holds.
+    pub conn: Option<SocketAddr>,
+    /// Retiring slots taken.
+    pub retiring: usize,
+    /// `release_overflows`.
+    pub overflows: u64,
+    /// `halted`.
+    pub halted: bool,
+    /// `pm_deadline().is_some()`.
+    pub timer: bool,
+    /// `nonce_failures`.
+    pub nonce_failures: u64,
+}
+
 /// The most stopped clients whose release is still on the way.
 const RETIRING: usize = 4;
 
@@ -210,6 +238,31 @@ where
             nonce_failures: pm.nonce_failures,
             release_overflows: pm.overflows,
         })
+    }
+
+    /// The port-mapping client's state, as a probe (with the `trace` feature, which the tests enable).
+    #[cfg(feature = "trace")]
+    #[doc(hidden)]
+    pub fn pm_view(&self) -> PmView {
+        let conn = self.conn.mapped_held()[0];
+        self.pm.as_ref().map_or(
+            PmView {
+                conn,
+                ..PmView::default()
+            },
+            |pm| PmView {
+                on: true,
+                client: pm.client.is_some(),
+                held: pm.client.as_ref().and_then(PortMap::mapped),
+                given: pm.given,
+                conn,
+                retiring: pm.retiring.iter().flatten().count(),
+                overflows: pm.overflows,
+                halted: pm.halted,
+                timer: self.pm_deadline().is_some(),
+                nonce_failures: pm.nonce_failures,
+            },
+        )
     }
 
     /// The mapping held: its external address and the protocol that granted it.

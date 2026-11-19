@@ -632,3 +632,212 @@ mod tests {
         }
     }
 }
+
+#[cfg(feature = "trace")]
+impl Net {
+    /// Fills the provider, stream and held tables of `v` as they are (a probe of the trace feature).
+    pub(crate) fn fill_view(&self, v: &mut crate::values_types::ValuesView) {
+        v.provs = self.provs.iter().map(|s| s.map(|s| (s.peer, s.uses))).collect();
+        v.streams = self
+            .streams
+            .iter()
+            .map(|(lid, s)| {
+                let owner = match s.owner() {
+                    Owner::Fetch(f) => f,
+                    Owner::Serve => 0,
+                };
+                (*lid, s.prov.0, owner, s.session())
+            })
+            .collect();
+        v.held = self
+            .held
+            .iter()
+            .map(|(f, ps)| (*f, ps.iter().map(|p| p.0).collect()))
+            .collect();
+    }
+}
+
+/// The tables of the values layer as the trace test of the proofs drives them (cargo feature `trace`): a real
+/// [`Net`] whose provider and stream tables are filled, all but `window` slots and streams, by fillers that are never
+/// given back, so what is left behaves as tables of `window`. Numbers and stream numbers are reported relative to the
+/// first one past the fillers. The probe makes no decision of its own: each call is the call the node makes.
+#[cfg(feature = "trace")]
+pub mod probe {
+    use alloc::vec::Vec;
+
+    use pinc_core::SessionId;
+    use pinc_values::session::Provider;
+
+    use super::{Net, Owner};
+    use crate::config::TABLE_MAX;
+
+    /// The bound of both tables.
+    pub const TABLE_MAX_PROBE: usize = TABLE_MAX;
+
+    /// A [`Net`] with all but a window of its tables filled.
+    #[derive(Debug)]
+    pub struct NetProbe {
+        net: Net,
+        base: u32,
+        lbase: u64,
+        key: u64,
+    }
+
+    /// The window of the tables after a call.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct NetView {
+        /// Slot `k` of the window (number `base + k`): `None` free, else the peer and its use count.
+        pub provs: Vec<Option<([u8; 32], u32)>>,
+        /// Every stream past the fillers: (relative stream number, relative provider number, owner: the fetch id,
+        /// or 0 for the server).
+        pub streams: Vec<(u64, u32, u32)>,
+        /// Every running fetch with the relative numbers it holds, in order.
+        pub held: Vec<(u32, Vec<u32>)>,
+        /// Fetches refused by the provider table.
+        pub refused: u64,
+        /// The last stream number handed out, relative.
+        pub next: u64,
+    }
+
+    /// The `j`-th filler peer: first byte 0xF0, so that no test peer collides.
+    fn filler(j: usize) -> [u8; 32] {
+        let mut id = [0u8; 32];
+        id[0] = 0xF0;
+        id[1] = u8::try_from(j & 0xFF).unwrap_or(0);
+        id[2] = u8::try_from((j >> 8) & 0xFF).unwrap_or(0);
+        id
+    }
+
+    impl NetProbe {
+        /// Tables of `window` slots and streams (clamped to `1..TABLE_MAX`) behind fillers.
+        pub fn new(window: usize) -> Self {
+            let window = window.clamp(1, TABLE_MAX - 1);
+            let fill = TABLE_MAX - window;
+            let mut net = Net::default();
+            for j in 0..fill {
+                net.acquire(&filler(j));
+            }
+            let mut key = 0u64;
+            for _ in 0..fill {
+                net.add_for(SessionId(0), key, Owner::Serve, Provider(0));
+                key += 1;
+            }
+            let lbase = net.next;
+            Self {
+                net,
+                base: u32::try_from(fill).unwrap_or(u32::MAX),
+                lbase,
+                key,
+            }
+        }
+
+        fn next_key(&mut self) -> u64 {
+            self.key += 1;
+            self.key
+        }
+
+        /// A fetch `fetch` of `peers`: the uses of all taken and the fetch begun, or none taken and the refusal
+        /// counted.
+        pub fn start(&mut self, fetch: u32, peers: &[[u8; 32]]) -> bool {
+            match self.net.acquire_all(peers) {
+                Ok(p) => {
+                    self.net.begin_fetch(fetch, p);
+                    true
+                }
+                Err(_) => false,
+            }
+        }
+
+        /// A fetch done as it starts: the uses taken are given back at once.
+        pub fn start_done(&mut self, peers: &[[u8; 32]]) -> bool {
+            match self.net.acquire_all(peers) {
+                Ok(p) => {
+                    self.net.release_all(&p);
+                    true
+                }
+                Err(_) => false,
+            }
+        }
+
+        /// A fetch ended.
+        pub fn end(&mut self, fetch: u32) {
+            self.net.end_fetch(fetch);
+        }
+
+        /// A stream served for `peer`: its relative stream number, 0 for none.
+        pub fn serve(&mut self, peer: &[u8; 32]) -> u64 {
+            let Some(p) = self.net.acquire(peer) else {
+                return 0;
+            };
+            let key = self.next_key();
+            let lbase = self.lbase;
+            self.net
+                .add(SessionId(1), key, Owner::Serve, p)
+                .map_or(0, |l| l.saturating_sub(lbase))
+        }
+
+        /// A stream of fetch `fetch` toward its `k`-th provider (from 1): its relative number, 0 for none.
+        pub fn open(&mut self, fetch: u32, k: usize) -> u64 {
+            let Some(p) = k
+                .checked_sub(1)
+                .and_then(|i| self.net.held.get(&fetch).and_then(|v| v.get(i)))
+                .copied()
+            else {
+                return 0;
+            };
+            let key = self.next_key();
+            let lbase = self.lbase;
+            self.net
+                .add_for(SessionId(2), key, Owner::Fetch(fetch), p)
+                .map_or(0, |l| l.saturating_sub(lbase))
+        }
+
+        /// Drops the stream of relative number `lid`: whether there was one.
+        pub fn drop(&mut self, lid: u64) -> bool {
+            self.net.drop_stream(lid.saturating_add(self.lbase)).is_some()
+        }
+
+        /// The window of the tables.
+        pub fn view(&self) -> NetView {
+            let base = self.base;
+            let provs = self
+                .net
+                .provs
+                .iter()
+                .skip(base as usize)
+                .map(|s| s.map(|s| (s.peer, s.uses)))
+                .collect();
+            let streams = self
+                .net
+                .streams
+                .iter()
+                .filter(|(k, _)| **k > self.lbase)
+                .map(|(k, s)| {
+                    let owner = match s.owner() {
+                        Owner::Fetch(f) => f,
+                        Owner::Serve => 0,
+                    };
+                    (k.saturating_sub(self.lbase), s.prov.0.saturating_sub(base), owner)
+                })
+                .collect();
+            let held = self
+                .net
+                .held
+                .iter()
+                .map(|(f, ps)| (*f, ps.iter().map(|p| p.0.saturating_sub(base)).collect()))
+                .collect();
+            NetView {
+                provs,
+                streams,
+                held,
+                refused: self.net.refused,
+                next: self.net.next.saturating_sub(self.lbase),
+            }
+        }
+    }
+
+    /// `next_fetch_id` with the running fetches as a list.
+    pub fn next_fetch_id(last: u32, running: &[u32]) -> u32 {
+        super::next_fetch_id(last, |id| running.contains(&id))
+    }
+}
