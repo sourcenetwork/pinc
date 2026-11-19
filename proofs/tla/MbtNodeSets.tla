@@ -1,0 +1,40 @@
+----------------------------- MODULE MbtNodeSets -----------------------------
+(***************************************************************************)
+(* Model-based tests of the reconcile layer over its sessions (pinc-node   *)
+(* reconcile.rs and layer.rs): the state graph of NodeSets.tla at a small  *)
+(* size, for tests/mbt_node_sets.rs to walk with a real node over a        *)
+(* scripted endpoint.                                                      *)
+(*                                                                         *)
+(* TLC enumerates every state reachable by the calls of NodeSets.tla and   *)
+(* writes the graph (-dump dot,actionlabels,constrained); an edge is one   *)
+(* call with its arguments and result, as the label TLC gives it:          *)
+(*   CallStart(p, res)    sets_start toward peer p: res the round id, 0    *)
+(*                        for Busy;                                        *)
+(*   CallCancel(id, res)  sets_cancel, res its answer;                     *)
+(*   CallRevoke(p)        revoke;                                          *)
+(*   CallLeave            leave;                                           *)
+(*   CallTick(t)          handle_timeout at t;                             *)
+(*   EnvCredit            the endpoint starts or stops giving streams;    *)
+(*   EvConnected(sid), EvFailed(sid), EvIncoming(p), EvClosed(sid),       *)
+(*   EvReply(id, kind), EvPeerStream(sid), EvRespEnd(sid, k)              *)
+(*                        one endpoint event handed to the node;           *)
+(* and the state after it (NodeSets.tla describes the fields). The result  *)
+(* is a parameter so that the graph has one node per state; Complete      *)
+(* checks that every invariant of NodeSets holds in each state and that    *)
+(* each recorded result is in its set. scripts/mbt.py turns the graph into *)
+(* paths from the initial state that take every edge; the test drives a    *)
+(* real node along each path and compares, after every call, what the     *)
+(* node shows (rounds running, round events, the dials it made, the        *)
+(* sessions it closed, the streams it holds open) with the model state.    *)
+(*                                                                         *)
+(* The size is the smallest that still has every path of the code: one    *)
+(* peer that runs rounds and one filler peer, 2 session ids, a layer table *)
+(* of 1, one round in all, 1 answered stream, the code's 4 attempts, times *)
+(* 0 and 1 (MbtNodeSets.cfg says how each maps onto the code's numbers).   *)
+(***************************************************************************)
+EXTENDS NodeSets
+
+Complete == /\ Inv
+            /\ st.next \in 0..NSTARTS
+            /\ \A e \in st.ends : e.why \in {"done", "protocol", "unknownset", "exhausted"}
+=============================================================================
