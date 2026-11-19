@@ -22,14 +22,29 @@ use pinc_core::{
 use pinc_crypto::{Drbg, NodeId, Software};
 use pinc_node::Ep as NodeEp;
 use pinc_security::{ConnId, LocalIdentity, PrekeyInfo};
+use pinc_transport::conn::Machines;
 use pinc_transport::stream::StreamId;
 
 use crate::mem::Ep;
 
+#[cfg(feature = "std")]
 std::thread_local! {
     /// The boxes of handshake machines the endpoints of this thread share: an endpoint holds one only while a
     /// handshake of its runs.
-    static MACHINES: pinc_transport::conn::Machines = pinc_transport::conn::Machines::new();
+    static MACHINES: Machines = Machines::new();
+}
+
+/// The handshake machine boxes of an endpoint being built: those of its thread.
+#[cfg(feature = "std")]
+fn machines() -> Machines {
+    MACHINES.with(Machines::clone)
+}
+
+/// The handshake machine boxes of an endpoint being built: its own. The first handshake allocates the box a machine
+/// lives in; it goes back to the pool afterwards.
+#[cfg(not(feature = "std"))]
+fn machines() -> Machines {
+    Machines::new()
 }
 
 /// The relays a node can name at once.
@@ -77,10 +92,11 @@ macro_rules! define {
                 cfg: EndpointConfig,
                 pool_chunks: usize,
             ) -> Option<Self> {
+                let pool = machines();
                 match connections {
                     $(n if n <= $k => Some(Self::$v({
                         let mut ep = Ep::<$k, { $k * 10 }>::new_owned(now, Software, drbg, identity, cfg, pool_chunks);
-                        MACHINES.with(|m| ep.share_machines(m));
+                        ep.share_machines(&pool);
                         ep
                     })),)+
                     _ => None,

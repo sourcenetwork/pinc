@@ -52,15 +52,16 @@ fn key_error(_: pinc_keystore::KeyStoreError) -> Error {
 }
 
 impl Identity {
-    /// The identity of the Ed25519 key made from `seed`, held in a new in-memory store.
+    /// The identity of the Ed25519 key made from `seed`, held in a new in-memory store. Only with the `std` feature.
     ///
     /// # Errors
     /// [`ErrorKind::Config`] if the store cannot start or the seed is refused.
+    #[cfg(feature = "std")]
     pub fn from_seed(seed: &[u8; 32]) -> Result<Self> {
         Self::in_store(SoftwareStore::new().map_err(key_error)?, seed)
     }
 
-    /// As [`from_seed`](Self::from_seed), in a store whose random bytes come from a generator seeded with `entropy`:
+    /// As `from_seed`, in a store whose random bytes come from a generator seeded with `entropy`:
     /// for a host without an operating system. The host gives fresh entropy at every start; the same entropy gives
     /// the same store keys and nonces.
     ///
@@ -70,10 +71,12 @@ impl Identity {
         Self::in_store(SoftwareStore::from_entropy(*entropy), seed)
     }
 
-    /// A new Ed25519 identity from operating system randomness, held in a new in-memory store.
+    /// A new Ed25519 identity from operating system randomness, held in a new in-memory store. Only with the `std`
+    /// feature.
     ///
     /// # Errors
     /// [`ErrorKind::Config`] if the operating system has no randomness or the store cannot start.
+    #[cfg(feature = "std")]
     pub fn generate() -> Result<Self> {
         Self::generate_in(SoftwareStore::new().map_err(key_error)?)
     }
@@ -264,7 +267,8 @@ mod tests {
     #[test]
     fn a_prekey_is_replaced_after_64_handshakes_or_its_lifetime() {
         let mut p = Prekeys::new([5; 32]);
-        let mut os = |out: &mut [u8]| pinc_keystore::os_random(out).map_err(key_error);
+        let mut store = SoftwareStore::from_entropy([1; 32]);
+        let mut os = |out: &mut [u8]| store.random(out).map_err(key_error);
         assert!(p.due(0), "no prekey yet");
         p.rotate(1, &mut os).unwrap();
         assert!(!p.due(2));
@@ -304,6 +308,7 @@ mod tests {
         assert_ne!(first.encaps_key(), other.encaps_key());
     }
 
+    #[cfg(feature = "std")]
     #[test]
     fn an_operating_system_identity_is_not_offered_fresh_entropy() {
         let mut id = Identity::from_seed(&[2; 32]).unwrap();

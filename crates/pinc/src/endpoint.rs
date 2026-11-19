@@ -1,6 +1,6 @@
 //! The builder and the endpoint handle.
 //!
-//! [`Pinc::builder`] collects an identity, protocols, relays, discovery, limits and an access hook;
+//! `Pinc::builder` collects an identity, protocols, relays, discovery, limits and an access hook;
 //! [`build`](Builder::build) takes the host's three async closures (receive a datagram, send a datagram, sleep until an
 //! instant) and returns the [`Endpoint`]. The library starts no thread and no task: the futures of the handles drive
 //! the endpoint when the host polls them, on the host's executor, so an endpoint with no future being polled makes no
@@ -61,7 +61,9 @@ pub use discovery::{Discovery, NoDiscovery};
 pub struct Pinc;
 
 impl Pinc {
-    /// A builder on the standard library's platform ([`System`]) with a fresh random identity.
+    /// A builder on the standard library's platform ([`System`]) with a fresh random identity. Only with the `std`
+    /// feature.
+    #[cfg(feature = "std")]
     pub fn builder() -> Builder {
         Self::builder_on(System)
     }
@@ -857,12 +859,12 @@ pub const LOOKUP_WAIT: Duration = Duration::from_secs(3);
 #[cfg(test)]
 #[allow(clippy::unwrap_used, reason = "tests assert")]
 mod tests {
-    use std::io;
-    use std::time::Instant;
+    use core::convert::Infallible;
 
     use pinc_crypto::IdentityAlg;
 
     use super::*;
+    use crate::platform::TestPlatform;
 
     /// A hook that refuses everyone.
     struct Refuse;
@@ -877,16 +879,16 @@ mod tests {
     /// the endpoint, such as from a hook it is running): the answer is the hook's, never a default that admits.
     #[test]
     fn admit_asks_the_hook_while_the_core_is_borrowed() {
-        let ep = Pinc::builder()
+        let ep = Pinc::builder_on(TestPlatform)
             .acp(Refuse)
             .limits(Limits {
                 connections: 1,
                 ..Limits::default()
             })
             .build(
-                async |_buf: &mut [u8]| -> io::Result<(usize, SocketAddr)> { Err(io::ErrorKind::WouldBlock.into()) },
-                async |pkt: &[u8], _to: SocketAddr| -> io::Result<usize> { Ok(pkt.len()) },
-                async |_at: Instant| {},
+                async |_buf: &mut [u8]| -> Result<(usize, SocketAddr), Infallible> { core::future::pending().await },
+                async |pkt: &[u8], _to: SocketAddr| -> Result<usize, Infallible> { Ok(pkt.len()) },
+                async |_at: u64| {},
             )
             .unwrap();
         let peer = NodeId {

@@ -239,7 +239,7 @@ where
 /// the buffer and returns the length, the sender and the segment size; `send` gets a whole transmit and its segment
 /// size and returns how many datagrams went; `sleep` waits until an instant. A host that handles one datagram per call
 /// returns the length as the segment size and sends the buffer as one datagram when the segment size is its length.
-pub trait Io<Pf: Platform = System> {
+pub trait Io<#[cfg(feature = "std")] Pf: Platform = System, #[cfg(not(feature = "std"))] Pf: Platform> {
     /// Receive into `buf`: the length filled, the sender and the size of each datagram in the filled part.
     fn recv(&self, buf: &mut [u8]) -> impl Future<Output = Result<(usize, SocketAddr, usize), Pf::Error>>;
 

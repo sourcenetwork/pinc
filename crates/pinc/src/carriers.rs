@@ -26,7 +26,7 @@ use pinc_crypto::NodeId;
 
 use crate::addr::node_to_string;
 use crate::carrier::CarrierKind;
-use crate::platform::{Platform, System};
+use crate::platform::Platform;
 
 /// A relay: where to reach it, by UDP and by carrier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -129,7 +129,11 @@ impl Relay {
 
 /// The host's carriers: open a byte stream to a relay, read it, write it, close it. `Pf` is the host's
 /// [`Platform`], whose error the operations return.
-pub trait Carriers<Pf: Platform = System> {
+pub trait Carriers<
+    #[cfg(feature = "std")] Pf: Platform = crate::platform::System,
+    #[cfg(not(feature = "std"))] Pf: Platform,
+>
+{
     /// A carrier the host opened.
     type Stream;
 

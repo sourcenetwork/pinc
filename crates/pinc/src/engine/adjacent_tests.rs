@@ -20,7 +20,7 @@ pub(super) type C = Core<SoftwareStore, AllowAll>;
 
 pub(super) fn core() -> C {
     let cfg = CoreConfig {
-        identity: Identity::from_seed(&[5; 32]).unwrap(),
+        identity: Identity::from_seed_with(&[5; 32], &[0; 32]).unwrap(),
         map_keys: crate::maps::Keys::for_tests(5),
         alpns: vec![b"app".to_vec()],
         limits: Limits {

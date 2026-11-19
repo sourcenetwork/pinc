@@ -8,9 +8,11 @@ use alloc::vec::Vec;
 use pinc_crypto::IdentityAlg;
 use pinc_keystore::{KeyHandle, KeyStore, SoftwareStore};
 
-use super::{Builder, Pinc};
+use super::{AllowAll, Builder, NoDiscovery, Pinc};
+use crate::carriers::NoCarriers;
 use crate::error::ErrorKind;
 use crate::keys::Identity;
+use crate::platform::TestPlatform;
 
 /// A key store whose randomness is fixed bytes, for the draw of the hash tables' keys.
 struct Fixed(SoftwareStore, [u8; 64]);
@@ -46,7 +48,7 @@ impl KeyStore for Fixed {
     }
 }
 
-fn fixed(secrets: [u64; 7]) -> Builder<Fixed> {
+fn fixed(secrets: [u64; 7]) -> Builder<Fixed, NoDiscovery, AllowAll, NoCarriers, (), TestPlatform> {
     let mut bytes = [0u8; 64];
     bytes[..8].copy_from_slice(&1u64.to_le_bytes());
     for (i, w) in secrets.iter().enumerate() {
@@ -54,7 +56,7 @@ fn fixed(secrets: [u64; 7]) -> Builder<Fixed> {
     }
     let mut store = SoftwareStore::from_entropy([4; 32]);
     let handle = store.insert(pinc_crypto::Keypair::from_seed(IdentityAlg::Ed25519, &[5; 32]).unwrap());
-    Pinc::builder().identity(Identity::from_store(Fixed(store, bytes), handle).unwrap())
+    Pinc::builder_on(TestPlatform).identity(Identity::from_store(Fixed(store, bytes), handle).unwrap())
 }
 
 const UNUSABLE: &str = "the key store's randomness is not usable";

@@ -1,7 +1,7 @@
 [package]
 name = "pinc"
 description = "PINC for applications: one entry point with a builder, connections, streams, datagrams, access hooks and a typed protocol registration, all async, with the host passing its I/O as three async closures"
-keywords = ["p2p", "transport", "facade"]
+keywords = ["p2p", "transport", "facade", "no_std"]
 version.workspace = true
 authors.workspace = true
 edition.workspace = true
@@ -12,7 +12,7 @@ publish.workspace = true
 [dependencies]
 pinc-crypto = { workspace = true }
 pinc-security = { workspace = true }
-pinc-keystore = { workspace = true, features = ["std"] }
+pinc-keystore = { workspace = true }
 pinc-transport = { workspace = true, features = ["alloc"] }
 pinc-core = { workspace = true, features = ["alloc"] }
 pinc-node = { workspace = true }
@@ -28,23 +28,32 @@ zeroize = { workspace = true }
 nuclei = { workspace = true }
 
 [features]
+default = ["std"]
+# The standard library: `System` as a `Platform` (`std::time::Instant`, `std::io::Error`, the operating system's
+# randomness), `Pinc::builder`, `Identity::from_seed` and `generate`, and one pair of buffer pools and one handshake
+# pool per thread instead of per endpoint. Without it the crate is `no_std` plus `alloc`.
+std = ["pinc-keystore/std"]
 # Lets a TPM key store (`pinc-keystore`) hold the identity: pass it to `Builder::key_store`.
-hwenc = ["pinc-keystore/hwenc"]
+hwenc = ["std", "pinc-keystore/hwenc"]
 # A slab of tickets of its own (`StandbyProbe`), driven call by call, for the trace check of the proofs, and the
 # node's probes.
-trace = ["pinc-node/trace"]
+trace = ["std", "pinc-node/trace"]
 
 [lints]
 workspace = true
 
 [[example]]
 name = "echo"
+required-features = ["std"]
 
 [[example]]
 name = "transfer"
+required-features = ["std"]
 
 [[example]]
 name = "defradb_backend"
+required-features = ["std"]
 
 [[example]]
 name = "relay"
+required-features = ["std"]

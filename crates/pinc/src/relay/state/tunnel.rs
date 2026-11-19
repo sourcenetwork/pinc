@@ -310,7 +310,7 @@ mod tests {
     /// the heard call stamps and releases, and its effects are applied and the store told in the same call.
     #[test]
     fn held_mail_restored_from_the_store_goes_down_the_hub_on_the_first_heard_packet() {
-        let identity = Rc::new(RefCell::new(Identity::from_seed(&[7; 32]).unwrap()));
+        let identity = Rc::new(RefCell::new(Identity::from_seed_with(&[7; 32], &[0; 32]).unwrap()));
         let local: SocketAddr = "192.0.2.1:4000".parse().unwrap();
         let mut core =
             Core::<(), SoftwareStore, AllowAll>::new(identity, AllowAll, &[], Limits::default(), Some(local), T0)

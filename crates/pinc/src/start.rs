@@ -208,7 +208,7 @@ mod tests {
 
     fn cfg(connections: usize) -> CoreConfig<SoftwareStore, AllowAll> {
         CoreConfig {
-            identity: Identity::from_seed(&[3; 32]).unwrap(),
+            identity: Identity::from_seed_with(&[3; 32], &[0; 32]).unwrap(),
             map_keys: crate::maps::Keys::for_tests(3),
             alpns: vec![b"t".to_vec()],
             limits: Limits {
@@ -232,6 +232,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "std")]
     fn on_stack(kib: usize, f: impl FnOnce() + Send + 'static) {
         std::thread::Builder::new()
             .stack_size(kib << 10)
@@ -275,12 +276,14 @@ mod tests {
     }
 
     /// The endpoint is built into the heap and ended there: a 1 MiB stack builds and drops one for a few sessions.
+    #[cfg(feature = "std")]
     #[test]
     fn a_small_endpoint_builds_and_drops_on_a_one_mebibyte_stack() {
         on_stack(1024, || drop(build(cfg(4), 1, WALL_MS).unwrap()));
     }
 
     /// The default 1024 sessions build and drop on a 1 MiB stack: the tables are built on the heap, piece by piece.
+    #[cfg(feature = "std")]
     #[test]
     fn a_default_endpoint_builds_and_drops_on_a_one_mebibyte_stack() {
         on_stack(1024, || drop(build(cfg(1024), 1, WALL_MS).unwrap()));
@@ -289,9 +292,12 @@ mod tests {
     const MS: u64 = 1_000_000;
 
     /// A core whose identity is in an operating system store is never offered fresh entropy, at a rotation or after.
+    #[cfg(feature = "std")]
     #[test]
     fn a_core_with_an_operating_system_identity_does_not_ask_for_entropy_at_a_rotation() {
-        let (mut c, _) = end(5, 9);
+        let mut cfg = cfg(4);
+        cfg.identity = Identity::from_seed(&[5; 32]).unwrap();
+        let mut c = build(cfg, MS, WALL_MS).unwrap();
         let mut asked = 0;
         for at in [
             MS,
@@ -309,7 +315,7 @@ mod tests {
     fn end(seed: u8, port: u16) -> (C, SocketAddr) {
         let local: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
         let mut c = cfg(4);
-        c.identity = Identity::from_seed(&[seed; 32]).unwrap();
+        c.identity = Identity::from_seed_with(&[seed; 32], &[0; 32]).unwrap();
         c.locals = vec![local];
         (build(c, MS, WALL_MS).unwrap(), local)
     }
@@ -359,7 +365,9 @@ mod tests {
         fn run(light: bool) -> (Vec<(usize, usize)>, Vec<u8>) {
             let mut ends = [end(3, 1), end(4, 2)];
             let (mut now, mut log) = (MS, Vec::new());
-            let peer = Identity::<SoftwareStore>::from_seed(&[4; 32]).unwrap().node_id();
+            let peer = Identity::<SoftwareStore>::from_seed_with(&[4; 32], &[0; 32])
+                .unwrap()
+                .node_id();
             let to = [ends[1].1];
             let session = ends[0].0.connect_start(now, peer, b"t", &to).unwrap();
             settle(&mut ends, &mut now, &mut log);

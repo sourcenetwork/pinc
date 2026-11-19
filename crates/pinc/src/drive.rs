@@ -14,9 +14,10 @@
 //!
 //! Invariants: at most one future holds the role; the flag, the baton and a ticket's registration change in one
 //! borrow of the core, so a wake is never lost between a failed attempt and the wait; no borrow is held across an await
-//! or a call of a host closure; the receive and transmit buffers come from two small pools the endpoints of the thread
-//! share and go back when dropped, so steady traffic allocates none, however many futures send at once; with no future
-//! polled the endpoint makes no progress, which is the SANS-IO contract.
+//! or a call of a host closure; the receive and transmit buffers come from two small pools (the endpoints of the
+//! thread share them with `std`; each endpoint holds its own without, reserved when it is built) and go back when
+//! dropped, so steady traffic allocates none, however many futures send at once; with no future polled the endpoint
+//! makes no progress, which is the SANS-IO contract.
 
 use alloc::boxed::Box;
 use alloc::rc::Rc;
@@ -52,11 +53,33 @@ const DRAIN: usize = 256;
 /// The most buffers each pool keeps.
 const POOLED: usize = 8;
 
+/// A pool of buffers.
+type Pool = Rc<RefCell<Vec<Vec<u8>>>>;
+
+#[cfg(feature = "std")]
 std::thread_local! {
     /// The receive buffers the endpoints of this thread share.
-    static RX_BUFS: Rc<RefCell<Vec<Vec<u8>>>> = Rc::default();
+    static RX_BUFS: Pool = Pool::default();
     /// The transmit buffers the endpoints of this thread share.
-    static TX_BUFS: Rc<RefCell<Vec<Vec<u8>>>> = Rc::default();
+    static TX_BUFS: Pool = Pool::default();
+}
+
+/// The receive and transmit pools of an endpoint being built: those of its thread.
+#[cfg(feature = "std")]
+fn pools(_rx_len: usize, _tx_len: usize) -> (Pool, Pool) {
+    (RX_BUFS.with(Rc::clone), TX_BUFS.with(Rc::clone))
+}
+
+/// The receive and transmit pools of an endpoint being built: its own, each with one buffer of its size and room for
+/// `POOLED`, so a buffer that goes back never allocates.
+#[cfg(not(feature = "std"))]
+fn pools(rx_len: usize, tx_len: usize) -> (Pool, Pool) {
+    let one = |len: usize| {
+        let mut pool = Vec::with_capacity(POOLED);
+        pool.push(vec![0; len]);
+        Rc::new(RefCell::new(pool))
+    };
+    (one(rx_len), one(tx_len))
 }
 
 /// The state every handle of an endpoint shares.
@@ -78,11 +101,11 @@ pub(crate) struct Shared<H: Hosted> {
     port_mapping: bool,
     /// The HTTP exchange of the port-mapping client while one runs; see [`http_io`].
     http: RefCell<http_io::Held<H>>,
-    /// The receive and transmit buffers of every endpoint on this thread. A receive buffer is held while a future drives
-    /// the endpoint and a transmit buffer while a transmit is built and sent, so endpoints that are mostly idle share a
-    /// few instead of keeping two each.
-    rx_bufs: Rc<RefCell<Vec<Vec<u8>>>>,
-    tx_bufs: Rc<RefCell<Vec<Vec<u8>>>>,
+    /// The receive and transmit buffers: shared by every endpoint on this thread with `std`, the endpoint's own
+    /// without. A receive buffer is held while a future drives the endpoint and a transmit buffer while a transmit is
+    /// built and sent, so with `std` endpoints that are mostly idle share a few instead of keeping two each.
+    rx_bufs: Pool,
+    tx_bufs: Pool,
     /// The size of a transmit buffer: the endpoint's batch of datagrams of the largest size.
     tx_len: usize,
     /// The relay role's clock minus the endpoint's, in nanoseconds; see [`role_io`].
@@ -196,6 +219,8 @@ impl<H: Hosted> Shared<H> {
     ) -> Self {
         let port_mapping = core.node.has_port_mapping();
         let start = host.platform().now();
+        let tx_len = gso.clamp(1, UDP_MAX / pinc_core::MAX_DATAGRAM) * pinc_core::MAX_DATAGRAM;
+        let (rx_bufs, tx_bufs) = pools(H::RECV_MAX, tx_len);
         Self {
             host,
             start,
@@ -208,9 +233,9 @@ impl<H: Hosted> Shared<H> {
             cdirty: Cell::new(false),
             port_mapping,
             http: RefCell::new(None),
-            rx_bufs: RX_BUFS.with(Rc::clone),
-            tx_bufs: TX_BUFS.with(Rc::clone),
-            tx_len: gso.clamp(1, UDP_MAX / pinc_core::MAX_DATAGRAM) * pinc_core::MAX_DATAGRAM,
+            rx_bufs,
+            tx_bufs,
+            tx_len,
             role_off,
             role_ready: Cell::new(false),
             rdirty: Cell::new(false),
@@ -462,5 +487,67 @@ impl<H: Hosted> Shared<H> {
             let _ = self.host.send(b.v.get(..len).unwrap_or_default(), to, segment).await;
             buf = Some(b);
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "tests assert")]
+mod tests {
+    use core::convert::Infallible;
+
+    use super::*;
+    use crate::endpoint::{Endpoint, Pinc};
+    use crate::platform::TestPlatform;
+
+    #[cfg(not(feature = "std"))]
+    fn recv_max<H: Hosted>(_: &Endpoint<H>) -> usize {
+        H::RECV_MAX
+    }
+
+    fn built() -> Endpoint<impl Hosted> {
+        Pinc::builder_on(TestPlatform)
+            .limits(crate::Limits {
+                connections: 4,
+                ..crate::Limits::default()
+            })
+            .build(
+                async |_buf: &mut [u8]| -> Result<(usize, SocketAddr), Infallible> { core::future::pending().await },
+                async |pkt: &[u8], _to: SocketAddr| -> Result<usize, Infallible> { Ok(pkt.len()) },
+                async |_at: u64| {},
+            )
+            .unwrap()
+    }
+
+    /// The endpoints of a thread share the pools with `std`, and each holds its own without.
+    #[test]
+    fn two_endpoints_of_a_thread_share_their_pools_only_with_std() {
+        let (a, b) = (built(), built());
+        let (a, b) = (&a.0.shared, &b.0.shared);
+        assert_eq!(Rc::ptr_eq(&a.rx_bufs, &b.rx_bufs), cfg!(feature = "std"));
+        assert_eq!(Rc::ptr_eq(&a.tx_bufs, &b.tx_bufs), cfg!(feature = "std"));
+    }
+
+    /// Without `std` the pools hold their buffers from the build, and a buffer that goes back lands in the same place.
+    #[cfg(not(feature = "std"))]
+    #[test]
+    fn the_pools_of_an_endpoint_hold_their_buffers_from_the_build_and_get_them_back() {
+        let ep = built();
+        let sh = &ep.0.shared;
+        let held = |p: &Pool| p.borrow().iter().map(|b| (b.as_ptr(), b.len())).collect::<Vec<_>>();
+        let room = |p: &Pool| p.borrow().capacity();
+        let (rx, tx) = (held(&sh.rx_bufs), held(&sh.tx_bufs));
+        assert_eq!(rx.len(), 1);
+        assert_eq!(tx.len(), 1);
+        assert_eq!(rx[0].1, recv_max(&ep));
+        assert_eq!(tx[0].1, sh.tx_len);
+        let (rx_room, tx_room) = (room(&sh.rx_bufs), room(&sh.tx_bufs));
+        assert!(rx_room >= POOLED && tx_room >= POOLED);
+        {
+            let (r, t) = (sh.rx_buf(), sh.tx_buf());
+            assert!(sh.rx_bufs.borrow().is_empty() && sh.tx_bufs.borrow().is_empty());
+            drop((r, t));
+        }
+        assert_eq!((held(&sh.rx_bufs), held(&sh.tx_bufs)), (rx, tx));
+        assert_eq!((room(&sh.rx_bufs), room(&sh.tx_bufs)), (rx_room, tx_room));
     }
 }

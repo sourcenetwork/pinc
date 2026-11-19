@@ -106,11 +106,13 @@ pub(crate) const fn ns_to_ms(ns: u64) -> u64 {
 
 // The standard library's platform: kept together so that the part that needs `std` is one block.
 
-/// The standard library's platform: `Instant` and `SystemTime`, `io::Error`, and the operating system's randomness.
+/// The standard library's platform: `Instant` and `SystemTime`, `io::Error`, and the operating system's randomness. The
+/// type always exists (it is the default of the platform parameters); it is a [`Platform`] only with the `std` feature.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct System;
 
-/// The latest instant `self + d` can reach: the step is halved until it fits.
+/// The latest instant `self + d` can reach: the step is halved until it fits. Only with the `std` feature.
+#[cfg(feature = "std")]
 impl HostInstant for std::time::Instant {
     #[inline]
     fn add(self, d: Duration) -> Self {
@@ -130,7 +132,9 @@ impl HostInstant for std::time::Instant {
     }
 }
 
-/// Interrupted, reset and refused receives lose one datagram; any other error is the socket's failure.
+/// Interrupted, reset and refused receives lose one datagram; any other error is the socket's failure. Only with the
+/// `std` feature.
+#[cfg(feature = "std")]
 impl HostError for std::io::Error {
     #[inline]
     fn is_transient(&self) -> bool {
@@ -139,6 +143,8 @@ impl HostError for std::io::Error {
     }
 }
 
+/// Only with the `std` feature.
+#[cfg(feature = "std")]
 impl Platform for System {
     type Instant = std::time::Instant;
     type Error = std::io::Error;
@@ -165,12 +171,36 @@ impl Platform for System {
     }
 }
 
+/// A platform for the unit tests of both builds: a clock stuck at zero, a fixed wall clock, a byte pattern for
+/// randomness, and an error type that cannot happen.
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct TestPlatform;
+
+#[cfg(test)]
+impl Platform for TestPlatform {
+    type Instant = u64;
+    type Error = Infallible;
+
+    fn now(&self) -> u64 {
+        0
+    }
+
+    fn wall_ns(&self) -> u64 {
+        1_700_000_000_000_000_000
+    }
+
+    fn random(&self, out: &mut [u8]) -> Result<(), Infallible> {
+        for (i, b) in (0u8..=255).cycle().zip(out) {
+            *b = i.wrapping_mul(31).wrapping_add(7);
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, reason = "tests assert")]
 mod tests {
-    use std::io::ErrorKind as K;
-    use std::time::Instant;
-
     use super::*;
 
     #[test]
@@ -183,8 +213,11 @@ mod tests {
         assert_eq!(0u64.since(u64::MAX), Duration::ZERO);
     }
 
+    #[cfg(feature = "std")]
     #[test]
     fn a_std_instant_add_never_panics_and_never_goes_back() {
+        use std::time::Instant;
+
         let t = Instant::now();
         let far = t.add(Duration::MAX);
         assert!(far >= t);
@@ -193,6 +226,7 @@ mod tests {
         assert_eq!(t.since(far), Duration::ZERO);
     }
 
+    #[cfg(feature = "std")]
     #[test]
     fn the_system_gives_random_bytes_and_a_wall_clock() {
         let mut out = [0u8; 32];
@@ -202,7 +236,17 @@ mod tests {
     }
 
     #[test]
-    fn each_error_type_decides_what_is_transient() {
+    fn the_facade_error_is_transient_only_when_busy() {
+        assert!(Error::new(ErrorKind::Busy, "busy").is_transient());
+        assert!(!Error::new(ErrorKind::Unreachable, "gone").is_transient());
+        assert!(!Error::new(ErrorKind::Shutdown, "stopped").is_transient());
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn an_io_error_is_transient_when_it_lost_one_datagram() {
+        use std::io::ErrorKind as K;
+
         for (kind, transient) in [
             (K::Interrupted, true),
             (K::ConnectionReset, true),
@@ -213,9 +257,6 @@ mod tests {
         ] {
             assert_eq!(std::io::Error::from(kind).is_transient(), transient, "{kind:?}");
         }
-        assert!(Error::new(ErrorKind::Busy, "busy").is_transient());
-        assert!(!Error::new(ErrorKind::Unreachable, "gone").is_transient());
-        assert!(!Error::new(ErrorKind::Shutdown, "stopped").is_transient());
     }
 
     #[test]

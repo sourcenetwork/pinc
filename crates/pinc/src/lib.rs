@@ -25,10 +25,18 @@
 //! [`build_batched`](Builder::build_batched) instead: its send closure gets a whole transmit and the segment size, and
 //! its receive closure may return several datagrams and their segment size, so one system call moves many.
 //!
+//! # Without `std`
+//!
+//! With the `std` feature (on by default) the standard library is the host's platform: `Pinc::builder` needs nothing
+//! else. Without it the crate is `no_std` plus `alloc`: the host brings an allocator and a [`Platform`] (its clock, its
+//! randomness and its error type) and starts from [`Pinc::builder_on`]; [`System`], `Pinc::builder` and
+//! `Identity::from_seed` are the standard library's and exist only with `std`.
+//!
 //! # The shape
 //!
-//! - [`Pinc::builder`] sets the identity (a seed, or a key store), the protocols (ALPNs), relays, discovery, limits and
-//!   the access hook, then [`build`](Builder::build) takes the closures and returns the [`Endpoint`].
+//! - `Pinc::builder` (or [`Pinc::builder_on`]) sets the identity (a seed, or a key store), the protocols (ALPNs),
+//!   relays, discovery, limits and the access hook, then [`build`](Builder::build) takes the closures and returns the
+//!   [`Endpoint`].
 //! - [`Endpoint::connect`] gives a [`Connection`]; [`Endpoint::accept`] gives an [`Incoming`] with its ALPN.
 //! - A connection opens and accepts bidirectional and unidirectional streams and sends and reads datagrams.
 //! - Every call is a future of the host's executor. A future that waits also runs the endpoint, one at a time; with no
@@ -56,7 +64,8 @@
 #![forbid(unsafe_code)]
 
 extern crate alloc;
-// `System`, the default platform, is the standard library's.
+// `System`, the default platform, is the standard library's; the tests use it also without the feature.
+#[cfg(any(feature = "std", test))]
 extern crate std;
 
 /// The README's examples, compiled and run as doctests so they cannot drift.

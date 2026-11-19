@@ -103,6 +103,7 @@ mod tests {
     use super::*;
 
     /// A 1 MiB stack builds and drops a relay with a hub.
+    #[cfg(feature = "std")]
     #[test]
     fn a_relay_builds_and_drops_on_a_one_mebibyte_stack() {
         use pinc_keystore::SoftwareStore;
