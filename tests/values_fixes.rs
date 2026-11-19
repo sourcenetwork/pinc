@@ -16,7 +16,6 @@ mod values_support;
 
 use std::collections::HashMap;
 
-use values_support::*;
 use pinc_transport::frame::ext;
 use pinc_transport::stream::{StreamId, StreamSource};
 use pinc_values::fetch::{Fetch, FetchSpec, In, Io};
@@ -26,6 +25,7 @@ use pinc_values::source::ValueSource;
 use pinc_values::span::Span;
 use pinc_values::trace::{Event, LiarWhy, Release, Trace};
 use pinc_values::wire::ProofFrame;
+use values_support::*;
 
 const G: u64 = GROUP;
 

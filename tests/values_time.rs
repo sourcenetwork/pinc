@@ -16,9 +16,9 @@
 
 mod values_support;
 
-use values_support::*;
 use pinc_values::fetch::Io;
 use pinc_values::trace::{Event, FailReason, Trace};
+use values_support::*;
 
 fn silent_sim(seed: u64, after: u64) -> Sim {
     let store = PStore::random(seed, 2 << 20);

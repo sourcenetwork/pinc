@@ -16,9 +16,9 @@ use std::net::SocketAddr;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use smol::channel::{Sender, unbounded};
 use pinc::{CarrierKind, Endpoint, Hosted, Pinc};
 use pinc_portmap::upnp;
+use smol::channel::{Sender, unbounded};
 
 const ALPN: &[u8] = b"portmap/churn";
 const SEARCH_ANSWER: &[u8] = b"HTTP/1.1 200 OK\r\nLOCATION: http://192.168.1.1:5000/d.xml\r\n\r\n";

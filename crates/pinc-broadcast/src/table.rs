@@ -22,8 +22,8 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::cell::Cell;
 use core::hash::BuildHasher;
-use rapidhash::quality::SeedableState;
 use pinc_membership::Nanos;
+use rapidhash::quality::SeedableState;
 
 use crate::consts::SEEN_TTL;
 use crate::node::StartError;

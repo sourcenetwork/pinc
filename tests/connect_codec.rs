@@ -21,7 +21,6 @@ mod connect_common;
 use core::net::SocketAddr;
 
 use connect_common::{big_stack, ed, enc, id, keypair, nid};
-use proptest::prelude::*;
 use pinc_connect::carrier::frame::{MAX_NOTICE_LEN, kind};
 use pinc_connect::carrier::{
     ALIAS_MAX, AliasTable, Assigned, BATCH_MAX_BYTES, BATCH_MAX_FRAMES, BatchBuilder, DnsAnswer, Frame, FrameError,
@@ -31,6 +30,7 @@ use pinc_connect::record::{MAX_ADDRS, MAX_HINT_LEN, MAX_RECORD_LEN, Reach, Recor
 use pinc_connect::relay::datagram::{Datagram, DatagramError, MAX_TUNNEL_DATAGRAM};
 use pinc_connect::relay::sleep::{self, Notice, SleepError};
 use pinc_crypto::{IdentityAlg, NodeId};
+use proptest::prelude::*;
 
 fn round_trip(f: &Frame<'_>) {
     let bytes = enc(f);

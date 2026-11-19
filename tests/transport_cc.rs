@@ -16,10 +16,10 @@
     clippy::too_many_lines
 )]
 
-use proptest::prelude::*;
 use pinc_transport::recovery::{
     AckInput, CONGESTION_BETA_SMALL, Cubic, INITIAL_CWND, MAX_CWND, MIN_CWND, MS, Pacer, SECOND,
 };
+use proptest::prelude::*;
 
 pub(crate) const MSS: u64 = 1200;
 

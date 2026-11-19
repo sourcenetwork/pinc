@@ -14,11 +14,11 @@ mod values_support;
 
 use std::collections::BTreeSet;
 
-use values_support::*;
 use pinc_tests::SplitMix64;
 use pinc_values::knobs::GROUP;
 use pinc_values::span::{RangeList, Span, align, holes};
 use pinc_values::trace::Trace;
+use values_support::*;
 
 fn bytes(l: &[Span]) -> BTreeSet<u64> {
     l.iter().flat_map(|s| s.off..s.end()).collect()

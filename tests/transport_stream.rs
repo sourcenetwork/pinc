@@ -14,10 +14,10 @@
 mod common;
 
 use common::{MIB, NO_CAP, drain_control, drain_frames, pattern, read_all, setup};
-use proptest::prelude::*;
 use pinc_tests::SplitMix64;
 use pinc_transport::stream::pool::CHUNK_SIZE;
 use pinc_transport::stream::{ControlFrame, RecvStatus, StreamError};
+use proptest::prelude::*;
 
 // ---- receive ------------------------------------------------------------------------------------------------------
 

@@ -27,10 +27,10 @@ use std::net::SocketAddr;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use smol::channel::{Receiver, Sender, unbounded};
 use pinc::relay::{CarrierFns, Peer, Relay as RelayHost};
 use pinc::{CarrierKind, Endpoint, Error, ErrorKind, Event, Hosted, Relay};
 use pinc_common::{ECHO, eventually, serve_conn, within};
+use smol::channel::{Receiver, Sender, unbounded};
 
 const RELAY_ADDR: &str = "10.0.0.1:7000";
 const A_ADDR: &str = "10.0.0.2:7001";

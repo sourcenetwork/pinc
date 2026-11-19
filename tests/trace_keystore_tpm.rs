@@ -29,13 +29,13 @@ use std::fmt::Write as _;
 use std::io;
 use std::sync::{Arc, Mutex};
 
-use tpm2_protocol::TpmUnmarshal;
-use tpm2_protocol::data::{Tpm2bPrivate, Tpm2bPublic};
-use tpm2_protocol::frame::{TpmGetRandomResponse, TpmResponse};
 use pinc_crypto::IdentityAlg;
 use pinc_keystore::tpm::{SimTransport, TpmClient, Transport};
 use pinc_keystore::{KeyHandle, KeyStore, KeyStoreError, TpmConfig, TpmStore};
 use pinc_tests::Swtpm;
+use tpm2_protocol::TpmUnmarshal;
+use tpm2_protocol::data::{Tpm2bPrivate, Tpm2bPublic};
+use tpm2_protocol::frame::{TpmGetRandomResponse, TpmResponse};
 
 fn arr(b: &[u8]) -> String {
     format!("[{}]", b.iter().map(u8::to_string).collect::<Vec<_>>().join(","))

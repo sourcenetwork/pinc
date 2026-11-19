@@ -8,9 +8,9 @@
     clippy::many_single_char_names
 )]
 
-use proptest::prelude::*;
 use pinc_crypto::drbg::MAX_FILL;
 use pinc_crypto::{CryptoError, Drbg, Transcript, expand, extract, labels};
+use proptest::prelude::*;
 
 mod blake3_vectors;
 mod hexutil;

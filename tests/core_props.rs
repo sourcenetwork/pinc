@@ -12,11 +12,11 @@
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 
-use proptest::prelude::*;
 use pinc_core::{
     DeadlineHeap, FIRST_RESEND, FLOOR_MAX, KeepaliveInputs, LEDGER_ENTRIES, Ledger, NodeRtt, Role, Table, standby_due,
 };
 use pinc_crypto::{IdentityAlg, NodeId};
+use proptest::prelude::*;
 
 #[derive(Debug, Clone)]
 enum Op {

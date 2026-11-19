@@ -8,11 +8,11 @@ pub mod app;
 pub mod data;
 pub mod iroh_app;
 pub mod libp2p_app;
+pub mod pinc;
 pub mod proto;
 pub mod shell;
 pub mod stats;
 pub mod transport;
-pub mod pinc;
 
 use crate::scenario::Stack;
 

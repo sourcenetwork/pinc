@@ -20,10 +20,10 @@
 mod connect_common;
 
 use connect_common::{Out, Rig, big_stack, enc, id, nid};
-use proptest::prelude::*;
 use pinc_connect::carrier::session::{CarrierError, IN_LEN, MAX_UNIT_LEN, PEER_ALPN};
 use pinc_connect::carrier::ws::{self, Decoder, MAX_PAYLOAD, Opcode, Role, WsError, WsFrame};
 use pinc_connect::carrier::{BatchBuilder, Frame, MAX_FRAME_LEN, Offer};
+use proptest::prelude::*;
 
 fn pkt(n: usize, fill: u8) -> Vec<u8> {
     vec![fill; n]

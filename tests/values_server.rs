@@ -14,7 +14,6 @@
 
 mod values_support;
 
-use values_support::*;
 use pinc_dag::tree::{Layout, PARENT_LEN};
 use pinc_transport::frame::ext;
 use pinc_values::knobs::{GROUP_LOG, code};
@@ -24,6 +23,7 @@ use pinc_values::session::Provider;
 use pinc_values::span::Span;
 use pinc_values::trace::Trace;
 use pinc_values::wire::{ProofFrame, ProofReq, Req};
+use values_support::*;
 
 const PEER: Provider = Provider(7);
 

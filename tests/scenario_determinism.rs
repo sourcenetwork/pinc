@@ -5,11 +5,11 @@
 
 mod scenario_support;
 
-use scenario_support::{run_child, selected};
 use pinc_sim::Driver;
 use pinc_sim::suite::grade::{GateStatus, gate_det};
 use pinc_sim::suite::run::{LayerSet, Status, run};
 use pinc_sim::suite::world::build;
+use scenario_support::{run_child, selected};
 
 #[test]
 fn child_worker() {

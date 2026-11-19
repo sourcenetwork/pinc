@@ -9,12 +9,12 @@
 use std::collections::BTreeSet;
 use std::ops::Range;
 
-use proptest::prelude::*;
 use pinc_dag::ranges::{VerifiedRanges, VerifiedRangesVec};
 use pinc_dag::tree::{
     Layout, OutboardBuilder, RangeVerifier, TreeError, build_outboard, build_outboard_vec, encode_range, encoded_len,
 };
 use pinc_tests::SplitMix64;
+use proptest::prelude::*;
 
 pinc_tests::install_counting_allocator!();
 

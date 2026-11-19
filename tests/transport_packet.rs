@@ -16,7 +16,6 @@
     clippy::many_single_char_names
 )]
 
-use proptest::prelude::*;
 use pinc_crypto::{Aead, Provider, Secret, Software};
 use pinc_security::{HeaderKey, PacketKey, RecordError};
 use pinc_tests::SplitMix64;
@@ -27,6 +26,7 @@ use pinc_transport::packet::{
     short_dcid, short_header_len, unprotect_header,
 };
 use pinc_wire::{WireError, Writer};
+use proptest::prelude::*;
 
 mod hexutil;
 use hexutil::{arr, hex};

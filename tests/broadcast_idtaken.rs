@@ -17,12 +17,12 @@ use std::hash::BuildHasher;
 use std::rc::Rc;
 
 use common::{Ev, Net, SEC, WALL0, keypair, ty};
-use rapidhash::quality::SeedableState;
 use pinc_broadcast::wire::Head;
 use pinc_broadcast::{Limits, Reject, Trace, auth};
 use pinc_crypto::IdentityAlg;
 use pinc_crypto::identity::MAX_SIGNATURE_LEN;
 use pinc_wire::hlc::Hlc;
+use rapidhash::quality::SeedableState;
 
 const T: &[u8] = b"taken";
 const ALG: IdentityAlg = IdentityAlg::Ed25519;

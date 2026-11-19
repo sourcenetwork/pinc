@@ -9,11 +9,11 @@
     clippy::redundant_closure_for_method_calls
 )]
 
-use proptest::prelude::*;
 use pinc_dag::block::{BlockError, BlockParts, BlockRef, Link, encode_block};
 use pinc_dag::cid::{Cid, CidError, DAG_CBOR, RAW, SHA2_256};
 use pinc_wire::WireError;
 use pinc_wire::cbor::Decoder;
+use proptest::prelude::*;
 
 mod golden;
 

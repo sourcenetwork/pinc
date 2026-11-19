@@ -18,7 +18,6 @@
 mod dtn_common;
 
 use dtn_common::{ALGS, Sealed, bytes, keypair, make, plan, recipient};
-use proptest::prelude::*;
 use pinc_crypto::{CryptoError, IdentityAlg, Software};
 use pinc_dag::ranges::VerifiedRanges;
 use pinc_dtn::bundle::Reception;
@@ -27,6 +26,7 @@ use pinc_dtn::head::{BundleId, MAX_SIGNED_HEAD_LEN, SignedHead};
 use pinc_dtn::hlc::Hlc;
 use pinc_dtn::layout::SliceLayout;
 use pinc_dtn::seal::decapsulate;
+use proptest::prelude::*;
 
 const NOW: u64 = 2_000;
 

@@ -13,16 +13,16 @@
     missing_docs
 )]
 
-mod relay_members;
 mod pinc_common;
+mod relay_members;
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
 
-use relay_members::{bind_ports, build_relay, on_stack};
 use pinc::Identity;
 use pinc::relay::Relay;
+use relay_members::{bind_ports, build_relay, on_stack};
 
 #[test]
 fn a_relay_builds_on_a_two_mebibyte_stack_in_an_unoptimised_build() {

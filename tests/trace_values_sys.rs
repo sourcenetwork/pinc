@@ -43,11 +43,11 @@ mod values_support;
 use std::fmt::Write as _;
 use std::ops::Range;
 
-use values_support::*;
 use pinc_values::session::Provider;
 use pinc_values::span::Span;
 use pinc_values::trace::{Event, FailReason, Release, Trace};
 use pinc_values::wire::Req;
+use values_support::*;
 
 /// What the checkers need to know about a run besides what the fetcher reports.
 struct Meta {

@@ -14,12 +14,12 @@
 
 mod values_support;
 
-use values_support::*;
 use pinc_values::knobs;
 use pinc_values::plan::Plan;
 use pinc_values::session::Provider;
 use pinc_values::span::Span;
 use pinc_values::trace::{Event, Release, Trace};
+use values_support::*;
 
 const G: u64 = GROUP;
 

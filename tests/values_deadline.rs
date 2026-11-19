@@ -13,8 +13,8 @@
 
 mod values_support;
 
-use values_support::*;
 use pinc_values::trace::{FailReason, Trace};
+use values_support::*;
 
 /// How many times the stall rule dialled a provider again.
 fn redials(sim: &Sim) -> usize {

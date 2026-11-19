@@ -44,13 +44,13 @@ mod values_support;
 
 use std::fmt::Write as _;
 
-use values_support::*;
 use pinc_tests::SplitMix64;
 use pinc_values::fetch::Timers;
 use pinc_values::knobs;
 use pinc_values::session::Provider;
 use pinc_values::span::{Span, align};
 use pinc_values::trace::{Event, FailReason, Release, Trace};
+use values_support::*;
 
 fn limbs(v: u64) -> String {
     format!(

@@ -2,8 +2,8 @@
 // Tests assert freely; the production lints on panics and indexing do not apply here.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
 
-use proptest::prelude::*;
 use pinc_tests::SplitMix64;
+use proptest::prelude::*;
 
 pinc_tests::install_counting_allocator!();
 use pinc_wire::cbor::{Decoder, Encoder, Item, MAX_DEPTH, MapReader};

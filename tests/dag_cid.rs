@@ -11,8 +11,8 @@
 
 use std::cmp::Ordering;
 
-use proptest::prelude::*;
 use pinc_dag::cid::{BLAKE3, Cid, CidError, CidRef, DAG_CBOR, MAX_TEXT_LEN, RAW, SHA2_256, cmp_text};
+use proptest::prelude::*;
 
 mod golden;
 

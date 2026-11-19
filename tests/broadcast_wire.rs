@@ -14,7 +14,6 @@
 mod common;
 
 use common::{ALGS, Net, SEC, keypair};
-use proptest::prelude::*;
 use pinc_broadcast::consts::DEFAULT_MAX_BODY;
 use pinc_broadcast::wire::{self, Head, build, ty};
 use pinc_broadcast::wire2::Head2;
@@ -22,6 +21,7 @@ use pinc_broadcast::{auth, consts};
 use pinc_crypto::IdentityAlg;
 use pinc_crypto::identity::MAX_SIGNATURE_LEN;
 use pinc_wire::hlc::Hlc;
+use proptest::prelude::*;
 
 const T: &[u8] = b"wire";
 

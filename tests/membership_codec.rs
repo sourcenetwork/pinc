@@ -24,12 +24,12 @@
     clippy::too_many_arguments
 )]
 
-use proptest::prelude::*;
 use pinc_membership::NodeId;
 use pinc_membership::codec::{
     Alive, Down, ENTRY_LEN, Frame, FrameError, Hello, MAX_BODY, Other, Path, Probe, Proof, Record, SNAP_CHUNK, Snap,
     entry_bytes, ty,
 };
+use proptest::prelude::*;
 
 pinc_tests::install_counting_allocator!();
 

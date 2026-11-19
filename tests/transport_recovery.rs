@@ -15,11 +15,11 @@
     clippy::too_many_lines
 )]
 
-use proptest::prelude::*;
 use pinc_transport::recovery::{
     Event, FrameRef, FrameRefs, LossEstimate, MAX_ACK_RANGES, MAX_PACKET_NUMBER, MIN_CWND, MS, PathKind,
     ReceivedPackets, Recovery, RecoveryError, RxOutcome, RxPacket, SECOND, Sent, Summary, TailRepair, Timeout,
 };
+use proptest::prelude::*;
 
 mod recovery_ack;
 mod recovery_congestion;

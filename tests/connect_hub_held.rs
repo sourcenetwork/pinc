@@ -19,11 +19,11 @@ mod connect_common;
 use std::cell::Cell;
 
 use connect_common::*;
-use proptest::prelude::*;
 use pinc_connect::carrier::Frame;
 use pinc_connect::relay::datagram::{Datagram, MAX_TUNNEL_DATAGRAM};
 use pinc_connect::relay::{Effect, Reject, SessionId, Sink, Trace, UdpTarget};
 use pinc_crypto::NodeId;
+use proptest::prelude::*;
 
 /// A relay holding the given packets (flag 7), oldest first, from `a` for the sleeping `m`.
 fn hold(fx: &mut Fx, packets: &[&[u8]]) -> (NodeId, SessionId, NodeId, Vec<u64>) {

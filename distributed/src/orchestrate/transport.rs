@@ -17,7 +17,7 @@ use crate::orchestrate::window::drops;
 use crate::orchestrate::{Ctx, Event};
 use crate::quiet::Snapshot;
 use crate::results::Row;
-use crate::scenario::{Stack, Transport, TransportTest, PincEndpoints};
+use crate::scenario::{PincEndpoints, Stack, Transport, TransportTest};
 
 /// The environment of a node program: the address it binds and the interface size PINC states.
 pub(crate) fn node_env(ip: std::net::Ipv4Addr, mtu: u32) -> Vec<(String, String)> {
@@ -200,7 +200,7 @@ async fn one(
 #[cfg(test)]
 mod tests {
     use super::{node_env, options};
-    use crate::scenario::{Reading, Stack, TransportTest, PincEndpoints};
+    use crate::scenario::{PincEndpoints, Reading, Stack, TransportTest};
 
     const MANY: TransportTest = TransportTest::Many {
         connections: 500,

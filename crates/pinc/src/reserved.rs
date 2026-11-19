@@ -35,9 +35,9 @@ mod tests {
     use super::*;
     use alloc::vec;
     use alloc::vec::Vec;
-    use std::net::SocketAddr;
     use pinc_connect::record::{Reach, RecordFields};
     use pinc_crypto::{IdentityAlg, Keypair};
+    use std::net::SocketAddr;
 
     fn node() -> pinc_crypto::NodeId {
         Keypair::from_seed(IdentityAlg::Ed25519, &[3; 32]).unwrap().node_id()

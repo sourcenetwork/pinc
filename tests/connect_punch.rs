@@ -16,11 +16,11 @@
 
 use std::net::SocketAddr;
 
-use proptest::prelude::*;
 use pinc_connect::client::punch::{
     ACTIVE_KEEP, Born, FIRST_DELAY, GOOD_LATENCY, MTU_DEFER, PROBES, Puncher, Step, UPGRADE_INTERVAL, View, decode,
     encode, probe_gaps,
 };
+use proptest::prelude::*;
 
 const S: u64 = 1_000_000_000;
 const MS: u64 = 1_000_000;

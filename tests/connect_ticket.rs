@@ -19,9 +19,9 @@ mod connect_common;
 use std::net::SocketAddr;
 
 use connect_common::nid;
-use proptest::prelude::*;
 use pinc_connect::ticket::{MAX_LEN, MAX_TEXT, Ticket, TicketError, VERSION};
 use pinc_crypto::{IdentityAlg, NodeId};
+use proptest::prelude::*;
 
 fn node(tag: u8, alg: IdentityAlg) -> NodeId {
     NodeId { alg, bytes: [tag; 32] }

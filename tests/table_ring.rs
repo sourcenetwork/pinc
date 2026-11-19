@@ -12,8 +12,8 @@
 
 use std::collections::VecDeque;
 
-use proptest::prelude::*;
 use pinc_table::{Error, Ring, Storage};
+use proptest::prelude::*;
 
 fn mem(n: usize, owned: bool) -> Storage {
     if owned {

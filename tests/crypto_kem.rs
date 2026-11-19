@@ -9,9 +9,9 @@
 )]
 
 use ml_kem::ExpandedKeyEncoding;
-use proptest::prelude::*;
 use pinc_crypto::provider::{KEM_CIPHERTEXT_LEN, KEM_ENCAPS_KEY_LEN};
 use pinc_crypto::{CryptoError, Provider, Software};
+use proptest::prelude::*;
 
 mod acvp_kem;
 mod hexutil;

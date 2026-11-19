@@ -10,8 +10,8 @@
     clippy::similar_names
 )]
 
-use proptest::prelude::*;
 use pinc_table::{Array, Error, Pool, Slot, Storage};
+use proptest::prelude::*;
 
 fn mem(n: usize, owned: bool) -> Storage {
     if owned {

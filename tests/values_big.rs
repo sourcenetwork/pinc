@@ -17,9 +17,9 @@
 
 mod values_support;
 
-use values_support::*;
 use pinc_values::span::Span;
 use pinc_values::trace::Trace;
+use values_support::*;
 
 const GROUP: u64 = 16384;
 

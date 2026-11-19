@@ -10,10 +10,10 @@ mod common;
 mod support;
 
 use common::{Ev, Net, SEC, ty};
-use support::{T, adj, ask, capture, room, sends};
 use pinc_broadcast::Limits;
 use pinc_broadcast::consts::{LOG_WINDOW, REACH_RECORD_BASE, RECORD_TTL, REFRESH};
 use pinc_crypto::IdentityAlg;
+use support::{T, adj, ask, capture, room, sends};
 
 /// A hub and `members` members, the hub's table holding `bytes` bytes ([`room`]); every member subscribes.
 fn small(members: usize, bytes: usize) -> Net {

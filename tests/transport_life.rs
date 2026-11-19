@@ -17,12 +17,12 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use proptest::prelude::*;
 use pinc_crypto::IdentityAlg;
 use pinc_security::Env;
 use pinc_tests::*;
 use pinc_transport::conn::{CloseReason, PathId, PathInfo};
 use pinc_transport::packet::LongHeader;
+use proptest::prelude::*;
 
 pinc_tests::install_counting_allocator!();
 

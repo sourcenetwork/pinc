@@ -17,10 +17,10 @@ use std::net::{IpAddr, SocketAddr};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use smol::channel::{Sender, unbounded};
 use pinc::relay::{CarrierFns, Peer, Relay as RelayHost};
 use pinc::{CarrierKind, Endpoint, Error, ErrorKind, Hosted, Pinc};
 use pinc_portmap::{pcp, upnp};
+use smol::channel::{Sender, unbounded};
 
 const ALPN: &[u8] = b"portmap/test";
 const PRIVATE: &str = "192.168.1.5:4433";

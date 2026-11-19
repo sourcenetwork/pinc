@@ -53,8 +53,8 @@ use nuclei::sync::Mutex as AsyncMutex;
 use nuclei::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use nuclei::time::sleep_until_precise;
 use pinc::{
-    Admission, Builder, Connection, Direction, Discovery, Endpoint, Error, ErrorKind, Hosted, NodeAddr, NodeId,
-    Records, Rendezvous, SendStream, Pinc, node_from_str, node_to_string,
+    Admission, Builder, Connection, Direction, Discovery, Endpoint, Error, ErrorKind, Hosted, NodeAddr, NodeId, Pinc,
+    Records, Rendezvous, SendStream, node_from_str, node_to_string,
 };
 use pinc::{RecvStream, read_tag};
 use pinc_keystore::KeyStore;

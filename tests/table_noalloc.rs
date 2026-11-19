@@ -9,8 +9,8 @@
     clippy::too_many_lines
 )]
 
-use std::hint::black_box;
 use pinc_table::{Array, Pool, Ring, Slot, SortedSlab, Storage};
+use std::hint::black_box;
 
 use pinc_tests::measure;
 

@@ -29,7 +29,7 @@ use crate::error::{Error, Result};
 use crate::plan::Plan;
 use crate::quiet::{self, Monitor, Snapshot, Thresholds, Usage};
 use crate::results::{self, Row};
-use crate::scenario::{Scenario, PincEndpoints, Workload};
+use crate::scenario::{PincEndpoints, Scenario, Workload};
 
 pub use faults::FaultRunner;
 

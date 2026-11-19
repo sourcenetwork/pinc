@@ -15,8 +15,6 @@
 
 mod values_support;
 
-use proptest::prelude::*;
-use values_support::*;
 use pinc_dag::tree::{Layout, PARENT_LEN, RangeEncoder, Step, build_outboard_vec, encoded_len};
 use pinc_transport::stream::StreamSource;
 use pinc_values::knobs::{MAX_REQ_RANGES, SERVE_BATCH};
@@ -24,6 +22,8 @@ use pinc_values::plan::Plan;
 use pinc_values::source::ValueSource;
 use pinc_values::span::Span;
 use pinc_values::wire::{GROUP_HDR, GroupHeader};
+use proptest::prelude::*;
+use values_support::*;
 
 /// The response to `spans` built the slow way from the `pinc-dag` encoder: header, proof pairs, group bytes.
 fn reference(value: &[u8], outboard: &[u8], spans: &[Span]) -> Vec<u8> {

@@ -18,12 +18,12 @@
 mod dtn_common;
 
 use dtn_common::{keypair, make, plan, recipient};
-use proptest::prelude::*;
 use pinc_crypto::IdentityAlg;
 use pinc_dtn::custody::{CustodyAck, CustodyBook, CustodyError, Incoming};
 use pinc_dtn::head::BundleId;
 use pinc_dtn::hlc::Hlc;
 use pinc_dtn::store::{Class, Key, Ledger, Space, StoreError};
+use proptest::prelude::*;
 
 fn key(n: u8) -> Key {
     Key {

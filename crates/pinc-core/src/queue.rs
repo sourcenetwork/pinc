@@ -267,9 +267,9 @@ mod tests {
 
     use std::vec::Vec;
 
-    use proptest::prelude::*;
     use pinc_crypto::{IdentityAlg, NodeId};
     use pinc_security::Alpn;
+    use proptest::prelude::*;
 
     use super::*;
 

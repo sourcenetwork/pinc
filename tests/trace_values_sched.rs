@@ -39,11 +39,11 @@ mod values_support;
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
-use values_support::*;
 use pinc_tests::SplitMix64;
 use pinc_values::session::Provider;
 use pinc_values::span::Span;
 use pinc_values::trace::{Event, FailReason, Trace};
+use values_support::*;
 
 const G: u64 = GROUP;
 

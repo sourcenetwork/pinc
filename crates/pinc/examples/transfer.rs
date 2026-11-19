@@ -23,7 +23,7 @@ use std::time::Instant;
 use nuclei::Handle;
 use nuclei::time::sleep_until_precise;
 
-use pinc::{Builder, Connection, Endpoint, Error, ErrorKind, Hosted, Protocol, Pinc};
+use pinc::{Builder, Connection, Endpoint, Error, ErrorKind, Hosted, Pinc, Protocol};
 
 const ALPN: &[u8] = b"example/transfer/1";
 

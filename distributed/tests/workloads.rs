@@ -17,11 +17,11 @@ use std::time::{Duration, Instant};
 
 use std::collections::BTreeMap;
 
-use serde_json::{Value, json};
 use pinc_distributed::dtn::{Check, Sent, evaluate};
-use pinc_distributed::node::proto::{Cmd, DtnInit, DtnReport, DtnWhat, Init, PeerSpec, PubSubReport, Reply, Request};
 use pinc_distributed::node::pinc::node_id;
+use pinc_distributed::node::proto::{Cmd, DtnInit, DtnReport, DtnWhat, Init, PeerSpec, PubSubReport, Reply, Request};
 use pinc_distributed::scenario::{Role, Stack};
+use serde_json::{Value, json};
 
 struct Prog {
     child: Child,

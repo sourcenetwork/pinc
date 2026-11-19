@@ -15,9 +15,9 @@
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-use serde_json::{Value, json};
 use pinc_core::{Answer, Query, Role, SessionId, relay_parts};
 use pinc_crypto::NodeId;
+use serde_json::{Value, json};
 
 use super::core::{Core, Op, StreamEv, StreamId};
 

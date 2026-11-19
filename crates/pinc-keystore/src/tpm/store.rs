@@ -6,9 +6,9 @@ use std::vec;
 use std::vec::Vec;
 
 use p256::ecdsa::{Signature as P256Signature, VerifyingKey};
+use pinc_crypto::{IdentityAlg, Provider, Secret, Software};
 use tpm2_protocol::TpmUnmarshal;
 use tpm2_protocol::data::{Tpm2bPrivate, Tpm2bPublic};
-use pinc_crypto::{IdentityAlg, Provider, Secret, Software};
 use zeroize::Zeroizing;
 
 use super::client::{Blob, EccPoint, MAX_AUTH_LEN, RC_INITIALIZE, TpmClient};

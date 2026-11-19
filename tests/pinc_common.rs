@@ -28,7 +28,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use nuclei::Handle;
-use pinc::{Admission, Builder, Connection, Discovery, Endpoint, Hosted, Protocol, RecvStream, SendStream, Pinc};
+use pinc::{Admission, Builder, Connection, Discovery, Endpoint, Hosted, Pinc, Protocol, RecvStream, SendStream};
 use pinc_keystore::KeyStore;
 use pinc_tests::SplitMix64;
 

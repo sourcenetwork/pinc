@@ -11,11 +11,11 @@
     clippy::manual_assert_eq
 )]
 
-use proptest::prelude::*;
 use pinc_crypto::IdentityAlg;
 use pinc_tests::*;
 use pinc_transport::conn::{CloseReason, CreditRecord, credit_for_streams, peer_limits};
 use pinc_transport::stream::{self, StreamError};
+use proptest::prelude::*;
 
 #[test]
 fn the_record_is_six_bytes_and_exact() {

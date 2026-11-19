@@ -107,6 +107,12 @@ pub use host::{BatchHost, Host, Hosted, Io, IoHost};
 pub use keys::Identity;
 pub use mem::{Limits, MAX_CONNECTIONS, MAX_PROTOCOLS, RING, STREAMS};
 pub use node::CAPACITIES;
+pub use pinc_broadcast::{ReachStats, Reject, RejectStats};
+pub use pinc_core::NodeStats;
+pub use pinc_crypto::NodeId;
+pub use pinc_node::{PortMapStats, Timed, TimerStats};
+/// The urgency a stream starts with; see [`SendStream::set_urgency`].
+pub use pinc_transport::stream::DEFAULT_URGENCY;
 pub use platform::{HostError, HostInstant, Platform, System};
 pub use protocol::{MAX_TAG, Protocol, Registered, read_tag, write_tag};
 pub use records::{KNOWN_MAX, MAX_HINTS, PeerRecord, Records, Rendezvous};
@@ -114,9 +120,3 @@ pub use role::{RelayRole, Role, RoleSpec};
 #[cfg(feature = "trace")]
 pub use standby::trace::{StandbyProbe, StandbySlot};
 pub use stream::{RecvStream, SendStream};
-pub use pinc_broadcast::{ReachStats, Reject, RejectStats};
-pub use pinc_core::NodeStats;
-pub use pinc_crypto::NodeId;
-pub use pinc_node::{PortMapStats, Timed, TimerStats};
-/// The urgency a stream starts with; see [`SendStream::set_urgency`].
-pub use pinc_transport::stream::DEFAULT_URGENCY;

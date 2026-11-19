@@ -3,9 +3,9 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::pinc_endpoints::Reading;
 use crate::scenario::Pair;
 use crate::scenario::Problem;
-use crate::pinc_endpoints::Reading;
 
 /// One transport test: the scenarios of the comparison benches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

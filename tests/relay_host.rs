@@ -15,8 +15,8 @@
     missing_docs
 )]
 
-mod relay_members;
 mod pinc_common;
+mod relay_members;
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -25,7 +25,6 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use nuclei::Handle;
-use relay_members::{Member, Ports, bind_ports, build_relay, decode, on_big_stack, wall_ns};
 use pinc::relay::{Event, Limits, MemStore, Peer, Reason, Relay, Stats, Store};
 use pinc::{CarrierKind, Identity};
 use pinc_common::{client, eventually, within};
@@ -35,6 +34,7 @@ use pinc_connect::record::{self, Reach, RecordFields};
 use pinc_connect::relay::datagram::Datagram;
 use pinc_connect::relay::{Quota, sleep};
 use pinc_crypto::{IdentityAlg, Keypair, NodeId};
+use relay_members::{Member, Ports, bind_ports, build_relay, decode, on_big_stack, wall_ns};
 
 const HUB: &[u8] = b"t/hub";
 

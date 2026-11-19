@@ -14,10 +14,10 @@
 
 mod values_support;
 
-use values_support::*;
 use pinc_values::session::Provider;
 use pinc_values::span::Span;
 use pinc_values::trace::{FailReason, LiarWhy, Trace};
+use values_support::*;
 
 /// Run a whole-value fetch to its end and check the store holds exactly the truth.
 fn fetch_all(mut sim: Sim, limit_s: u64) -> Sim {

@@ -44,7 +44,6 @@ mod values_support;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use values_support::*;
 use pinc_dag::tree::{Layout, PARENT_LEN, RangeEncoder, Step, encode_range};
 use pinc_tests::SplitMix64;
 use pinc_transport::frame::ext;
@@ -57,6 +56,7 @@ use pinc_values::source::ValueSource;
 use pinc_values::span::Span;
 use pinc_values::store::ValueRead;
 use pinc_values::wire::{GROUP_HDR, GroupHeader, PROOF_BODY_MAX, ProofFrame, ProofReq, Req};
+use values_support::*;
 
 /// TLC integers are 32 bits: a run is "small" when every number of it is under this.
 const SMALL: u64 = 1 << 26;

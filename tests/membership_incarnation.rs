@@ -27,11 +27,11 @@
 #[path = "membership_world.rs"]
 mod world;
 
-use proptest::prelude::*;
 use pinc_membership::codec::{Alive, Entry, Frame, Record};
 use pinc_membership::incarnation::{AddressTag, Incarnation, IncarnationError, MOVE_SETTLE};
 use pinc_membership::session::StoreError;
 use pinc_membership::{Config, Event, Local, Membership, StartError, Trace};
+use proptest::prelude::*;
 use world::{Host, SEC, World, id};
 
 #[derive(Default)]

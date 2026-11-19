@@ -15,11 +15,11 @@ mod common;
 mod support;
 
 use common::{Net, SEC, WALL0, ty};
-use support::{T, adj, ask, capture, got, offered, sends, session};
 use pinc_broadcast::Topics;
 use pinc_broadcast::consts::{ADJ_MAX, RECORD_TTL, REFRESH};
 use pinc_crypto::IdentityAlg;
 use pinc_membership::NodeId;
+use support::{T, adj, ask, capture, got, offered, sends, session};
 
 #[test]
 fn two_groups_on_one_hub_hear_only_their_own_group_even_through_gap_repair() {

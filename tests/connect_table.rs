@@ -18,8 +18,8 @@ mod connect_common;
 use std::collections::BTreeMap;
 
 use connect_common::nid;
-use proptest::prelude::*;
 use pinc_connect::relay::table::{Cache, Table};
+use proptest::prelude::*;
 
 #[derive(Debug, Clone)]
 enum Op {

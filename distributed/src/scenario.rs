@@ -16,8 +16,8 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+pub use crate::pinc_endpoints::{PincEndpoints, Reading};
 pub use crate::scenario_transport::{Transport, TransportTest};
-pub use crate::pinc_endpoints::{Reading, PincEndpoints};
 
 /// The most nodes one scenario may have: the backend's address plan and the dashboard are sized for it.
 pub const MAX_NODES: usize = 512;

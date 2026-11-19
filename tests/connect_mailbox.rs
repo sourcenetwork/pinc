@@ -21,9 +21,9 @@ mod connect_common;
 use std::collections::VecDeque;
 
 use connect_common::{SEC, nid};
-use proptest::prelude::*;
 use pinc_connect::carrier::MAX_PACKET_LEN;
 use pinc_connect::mailbox::{ENTRY_HEAD, Mailbox, Offer, Push};
+use proptest::prelude::*;
 
 const B: usize = 1000;
 type M = Mailbox<3, B>;

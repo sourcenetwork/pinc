@@ -14,11 +14,11 @@
 
 use std::collections::BTreeSet;
 
-use proptest::prelude::*;
 use pinc_crypto::{Aead, Provider, Secret, Software, expand};
 use pinc_security::amp::{FACTOR, OVERHEAD};
 use pinc_security::record::{AES_GCM_PACKET_LIMIT, CHACHA_FAILURE_LIMIT, MAX_PACKET_NUMBER};
 use pinc_security::{AmpBudget, HeaderKey, Limits, PacketKey, RecordError, labels, roll_secret};
+use proptest::prelude::*;
 
 mod sec_common;
 

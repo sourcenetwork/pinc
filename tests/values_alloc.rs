@@ -16,7 +16,6 @@ mod values_support;
 
 use std::ops::Range;
 
-use values_support::{GROUP, PStore};
 use pinc_dag::ranges::VerifiedRanges;
 use pinc_tests::measure;
 use pinc_transport::stream::{StreamId, StreamSource};
@@ -30,6 +29,7 @@ use pinc_values::store::{StoreError, ValueRead, ValueStore};
 use pinc_values::trace::{Event, Out, Trace};
 use pinc_values::verify::GroupVerifier;
 use pinc_values::wire::{GroupHeader, Req};
+use values_support::{GROUP, PStore};
 
 pinc_tests::install_counting_allocator!();
 

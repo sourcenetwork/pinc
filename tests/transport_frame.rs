@@ -19,7 +19,6 @@
 
 use std::ops::RangeInclusive;
 
-use proptest::prelude::*;
 use pinc_security::{Rekey, TicketBatch, TicketEntry};
 use pinc_tests::SplitMix64;
 use pinc_transport::frame::{
@@ -27,6 +26,7 @@ use pinc_transport::frame::{
     write_ack,
 };
 use pinc_wire::{WireError, Writer};
+use proptest::prelude::*;
 
 pinc_tests::install_counting_allocator!();
 

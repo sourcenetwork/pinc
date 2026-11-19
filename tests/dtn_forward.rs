@@ -16,11 +16,11 @@
     clippy::needless_pass_by_value
 )]
 
-use proptest::prelude::*;
 use pinc_crypto::{IdentityAlg, NodeId};
 use pinc_dtn::forward::{Action, ForwardError, Forwarder, Held, Input, Policy};
 use pinc_dtn::head::BundleId;
 use pinc_tests::SplitMix64;
+use proptest::prelude::*;
 
 type Fwd = Forwarder<4, 8, 32, 8>;
 

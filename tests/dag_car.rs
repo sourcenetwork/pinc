@@ -9,10 +9,10 @@
     clippy::redundant_closure_for_method_calls
 )]
 
-use proptest::prelude::*;
 use pinc_dag::car::{CarDecoder, CarError, CarReader, CarWriter, Decoded};
 use pinc_dag::cid::{BLAKE3, Cid, CidError, DAG_CBOR, RAW, SHA2_256};
 use pinc_wire::WireError;
+use proptest::prelude::*;
 
 mod golden;
 

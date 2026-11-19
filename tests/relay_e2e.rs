@@ -17,8 +17,8 @@
     missing_docs
 )]
 
-mod relay_members;
 mod pinc_common;
+mod relay_members;
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -29,7 +29,6 @@ use std::task::{Context, Poll, Waker};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use nuclei::Handle;
-use relay_members::{Member, on_big_stack};
 use pinc::relay::{
     CarrierFns, Carriers, Clock, Completion, Done, Limits, MemStore, Peer, Relay as RelayHost, Stats, Tag, Udp,
 };
@@ -37,6 +36,7 @@ use pinc::{CarrierKind, Error, ErrorKind, Identity, Relay};
 use pinc_common::{ECHO, SINK, eventually, lo, serve_conn, within};
 use pinc_connect::carrier::session::ALPN;
 use pinc_connect::relay::Quota;
+use relay_members::{Member, on_big_stack};
 
 fn failed(_: io::Error) -> Error {
     Error::new(ErrorKind::Unreachable, "the socket failed")

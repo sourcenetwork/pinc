@@ -9,10 +9,10 @@
 
 use std::collections::VecDeque;
 
-use proptest::prelude::*;
 use pinc_tests::measure;
 use pinc_transport::stream::datagram::{DatagramError, Datagrams, EarlyData, MAX_EARLY_PACKETS};
 use pinc_transport::stream::pool::{BufferPool, CHUNK_SIZE, PoolExhausted};
+use proptest::prelude::*;
 
 pinc_tests::install_counting_allocator!();
 

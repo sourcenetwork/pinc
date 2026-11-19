@@ -12,12 +12,12 @@
     reason = "tests assert freely and name protocol rules in capitals"
 )]
 
-use proptest::prelude::*;
 use pinc_transport::frame::{Frame, ext};
 use pinc_values::knobs::{MAX_REQ_RANGES, WT_PMAX};
 use pinc_values::span::Span;
 use pinc_values::wire::{GROUP_HDR, GroupHeader, PROOF_BODY_MAX, ProofFrame, ProofReq, REQ_FIXED, REQ_MAX, Req};
 use pinc_wire::{Reader, WireError, Writer};
+use proptest::prelude::*;
 
 fn truncated<T>(r: &Result<T, WireError>) -> bool {
     matches!(r, Err(WireError::Truncated { .. }))

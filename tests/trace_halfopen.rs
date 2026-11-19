@@ -57,9 +57,9 @@ mod rec;
 #[path = "trace_halfopen/runs.rs"]
 mod runs;
 
+use pinc_tests::*;
 use rec::{Seen, add};
 use runs::{big_run, room_run, small_run};
-use pinc_tests::*;
 
 #[test]
 fn the_half_open_cap_matches_the_models() {

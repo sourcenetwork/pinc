@@ -10,10 +10,10 @@
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-use proptest::prelude::*;
 use pinc_portmap::natpmp::{self, NatPmpError};
 use pinc_portmap::pcp::{self, MapRequest, PcpError};
 use pinc_portmap::upnp::{self, Call, SoapResult, Url};
+use proptest::prelude::*;
 
 fn req() -> MapRequest {
     MapRequest {

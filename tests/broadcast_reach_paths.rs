@@ -8,9 +8,9 @@ mod common;
 mod support;
 
 use common::{Net, SEC};
-use support::{T, adj, got, session};
 use pinc_broadcast::consts::GAP_EVERY;
 use pinc_crypto::IdentityAlg;
+use support::{T, adj, got, session};
 
 #[test]
 fn a_subscriber_that_is_behind_catches_up_only_on_its_component() {

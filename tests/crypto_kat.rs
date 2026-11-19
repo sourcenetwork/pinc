@@ -7,9 +7,9 @@
     clippy::cast_possible_truncation
 )]
 
-use proptest::prelude::*;
 use pinc_crypto::{Aead, CryptoError, Provider, Software};
 use pinc_tests::SplitMix64;
+use proptest::prelude::*;
 
 mod hexutil;
 use hexutil::{arr, hex};

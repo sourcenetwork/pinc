@@ -17,7 +17,7 @@ use pinc_distributed::plan::{Ns, Plan, Tool, cpu_sets, netem_args, queue_limit};
 use pinc_distributed::quiet::{Monitor, Snapshot, Thresholds, parse_stat_line};
 use pinc_distributed::results::{Cell, Row, Table, civil_date, fmt_cell, fmt_num, markdown, spread, summarize};
 use pinc_distributed::scenario::{
-    Nat, Reading as ReadingMode, Scenario, Shape, Stack, TransportTest, PincEndpoints, Workload,
+    Nat, PincEndpoints, Reading as ReadingMode, Scenario, Shape, Stack, TransportTest, Workload,
 };
 
 fn scenario(name: &str) -> Scenario {
