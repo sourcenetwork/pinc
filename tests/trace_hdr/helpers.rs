@@ -2,9 +2,9 @@
 
 use std::fmt::Write as _;
 
-use vinc_tests::SplitMix64;
-use vinc_transport::packet::{pad_to, sample_at};
-use vinc_wire::Writer;
+use pinc_tests::SplitMix64;
+use pinc_transport::packet::{pad_to, sample_at};
+use pinc_wire::Writer;
 
 use super::headers::{arr, bytes, err_name, pick};
 

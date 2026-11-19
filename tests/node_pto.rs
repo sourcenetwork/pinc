@@ -14,7 +14,7 @@
 mod node_common;
 
 use node_common::{World, big, secs};
-use vinc_node::Ep;
+use pinc_node::Ep;
 
 #[test]
 fn no_healthy_session_has_a_probe_timeout_outstanding() {

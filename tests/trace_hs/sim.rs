@@ -8,10 +8,10 @@
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Write as _;
 
-use vinc_crypto::{Drbg, IdentityAlg, NodeId, Software};
-use vinc_security::message::{Initial, MessageType, PrekeyField, Reject, Reply, ResumeHello, ResumeReply};
-use vinc_security::tickets::MAX_EXPORT_ENTRY_LEN;
-use vinc_security::{
+use pinc_crypto::{Drbg, IdentityAlg, NodeId, Software};
+use pinc_security::message::{Initial, MessageType, PrekeyField, Reject, Reply, ResumeHello, ResumeReply};
+use pinc_security::tickets::MAX_EXPORT_ENTRY_LEN;
+use pinc_security::{
     AlpnList, ClientTickets, ConnId, CreditRecord, Env, Established, Event, Failure, Initiator, InitiatorParams,
     KeyHandle, KeyRequest, KeyResponse, Output, PrekeyPolicy, Responder, ResponderConfig, ResponderStores, SoftKeys,
     SoftPrekeys,
@@ -110,7 +110,7 @@ macro_rules! drain {
                 Output::Key(KeyRequest::Sign { message, .. }) => {
                     d.req = Some((
                         "sign",
-                        message[vinc_security::labels::SIGNATURE_RESPONDER.len()..].to_vec(),
+                        message[pinc_security::labels::SIGNATURE_RESPONDER.len()..].to_vec(),
                     ));
                 }
                 Output::Key(KeyRequest::Decapsulate { .. }) => d.req = Some(("decap", vec![])),

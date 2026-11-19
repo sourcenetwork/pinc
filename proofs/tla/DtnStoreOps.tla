@@ -1,6 +1,6 @@
 ----------------------------- MODULE DtnStoreOps -----------------------------
 (***************************************************************************)
-(* The operations of vinc-dtn/src/store.rs (Ledger<N>), step for step, over *)
+(* The operations of pinc-dtn/src/store.rs (Ledger<N>), step for step, over *)
 (* a ledger record [budget, used, seq, slots]. One definition serves two    *)
 (* uses: DtnStore.tla and DtnCustody.tla model check it exhaustively with a *)
 (* small saturation maximum MaxU (u64::MAX in the code), TraceDtnStore.tla *)
@@ -28,7 +28,7 @@
 (* budget, and Assert stops TLC if that were ever false. `next_seq += 1`    *)
 (* needs 2^64 admissions (a documented ceiling); seq is unbounded here.     *)
 (*                                                                          *)
-(* The Lean counterpart is proofs/lean/Vinc/DtnStore*.lean.                 *)
+(* The Lean counterpart is proofs/lean/Pinc/DtnStore*.lean.                 *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC
 

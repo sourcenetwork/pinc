@@ -1,6 +1,6 @@
 ------------------------------ MODULE CryptoDrbg ------------------------------
 (***************************************************************************)
-(* The DRBG of vinc-crypto (drbg.rs): ChaCha20 with fast key erasure,      *)
+(* The DRBG of pinc-crypto (drbg.rs): ChaCha20 with fast key erasure,      *)
 (* and the zeroization of its buffers, step for step.                      *)
 (*                                                                         *)
 (* A key is a pair [b, m]: a base (the seed, or the stream of the key      *)
@@ -31,7 +31,7 @@
 (*                    the key and the output holds secret bytes            *)
 (*   ToggleLaws       reseed is an involution, commutative, Z is identity  *)
 (* TraceCrypto.tla replays the recorded runs against Next. Lean            *)
-(* counterpart: proofs/lean/Vinc/CryptoDrbg.lean (fill_too_long,           *)
+(* counterpart: proofs/lean/Pinc/CryptoDrbg.lean (fill_too_long,           *)
 (* fill_within_stream, same_key_same_output, reseed_involutive,            *)
 (* reseed_nonzero_changes, fill_clean, reseed_clean).                      *)
 (***************************************************************************)

@@ -1,6 +1,6 @@
 //! Trace generation for the node's own record and address discovery: seeded random runs of the real `Connectivity`
 //! through its public API, recorded as ndjson (`connect_own.ndjson`) for the TLA+ trace check (`TraceConnectOwn.tla`) and
-//! the Lean replay (`Vinc/TraceConnectOwn.lean`).
+//! the Lean replay (`Pinc/TraceConnectOwn.lean`).
 //!
 //! A run is one node with ten relay slots (some with a UDP address, some without, some sharing an address), local
 //! discovery off (no beacon shares the signing slot), driven by `set_local` (up to eleven addresses, with repeats),
@@ -23,7 +23,7 @@
 //! each above the one before. A scripted run shows #287 fixed: records signed in one tick, after a tick with no wall
 //! clock and after the clock was set back are each one above the one before. Addresses are small numbers (the address
 //! `k` is `10.0.0.k:k`; a relay's UDP address `100 + k`), nonces are numbered from 1 in the order they are sent.
-//! The trace is written to the directory in `VINC_TRACE_DIR` when it is set; otherwise nothing is written.
+//! The trace is written to the directory in `PINC_TRACE_DIR` when it is set; otherwise nothing is written.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -47,12 +47,12 @@ use std::fmt::Write as _;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use connect_common::{SEC, big_stack, nid};
-use vinc_connect::client::{Config, Connectivity, RelayCfg};
-use vinc_connect::record::{MAX_ADDRS, MAX_HINT_LEN, Record};
-use vinc_connect::relay::datagram::Datagram;
-use vinc_crypto::Software;
-use vinc_security::{Env, KeyRequest, KeyResponse};
-use vinc_tests::{Host, SplitMix64};
+use pinc_connect::client::{Config, Connectivity, RelayCfg};
+use pinc_connect::record::{MAX_ADDRS, MAX_HINT_LEN, Record};
+use pinc_connect::relay::datagram::Datagram;
+use pinc_crypto::Software;
+use pinc_security::{Env, KeyRequest, KeyResponse};
+use pinc_tests::{Host, SplitMix64};
 
 const NR: usize = 10;
 type Conn = Connectivity<Software, NR, 4>;
@@ -109,12 +109,12 @@ impl Reference {
 
 struct Run {
     conn: Box<Conn>,
-    drbg: vinc_crypto::Drbg,
+    drbg: pinc_crypto::Drbg,
     r: Reference,
     out: Vec<String>,
     now: u64,
     ids: HashMap<[u8; 8], u32>,
-    relay_ids: Vec<vinc_crypto::NodeId>,
+    relay_ids: Vec<pinc_crypto::NodeId>,
     sig_len: usize,
     stats: Stats,
     seqs: Vec<u64>,
@@ -475,7 +475,7 @@ fn new_run(host: &Host, udp: &[u16], seed: u64, out: Vec<String>, stats: Stats) 
     u.resize(NR, 0);
     let mut run = Run {
         conn,
-        drbg: vinc_crypto::Drbg::new(&[seed as u8 ^ 0x62; 32]),
+        drbg: pinc_crypto::Drbg::new(&[seed as u8 ^ 0x62; 32]),
         r: Reference {
             udp: u.clone(),
             probe: vec![None; NR],
@@ -664,7 +664,7 @@ fn the_own_record_and_address_discovery_trace() {
         assert!(stats.toolong > 0, "hints too long");
         assert!(stats.badsig > 0, "signature of the wrong length");
         assert!(stats.blocked > 0, "a wanted record dropped for want of a home or class");
-        let Some(dir) = std::env::var_os("VINC_TRACE_DIR") else {
+        let Some(dir) = std::env::var_os("PINC_TRACE_DIR") else {
             return;
         };
         let dir = std::path::PathBuf::from(dir);

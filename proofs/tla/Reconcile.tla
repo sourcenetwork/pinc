@@ -1,6 +1,6 @@
 ------------------------------ MODULE Reconcile ------------------------------
 (***************************************************************************)
-(* The reconciliation session of vinc-reconcile as a system: an initiator  *)
+(* The reconciliation session of pinc-reconcile as a system: an initiator  *)
 (* and a responder (ReconcileSess.tla, a byte-level mirror of core.rs and  *)
 (* session.rs) joined by two lockstep streams exactly as tests/            *)
 (* reconcile_common.rs run_with and drive.rs run them: the initiator sends *)

@@ -1,6 +1,6 @@
 ------------------------------ MODULE CoreTable ------------------------------
 (***************************************************************************)
-(* The endpoint's connection-id table (vinc-core table.rs, Table) over     *)
+(* The endpoint's connection-id table (pinc-core table.rs, Table) over     *)
 (* every interleaving of insert, insert_room, insert_dup, remove,          *)
 (* remove_pair, touch and clear, at small sizes, for EVERY bucket          *)
 (* function (bk is chosen once, arbitrarily, so a constant function that   *)
@@ -44,7 +44,7 @@
 (* CoreTable_dup and CoreTable_cut are reachability witnesses: a key held  *)
 (* twice (so Unique is false once insert_dup is allowed) and a key with    *)
 (* more holders than M, whose oldest holders matches::<M> then leaves out. *)
-(* Lean counterpart: proofs/lean/Vinc/CoreTable*.lean.                     *)
+(* Lean counterpart: proofs/lean/Pinc/CoreTable*.lean.                     *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
 CONSTANTS N, KeySet, Vals, DUP, BUG_EVICT, BUG_CHAIN, CUT

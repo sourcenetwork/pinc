@@ -1,4 +1,4 @@
-//! The `vinc-sim` engine: determinism, event order, timers, the toy node over lossy links, CPU metering, wall clocks
+//! The `pinc-sim` engine: determinism, event order, timers, the toy node over lossy links, CPU metering, wall clocks
 //! and the trace.
 #![allow(
     clippy::unwrap_used,
@@ -17,8 +17,8 @@
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-use vinc_sim::toy::{Probe, ProbeCmd, ProbeEvent, Toy, ToyCmd, ToyConfig, ToyEvent};
-use vinc_sim::{Cpu, LinkConfig, Loss, MS, NodeId, SEC, Sim, SimConfig, WALL_EPOCH};
+use pinc_sim::toy::{Probe, ProbeCmd, ProbeEvent, Toy, ToyCmd, ToyConfig, ToyEvent};
+use pinc_sim::{Cpu, LinkConfig, Loss, MS, NodeId, SEC, Sim, SimConfig, WALL_EPOCH};
 
 fn ip(a: u8, b: u8, c: u8, d: u8) -> IpAddr {
     IpAddr::V4(Ipv4Addr::new(a, b, c, d))
@@ -197,8 +197,8 @@ fn unroutable_datagrams_are_counted() {
         },
     );
     sim.run_until(MS);
-    assert_eq!(sim.metrics().dropped(vinc_sim::DropReason::NoRoute), 1);
-    assert_eq!(sim.metrics().dropped(vinc_sim::DropReason::NoIface), 1);
+    assert_eq!(sim.metrics().dropped(pinc_sim::DropReason::NoRoute), 1);
+    assert_eq!(sim.metrics().dropped(pinc_sim::DropReason::NoIface), 1);
     assert_eq!(sim.metrics().total_dropped(), 2);
 }
 

@@ -1,6 +1,6 @@
 name = "three-site"
 about = "Three sites of eleven nodes (a hub and ten peers each) with 20, 80 and 150 ms round trips between them, 200 Mbit/s each way; the transport tests run across the 150 ms path."
-stacks = ["vinc", "iroh", "libp2p"]
+stacks = ["pinc", "iroh", "libp2p"]
 repetitions = 3
 
 [resources]

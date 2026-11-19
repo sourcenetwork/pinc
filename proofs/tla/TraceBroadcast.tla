@@ -1,6 +1,6 @@
 ----------------------------- MODULE TraceBroadcast -----------------------------
 (***************************************************************************)
-(* Trace validation of the topic broadcast: vinc-broadcast msg.rs          *)
+(* Trace validation of the topic broadcast: pinc-broadcast msg.rs          *)
 (* (on_msg, hub_store, offer, offer_held, acp_answer), gap.rs (on_have),   *)
 (* floors.rs (the end of the floor wait), timers.rs (sweep) and table.rs / *)
 (* log.rs behind them.                                                     *)
@@ -10,7 +10,7 @@
 (* path (a frame, a HAVE, a timer, an access answer, the start of a node)  *)
 (* with what the machine reported for it. Every event must be the step    *)
 (* the operators of BroadcastNodeOps.tla (the model BroadcastNode.tla and  *)
-(* the Lean port Vinc/BroadcastNode.lean use) compute: the same trace      *)
+(* the Lean port Pinc/BroadcastNode.lean use) compute: the same trace      *)
 (* records in the same order, the same delivered ids, the same PACK count. *)
 (*                                                                         *)
 (* A message in a frame is not told apart as good or bad by the trace: the *)
@@ -20,7 +20,7 @@
 (* tampered field is rejected by the model exactly when the code rejects   *)
 (* it. A head cut short is a `hd` of false. Times are in units of 1/8 ms.  *)
 (*                                                                         *)
-(* Needs the TLA+ CommunityModules (Json, IOUtils) and VINC_TRACE_DIR, the *)
+(* Needs the TLA+ CommunityModules (Json, IOUtils) and PINC_TRACE_DIR, the *)
 (* directory that holds broadcast.ndjson.                                  *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
@@ -38,7 +38,7 @@ I3 == INSTANCE BroadcastNodeOps WITH LogTrack <- FALSE, Me <- 3, IsHub <- FALSE
 VARIABLES i, ns, orc
 vars == <<i, ns, orc>>
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/broadcast.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/broadcast.ndjson")
 Ev == Trace[i]
 
 Init == i = 1 /\ ns = [n \in 0..3 |-> <<>>] /\ orc = {}

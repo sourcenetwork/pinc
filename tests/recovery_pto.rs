@@ -2,7 +2,7 @@
 //! test target.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 
-use vinc_transport::recovery::{Event, FrameRef, FrameRefs, Health, MS, Recovery, SECOND, Sent, Summary, Timeout};
+use pinc_transport::recovery::{Event, FrameRef, FrameRefs, Health, MS, Recovery, SECOND, Sent, Summary, Timeout};
 
 use crate::{MSS, Rec, ack, assert_conserved, describe, established, fire, lost_ev, on_path, one, sent, stream_frame};
 

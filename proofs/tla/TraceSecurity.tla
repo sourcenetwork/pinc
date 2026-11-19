@@ -1,11 +1,11 @@
 ---------------------------- MODULE TraceSecurity ----------------------------
 (***************************************************************************)
-(* Trace validation of the pure parts of vinc-security: the labels, the    *)
+(* Trace validation of the pure parts of pinc-security: the labels, the    *)
 (* credit record, the anti-amplification budget and the padding sizes.     *)
 (*                                                                         *)
 (* The Rust test tests/trace_security.rs drives the public API and records *)
 (* one event per call in security.ndjson:                                  *)
-(*  lbl   labels::ALL, labels::PREFIX and the labels of vinc-crypto must   *)
+(*  lbl   labels::ALL, labels::PREFIX and the labels of pinc-crypto must   *)
 (*        equal the strings of Labels.tla;                                 *)
 (*  cred  CreditRecord::new (the window request as four 16-bit limbs, the  *)
 (*        record, window_bytes and the 6 bytes), decode of 6 bytes and     *)
@@ -26,14 +26,14 @@
 (* 2^17 above, which NewFromUnits clamps to the same largest field.        *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds security.ndjson.      *)
+(* variable PINC_TRACE_DIR, the directory that holds security.ndjson.      *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, TLC, Json, IOUtils
 
 VARIABLES i, bud, run
 vars == <<i, bud, run>>
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/security.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/security.ndjson")
 
 U == INSTANCE U64
 Unit16 == 16384

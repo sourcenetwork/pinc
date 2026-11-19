@@ -10,12 +10,12 @@
     clippy::cast_possible_truncation
 )]
 
-use vinc_core::{Command, Role, Value};
-use vinc_tests::*;
+use pinc_core::{Command, Role, Value};
+use pinc_tests::*;
 
-vinc_tests::install_counting_allocator!();
+pinc_tests::install_counting_allocator!();
 
-fn transfer(net: &mut CoreNet, a: usize, sa: vinc_core::SessionId, size: usize, seed: u64) {
+fn transfer(net: &mut CoreNet, a: usize, sa: pinc_core::SessionId, size: usize, seed: u64) {
     let data = pattern(size, seed);
     let t = net.now;
     let Value::Stream(id) = net.nodes[a]
@@ -141,6 +141,6 @@ fn a_resumption_dial_and_a_forged_hello_allocate_nothing() {
         meter_endpoint_calls(false);
         let allocs = take_metered_allocs();
         assert_eq!(allocs, 0, "a resumption allocated {allocs} times");
-        assert!(net.nodes[a].count(|e| matches!(e, vinc_core::Event::Connected { .. })) >= 2);
+        assert!(net.nodes[a].count(|e| matches!(e, pinc_core::Event::Connected { .. })) >= 2);
     });
 }

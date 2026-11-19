@@ -1,11 +1,11 @@
-//! The push-back of the accept room (vinc#436): an endpoint owes its host every server session a first flight made
+//! The push-back of the accept room (pinc#436): an endpoint owes its host every server session a first flight made
 //! until the host reads its `Incoming` or it ends, and starts none while the owed sessions fill the room the host set.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
 
 use std::net::SocketAddr;
 
-use vinc_core::{Command, Event, Role, Taken};
-use vinc_tests::*;
+use pinc_core::{Command, Event, Role, Taken};
+use pinc_tests::*;
 
 fn dial(net: &mut CoreNet, from: usize, to: usize) {
     let (peer, addr, now) = (net.nodes[to].node, net.nodes[to].addr, net.now);

@@ -1,6 +1,6 @@
 ---------------------------- MODULE VerifierBytes ----------------------------
 (***************************************************************************)
-(* The range verifier of vinc-dag (tree/verify.rs) at the byte level: the  *)
+(* The range verifier of pinc-dag (tree/verify.rs) at the byte level: the  *)
 (* call `feed` with its buffer of GROUP bytes, `filled`, the zero-copy     *)
 (* fast path (nothing buffered and the whole next item in the input) and   *)
 (* the buffered path, `next_item` (`usize::try_from` of the item size),    *)
@@ -47,13 +47,13 @@
 (* input is not empty, and no step fails; on a genuine stream the verifier *)
 (* completes with exactly the requested groups released, in order.         *)
 (*                                                                         *)
-(* Lean counterparts (proofs/lean/Vinc/VerifyBytes.lean):                  *)
+(* Lean counterparts (proofs/lean/Pinc/VerifyBytes.lean):                  *)
 (*   Lockstep        VerifyBytes.feedCode_sim, VerifyBytes.needW_eq        *)
 (*   Equivalence     VerifyBytes.split_invariance, stream_equiv            *)
 (*                   (with drivePiece_eq, driveAll_eq, bytes_items,        *)
 (*                   itemwise_core)                                        *)
 (*   Complete        VerifyBytes.complete_arith, Encode.complete_accepts   *)
-(*   the boundary sets  Vinc.Link (Verifier boundary theorems)             *)
+(*   the boundary sets  Pinc.Link (Verifier boundary theorems)             *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC
 

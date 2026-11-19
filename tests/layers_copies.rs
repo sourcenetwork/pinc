@@ -13,11 +13,11 @@
 mod layers_common;
 
 use layers_common::{LWorld, big, secs};
-use vinc_node::{Enabled, NodeEvent};
-use vinc_sim::Loss;
-use vinc_tests::{LayerApps, NCmd, SplitMix64, meter_endpoint_calls, take_metered_allocs, take_metered_bytes};
+use pinc_node::{Enabled, NodeEvent};
+use pinc_sim::Loss;
+use pinc_tests::{LayerApps, NCmd, SplitMix64, meter_endpoint_calls, take_metered_allocs, take_metered_bytes};
 
-vinc_tests::install_counting_allocator!();
+pinc_tests::install_counting_allocator!();
 
 fn values_on(tag: u8) -> LayerApps {
     LayerApps::new(
@@ -61,7 +61,7 @@ fn the_receive_path_requests_a_fraction_of_the_value_size_from_the_heap() {
                 .sim
                 .events(m[0])
                 .iter()
-                .any(|(_, e)| matches!(e, vinc_tests::NEv::Node(NodeEvent::ValueComplete { .. })));
+                .any(|(_, e)| matches!(e, pinc_tests::NEv::Node(NodeEvent::ValueComplete { .. })));
             assert!(done, "seed {seed}: the fetch completed");
             eprintln!(
                 "seed {seed} {loss:?}: {bytes} heap bytes requested for {} value bytes",

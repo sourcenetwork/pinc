@@ -1,6 +1,6 @@
 ------------------------------- MODULE RttOps -------------------------------
 (***************************************************************************)
-(* The operations of vinc-core rtt.rs (NodeRtt), step for step: what the   *)
+(* The operations of pinc-core rtt.rs (NodeRtt), step for step: what the   *)
 (* endpoint remembers about round trips. Rtt.tla checks them over every    *)
 (* interleaving at small sizes; TraceRtt.tla replays the recorded calls of *)
 (* the real code. Times are u64 nanosecond words (five 16-bit limbs) of    *)

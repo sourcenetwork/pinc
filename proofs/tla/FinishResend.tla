@@ -16,7 +16,7 @@
 (*    thin node resending before its answer could have come back           *)
 (*    (ThinWaits), or a wait of no time at all (WaitsPositive).            *)
 (*                                                                         *)
-(* The code: crates/vinc-transport/src/conn/handshake.rs,                  *)
+(* The code: crates/pinc-transport/src/conn/handshake.rs,                  *)
 (* Handshake::finish_sent (the first wait, min(FINISH_FIRST, pto)) and the *)
 (* Stage::Finish arm of Handshake::on_timer (each later wait); the probe   *)
 (* timeout comes from Recovery::pto_duration in conn/drive.rs. Times are   *)
@@ -34,7 +34,7 @@
 (*  - "nocap": the doubling has no 2 s ceiling; the third wait of a        *)
 (*    999 ms schedule is 3,996 ms, so WaitsCapped fails                    *)
 (*    (FinishResend_nocap.cfg).                                            *)
-(* Lean counterpart: proofs/lean/Vinc/TransportFinish.lean.                *)
+(* Lean counterpart: proofs/lean/Pinc/TransportFinish.lean.                *)
 (***************************************************************************)
 EXTENDS Integers, Sequences \* whole numbers and the list of waits
 

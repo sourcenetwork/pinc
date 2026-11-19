@@ -17,21 +17,21 @@ mod values_support;
 use std::ops::Range;
 
 use values_support::{GROUP, PStore};
-use vinc_dag::ranges::VerifiedRanges;
-use vinc_tests::measure;
-use vinc_transport::stream::{StreamId, StreamSource};
-use vinc_values::fetch::{Fetch, FetchSpec, In, Io};
-use vinc_values::plan::Plan;
-use vinc_values::server::{Server, ServerIn};
-use vinc_values::session::{Inbound, OpenError, Outbound, PeerInfo, Provider, Session};
-use vinc_values::source::ValueSource;
-use vinc_values::span::Span;
-use vinc_values::store::{StoreError, ValueRead, ValueStore};
-use vinc_values::trace::{Event, Out, Trace};
-use vinc_values::verify::GroupVerifier;
-use vinc_values::wire::{GroupHeader, Req};
+use pinc_dag::ranges::VerifiedRanges;
+use pinc_tests::measure;
+use pinc_transport::stream::{StreamId, StreamSource};
+use pinc_values::fetch::{Fetch, FetchSpec, In, Io};
+use pinc_values::plan::Plan;
+use pinc_values::server::{Server, ServerIn};
+use pinc_values::session::{Inbound, OpenError, Outbound, PeerInfo, Provider, Session};
+use pinc_values::source::ValueSource;
+use pinc_values::span::Span;
+use pinc_values::store::{StoreError, ValueRead, ValueStore};
+use pinc_values::trace::{Event, Out, Trace};
+use pinc_values::verify::GroupVerifier;
+use pinc_values::wire::{GroupHeader, Req};
 
-vinc_tests::install_counting_allocator!();
+pinc_tests::install_counting_allocator!();
 
 const LEN: usize = 4 << 20;
 
@@ -107,7 +107,7 @@ impl ValueRead for Mem {
 
 impl ValueStore for Mem {
     fn verified_from(&self, _: &[u8; 32], from: u64) -> Option<Range<u64>> {
-        vinc_values::store::verified_after(&self.verified, from)
+        pinc_values::store::verified_after(&self.verified, from)
     }
     fn write_at(&mut self, _: &[u8; 32], offset: u64, data: &[u8]) -> Result<(), StoreError> {
         self.data[offset as usize..offset as usize + data.len()].copy_from_slice(data);

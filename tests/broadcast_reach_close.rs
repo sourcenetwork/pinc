@@ -1,4 +1,4 @@
-//! A hub's adjacency table that closes says so, and opens again (vinc#86, review of #137): each refused record and
+//! A hub's adjacency table that closes says so, and opens again (pinc#86, review of #137): each refused record and
 //! the closing are reported, the table opens once no refused node waits for a record (each got one once room was made), and a refused
 //! node that never got a record keeps it closed. Also what a record costs: its peers and its signature, and a refresh
 //! with the same bytes is not verified again.
@@ -11,9 +11,9 @@ mod support;
 
 use common::{Ev, Net, SEC, ty};
 use support::{T, adj, ask, capture, room, sends};
-use vinc_broadcast::Limits;
-use vinc_broadcast::consts::{LOG_WINDOW, REACH_RECORD_BASE, RECORD_TTL, REFRESH};
-use vinc_crypto::IdentityAlg;
+use pinc_broadcast::Limits;
+use pinc_broadcast::consts::{LOG_WINDOW, REACH_RECORD_BASE, RECORD_TTL, REFRESH};
+use pinc_crypto::IdentityAlg;
 
 /// A hub and `members` members, the hub's table holding `bytes` bytes ([`room`]); every member subscribes.
 fn small(members: usize, bytes: usize) -> Net {

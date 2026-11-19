@@ -1,7 +1,7 @@
 ------------------------------ MODULE KeyRoll ------------------------------
 (***************************************************************************)
-(* Model of the key roll: the state machine Roll of vinc-security          *)
-(* keyroll.rs and the flip/hold layer of vinc-transport conn/keys.rs       *)
+(* Model of the key roll: the state machine Roll of pinc-security          *)
+(* keyroll.rs and the flip/hold layer of pinc-transport conn/keys.rs       *)
 (* (staged keys, the switch of the sending key, the reactive switch of the *)
 (* answerer, the previous key held for one probe timeout, the floors), for *)
 (* two connections over a network that loses, reorders and duplicates      *)
@@ -55,7 +55,7 @@
 (* RecvKeys, Poll); the system passes the constant PTO and the trace       *)
 (* validation the timeout in force at each event.                          *)
 (*                                                                         *)
-(* Lean counterpart: Vinc/KeyRoll.lean. Trace validation: TraceKeyRoll.tla *)
+(* Lean counterpart: Pinc/KeyRoll.lean. Trace validation: TraceKeyRoll.tla *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
 

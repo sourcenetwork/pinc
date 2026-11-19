@@ -17,12 +17,12 @@
 mod connect_common;
 
 use connect_common::{Rig, SEC, big_stack, ed, id, nid};
-use vinc_connect::carrier::{DnsAnswer, Frame};
-use vinc_connect::mailbox::Mailbox;
-use vinc_connect::relay::datagram::Datagram;
-use vinc_connect::relay::{Config, Effect, Relay, Sink};
+use pinc_connect::carrier::{DnsAnswer, Frame};
+use pinc_connect::mailbox::Mailbox;
+use pinc_connect::relay::datagram::Datagram;
+use pinc_connect::relay::{Config, Effect, Relay, Sink};
 
-vinc_tests::install_counting_allocator!();
+pinc_tests::install_counting_allocator!();
 
 /// A sink that drops everything but counts it; it never allocates.
 #[derive(Default)]
@@ -126,7 +126,7 @@ fn the_relay_allocates_nothing_in_steady_state() {
             step(&mut r, &mut s, i);
         }
         let before = s.0;
-        let stats = vinc_tests::measure(|| {
+        let stats = pinc_tests::measure(|| {
             for i in 50..2050 {
                 step(&mut r, &mut s, i);
             }
@@ -146,7 +146,7 @@ fn the_mailbox_allocates_nothing_in_steady_state() {
     for i in 0..50 {
         m.push(i, &to, &from, 0, &body);
     }
-    let stats = vinc_tests::measure(|| {
+    let stats = pinc_tests::measure(|| {
         for i in 50..20_000u64 {
             m.push(i * 1000, &to, &from, 1, &body);
             if i % 3 == 0 {
@@ -181,7 +181,7 @@ fn a_release_pass_with_mail_held_allocates_nothing() {
             step(&mut r, &mut s, i);
         }
         let (before, delivered) = (s.0, r.mailbox_stats().delivered);
-        let stats = vinc_tests::measure(|| {
+        let stats = pinc_tests::measure(|| {
             for i in 50..2050 {
                 step(&mut r, &mut s, i);
             }
@@ -210,7 +210,7 @@ fn the_protected_carrier_allocates_nothing_in_steady_state() {
             rig.feed_relay(&unit[..n]);
             assert!(rig.relay_next_kind().is_some());
         }
-        let stats = vinc_tests::measure(|| {
+        let stats = pinc_tests::measure(|| {
             for _ in 0..2000 {
                 let n = rig.seal_client_into(&f, &mut unit);
                 let took = rig.relay.receive(&unit[..n]);

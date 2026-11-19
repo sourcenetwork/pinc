@@ -9,8 +9,8 @@
     clippy::cast_possible_truncation
 )]
 
-use vinc_crypto::IdentityAlg;
-use vinc_tests::*;
+use pinc_crypto::IdentityAlg;
+use pinc_tests::*;
 
 const STREAMS: usize = 16;
 const LEN: usize = 64 * 1024;

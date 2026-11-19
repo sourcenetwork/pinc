@@ -23,7 +23,7 @@
 //! with output buffers of every size around the stream's length: `OutputTooSmall` exactly when the buffer is short.
 //!
 //! Every run is also checked here against the genuine value, so the test is meaningful without the proof tools.
-//! The traces are written to the directory in `VINC_TRACE_DIR` when it is set; otherwise nothing is written. The
+//! The traces are written to the directory in `PINC_TRACE_DIR` when it is set; otherwise nothing is written. The
 //! same directory gets the `Layout` size cases (`groups`, `depth`, `outboard_size`, `group_size`).
 #![allow(
     clippy::unwrap_used,
@@ -40,10 +40,10 @@ use std::ops::Range;
 
 use blake3::Hasher;
 use blake3::hazmat::{HasherExt, Mode, merge_subtrees_non_root, merge_subtrees_root};
-use vinc_dag::tree::{
+use pinc_dag::tree::{
     Cv, Layout, RangeEncoder, RangeVerifier, Step, TreeError, build_outboard_vec, encode_range, encoded_len,
 };
-use vinc_tests::SplitMix64;
+use pinc_tests::SplitMix64;
 
 /// A value below `n` (`n > 0`).
 fn below(rng: &mut SplitMix64, n: u64) -> u64 {
@@ -649,14 +649,14 @@ fn verifier_traces_are_consistent_with_the_genuine_value() {
         "\"err\":\"group\"",
     ] {
         assert!(
-            vinc_tests::soaking() || tr.out.contains(needle),
+            pinc_tests::soaking() || tr.out.contains(needle),
             "the runs never produce {needle}"
         );
     }
     assert!(lines > 2000, "{lines} events");
     assert!(encoder.contains("[\"p\",") && encoder.contains("[\"g\",") && encoder.lines().count() > 600);
     assert!(encout.contains("\"res\":\"small\"") && encout.contains("\"res\":\"ok\""));
-    let Some(dir) = std::env::var_os("VINC_TRACE_DIR") else {
+    let Some(dir) = std::env::var_os("PINC_TRACE_DIR") else {
         return;
     };
     let dir = std::path::PathBuf::from(dir);

@@ -1,7 +1,7 @@
 --------------------------- MODULE TraceValuesPlan ---------------------------
 (***************************************************************************)
 (* Trace validation of the response geometry, ValueSource::read_at and the *)
-(* server's range-proof frames of vinc-values (plan.rs, source.rs,         *)
+(* server's range-proof frames of pinc-values (plan.rs, source.rs,         *)
 (* server.rs).                                                             *)
 (*                                                                         *)
 (* The Rust test tests/trace_values_plan.rs runs the real Plan,            *)
@@ -9,7 +9,7 @@
 (* Server on seeded random values, spans, offsets and events, and records  *)
 (* one line per call (values_plan_small.ndjson: the runs whose numbers fit *)
 (* TLC's 32-bit integers; Lean replays all of values_plan.ndjson,          *)
-(* proofs/lean/Vinc/TraceValuesPlan.lean). Every line must be what the     *)
+(* proofs/lean/Pinc/TraceValuesPlan.lean). Every line must be what the     *)
 (* operators of ValuesPlanOps.tla and ValuesPlanProofs.tla compute, at the *)
 (* constants of the code (G = 16384, 16-byte headers, 64-byte pairs, the   *)
 (* 2^62 - 1 response limit scaled to the integers TLC has, which the small *)
@@ -33,7 +33,7 @@
 (*    session; the table before is the table after the last event.         *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds                       *)
+(* variable PINC_TRACE_DIR, the directory that holds                       *)
 (* values_plan_small.ndjson.                                               *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
@@ -47,7 +47,7 @@ PR == INSTANCE ValuesPlanProofs WITH G <- 16384, PMax <- 1100, MaxK <- 16, MinK 
                                      MaxU <- MaxU, BodyHead <- 22,
                                      ln <- 0, st <- 0, vfront <- 0, window <- 0, armed <- 0, ok <- 0, fired <- 0
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/values_plan_small.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/values_plan_small.ndjson")
 Ev == Trace[i]
 
 IsNone(f) == "none" \in DOMAIN f

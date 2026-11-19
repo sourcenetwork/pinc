@@ -6,8 +6,8 @@ mod connect_common;
 mod connect_keyhost_common;
 mod connect_rig;
 
-use vinc_crypto::IdentityAlg;
-use vinc_keystore::{KeyHost, SoftwareStore};
+use pinc_crypto::IdentityAlg;
+use pinc_keystore::{KeyHost, SoftwareStore};
 
 #[test]
 fn a_software_store_signs_the_handshake_the_record_the_notice_and_the_beacon() {
@@ -24,9 +24,9 @@ fn a_software_store_signs_the_handshake_the_record_the_notice_and_the_beacon() {
 fn a_refused_or_malformed_signature_is_reported_and_asked_again_never_published() {
     use connect_common::SEC;
     use connect_rig::{Ans, Custody, Rig};
-    use vinc_connect::client::Notice;
-    use vinc_crypto::{Drbg, Software};
-    use vinc_security::{
+    use pinc_connect::client::Notice;
+    use pinc_crypto::{Drbg, Software};
+    use pinc_security::{
         Env, KeyHandle as SecHandle, KeyRequest, KeyResponse, LocalIdentity, PrekeyPolicy, SoftKeys, SoftPrekeys,
     };
 
@@ -48,7 +48,7 @@ fn a_refused_or_malformed_signature_is_reported_and_asked_again_never_published(
                         now,
                         drbg: &mut self.2,
                     };
-                    match soft.answer(&mut env, req, &mut [0u8; vinc_crypto::identity::MAX_SIGNATURE_LEN]) {
+                    match soft.answer(&mut env, req, &mut [0u8; pinc_crypto::identity::MAX_SIGNATURE_LEN]) {
                         KeyResponse::SharedSecret(s) => Ans::Secret(s),
                         other => panic!("{other:?}"),
                     }
@@ -60,7 +60,7 @@ fn a_refused_or_malformed_signature_is_reported_and_asked_again_never_published(
     connect_common::big_stack(|| {
         let mut store = SoftwareStore::new().unwrap();
         let key = store.generate(IdentityAlg::Ed25519).unwrap();
-        let (alg, pk) = vinc_keystore::KeyStore::public(&store, &key).unwrap();
+        let (alg, pk) = pinc_keystore::KeyStore::public(&store, &key).unwrap();
         let mut host = KeyHost::new(store);
         host.bind(SecHandle(1), key);
         let identity = LocalIdentity::new(alg, &pk, SecHandle(1)).unwrap();
@@ -91,7 +91,7 @@ fn a_refused_or_malformed_signature_is_reported_and_asked_again_never_published(
         now += SEC;
         tick(&mut rig, now);
         assert!(rig.conn.sign_request().is_some(), "the record wants a signature");
-        rig.conn.sign_response(now, vinc_security::KeyResponse::Failed);
+        rig.conn.sign_response(now, pinc_security::KeyResponse::Failed);
         assert_eq!(rig.conn.poll_notice(), Some(Notice::SignFailed));
         assert!(rig.conn.sign_request().is_none());
         rig.shuttle(&mut keys, now, &mut answered);
@@ -101,7 +101,7 @@ fn a_refused_or_malformed_signature_is_reported_and_asked_again_never_published(
         tick(&mut rig, now);
         assert!(rig.conn.sign_request().is_some(), "asked again after the retry wait");
         rig.conn
-            .sign_response(now, vinc_security::KeyResponse::Signature(&[1, 2, 3]));
+            .sign_response(now, pinc_security::KeyResponse::Signature(&[1, 2, 3]));
         assert_eq!(rig.conn.poll_notice(), Some(Notice::SignFailed));
         rig.shuttle(&mut keys, now, &mut answered);
         assert_eq!(rig.relay.record_count(), 0);

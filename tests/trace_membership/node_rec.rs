@@ -1,13 +1,13 @@
 //! The recorder of the node trace: turns every call into a machine of a [`World`] into one ndjson line of the
-//! schema `TraceMembership.tla` and `Vinc.TraceMembership` read (see the header of `node.rs`).
+//! schema `TraceMembership.tla` and `Pinc.TraceMembership` read (see the header of `node.rs`).
 
 use std::cell::RefCell;
 use std::fmt::Write as _;
 use std::rc::Rc;
 
-use vinc_membership::codec::{Alive, Down, Entry, Frame, Path};
-use vinc_membership::event::{QuietCause, Refusal, Removal};
-use vinc_membership::{Carrier, CloseReason, Event, NodeId, Route, Trace};
+use pinc_membership::codec::{Alive, Down, Entry, Frame, Path};
+use pinc_membership::event::{QuietCause, Refusal, Removal};
+use pinc_membership::{Carrier, CloseReason, Event, NodeId, Route, Trace};
 
 use crate::common::{b, limbs, list, opt_limbs};
 use crate::world::{Bc, Call, EnvSnap, Op, Recorder, StSnap};
@@ -379,7 +379,7 @@ fn op_json(c: &Call) -> String {
                     hex(&bytes[at..at + n])
                 ));
                 at += n;
-                if fs.len() == vinc_membership::MAX_FRAMES_PER_CALL {
+                if fs.len() == pinc_membership::MAX_FRAMES_PER_CALL {
                     break;
                 }
             }

@@ -1,6 +1,6 @@
 ----------------------------- MODULE TraceQueue -----------------------------
 (***************************************************************************)
-(* Trace validation of the endpoint's event queue: vinc-core queue.rs.     *)
+(* Trace validation of the endpoint's event queue: pinc-core queue.rs.     *)
 (*                                                                         *)
 (* The Rust test tests/trace_queue.rs drives real rings (built with the    *)
 (* cargo feature `trace`) with seeded calls: pushes of recoverable and     *)
@@ -17,14 +17,14 @@
 (* then every 307th call and the end of the run).                          *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds queue.ndjson.         *)
+(* variable PINC_TRACE_DIR, the directory that holds queue.ndjson.         *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, TLC, Json, IOUtils
 VARIABLES i, r, cap, h
 vars == <<i, r, cap, h>>
 INSTANCE QueueOps
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/queue.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/queue.ndjson")
 Ev0 == Trace[i]
 
 Same(x, v, c, hh) ==

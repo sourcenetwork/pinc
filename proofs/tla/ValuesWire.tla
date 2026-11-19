@@ -1,7 +1,7 @@
 ---------------------------- MODULE ValuesWire ----------------------------
 (***************************************************************************)
-(* The wire codecs of vinc-values (wire.rs), written step for step on the  *)
-(* Reader and Writer of vinc-wire and the machine integers of U64.tla:     *)
+(* The wire codecs of pinc-values (wire.rs), written step for step on the  *)
+(* Reader and Writer of pinc-wire and the machine integers of U64.tla:     *)
 (*   REQ        Req::parse, Req::total_len, Req::encode                    *)
 (*   GROUP      GroupHeader::parse, GroupHeader::encode                    *)
 (*   PROOF      ProofFrame::parse, ProofFrame::write_head                  *)
@@ -75,8 +75,8 @@
 (* Not covered by enumeration here and covered unboundedly by Lean: longer *)
 (* byte strings of other shapes, ids and offsets outside the classes.      *)
 (*                                                                         *)
-(* Lean counterparts (proofs/lean/Vinc/ValuesWire*.lean, namespace         *)
-(* Vinc.ValuesWire):                                                       *)
+(* Lean counterparts (proofs/lean/Pinc/ValuesWire*.lean, namespace         *)
+(* Pinc.ValuesWire):                                                       *)
 (*   REQ        reqParse_eq, req_accept_iff, req_canonical, req_injective, *)
 (*              req_roundtrip, reqEncode_ok, reqEncode_short,              *)
 (*              reqEncode_too_many, req_reject_type, req_reject_count,     *)
@@ -131,7 +131,7 @@ BeWord(bs) == <<BeByte(bs, 0) + 256 * BeByte(bs, 1), BeByte(bs, 2) + 256 * BeByt
 (* v.to_be_bytes() of n bytes *)
 BeBytes(w, n) == [i \in 1..n |-> U!Val(U!Low(U!Shr(w, 8 * (n - i)), 8))]
 
-(* ---- the Reader (vinc-wire reader.rs) over the bytes not yet consumed ---- *)
+(* ---- the Reader (pinc-wire reader.rs) over the bytes not yet consumed ---- *)
 
 RdBytes(rest, n) ==
     IF n <= Len(rest)

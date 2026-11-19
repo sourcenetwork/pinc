@@ -15,15 +15,15 @@
 mod values_support;
 
 use values_support::*;
-use vinc_dag::tree::{Layout, PARENT_LEN};
-use vinc_transport::frame::ext;
-use vinc_values::knobs::{GROUP_LOG, code};
-use vinc_values::plan::Plan;
-use vinc_values::server::{Server, ServerIn};
-use vinc_values::session::Provider;
-use vinc_values::span::Span;
-use vinc_values::trace::Trace;
-use vinc_values::wire::{ProofFrame, ProofReq, Req};
+use pinc_dag::tree::{Layout, PARENT_LEN};
+use pinc_transport::frame::ext;
+use pinc_values::knobs::{GROUP_LOG, code};
+use pinc_values::plan::Plan;
+use pinc_values::server::{Server, ServerIn};
+use pinc_values::session::Provider;
+use pinc_values::span::Span;
+use pinc_values::trace::Trace;
+use pinc_values::wire::{ProofFrame, ProofReq, Req};
 
 const PEER: Provider = Provider(7);
 
@@ -285,7 +285,7 @@ fn a_proof_request_is_answered_with_the_outboard_pairs_of_each_range() {
         assert_eq!(pf.start, next, "frames tile from the block of the request");
         assert!(pf.wn <= 16 * 16384 && pf.start.is_multiple_of(16384));
         let a = pf.start / 16384;
-        let pairs = vinc_values::plan::range_pairs(layout.groups(), a, (pf.start + u64::from(pf.wn)).div_ceil(16384));
+        let pairs = pinc_values::plan::range_pairs(layout.groups(), a, (pf.start + u64::from(pf.wn)).div_ceil(16384));
         assert_eq!(pf.proof.len() as u64, pairs * PARENT_LEN as u64);
         next = pf.start + u64::from(pf.wn);
         // The pairs are the outboard's, in pre-order: the first is the root's when the range starts the tree path.

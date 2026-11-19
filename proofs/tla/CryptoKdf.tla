@@ -1,6 +1,6 @@
 ----------------------------- MODULE CryptoKdf -----------------------------
 (***************************************************************************)
-(* The key derivation of vinc-crypto (kdf.rs) and every call site of the   *)
+(* The key derivation of pinc-crypto (kdf.rs) and every call site of the   *)
 (* BLAKE3 derive_key primitive.                                            *)
 (*                                                                         *)
 (* The primitive receives a Call: the mode, the label (context string) and *)
@@ -14,7 +14,7 @@
 (* of a 2-letter alphabet stands for 32 bytes: only the common length of   *)
 (* all secrets matters):                                                   *)
 (*   RegistryOK        the 31 labels that reach the primitive (23 of       *)
-(*                     vinc-security, 2 of vinc-crypto, 6 of vinc-dtn) are *)
+(*                     pinc-security, 2 of pinc-crypto, 6 of pinc-dtn) are *)
 (*                     pairwise distinct, start with the prefix, are ASCII *)
 (*                     and are longer than it                              *)
 (*   ExpandInjective   the call of expand determines secret, label, ctx    *)
@@ -29,7 +29,7 @@
 (*                     secret (with a perfect primitive: a derived secret  *)
 (*                     is the term of its call)                            *)
 (* TraceCrypto.tla checks the recorded calls of the code against these     *)
-(* operators. Lean counterpart: proofs/lean/Vinc/CryptoKdf.lean            *)
+(* operators. Lean counterpart: proofs/lean/Pinc/CryptoKdf.lean            *)
 (* (expandCall_injective, registry_bytes_nodup, sites_separated,           *)
 (* ticket_roles_separate, out_prefix, chain_injective).                    *)
 (***************************************************************************)
@@ -39,11 +39,11 @@ VARIABLE x
 
 L == INSTANCE Labels
 
-NodeIdLabel == "VINC 2026 v1 node id"
-HybridLabel == "VINC 2026 v1 hybrid signature"
+NodeIdLabel == "PINC 2026 v1 node id"
+HybridLabel == "PINC 2026 v1 hybrid signature"
 CryptoLabels == <<NodeIdLabel, HybridLabel>>
-DtnLabels == <<"VINC 2026 v1 dtn chain", "VINC 2026 v1 dtn transcript", "VINC 2026 v1 dtn slice key",
-               "VINC 2026 v1 dtn bundle id", "VINC 2026 v1 dtn head", "VINC 2026 v1 dtn custody ack">>
+DtnLabels == <<"PINC 2026 v1 dtn chain", "PINC 2026 v1 dtn transcript", "PINC 2026 v1 dtn slice key",
+               "PINC 2026 v1 dtn bundle id", "PINC 2026 v1 dtn head", "PINC 2026 v1 dtn custody ack">>
 Registry == L!AllLabels \o CryptoLabels \o DtnLabels
 RIdx == 1..Len(Registry)
 
@@ -66,7 +66,7 @@ Prks == {<<a, b>> : a \in Bits, b \in Bits}
 Strs(n) == UNION {[1..k -> Bits] : k \in 0..n}
 Ctxs == Strs(2)
 SecLabels == {L!AllLabels[i] : i \in 1..Len(L!AllLabels)}
-Lbls == {NodeIdLabel, HybridLabel, "VINC 2026 v1 packet key", "VINC 2026 v1 dtn slice key", "VINC 2026 v1 ticket"}
+Lbls == {NodeIdLabel, HybridLabel, "PINC 2026 v1 packet key", "PINC 2026 v1 dtn slice key", "PINC 2026 v1 ticket"}
 
 Starts(s, p) == Len(s) > Len(p) /\ SubSeq(s, 1, Len(p)) = p
 
@@ -81,7 +81,7 @@ ExpandInjective ==
         ExpandCall(p, l, c) = ExpandCall(q, m, d) => (p = q /\ l = m /\ c = d)
 
 AmbiguousWithoutLength ==
-    ExpandCall(<<1>>, "VINC 2026 v1 packet key", <<0, 1>>) = ExpandCall(<<1, 0>>, "VINC 2026 v1 packet key", <<1>>)
+    ExpandCall(<<1>>, "PINC 2026 v1 packet key", <<0, 1>>) = ExpandCall(<<1, 0>>, "PINC 2026 v1 packet key", <<1>>)
 
 ExtractInjective ==
     \A p, q \in Prks : \A c, d \in Ctxs : ExtractCall(p, c) = ExtractCall(q, d) => (p = q /\ c = d)
@@ -109,13 +109,13 @@ TicketTranscriptLen == (1 + 16) + (1 + 6)
 TicketExpandLen == 32 + 32
 TicketRoles == TicketTranscriptLen # TicketExpandLen
 
-OutLength == \A c \in {ExpandCall(p, "VINC 2026 v1 packet key", <<>>) : p \in Prks} : \A n \in 0..4 : Len(Out(c, n)) = n
-OutPrefix == \A c \in {ExpandCall(p, "VINC 2026 v1 packet key", <<>>) : p \in Prks} : \A n, m \in 0..4 :
+OutLength == \A c \in {ExpandCall(p, "PINC 2026 v1 packet key", <<>>) : p \in Prks} : \A n \in 0..4 : Len(Out(c, n)) = n
+OutPrefix == \A c \in {ExpandCall(p, "PINC 2026 v1 packet key", <<>>) : p \in Prks} : \A n, m \in 0..4 :
     n <= m => Out(c, m) = Out(c, n) \o [i \in 1..(m - n) |-> <<c, n + i>>]
 
 (* a derived secret, as the term of its call (a perfect primitive); the chain applies a list of (label, ctx) *)
 Derive(s, l, c) == [call |-> ExpandCall(<<s>>, l, c)]
-Steps == {<<l, c>> : l \in {"VINC 2026 v1 packet key", "VINC 2026 v1 ticket"}, c \in Strs(1)}
+Steps == {<<l, c>> : l \in {"PINC 2026 v1 packet key", "PINC 2026 v1 ticket"}, c \in Strs(1)}
 ChainOf(s, a, b) == Derive(Derive(s, a[1], a[2]), b[1], b[2])
 ChainInjective ==
     \A s, t \in {"s0", "s1", "s2"} : \A a, b \in Steps :

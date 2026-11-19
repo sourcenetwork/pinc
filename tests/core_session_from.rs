@@ -8,8 +8,8 @@
 
 use std::net::SocketAddr;
 
-use vinc_core::{Answer, Command, IfaceEvent, IfaceId, Query, Role, SessionId, Value, is_relay_addr};
-use vinc_tests::*;
+use pinc_core::{Answer, Command, IfaceEvent, IfaceId, Query, Role, SessionId, Value, is_relay_addr};
+use pinc_tests::*;
 
 /// The sessions of node `n` whose active path is validated, direct and from `addr`, by a walk of every live session.
 fn walk(net: &CoreNet, n: usize, addr: SocketAddr) -> Vec<SessionId> {

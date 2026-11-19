@@ -1,6 +1,6 @@
 ---------------------------- MODULE TraceValuesWire ----------------------------
 (***************************************************************************)
-(* Trace validation of the value wire codecs (vinc-values wire.rs).        *)
+(* Trace validation of the value wire codecs (pinc-values wire.rs).        *)
 (*                                                                         *)
 (* The Rust test tests/trace_values_wire.rs runs the real Req::parse,      *)
 (* Req::total_len, Req::encode, GroupHeader::parse and encode,             *)
@@ -20,7 +20,7 @@
 (* checks exhaustively in ValuesWire.cfg.                                  *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds values_wire.ndjson.   *)
+(* variable PINC_TRACE_DIR, the directory that holds values_wire.ndjson.   *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, TLC, Json, IOUtils
 
@@ -29,7 +29,7 @@ VARIABLE c
 W == INSTANCE ValuesWire WITH c <- 0
 U == INSTANCE U64
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/values_wire.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/values_wire.ndjson")
 
 Init == c = [t |-> "root"]
 

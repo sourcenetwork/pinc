@@ -28,10 +28,10 @@
 mod world;
 
 use proptest::prelude::*;
-use vinc_membership::codec::{Alive, Entry, Frame, Record};
-use vinc_membership::incarnation::{AddressTag, Incarnation, IncarnationError, MOVE_SETTLE};
-use vinc_membership::session::StoreError;
-use vinc_membership::{Config, Event, Local, Membership, StartError, Trace};
+use pinc_membership::codec::{Alive, Entry, Frame, Record};
+use pinc_membership::incarnation::{AddressTag, Incarnation, IncarnationError, MOVE_SETTLE};
+use pinc_membership::session::StoreError;
+use pinc_membership::{Config, Event, Local, Membership, StartError, Trace};
 use world::{Host, SEC, World, id};
 
 #[derive(Default)]
@@ -337,7 +337,7 @@ fn a_hub_reports_a_stale_incarnation_without_regressing_its_roster() {
     w.inject(
         0,
         1,
-        &Frame::Hello(vinc_membership::codec::Hello {
+        &Frame::Hello(pinc_membership::codec::Hello {
             rec: low,
             snap: false,
             homed: false,

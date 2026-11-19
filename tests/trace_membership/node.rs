@@ -1,6 +1,6 @@
-//! The node trace: the real hub and member state machines of `vinc-membership`, exchanging frames over the membership
+//! The node trace: the real hub and member state machines of `pinc-membership`, exchanging frames over the membership
 //! test world (`membership_world.rs`), recorded call by call as ndjson (`membership.ndjson`) for the TLA+ trace check
-//! (`TraceMembership.tla`) and the Lean replay (`Vinc.TraceMembership`).
+//! (`TraceMembership.tla`) and the Lean replay (`Pinc.TraceMembership`).
 //!
 //! A line is `{"t":"mem","run":R,"n":K,"op":OP, ...inputs..., "env":ENV, "out":OUT, "st":ST}`: the call, the host as
 //! the call found it (transport evidence, carriers, which peers take a send, the store), what the machine asked of
@@ -18,9 +18,9 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use vinc_membership::codec::{Alive, Down, Entry, Frame, Hello, Path, Probe, Proof, Record, Snap};
-use vinc_membership::event::{QuietCause, Refusal};
-use vinc_membership::{Carrier, CloseReason, Event, NodeId, Trace};
+use pinc_membership::codec::{Alive, Down, Entry, Frame, Hello, Path, Probe, Proof, Record, Snap};
+use pinc_membership::event::{QuietCause, Refusal};
+use pinc_membership::{Carrier, CloseReason, Event, NodeId, Trace};
 
 use crate::common::TraceWriter;
 use crate::node_rec::{JsonRec, Sink};
@@ -127,7 +127,7 @@ fn churn(c: &mut Ctx) {
 /// A lossy network and dropped frames; the awareness bound.
 fn lossy(c: &mut Ctx) {
     let mut w = c.world(2, 6, START);
-    w.rng = vinc_tests::SplitMix64::traced(3);
+    w.rng = pinc_tests::SplitMix64::traced(3);
     w.loss_pct = 20;
     w.attach_all();
     w.run(120 * SEC);
@@ -453,7 +453,7 @@ fn revoke_full(c: &mut Ctx) {
     let mut w = c.world(1, 1, START);
     w.attach_all();
     w.run(2 * SEC);
-    let max = u16::try_from(vinc_membership::consts::MAX_TABLE).unwrap();
+    let max = u16::try_from(pinc_membership::consts::MAX_TABLE).unwrap();
     let mut refused = 0;
     for k in 0..=max {
         if !w.revoke_raw(0, 256 + k) {
@@ -809,7 +809,7 @@ fn garbage(c: &mut Ctx) {
     w.inject(
         0,
         1,
-        &Frame::Other(vinc_membership::codec::Other {
+        &Frame::Other(pinc_membership::codec::Other {
             ty: 20,
             topic: b"t/a",
             rest: &[1, 2, 3],
@@ -826,8 +826,8 @@ fn garbage(c: &mut Ctx) {
     w.inject(1, 0, &Frame::Probe);
     // A snapshot with a continuation, then the rest, from the hub.
     let me = id(1);
-    let es1 = vinc_membership::codec::entry_bytes(&id(7), &rec(3, 0, 1), Alive::Alive);
-    let es2 = vinc_membership::codec::entry_bytes(&me, &rec(4, 0, 1), Alive::Alive);
+    let es1 = pinc_membership::codec::entry_bytes(&id(7), &rec(3, 0, 1), Alive::Alive);
+    let es2 = pinc_membership::codec::entry_bytes(&me, &rec(4, 0, 1), Alive::Alive);
     w.inject(1, 0, &Frame::Snap(Snap::new(false, true, &es1).unwrap()));
     w.inject(1, 0, &Frame::Snap(Snap::new(true, false, &es2).unwrap()));
     w.run(5 * SEC);
@@ -961,7 +961,7 @@ fn wide_frames(c: &mut Ctx) {
     assert_eq!(w.inject_bytes(0, 1, &long), Ok(0));
     assert!(w.inject_bytes(0, 1, &[0, 16, 0, 1, 1, 0]).is_err());
     w.set_max_frame(0, 100);
-    assert_eq!(w.nodes[0].m.max_frame(), vinc_membership::codec::MAX_BODY);
+    assert_eq!(w.nodes[0].m.max_frame(), pinc_membership::codec::MAX_BODY);
     assert!(w.inject_bytes(0, 1, &long).is_err());
     w.run(2 * SEC);
 }

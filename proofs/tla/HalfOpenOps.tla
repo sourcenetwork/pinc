@@ -1,6 +1,6 @@
 ---------------------------- MODULE HalfOpenOps -----------------------------
 (***************************************************************************)
-(* The half-open bookkeeping of the vinc-core endpoint, step for step: the *)
+(* The half-open bookkeeping of the pinc-core endpoint, step for step: the *)
 (* admission of a first flight (rx.rs unrouted, accept; offer for an id    *)
 (* that sessions hold), the end of the unauthenticated phase (events.rs    *)
 (* on_established), the release of a slot (endpoint.rs free_slot), the     *)

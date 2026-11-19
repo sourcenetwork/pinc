@@ -1,6 +1,6 @@
 name = "dtn-wake"
-about = "A device that sleeps and wakes with no contact schedule, the real DefraDB case. The phone is paused when the update is sent and resumed later; the laptop hands the update and custody to the cloud carrier and then sleeps itself. The carrier holds custody, dials the phone while it sleeps and backs off, and delivers on its first dial after the wake, within the longest dial backoff. The send-to-delivery time is reported. VINC only."
-stacks = ["vinc"]
+about = "A device that sleeps and wakes with no contact schedule, the real DefraDB case. The phone is paused when the update is sent and resumed later; the laptop hands the update and custody to the cloud carrier and then sleeps itself. The carrier holds custody, dials the phone while it sleeps and backs off, and delivers on its first dial after the wake, within the longest dial backoff. The send-to-delivery time is reported. PINC only."
+stacks = ["pinc"]
 repetitions = 3
 
 [resources]

@@ -1,6 +1,6 @@
 ---------------------------- MODULE NodeBackoffOps ----------------------------
 (***************************************************************************)
-(* The operations of vinc-node on its table of failed dials, step for      *)
+(* The operations of pinc-node on its table of failed dials, step for      *)
 (* step: io.rs (`backoff`, `deny_back`, `set_failed`), duties.rs           *)
 (* (`dial_peer`, `prune`), events.rs (`hub_closed`, `hub_connect_failed`,  *)
 (* and `hub_connected`, whose session the full session table shed: that   *)

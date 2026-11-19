@@ -1,6 +1,6 @@
 ------------------------------ MODULE TraceReach ------------------------------
 (***************************************************************************)
-(* Trace validation of the ring of REACH_OUT bodies: vinc-core reach.rs    *)
+(* Trace validation of the ring of REACH_OUT bodies: pinc-core reach.rs    *)
 (* (ReachRing).                                                            *)
 (*                                                                         *)
 (* The Rust test tests/trace_reach.rs drives real rings (built with the    *)
@@ -17,14 +17,14 @@
 (* carries the first byte in the slot of its place in the order of puts.   *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds reach.ndjson.         *)
+(* variable PINC_TRACE_DIR, the directory that holds reach.ndjson.         *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, TLC, Json, IOUtils
 VARIABLES i, r, n, mx
 vars == <<i, r, n, mx>>
 INSTANCE ReachOps
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/reach.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/reach.ndjson")
 Ev0 == Trace[i]
 
 \* a place as the test records it: [] for empty, else [session, length, first byte]

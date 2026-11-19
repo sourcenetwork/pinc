@@ -1,6 +1,6 @@
 -------------------------- MODULE TraceConnectTable --------------------------
 (***************************************************************************)
-(* Trace validation of the bounded tables: vinc-connect relay/table.rs.    *)
+(* Trace validation of the bounded tables: pinc-connect relay/table.rs.    *)
 (*                                                                         *)
 (* The Rust test tests/trace_connect_table.rs runs the real Table and      *)
 (* Cache of small capacities, with node ids whose buckets collide, wrap    *)
@@ -13,14 +13,14 @@
 (* order.                                                                  *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds connect_table.ndjson. *)
+(* variable PINC_TRACE_DIR, the directory that holds connect_table.ndjson. *)
 (***************************************************************************)
 EXTENDS ConnectTableOps, Json, IOUtils
 
 VARIABLES i, n, bk, t, c
 vars == <<i, n, bk, t, c>>
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/connect_table.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/connect_table.ndjson")
 Ev == Trace[i]
 
 Init == i = 1 /\ n = 1 /\ bk = [x \in {} |-> 0] /\ t = NewTable(1) /\ c = NewCache(1)

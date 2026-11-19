@@ -1,0 +1,50 @@
+[package]
+name = "pinc"
+description = "PINC for applications: one entry point with a builder, connections, streams, datagrams, access hooks and a typed protocol registration, all async, with the host passing its I/O as three async closures"
+keywords = ["p2p", "transport", "facade"]
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+pinc-crypto = { workspace = true }
+pinc-security = { workspace = true }
+pinc-keystore = { workspace = true, features = ["std"] }
+pinc-transport = { workspace = true, features = ["alloc"] }
+pinc-core = { workspace = true, features = ["alloc"] }
+pinc-node = { workspace = true }
+pinc-connect = { workspace = true, features = ["alloc"] }
+pinc-portmap = { workspace = true }
+pinc-broadcast = { workspace = true, features = ["alloc"] }
+once_cell = { workspace = true, features = ["race", "alloc"] }
+hashbrown = { workspace = true, features = ["inline-more"] }
+rapidhash = { workspace = true }
+
+[dev-dependencies]
+nuclei = { workspace = true }
+zeroize = { workspace = true }
+
+[features]
+# Lets a TPM key store (`pinc-keystore`) hold the identity: pass it to `Builder::key_store`.
+hwenc = ["pinc-keystore/hwenc"]
+# A slab of tickets of its own (`StandbyProbe`), driven call by call, for the trace check of the proofs, and the
+# node's probes.
+trace = ["pinc-node/trace"]
+
+[lints]
+workspace = true
+
+[[example]]
+name = "echo"
+
+[[example]]
+name = "transfer"
+
+[[example]]
+name = "defradb_backend"
+
+[[example]]
+name = "relay"

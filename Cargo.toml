@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/*", "tests", "tests/noalloc"]
-# The benchmarks and the distributed harness are workspaces of their own: the libraries they measure VINC against, their
+# The benchmarks and the distributed harness are workspaces of their own: the libraries they measure PINC against, their
 # runtimes and their C code stay out of the library's graph and lockfile.
 exclude = ["benches", "distributed"]
 
@@ -10,30 +10,30 @@ version = "0.1.0"
 authors = ["Theo M. Bulut <theo@source.network>"]
 edition = "2024"
 rust-version = "1.99"
-repository = "https://github.com/sourcenetwork/vinc"
+repository = "https://github.com/sourcenetwork/pinc"
 publish = false
 
 # Every dependency of every member is declared here, once; members only say `{ workspace = true }` and add features.
-# Every VINC crate has the workspace version, and the entries below pin that same version.
+# Every PINC crate has the workspace version, and the entries below pin that same version.
 [workspace.dependencies]
-vinc-wire = { path = "crates/vinc-wire", version = "0.1.0" }
-vinc-dag = { path = "crates/vinc-dag", version = "0.1.0" }
-vinc-crypto = { path = "crates/vinc-crypto", version = "0.1.0" }
-vinc-security = { path = "crates/vinc-security", version = "0.1.0" }
-vinc-keystore = { path = "crates/vinc-keystore", version = "0.1.0" }
-vinc-transport = { path = "crates/vinc-transport", version = "0.1.0" }
-vinc-membership = { path = "crates/vinc-membership", version = "0.1.0" }
-vinc-sim = { path = "crates/vinc-sim", version = "0.1.0" }
-vinc-connect = { path = "crates/vinc-connect", version = "0.1.0" }
-vinc-portmap = { path = "crates/vinc-portmap", version = "0.1.0" }
-vinc-reconcile = { path = "crates/vinc-reconcile", version = "0.1.0" }
-vinc-dtn = { path = "crates/vinc-dtn", version = "0.1.0" }
-vinc-values = { path = "crates/vinc-values", version = "0.1.0" }
-vinc-core = { path = "crates/vinc-core", version = "0.1.0" }
-vinc-broadcast = { path = "crates/vinc-broadcast", version = "0.1.0" }
-vinc = { path = "crates/vinc", version = "0.1.0" }
-vinc-node = { path = "crates/vinc-node", version = "0.1.0" }
-vinc-table = { path = "crates/vinc-table", version = "0.1.0" }
+pinc-wire = { path = "crates/pinc-wire", version = "0.1.0" }
+pinc-dag = { path = "crates/pinc-dag", version = "0.1.0" }
+pinc-crypto = { path = "crates/pinc-crypto", version = "0.1.0" }
+pinc-security = { path = "crates/pinc-security", version = "0.1.0" }
+pinc-keystore = { path = "crates/pinc-keystore", version = "0.1.0" }
+pinc-transport = { path = "crates/pinc-transport", version = "0.1.0" }
+pinc-membership = { path = "crates/pinc-membership", version = "0.1.0" }
+pinc-sim = { path = "crates/pinc-sim", version = "0.1.0" }
+pinc-connect = { path = "crates/pinc-connect", version = "0.1.0" }
+pinc-portmap = { path = "crates/pinc-portmap", version = "0.1.0" }
+pinc-reconcile = { path = "crates/pinc-reconcile", version = "0.1.0" }
+pinc-dtn = { path = "crates/pinc-dtn", version = "0.1.0" }
+pinc-values = { path = "crates/pinc-values", version = "0.1.0" }
+pinc-core = { path = "crates/pinc-core", version = "0.1.0" }
+pinc-broadcast = { path = "crates/pinc-broadcast", version = "0.1.0" }
+pinc = { path = "crates/pinc", version = "0.1.0" }
+pinc-node = { path = "crates/pinc-node", version = "0.1.0" }
+pinc-table = { path = "crates/pinc-table", version = "0.1.0" }
 
 blake3 = { version = "1.8.7", default-features = false, features = ["pure"] }
 sha2 = { version = "0.11.1", default-features = false }
@@ -108,48 +108,48 @@ panic = "unwind"
 [profile.dev.package."*"]
 opt-level = 3
 
-[profile.dev.package.vinc-wire]
+[profile.dev.package.pinc-wire]
 opt-level = 3
 
-[profile.dev.package.vinc-crypto]
+[profile.dev.package.pinc-crypto]
 opt-level = 3
 
-[profile.dev.package.vinc-security]
+[profile.dev.package.pinc-security]
 opt-level = 3
 
-[profile.dev.package.vinc-transport]
+[profile.dev.package.pinc-transport]
 opt-level = 3
 
-[profile.dev.package.vinc-core]
+[profile.dev.package.pinc-core]
 opt-level = 3
 
 # The facade builds the endpoint's slot table on the heap, one slot at a time; unoptimised code would keep several
 # copies of a slot and of a stream table (hundreds of kilobytes each) on the stack while it does.
-[profile.dev.package.vinc]
+[profile.dev.package.pinc]
 opt-level = 3
 
 # The node composes the connectivity layer, membership and broadcast, which hold their buffers inline; built unoptimised
 # they keep several copies of the node on the stack while the facade builds it on the heap.
-[profile.dev.package.vinc-node]
+[profile.dev.package.pinc-node]
 opt-level = 3
 
-[profile.dev.package.vinc-connect]
+[profile.dev.package.pinc-connect]
 opt-level = 3
 
-[profile.dev.package.vinc-membership]
+[profile.dev.package.pinc-membership]
 opt-level = 3
 
-[profile.dev.package.vinc-broadcast]
+[profile.dev.package.pinc-broadcast]
 opt-level = 3
 
-[profile.dev.package.vinc-sim]
+[profile.dev.package.pinc-sim]
 opt-level = 3
 
-[profile.dev.package.vinc-dag]
+[profile.dev.package.pinc-dag]
 opt-level = 3
 
-[profile.dev.package.vinc-values]
+[profile.dev.package.pinc-values]
 opt-level = 3
 
-[profile.dev.package.vinc-reconcile]
+[profile.dev.package.pinc-reconcile]
 opt-level = 3

@@ -1,6 +1,6 @@
 ---------------------------- MODULE ConnectCarrier ----------------------------
 (***************************************************************************)
-(* The protected carrier of vinc-connect carrier/session.rs over every     *)
+(* The protected carrier of pinc-connect carrier/session.rs over every     *)
 (* interleaving, at small sizes (ConnectCarrierOps.tla has the operators). *)
 (*                                                                         *)
 (* Two carriers: the acceptor A, whose reader is checked, and the dialer   *)
@@ -72,7 +72,7 @@
 (*    carrier, is accepted (InOrderAccepted), unless the receive key is   *)
 (*    at its failed-open limit (KeyLimit) or the packet number is past    *)
 (*    MaxPn (Record), which end the carrier (LimitEnds).                   *)
-(* Lean counterparts (proofs/lean/Vinc/ConnectCarrier*.lean):              *)
+(* Lean counterparts (proofs/lean/Pinc/ConnectCarrier*.lean):              *)
 (*   Aligned, EarlyRefusal   ConnectCarrier.run_ref, split_invariance,     *)
 (*                           poll_idle_iff, poll_bad_len, poll_extend      *)
 (*   InOrder, InOrderAccepted, NoFrameBeforeOpen                           *)

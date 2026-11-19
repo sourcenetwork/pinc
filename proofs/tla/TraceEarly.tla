@@ -1,7 +1,7 @@
 ----------------------------- MODULE TraceEarly ------------------------------
 (***************************************************************************)
 (* Trace validation of the buffer of packets that arrive before their      *)
-(* keys: vinc-transport conn/recv.rs, drive.rs, life.rs and                *)
+(* keys: pinc-transport conn/recv.rs, drive.rs, life.rs and                *)
 (* stream/datagram.rs.                                                     *)
 (*                                                                         *)
 (* The Rust test tests/trace_early.rs records two kinds of event.          *)
@@ -26,14 +26,14 @@
 (* event.                                                                  *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds early.ndjson.         *)
+(* variable PINC_TRACE_DIR, the directory that holds early.ndjson.         *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, TLC, Json, IOUtils
 VARIABLES i, c, cap
 vars == <<i, c, cap>>
 INSTANCE EarlyOps
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/early.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/early.ndjson")
 Ev0 == Trace[i]
 
 \* the buffer alone

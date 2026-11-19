@@ -1,6 +1,6 @@
 ------------------------------ MODULE MbtReasm ------------------------------
 (***************************************************************************)
-(* Model-based tests of the handshake fragment reassembly (vinc-transport  *)
+(* Model-based tests of the handshake fragment reassembly (pinc-transport  *)
 (* conn/reasm.rs, Reassembly::add): the state graph of the operators of    *)
 (* ReasmOps.tla at the size of the real table, for a Rust test to walk.    *)
 (*                                                                         *)

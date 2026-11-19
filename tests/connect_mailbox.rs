@@ -22,8 +22,8 @@ use std::collections::VecDeque;
 
 use connect_common::{SEC, nid};
 use proptest::prelude::*;
-use vinc_connect::carrier::MAX_PACKET_LEN;
-use vinc_connect::mailbox::{ENTRY_HEAD, Mailbox, Offer, Push};
+use pinc_connect::carrier::MAX_PACKET_LEN;
+use pinc_connect::mailbox::{ENTRY_HEAD, Mailbox, Offer, Push};
 
 const B: usize = 1000;
 type M = Mailbox<3, B>;
@@ -333,7 +333,7 @@ fn a_looked_at_message_stays_held_with_its_seq_until_it_is_removed() {
 /// the `stop`th offer either takes it and stops (`take_on_stop`) or stops without it. Returns what was offered.
 fn drain(
     m: &mut M,
-    to: &vinc_crypto::NodeId,
+    to: &pinc_crypto::NodeId,
     fit: usize,
     stop: usize,
     take_on_stop: bool,

@@ -1,5 +1,5 @@
 //! A deadline that a timer call leaves due where the call before had left it is counted against the layer that holds
-//! it, recorded in the trace once for that layer, and the node asks for its next call one tick later (vinc#569). A
+//! it, recorded in the trace once for that layer, and the node asks for its next call one tick later (pinc#569). A
 //! host that serves due timers before anything else (the facade's `run_as`) therefore yields between two calls,
 //! whatever a layer does with its deadline. The layer here is the scripted endpoint, whose timer call does nothing.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, missing_docs)]
@@ -7,7 +7,7 @@
 mod node_script;
 
 use node_script::{ScriptNode, node_traced};
-use vinc_node::{Body, HUB_ALPN, NoApps, NodeTrace, TIMER_TICK, Timed, TimerStats};
+use pinc_node::{Body, HUB_ALPN, NoApps, NodeTrace, TIMER_TICK, Timed, TimerStats};
 
 const SEC: u64 = 1_000_000_000;
 

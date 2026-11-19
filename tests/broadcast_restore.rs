@@ -14,9 +14,9 @@
 mod common;
 
 use common::{Ev, Net, NodeHost, SEC, ty};
-use vinc_broadcast::Topics;
-use vinc_crypto::IdentityAlg;
-use vinc_membership::{Broadcast, NodeId};
+use pinc_broadcast::Topics;
+use pinc_crypto::IdentityAlg;
+use pinc_membership::{Broadcast, NodeId};
 
 const T: &[u8] = b"back";
 

@@ -1,6 +1,6 @@
 //! Trace generation for the ring of extension frames held for the application: seeded runs of a real ring
-//! (`vinc-core`, built with the `trace` feature), recorded as ndjson (`ext_in.ndjson`) for the TLA+ trace check
-//! (`TraceExtIn.tla`) and the Lean replay (`Vinc/TraceExtIn.lean`).
+//! (`pinc-core`, built with the `trace` feature), recorded as ndjson (`ext_in.ndjson`) for the TLA+ trace check
+//! (`TraceExtIn.tla`) and the Lean replay (`Pinc/TraceExtIn.lean`).
 //!
 //! A run puts frames of a few sessions and types, with bodies of every length that matters (empty, short, exactly the
 //! limit of 1200 bytes, one over it and well over it), takes them with buffers that are too small, just right and
@@ -28,8 +28,8 @@
 use std::collections::VecDeque;
 use std::fmt::Write as _;
 
-use vinc_core::ExtInProbe;
-use vinc_tests::SplitMix64;
+use pinc_core::ExtInProbe;
+use pinc_tests::SplitMix64;
 
 const CAP: usize = ExtInProbe::SLOTS;
 const MAX: usize = ExtInProbe::BODY_MAX;
@@ -252,7 +252,7 @@ fn the_extension_ring_matches_the_models() {
     assert!(seen.taken > 0, "no frame was taken");
     assert!(seen.took_empty > 0, "no take found the ring empty");
     assert!(seen.zero_len > 0, "no empty body was kept");
-    if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
+    if let Ok(dir) = std::env::var("PINC_TRACE_DIR") {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(std::path::Path::new(&dir).join("ext_in.ndjson"), &out).unwrap();
     }

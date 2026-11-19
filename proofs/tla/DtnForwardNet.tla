@@ -34,8 +34,8 @@
 (* flag replayed records an accepted hold at a node that had released the   *)
 (* bundle (the bundle never expires within the horizon, exp = MaxTime + 5); *)
 (* NoReplay (config DtnForwardNet_replay) checks that it never happens.     *)
-(* Lean counterpart: Vinc/DtnForwardInv.lean (balance, per node) and        *)
-(* Vinc/DtnForwardWitness.lean.                                             *)
+(* Lean counterpart: Pinc/DtnForwardInv.lean (balance, per node) and        *)
+(* Pinc/DtnForwardWitness.lean.                                             *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC
 

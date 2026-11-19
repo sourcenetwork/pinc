@@ -1,6 +1,6 @@
 ---------------------------- MODULE BuilderBytes ----------------------------
 (***************************************************************************)
-(* The outboard builder of vinc-dag (tree/builder.rs) at the byte level,   *)
+(* The outboard builder of pinc-dag (tree/builder.rs) at the byte level,   *)
 (* written step for step on the machine integers of U64.tla: `update`      *)
 (* (the size checks, the loop that takes min(room, bytes left) bytes, the  *)
 (* hasher offset `consumed / group * group`, `in_group`, `consumed`),      *)
@@ -51,7 +51,7 @@
 (*    full stack of n groups merges the right spine into the genuine       *)
 (*    nodes.                                                               *)
 (*                                                                         *)
-(* Lean counterparts (proofs/lean/Vinc/BuilderBytes.lean, Builder.lean):   *)
+(* Lean counterparts (proofs/lean/Pinc/BuilderBytes.lean, Builder.lean):   *)
 (*   StateDet         BuilderBytes.builder_split_invariance, updLoop_inv,  *)
 (*                    updStep_inv                                          *)
 (*   FinishOK         BuilderBytes.builder_split_root, Builder.builder_correct, *)
@@ -60,7 +60,7 @@
 (*   ArithOK          BuilderBytes.builder_arith, mergeTopM_eq,            *)
 (*                    finishTopM_eq, merge_safe, finish_safe, slotM_eq     *)
 (*   StackOK          Builder.mainPhase_stack_le                           *)
-(*   the boundary sets  Vinc.Link (Builder boundary theorems)              *)
+(*   the boundary sets  Pinc.Link (Builder boundary theorems)              *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC
 

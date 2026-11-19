@@ -1,6 +1,6 @@
 ------------------------------- MODULE HdrOps -------------------------------
 (***************************************************************************)
-(* The packet header codecs of vinc-transport, step for step:              *)
+(* The packet header codecs of pinc-transport, step for step:              *)
 (* packet/header.rs (LongHeader::write and parse, ShortHeader::write,      *)
 (* short_dcid), the first byte unprotect_header reads once the mask is     *)
 (* off, packet/datagram.rs (the iterator Packets::next run to its end) and *)
@@ -27,7 +27,7 @@
 (* length is refused after the bytes before it were written                *)
 (* (Hdr_late.cfg must violate WriteAtomic).                                *)
 (*                                                                         *)
-(* Lean counterpart: proofs/lean/Vinc/TransportHdr.lean.                   *)
+(* Lean counterpart: proofs/lean/Pinc/TransportHdr.lean.                   *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
 

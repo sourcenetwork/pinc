@@ -1,5 +1,5 @@
 //! A member of a relay for the tests: the carrier handshake and frames over a real TCP stream, with optional WebSocket
-//! framing, written with the carrier state machine of `vinc-connect` and nothing of the facade.
+//! framing, written with the carrier state machine of `pinc-connect` and nothing of the facade.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -19,14 +19,14 @@ use std::rc::Rc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use nuclei::Handle;
-use vinc::relay::{CarrierFns, Clock, Hosted, Peer, Relay, Udp};
-use vinc::{CarrierKind, Error, ErrorKind};
-use vinc_connect::carrier::session::Poll;
-use vinc_connect::carrier::ws::{self, Decoder, Opcode, Role, WsFrame};
-use vinc_connect::carrier::{Frame, MAX_FRAME_LEN, ProtectedCarrier};
-use vinc_connect::record::{self, Reach, RecordFields};
-use vinc_crypto::{Drbg, IdentityAlg, Keypair, NodeId, Software};
-use vinc_security::{
+use pinc::relay::{CarrierFns, Clock, Hosted, Peer, Relay, Udp};
+use pinc::{CarrierKind, Error, ErrorKind};
+use pinc_connect::carrier::session::Poll;
+use pinc_connect::carrier::ws::{self, Decoder, Opcode, Role, WsFrame};
+use pinc_connect::carrier::{Frame, MAX_FRAME_LEN, ProtectedCarrier};
+use pinc_connect::record::{self, Reach, RecordFields};
+use pinc_crypto::{Drbg, IdentityAlg, Keypair, NodeId, Software};
+use pinc_security::{
     ConnId, CreditRecord, Env, InitiatorParams, KeyHandle, LocalIdentity, PrekeyPolicy, SoftKeys, SoftPrekeys,
 };
 
@@ -79,7 +79,7 @@ pub struct Member {
     stream: Handle<TcpStream>,
     carrier: Box<ProtectedCarrier<Software>>,
     drbg: Drbg,
-    stores: Box<vinc_security::ResponderStores<4, 4>>,
+    stores: Box<pinc_security::ResponderStores<4, 4>>,
     ws: Option<Decoder>,
     ws_in: Vec<u8>,
     eof: bool,
@@ -326,7 +326,7 @@ pub struct Ports {
 pub async fn bind_ports() -> Ports {
     // the UDP port of the same number may be taken by another test process: try another number
     for _ in 0..50 {
-        let listener = Rc::new(Handle::<TcpListener>::bind(crate::vinc_common::lo()).await.unwrap());
+        let listener = Rc::new(Handle::<TcpListener>::bind(crate::pinc_common::lo()).await.unwrap());
         let addr = listener.get_ref().local_addr().unwrap();
         if let Ok(sock) = Handle::<UdpSocket>::bind(addr).await {
             return Ports {
@@ -344,7 +344,7 @@ pub async fn bind_ports() -> Ports {
 pub fn build_relay(
     ports: &Ports,
     kinds: &Rc<RefCell<VecDeque<CarrierKind>>>,
-    builder: vinc::relay::Builder,
+    builder: pinc::relay::Builder,
 ) -> Relay<impl Hosted + use<>> {
     let t0 = Instant::now();
     let base = wall_ns();

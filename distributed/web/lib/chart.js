@@ -1,6 +1,6 @@
 // Line charts on canvas: real units on both axes, one series per stack (hue and line pattern), redrawn at most once
 // per animation frame however often data arrives.
-const DASH = { vinc: [], iroh: [6, 4], libp2p: [2, 3], all: [] };
+const DASH = { pinc: [], iroh: [6, 4], libp2p: [2, 3], all: [] };
 
 function niceStep(range, ticks) {
   const raw = range / Math.max(1, ticks);

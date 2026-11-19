@@ -1,6 +1,6 @@
 ---------------------------- MODULE CryptoIdentity ----------------------------
 (***************************************************************************)
-(* The identities of vinc-crypto (identity.rs): algorithm tags and         *)
+(* The identities of pinc-crypto (identity.rs): algorithm tags and         *)
 (* lengths, node ids, the decision tables of verify, verify_node and       *)
 (* verify_ml_dsa_65, and the errors of the key pair operations.            *)
 (*                                                                         *)
@@ -27,7 +27,7 @@
 (*   SeedBoundary, LexIsNumeric  the P-256 seed range                      *)
 (*   WriteRule, NodeIdNoFallback  the output buffer rules                  *)
 (* TraceCrypto.tla checks the recorded calls against these operators.      *)
-(* Lean counterpart: proofs/lean/Vinc/CryptoIdentity.lean.                 *)
+(* Lean counterpart: proofs/lean/Pinc/CryptoIdentity.lean.                 *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
 

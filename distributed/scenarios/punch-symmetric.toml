@@ -1,6 +1,6 @@
 name = "punch-symmetric"
 about = "Two nodes each behind a symmetric home router, a public relay and hub: no punch can work, so the whole transfer stays on the relay."
-stacks = ["vinc"]
+stacks = ["pinc"]
 repetitions = 3
 
 [[sites]]

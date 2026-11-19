@@ -1,4 +1,4 @@
-//! Benchmarks of `vinc-security`: the handshakes end to end in memory, and per-packet record protection.
+//! Benchmarks of `pinc-security`: the handshakes end to end in memory, and per-packet record protection.
 #![allow(
     missing_docs,
     clippy::unwrap_used,
@@ -13,15 +13,15 @@
 use std::hint::black_box;
 
 use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main};
-use vinc_crypto::{Aead, Drbg, IdentityAlg, Keypair, Provider, Secret, Software};
-use vinc_security::message::MAX_MESSAGE_LEN;
-use vinc_security::{
+use pinc_crypto::{Aead, Drbg, IdentityAlg, Keypair, Provider, Secret, Software};
+use pinc_security::message::MAX_MESSAGE_LEN;
+use pinc_security::{
     AlpnList, ConnId, CreditRecord, Env, Established, Event, HeaderKey, Initiator, InitiatorParams, KeyHandle, Limits,
     LocalIdentity, Output, PacketKey, PrekeyPolicy, Responder, ResponderConfig, ResponderStores, SoftKeys, SoftPrekeys,
     Ticket,
 };
 
-const ALPN: &[u8] = b"vinc/1";
+const ALPN: &[u8] = b"pinc/1";
 
 /// Both ends of a connection and everything they keep between handshakes.
 struct Rig {
@@ -195,7 +195,7 @@ fn bench_handshakes(c: &mut Criterion) {
                         stores,
                         ..
                     } = &mut *rig;
-                    let mut client = vinc_security::ClientTickets::<1>::new();
+                    let mut client = pinc_security::ClientTickets::<1>::new();
                     let mut env = Env {
                         provider: &*p,
                         now: 1,

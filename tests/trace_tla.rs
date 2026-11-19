@@ -5,7 +5,7 @@
 //! first (`[l0,l1,l2,l3]`), which `U64.tla` reads. The real code runs on the same boundary sets the TLA+ models
 //! enumerate (for every `j`, `2^j - 1`, `2^j` and `2^j + 1`, the edges of every group size, the full byte range of
 //! short inputs) and on seeded random values; every result is also checked here against a naive reference, so the
-//! test is meaningful without the proof tools. The files go to `tla/` under `VINC_TRACE_DIR` when it is set;
+//! test is meaningful without the proof tools. The files go to `tla/` under `PINC_TRACE_DIR` when it is set;
 //! otherwise nothing is written.
 #![allow(
     clippy::unwrap_used,
@@ -18,9 +18,9 @@
 use std::fmt::Write as _;
 use std::ops::Range;
 
-use vinc_dag::tree::{Layout, RangeEncoder, Step, TreeError, encode_range, encoded_len};
-use vinc_tests::SplitMix64;
-use vinc_wire::{WireError, varint};
+use pinc_dag::tree::{Layout, RangeEncoder, Step, TreeError, encode_range, encoded_len};
+use pinc_tests::SplitMix64;
+use pinc_wire::{WireError, varint};
 
 /// A value below `n` (`n > 0`).
 fn below(rng: &mut SplitMix64, n: u64) -> u64 {
@@ -511,7 +511,7 @@ fn tla_traces_are_consistent_with_the_code() {
     assert!(encoder_trace.lines().count() > 5000);
     let encout_trace = encout_traces();
     assert!(encout_trace.lines().count() > 1500);
-    let Some(dir) = std::env::var_os("VINC_TRACE_DIR") else {
+    let Some(dir) = std::env::var_os("PINC_TRACE_DIR") else {
         return;
     };
     let dir = std::path::PathBuf::from(dir).join("tla");

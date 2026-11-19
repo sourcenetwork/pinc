@@ -20,10 +20,10 @@ use std::cell::Cell;
 
 use connect_common::*;
 use proptest::prelude::*;
-use vinc_connect::carrier::Frame;
-use vinc_connect::relay::datagram::{Datagram, MAX_TUNNEL_DATAGRAM};
-use vinc_connect::relay::{Effect, Reject, SessionId, Sink, Trace, UdpTarget};
-use vinc_crypto::NodeId;
+use pinc_connect::carrier::Frame;
+use pinc_connect::relay::datagram::{Datagram, MAX_TUNNEL_DATAGRAM};
+use pinc_connect::relay::{Effect, Reject, SessionId, Sink, Trace, UdpTarget};
+use pinc_crypto::NodeId;
 
 /// A relay holding the given packets (flag 7), oldest first, from `a` for the sleeping `m`.
 fn hold(fx: &mut Fx, packets: &[&[u8]]) -> (NodeId, SessionId, NodeId, Vec<u64>) {
@@ -297,7 +297,7 @@ fn held_lengths() -> impl Strategy<Value = Vec<usize>> {
         let mut total = 0;
         lens.into_iter()
             .take_while(|len| {
-                total += vinc_connect::mailbox::ENTRY_HEAD + len;
+                total += pinc_connect::mailbox::ENTRY_HEAD + len;
                 total <= 4096
             })
             .collect()

@@ -1,6 +1,6 @@
 ------------------------------- MODULE DtnStore -------------------------------
 (***************************************************************************)
-(* Model check of the charged store, vinc-dtn/src/store.rs (the Ledger).    *)
+(* Model check of the charged store, pinc-dtn/src/store.rs (the Ledger).    *)
 (* The operations are DtnStoreOps.tla, the definitions the trace check also *)
 (* uses. The environment calls admit, expire, release and reclass with any  *)
 (* key (of the bundle space 1 or the mailbox space 2: one ledger, one       *)
@@ -29,7 +29,7 @@
 (*   ReclassNeedsNoRoom, ReleaseExits, ExpireExits                          *)
 (*   NoCrossEviction    (witness config) a mailbox admission evicting a     *)
 (*                      bundle item: the ledger is shared                   *)
-(* The Lean counterpart is proofs/lean/Vinc/DtnStore*.lean (every ledger).  *)
+(* The Lean counterpart is proofs/lean/Pinc/DtnStore*.lean (every ledger).  *)
 (***************************************************************************)
 EXTENDS DtnStoreOps
 

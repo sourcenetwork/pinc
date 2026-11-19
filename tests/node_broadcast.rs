@@ -13,8 +13,8 @@
 mod node_common;
 
 use node_common::{World, big, secs};
-use vinc_broadcast::Limits;
-use vinc_tests::NCmd;
+use pinc_broadcast::Limits;
+use pinc_tests::NCmd;
 
 const TOPIC: &[u8] = b"news";
 

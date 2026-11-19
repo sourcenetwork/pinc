@@ -1,6 +1,6 @@
 //! Trace generation for path MTU discovery: seeded runs of the real `Mtu` state machine of one path
-//! (`vinc-transport`, built with the `trace` feature), recorded as ndjson (`mtu.ndjson`) for the TLA+ trace check
-//! (`TraceMtu.tla`) and the Lean replay (`Vinc/TraceMtu.lean`).
+//! (`pinc-transport`, built with the `trace` feature), recorded as ndjson (`mtu.ndjson`) for the TLA+ trace check
+//! (`TraceMtu.tla`) and the Lean replay (`Pinc/TraceMtu.lean`).
 //!
 //! A run starts discovery and then makes the calls the connection makes: asks which size is due (with the path
 //! allowed or not, interface sizes from the minimum to a jumbo frame, low latency or not), sends, acknowledges,
@@ -24,8 +24,8 @@
 
 use std::fmt::Write as _;
 
-use vinc_tests::SplitMix64;
-use vinc_transport::conn::{HEADERS_V4, MIN_MTU, MtuProbe, MtuView, PROBE_MTU};
+use pinc_tests::SplitMix64;
+use pinc_transport::conn::{HEADERS_V4, MIN_MTU, MtuProbe, MtuView, PROBE_MTU};
 
 const TOP: u64 = (1 << 31) - 1;
 
@@ -198,19 +198,19 @@ fn path_mtu_runs_match_the_models() {
         r#""r":true"#,
     ] {
         assert!(
-            vinc_tests::soaking() || out.contains(needle) || wide.contains(needle),
+            pinc_tests::soaking() || out.contains(needle) || wide.contains(needle),
             "the runs never reach {needle}"
         );
     }
     assert!(
-        vinc_tests::soaking()
+        pinc_tests::soaking()
             || out
                 .lines()
                 .chain(wide.lines())
                 .any(|l| l.contains(r#""op":"bhc""#) && l.contains(r#""r":true,"#)),
         "the fallback is never taken"
     );
-    if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
+    if let Ok(dir) = std::env::var("PINC_TRACE_DIR") {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(std::path::Path::new(&dir).join("mtu.ndjson"), &out).unwrap();
         std::fs::write(std::path::Path::new(&dir).join("mtu_wide.ndjson"), &wide).unwrap();

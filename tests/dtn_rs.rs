@@ -9,10 +9,10 @@
 )]
 
 use proptest::prelude::*;
-use vinc_dtn::error::DtnError;
-use vinc_dtn::gf256::{inv, mul, mul_add, scale};
-use vinc_dtn::rs::Rs;
-use vinc_tests::SplitMix64;
+use pinc_dtn::error::DtnError;
+use pinc_dtn::gf256::{inv, mul, mul_add, scale};
+use pinc_dtn::rs::Rs;
+use pinc_tests::SplitMix64;
 
 fn block(rs: &Rs, len: usize, seed: u64) -> Vec<u8> {
     let mut b = vec![0; rs.n() * len];

@@ -53,7 +53,7 @@ pub struct Init {
     pub peers: Vec<PeerSpec>,
     /// The interface size the stack is told.
     pub mtu: u32,
-    /// The most nodes that may be in the group: sizes the VINC endpoint.
+    /// The most nodes that may be in the group: sizes the PINC endpoint.
     pub sessions: u32,
     /// Ask the site's router for a port mapping: the node's site has a port-mapping service.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -61,10 +61,10 @@ pub struct Init {
     /// The largest iroh gossip message, when the workload sets one (see `Pubsub::iroh_gossip_max`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub iroh_gossip_max: Option<u32>,
-    /// Delay-tolerant delivery for this node, on the stacks that have it (VINC); none leaves it off.
+    /// Delay-tolerant delivery for this node, on the stacks that have it (PINC); none leaves it off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dtn: Option<DtnInit>,
-    /// Record the node's trace and packet log and report them (VINC only; the other stacks ignore it).
+    /// Record the node's trace and packet log and report them (PINC only; the other stacks ignore it).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub trace: bool,
 }

@@ -9,10 +9,10 @@
 mod node_script;
 
 use node_script::{ScriptNode, hub_alpn, id_of, node_with};
-use vinc_core::{Event, SessionId};
-use vinc_node::{DTN_ALPN, Enabled, HUB_ALPN, NoApps, NodeEvent, SETS_ALPN, VALUES_ALPN};
-use vinc_security::Alpn;
-use vinc_tests::LayerApps;
+use pinc_core::{Event, SessionId};
+use pinc_node::{DTN_ALPN, Enabled, HUB_ALPN, NoApps, NodeEvent, SETS_ALPN, VALUES_ALPN};
+use pinc_security::Alpn;
+use pinc_tests::LayerApps;
 
 /// A thread with the stack a node needs.
 fn big<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
@@ -59,7 +59,7 @@ fn is_data_event(e: &Event) -> bool {
 }
 
 /// Run the node and return every endpoint event it handed the application.
-fn drive<A: vinc_node::Apps<vinc_tests::Caps>>(node: &mut ScriptNode<A>, now: u64) -> Vec<Event> {
+fn drive<A: pinc_node::Apps<pinc_tests::Caps>>(node: &mut ScriptNode<A>, now: u64) -> Vec<Event> {
     node.poll(now);
     let mut seen = Vec::new();
     while let Some(e) = node.poll_event() {

@@ -1,4 +1,4 @@
-//! The shared writer of the membership trace test: one ndjson file per proof part, written to `$VINC_TRACE_DIR`
+//! The shared writer of the membership trace test: one ndjson file per proof part, written to `$PINC_TRACE_DIR`
 //! when the variable is set.
 #![allow(dead_code, unreachable_pub, clippy::unwrap_used, clippy::expect_used)]
 
@@ -36,9 +36,9 @@ impl TraceWriter {
         self.files.get(file).map_or(0, |s| s.lines().count())
     }
 
-    /// Write every file into `$VINC_TRACE_DIR`, if it is set.
+    /// Write every file into `$PINC_TRACE_DIR`, if it is set.
     pub fn finish(&self) {
-        if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
+        if let Ok(dir) = std::env::var("PINC_TRACE_DIR") {
             std::fs::create_dir_all(&dir).unwrap();
             for (name, text) in &self.files {
                 std::fs::write(std::path::Path::new(&dir).join(name), text).unwrap();

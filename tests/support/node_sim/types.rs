@@ -171,9 +171,9 @@ pub enum NCmd {
     },
     /// Create a bundle for a recipient.
     DtnSend {
-        to: Box<vinc_dtn::seal::RecipientKeys>,
+        to: Box<pinc_dtn::seal::RecipientKeys>,
         payload: Vec<u8>,
-        plan: vinc_node::DtnPlan,
+        plan: pinc_node::DtnPlan,
     },
 }
 

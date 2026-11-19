@@ -10,11 +10,11 @@
 )]
 
 use std::hint::black_box;
-use vinc_table::{Array, Pool, Ring, Slot, SortedSlab, Storage};
+use pinc_table::{Array, Pool, Ring, Slot, SortedSlab, Storage};
 
-use vinc_tests::measure;
+use pinc_tests::measure;
 
-vinc_tests::install_counting_allocator!();
+pinc_tests::install_counting_allocator!();
 
 struct Rng(u64);
 

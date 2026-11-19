@@ -14,12 +14,12 @@
 use std::collections::HashSet;
 
 use proptest::prelude::*;
-use vinc_crypto::IdentityAlg;
-use vinc_security::{TicketBatch, TicketEntry};
-use vinc_tests::*;
-use vinc_transport::conn::{Drop, Event, PathId};
-use vinc_transport::frame::Frame;
-use vinc_wire::Writer;
+use pinc_crypto::IdentityAlg;
+use pinc_security::{TicketBatch, TicketEntry};
+use pinc_tests::*;
+use pinc_transport::conn::{Drop, Event, PathId};
+use pinc_transport::frame::Frame;
+use pinc_wire::Writer;
 
 #[derive(Debug, Clone)]
 enum F {

@@ -14,9 +14,9 @@
 mod node_common;
 
 use node_common::{World, big, secs};
-use vinc_core::{Answer, Command, Event, Query, Role, SessionStats};
-use vinc_node::{HUB_ALPN, NodeEvent};
-use vinc_tests::MS_NS;
+use pinc_core::{Answer, Command, Event, Query, Role, SessionStats};
+use pinc_node::{HUB_ALPN, NodeEvent};
+use pinc_tests::MS_NS;
 
 /// Every live session of an endpoint, as its counters.
 macro_rules! stats_list {

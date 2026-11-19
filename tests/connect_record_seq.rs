@@ -7,10 +7,10 @@ mod connect_rig;
 
 use connect_common::{SEC, big_stack};
 use connect_rig::{Ans, Custody, Rig};
-use vinc_connect::record::Record;
-use vinc_crypto::Software;
-use vinc_security::{Env, KeyRequest};
-use vinc_tests::{Answer, Host};
+use pinc_connect::record::Record;
+use pinc_crypto::Software;
+use pinc_security::{Env, KeyRequest};
+use pinc_tests::{Answer, Host};
 
 struct Soft(Box<Host>);
 

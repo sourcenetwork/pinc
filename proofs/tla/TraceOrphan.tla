@@ -1,7 +1,7 @@
 ----------------------------- MODULE TraceOrphan -----------------------------
 (***************************************************************************)
 (* Trace validation of the endpoint's table of held first-flight           *)
-(* fragments: vinc-core orphan.rs.                                         *)
+(* fragments: pinc-core orphan.rs.                                         *)
 (*                                                                         *)
 (* The Rust test tests/trace_orphan.rs drives real tables (built with the  *)
 (* cargo feature `trace`) with seeded calls: datagrams of every length up  *)
@@ -15,14 +15,14 @@
 (* table holds and from the bytes it gives out.                            *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds orphan.ndjson.        *)
+(* variable PINC_TRACE_DIR, the directory that holds orphan.ndjson.        *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, TLC, Json, IOUtils
 VARIABLES i, o, max, life
 vars == <<i, o, max, life>>
 INSTANCE OrphanOps
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/orphan.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/orphan.ndjson")
 Ev0 == Trace[i]
 \* the recorded table: the entries as sequences, an empty one for a free entry
 Same(y, v) == /\ DOMAIN y.slots = 1..Len(v.slots)

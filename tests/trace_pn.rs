@@ -1,6 +1,6 @@
 //! Trace generation for the packet-number codec: seeded calls of the real `encode_pn`, `decode_pn` and `pn_len_for`
-//! (`vinc-transport`), recorded as ndjson (`pn.ndjson`) for the TLA+ trace check (`TracePn.tla`) and the Lean replay
-//! (`Vinc/TracePn.lean`).
+//! (`pinc-transport`), recorded as ndjson (`pn.ndjson`) for the TLA+ trace check (`TracePn.tla`) and the Lean replay
+//! (`Pinc/TracePn.lean`).
 //!
 //! The expansion is called with numbers near the edges of the window of every width (just inside and just outside half
 //! a window of the next number expected), with and without a largest received, and with the truncated number beyond
@@ -24,8 +24,8 @@
 
 use std::fmt::Write as _;
 
-use vinc_tests::SplitMix64;
-use vinc_transport::packet::{MAX_PN, PacketError, WIDE_WINDOW, decode_pn, encode_pn, pn_len_for};
+use pinc_tests::SplitMix64;
+use pinc_transport::packet::{MAX_PN, PacketError, WIDE_WINDOW, decode_pn, encode_pn, pn_len_for};
 
 fn err_name(e: &PacketError) -> &'static str {
     match e {
@@ -137,15 +137,15 @@ fn packet_number_calls_match_the_models() {
     run(&mut rng, &mut wide, true, 6000);
     for needle in [r#""err":"ok""#, r#""err":"PnLength""#, r#""op":"dec""#, r#""op":"for""#] {
         assert!(
-            vinc_tests::soaking() || out.contains(needle),
+            pinc_tests::soaking() || out.contains(needle),
             "the calls never reach {needle}"
         );
     }
     assert!(
-        vinc_tests::soaking() || wide.contains(r#""err":"PacketNumber""#),
+        pinc_tests::soaking() || wide.contains(r#""err":"PacketNumber""#),
         "the wide calls never reach PacketNumber"
     );
-    if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
+    if let Ok(dir) = std::env::var("PINC_TRACE_DIR") {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(std::path::Path::new(&dir).join("pn.ndjson"), &out).unwrap();
         std::fs::write(std::path::Path::new(&dir).join("pn_wide.ndjson"), &wide).unwrap();

@@ -1,6 +1,6 @@
 --------------------------------- MODULE RangeOps ---------------------------------
 (***************************************************************************)
-(* The pure operations of a verified-range set (vinc-dag/src/ranges.rs).   *)
+(* The pure operations of a verified-range set (pinc-dag/src/ranges.rs).   *)
 (* A set is a sequence of <<start, end>> pairs, half-open, sorted. Shared  *)
 (* by the model (VerifiedRanges.tla) and by the trace check, so both use  *)
 (* one definition of insert.                                               *)

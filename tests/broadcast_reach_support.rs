@@ -4,7 +4,7 @@
 #![allow(dead_code, unreachable_pub, clippy::unwrap_used, clippy::indexing_slicing)]
 
 use crate::common::{Net, ty};
-use vinc_membership::NodeId;
+use pinc_membership::NodeId;
 
 pub const T: &[u8] = b"reach";
 
@@ -97,5 +97,5 @@ pub fn capture(net: &mut Net, i: usize, peers: &[usize]) -> Vec<u8> {
 /// A hub table's bytes for `records` records of no peers and an Ed25519 signature, and 8 peers named between them: one
 /// more record of no peers does not fit.
 pub fn room(records: usize) -> usize {
-    records * (vinc_broadcast::consts::REACH_RECORD_BASE + 64) + 8 * 32
+    records * (pinc_broadcast::consts::REACH_RECORD_BASE + 64) + 8 * 32
 }

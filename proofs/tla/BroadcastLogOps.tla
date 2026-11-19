@@ -1,6 +1,6 @@
 ------------------------------ MODULE BroadcastLogOps ------------------------------
 (***************************************************************************)
-(* The hub log of vinc-broadcast log.rs (HubLog), step for step: a byte    *)
+(* The hub log of pinc-broadcast log.rs (HubLog), step for step: a byte    *)
 (* ring that holds the heads and bodies, the entry queue, the index from a *)
 (* message id to its sequence number, and the base sequence number. A      *)
 (* message is Ring cells: the model writes the id into each cell its bytes *)

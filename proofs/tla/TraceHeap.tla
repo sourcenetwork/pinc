@@ -1,6 +1,6 @@
 ----------------------------- MODULE TraceHeap ------------------------------
 (***************************************************************************)
-(* Trace validation of the endpoint's deadline heap: vinc-core heap.rs.    *)
+(* Trace validation of the endpoint's deadline heap: pinc-core heap.rs.    *)
 (*                                                                         *)
 (* The Rust test tests/trace_heap.rs drives real heaps (built with the     *)
 (* cargo feature `trace`) with seeded calls: deadlines for new and held    *)
@@ -13,7 +13,7 @@
 (* and `deadline`.                                                         *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds heap.ndjson.          *)
+(* variable PINC_TRACE_DIR, the directory that holds heap.ndjson.          *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
 VARIABLES i, s
@@ -21,7 +21,7 @@ vars == <<i, s>>
 CONSTANT TIEHI
 INSTANCE HeapOps
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/heap.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/heap.ndjson")
 Ev0 == Trace[i]
 \* the recorded heap: the array, then the position and the deadline of each id (arrays count from 1)
 Same(y, v) == /\ y.hp = v.heap

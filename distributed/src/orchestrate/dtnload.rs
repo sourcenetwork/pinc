@@ -16,7 +16,7 @@ use crate::dtn::{self as rules, Dtn, Logs, Sent};
 use crate::error::{Error, Result};
 use crate::node::data::wall_ns;
 use crate::node::proto::{Cmd, Contact, DtnInit, DtnReport, PubSubReport};
-use crate::node::vinc::node_id;
+use crate::node::pinc::node_id;
 use crate::orchestrate::apps::{AppSet, QUICK};
 use crate::orchestrate::window::Window;
 use crate::orchestrate::{Ctx, Event, faults};
@@ -79,7 +79,7 @@ async fn one(ctx: &Ctx, b: &Cluster, stack: Stack, w: &Dtn, size: u64, rep: u32,
     let sealed = w.sealed_len(size).unwrap_or(size);
     let set = AppSet::new(b, plan, stack).with_dtn(|i| {
         let n = plan.nodes.get(i)?;
-        if stack != Stack::Vinc || !rules::runs_layer(n.role) {
+        if stack != Stack::Pinc || !rules::runs_layer(n.role) {
             return None;
         }
         let own = w.node(&n.name);
@@ -97,13 +97,13 @@ async fn one(ctx: &Ctx, b: &Cluster, stack: Stack, w: &Dtn, size: u64, rep: u32,
             max_sends: 8,
             dir: own
                 .filter(|o| o.persist)
-                .map(|_| format!("/tmp/vinc-dtn/{nonce}/{}", n.name)),
+                .map(|_| format!("/tmp/pinc-dtn/{nonce}/{}", n.name)),
             tamper_slices: own.is_some_and(|o| o.tamper_slices),
             tamper_one_slice: own.is_some_and(|o| o.tamper_one_slice),
             tamper_heads: own.is_some_and(|o| o.tamper_heads),
         })
     });
-    let outcome = if stack == Stack::Vinc {
+    let outcome = if stack == Stack::Pinc {
         body(ctx, b, &set, w, size, &mut r).await
     } else {
         baseline(ctx, b, &set, w, size, &mut r).await

@@ -20,7 +20,7 @@
 (* every refusal frees the slot of the refused request and no other; a    *)
 (* BUSY reset happens only with all slots held.                           *)
 (*                                                                         *)
-(* Lean counterpart: proofs/lean/Vinc/ValuesPlanServer.lean (held_le,      *)
+(* Lean counterpart: proofs/lean/Pinc/ValuesPlanServer.lean (held_le,      *)
 (* opened_busy, opened_free, supersede_iff, supersedes_iff, refuse_spec,  *)
 (* closed_iff), for every S.                                               *)
 (***************************************************************************)

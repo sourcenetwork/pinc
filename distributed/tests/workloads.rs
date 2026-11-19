@@ -18,10 +18,10 @@ use std::time::{Duration, Instant};
 use std::collections::BTreeMap;
 
 use serde_json::{Value, json};
-use vinc_distributed::dtn::{Check, Sent, evaluate};
-use vinc_distributed::node::proto::{Cmd, DtnInit, DtnReport, DtnWhat, Init, PeerSpec, PubSubReport, Reply, Request};
-use vinc_distributed::node::vinc::node_id;
-use vinc_distributed::scenario::{Role, Stack};
+use pinc_distributed::dtn::{Check, Sent, evaluate};
+use pinc_distributed::node::proto::{Cmd, DtnInit, DtnReport, DtnWhat, Init, PeerSpec, PubSubReport, Reply, Request};
+use pinc_distributed::node::pinc::node_id;
+use pinc_distributed::scenario::{Role, Stack};
 
 struct Prog {
     child: Child,
@@ -32,7 +32,7 @@ struct Prog {
 
 impl Prog {
     fn start(init: &Init) -> Self {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_vinc-distributed"))
+        let mut child = Command::new(env!("CARGO_BIN_EXE_pinc-distributed"))
             .args(["node", "app"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -196,8 +196,8 @@ fn pubsub_on(stack: Stack, net: u8) {
 }
 
 #[test]
-fn vinc_delivers_every_message_once() {
-    pubsub_on(Stack::Vinc, 101);
+fn pinc_delivers_every_message_once() {
+    pubsub_on(Stack::Pinc, 101);
 }
 
 #[test]
@@ -243,8 +243,8 @@ fn sync_on(stack: Stack, net: u8, providers: u16, size: u64) {
 }
 
 #[test]
-fn vinc_fetches_a_value_from_two_providers() {
-    sync_on(Stack::Vinc, 104, 2, 3 * (1 << 20) + 17);
+fn pinc_fetches_a_value_from_two_providers() {
+    sync_on(Stack::Pinc, 104, 2, 3 * (1 << 20) + 17);
 }
 
 #[test]
@@ -258,27 +258,27 @@ fn libp2p_fetches_a_value_from_two_providers() {
 }
 
 #[test]
-fn vinc_fetches_a_small_value_from_three_providers() {
-    sync_on(Stack::Vinc, 110, 3, 3 << 20);
+fn pinc_fetches_a_small_value_from_three_providers() {
+    sync_on(Stack::Pinc, 110, 3, 3 << 20);
 }
 
 /// A value of 48 MiB held by two providers reaches the consumer over real sockets on loopback. It once did not finish
 /// in a minute: a provider's session that began on the relay never moved to the direct path, and the relay's quota ran
 /// out.
 #[test]
-fn vinc_fetches_a_large_value_from_two_providers() {
-    sync_on(Stack::Vinc, 111, 2, 48 << 20);
+fn pinc_fetches_a_large_value_from_two_providers() {
+    sync_on(Stack::Pinc, 111, 2, 48 << 20);
 }
 
 #[test]
-fn vinc_fetches_a_large_value_from_one_provider() {
-    sync_on(Stack::Vinc, 112, 1, 48 << 20);
+fn pinc_fetches_a_large_value_from_one_provider() {
+    sync_on(Stack::Pinc, 112, 1, 48 << 20);
 }
 
 /// Two sets that differ in a few items on each side reconcile to exactly that difference.
 #[test]
-fn vinc_reconciles_two_sets_to_their_exact_difference() {
-    let mut progs: Vec<Prog> = group(Stack::Vinc, 107, 2).iter().map(|(i, _)| Prog::start(i)).collect();
+fn pinc_reconciles_two_sets_to_their_exact_difference() {
+    let mut progs: Vec<Prog> = group(Stack::Pinc, 107, 2).iter().map(|(i, _)| Prog::start(i)).collect();
     for p in &mut progs {
         p.ok(
             Cmd::Join {
@@ -317,12 +317,12 @@ fn dtn_log(p: &mut Prog) -> DtnReport {
     serde_json::from_value(v["dtn"].clone()).unwrap()
 }
 
-/// Store and forward through vinc-node's own layer: the source sends to a node that has not started, hands a copy to
+/// Store and forward through pinc-node's own layer: the source sends to a node that has not started, hands a copy to
 /// the carrier and ends; the destination starts later and gets the bundle, intact and once, from the carrier. The
 /// logs pass the custody and copy rules.
 #[test]
-fn vinc_carries_a_bundle_to_a_node_that_comes_online_after_its_source_left() {
-    let mut inits = group(Stack::Vinc, 113, 3);
+fn pinc_carries_a_bundle_to_a_node_that_comes_online_after_its_source_left() {
+    let mut inits = group(Stack::Pinc, 113, 3);
     for (init, role) in &mut inits {
         if *role == Role::Peer {
             init.dtn = Some(DtnInit {
@@ -460,10 +460,10 @@ fn a_request_that_is_not_understood_is_answered_and_the_program_goes_on() {
     assert!(progs[1].call(Cmd::Report, 30).ok);
 }
 
-/// With tracing asked for, a VINC node reports its trace and packet log; without, the report has no trace.
+/// With tracing asked for, a PINC node reports its trace and packet log; without, the report has no trace.
 #[test]
-fn a_traced_vinc_node_reports_its_packet_log_and_an_untraced_one_does_not() {
-    let mut inits = group(Stack::Vinc, 140, 2);
+fn a_traced_pinc_node_reports_its_packet_log_and_an_untraced_one_does_not() {
+    let mut inits = group(Stack::Pinc, 140, 2);
     for (init, _) in &mut inits {
         init.trace = init.name == "p-2";
     }

@@ -9,17 +9,17 @@
 
 use core::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-use vinc_core::{
+use pinc_core::{
     Answer, Command, CommandError, Endpoint, EndpointConfig, Event, MAX_DATAGRAM, Query, Role, SessionId, Slot,
     Transmit, Value,
 };
-use vinc_crypto::identity::MAX_SIGNATURE_LEN;
-use vinc_crypto::{Drbg, IdentityAlg, Keypair, NodeId, Software};
-use vinc_security::{Env, KeyHandle, LocalIdentity, PrekeyPolicy, SoftKeys, SoftPrekeys};
-use vinc_transport::conn::{Resources, Tables};
-use vinc_transport::recovery::LossEstimate;
-use vinc_transport::stream::pool::{BufferPool, RawChunk};
-use vinc_transport::stream::{self, NoSource, RecvStatus, Streams};
+use pinc_crypto::identity::MAX_SIGNATURE_LEN;
+use pinc_crypto::{Drbg, IdentityAlg, Keypair, NodeId, Software};
+use pinc_security::{Env, KeyHandle, LocalIdentity, PrekeyPolicy, SoftKeys, SoftPrekeys};
+use pinc_transport::conn::{Resources, Tables};
+use pinc_transport::recovery::LossEstimate;
+use pinc_transport::stream::pool::{BufferPool, RawChunk};
+use pinc_transport::stream::{self, NoSource, RecvStatus, Streams};
 
 use crate::mem::{self, CHUNKS, SLOTS};
 
@@ -50,7 +50,7 @@ type Ep<'s, 'a> = Endpoint<
     CLIENT_TICKETS,
 >;
 
-const ALPN: &[u8] = b"vinc/noalloc";
+const ALPN: &[u8] = b"pinc/noalloc";
 const PAYLOAD: &[u8] = b"one stream, no heap";
 const DIALER: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)), 4433);
 const LISTENER: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2)), 4433);

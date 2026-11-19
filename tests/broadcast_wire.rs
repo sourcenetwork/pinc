@@ -15,13 +15,13 @@ mod common;
 
 use common::{ALGS, Net, SEC, keypair};
 use proptest::prelude::*;
-use vinc_broadcast::consts::DEFAULT_MAX_BODY;
-use vinc_broadcast::wire::{self, Head, build, ty};
-use vinc_broadcast::wire2::Head2;
-use vinc_broadcast::{auth, consts};
-use vinc_crypto::IdentityAlg;
-use vinc_crypto::identity::MAX_SIGNATURE_LEN;
-use vinc_wire::hlc::Hlc;
+use pinc_broadcast::consts::DEFAULT_MAX_BODY;
+use pinc_broadcast::wire::{self, Head, build, ty};
+use pinc_broadcast::wire2::Head2;
+use pinc_broadcast::{auth, consts};
+use pinc_crypto::IdentityAlg;
+use pinc_crypto::identity::MAX_SIGNATURE_LEN;
+use pinc_wire::hlc::Hlc;
 
 const T: &[u8] = b"wire";
 

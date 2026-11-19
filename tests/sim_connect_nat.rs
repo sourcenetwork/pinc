@@ -11,10 +11,10 @@
 mod connect_sim_common;
 
 use connect_sim_common::*;
-use vinc_connect::client::Notice;
-use vinc_connect::record::Reach;
-use vinc_core::is_relay_addr;
-use vinc_sim::{NatKind, NodeId, SEC};
+use pinc_connect::client::Notice;
+use pinc_connect::record::Reach;
+use pinc_core::is_relay_addr;
+use pinc_sim::{NatKind, NodeId, SEC};
 
 /// Two relays, A behind a NAT of `ka` and B behind one of `kb`; A dials B at 6 s. Returns the world and the nodes.
 fn pair(ka: NatKind, kb: NatKind, seed: u64) -> (World, NodeId, NodeId) {
@@ -68,7 +68,7 @@ fn every_nat_kind_gets_a_class_a_session_and_a_path() {
             w.sim.command(
                 secs(9),
                 a,
-                vinc_tests::Cmd::Send {
+                pinc_tests::Cmd::Send {
                     session: sa,
                     data: b"ping".to_vec(),
                 },
@@ -78,7 +78,7 @@ fn every_nat_kind_gets_a_class_a_session_and_a_path() {
             w.sim.command(
                 secs(10),
                 b,
-                vinc_tests::Cmd::Send {
+                pinc_tests::Cmd::Send {
                     session: sb,
                     data: b"pong".to_vec(),
                 },

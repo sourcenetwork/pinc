@@ -11,9 +11,9 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use proptest::prelude::*;
-use vinc_portmap::natpmp::{self, NatPmpError};
-use vinc_portmap::pcp::{self, MapRequest, PcpError};
-use vinc_portmap::upnp::{self, Call, SoapResult, Url};
+use pinc_portmap::natpmp::{self, NatPmpError};
+use pinc_portmap::pcp::{self, MapRequest, PcpError};
+use pinc_portmap::upnp::{self, Call, SoapResult, Url};
 
 fn req() -> MapRequest {
     MapRequest {

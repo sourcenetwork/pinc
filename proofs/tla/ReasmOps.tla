@@ -1,6 +1,6 @@
 ------------------------------ MODULE ReasmOps ------------------------------
 (***************************************************************************)
-(* The operations of vinc-transport conn/reasm.rs (Reassembly), step for   *)
+(* The operations of pinc-transport conn/reasm.rs (Reassembly), step for   *)
 (* step: one handshake message put together from fragments that arrive in  *)
 (* any order and any number of times, kept as at most nr disjoint sorted   *)
 (* runs [start, end). Reasm.tla checks them over every interleaving at     *)

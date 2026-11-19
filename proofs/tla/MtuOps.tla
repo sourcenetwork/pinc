@@ -1,6 +1,6 @@
 ------------------------------- MODULE MtuOps -------------------------------
 (***************************************************************************)
-(* The operations of vinc-transport conn/mtu.rs (the Mtu state of one path),*)
+(* The operations of pinc-transport conn/mtu.rs (the Mtu state of one path),*)
 (* call for call: probing the path datagram size, the floor, and the       *)
 (* black-hole fallback. Mtu.tla checks them over every interleaving at     *)
 (* small sizes; TraceMtu.tla replays the recorded calls of the real code.  *)

@@ -1,6 +1,6 @@
 ----------------------------- MODULE BroadcastPending -----------------------------
 (***************************************************************************)
-(* The publisher's table of unacknowledged publishes in vinc-broadcast     *)
+(* The publisher's table of unacknowledged publishes in pinc-broadcast     *)
 (* publish.rs (Topics::publish, pub_retry) and frames.rs (on_pack), for    *)
 (* any number of publishes. The application calls publish again and       *)
 (* again; each call is refused (Refused::Backlog, the caller hears it) or  *)
@@ -20,7 +20,7 @@
 (* answered with an id and the publish was never tracked, so TLC finds     *)
 (* EveryOkTracked violated.                                                *)
 (*                                                                         *)
-(* Lean counterpart: proofs/lean/Vinc/BroadcastPublish.lean (publish,      *)
+(* Lean counterpart: proofs/lean/Pinc/BroadcastPublish.lean (publish,      *)
 (* publish_tracked, publish_refused_iff, push_drops).                      *)
 (***************************************************************************)
 EXTENDS Integers, FiniteSets, TLC

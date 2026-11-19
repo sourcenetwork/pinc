@@ -1,4 +1,4 @@
-//! A simulated relay node: the `vinc-connect` relay with its own endpoint (the hub), the protected carrier accepting
+//! A simulated relay node: the `pinc-connect` relay with its own endpoint (the hub), the protected carrier accepting
 //! sessions over simulated TCP and WebSocket streams, and the UDP side of the relay.
 #![allow(
     missing_docs,
@@ -18,14 +18,14 @@
 use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
 
-use vinc_connect::carrier::MAX_FRAME_LEN;
-use vinc_connect::carrier::session::{self, Poll, ProtectedCarrier};
-use vinc_connect::carrier::ws::{self, Decoder, Opcode, Role as WsRole, WsFrame};
-use vinc_connect::relay::{Config, Effect, Relay, SessionId as RSession, Sink, Trace, UdpTarget};
-use vinc_core::{Command, Event, Query, SessionId, is_relay_addr, relay_addr, relay_parts};
-use vinc_crypto::NodeId;
-use vinc_security::{ConnId, Env, KeyHandle, ResponderStores, SoftKeys};
-use vinc_sim::{StreamEvent, StreamId, StreamOp, Time};
+use pinc_connect::carrier::MAX_FRAME_LEN;
+use pinc_connect::carrier::session::{self, Poll, ProtectedCarrier};
+use pinc_connect::carrier::ws::{self, Decoder, Opcode, Role as WsRole, WsFrame};
+use pinc_connect::relay::{Config, Effect, Relay, SessionId as RSession, Sink, Trace, UdpTarget};
+use pinc_core::{Command, Event, Query, SessionId, is_relay_addr, relay_addr, relay_parts};
+use pinc_crypto::NodeId;
+use pinc_security::{ConnId, Env, KeyHandle, ResponderStores, SoftKeys};
+use pinc_sim::{StreamEvent, StreamId, StreamOp, Time};
 
 use crate::Caps;
 use crate::connect_host::{Ev, Host, Outbox};
@@ -152,7 +152,7 @@ impl RelayNode {
 
     fn session_remote(&self, sid: SessionId) -> Option<SocketAddr> {
         match self.host.ep.query(Query::Stats(sid)) {
-            vinc_core::Answer::Stats(st) if st.path_validated => st.route.map(|(_, r)| r).filter(|r| !is_relay_addr(r)),
+            pinc_core::Answer::Stats(st) if st.path_validated => st.route.map(|(_, r)| r).filter(|r| !is_relay_addr(r)),
             _ => None,
         }
     }
@@ -188,7 +188,7 @@ impl RelayNode {
                         now,
                         Command::SetRole {
                             session,
-                            role: vinc_core::Role::Member,
+                            role: pinc_core::Role::Member,
                         },
                     );
                 }
@@ -236,8 +236,8 @@ impl RelayNode {
             match e {
                 Eff::Carrier(to, plain) => {
                     if matches!(
-                        vinc_connect::carrier::Frame::decode(&plain),
-                        Ok(vinc_connect::carrier::Frame::DnsReply { .. })
+                        pinc_connect::carrier::Frame::decode(&plain),
+                        Ok(pinc_connect::carrier::Frame::DnsReply { .. })
                     ) {
                         self.dns_carrier += 1;
                     }
@@ -245,8 +245,8 @@ impl RelayNode {
                 }
                 Eff::Udp(UdpTarget::Reply(a), d) => {
                     if matches!(
-                        vinc_connect::relay::datagram::Datagram::decode(&d),
-                        Ok(vinc_connect::relay::datagram::Datagram::DnsReply { .. })
+                        pinc_connect::relay::datagram::Datagram::decode(&d),
+                        Ok(pinc_connect::relay::datagram::Datagram::DnsReply { .. })
                     ) {
                         self.dns_udp += 1;
                     }
@@ -443,10 +443,10 @@ impl RelayNode {
         self.pump(now);
     }
 
-    pub fn poll_transmit(&mut self, buf: &mut [u8]) -> Option<vinc_sim::Transmit> {
+    pub fn poll_transmit(&mut self, buf: &mut [u8]) -> Option<pinc_sim::Transmit> {
         let (local, remote, d) = self.out.datagrams.pop_front()?;
         buf[..d.len()].copy_from_slice(&d);
-        Some(vinc_sim::Transmit {
+        Some(pinc_sim::Transmit {
             local,
             remote,
             len: d.len(),
@@ -544,9 +544,9 @@ impl RelayNode {
         self.pump(now);
     }
 
-    pub fn session_stats(&self, s: SessionId) -> Option<vinc_core::SessionStats> {
+    pub fn session_stats(&self, s: SessionId) -> Option<pinc_core::SessionStats> {
         match self.host.ep.query(Query::Stats(s)) {
-            vinc_core::Answer::Stats(st) => Some(st),
+            pinc_core::Answer::Stats(st) => Some(st),
             _ => None,
         }
     }

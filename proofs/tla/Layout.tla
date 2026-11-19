@@ -1,6 +1,6 @@
 ------------------------------ MODULE Layout ------------------------------
 (***************************************************************************)
-(* The tree layout arithmetic of vinc-dag (tree/layout.rs), written step   *)
+(* The tree layout arithmetic of pinc-dag (tree/layout.rs), written step   *)
 (* for step on the machine integers of U64.tla: `Layout::new`,             *)
 (* `for_group_bytes` (on a usize of 32 or 64 bits), `groups`, `depth`,     *)
 (* `outboard_size`, `group_size` (the saturating multiply), `group_range`, *)
@@ -36,7 +36,7 @@
 (*    boundary sizes, whose depth reaches 54;                              *)
 (*  - for_group_bytes on both usize widths, new for every log 0..70.       *)
 (*                                                                         *)
-(* Lean counterparts (proofs/lean/Vinc/Layout.lean, Machine.lean):         *)
+(* Lean counterparts (proofs/lean/Pinc/Layout.lean, Machine.lean):         *)
 (*   GroupsOK        Layout.groups_le, Machine.groupsM_eq                  *)
 (*   DepthOK         Layout.depth_eq, Layout.ht_eq, Machine.depthM_eq      *)
 (*   OutboardOK      Layout.outboardSize_eq, outboardSize_lt,              *)
@@ -53,7 +53,7 @@
 (*                   Machine.preorderIndexM_eq, preorderOffset_lt          *)
 (*   ForGroupBytesOK Machine.forGroupBytesM_iff                            *)
 (*   NewOK           Layout.new (InvalidGroupSize above log 20)            *)
-(*   the boundary sets  Vinc.Link (Layout boundary theorems)               *)
+(*   the boundary sets  Pinc.Link (Layout boundary theorems)               *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC
 

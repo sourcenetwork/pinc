@@ -1,4 +1,4 @@
-//! Benchmarks of `vinc-broadcast`: a message from the publisher through a hub to a subscriber, end to end - the
+//! Benchmarks of `pinc-broadcast`: a message from the publisher through a hub to a subscriber, end to end - the
 //! publisher signs and sends it, the hub verifies, logs and pushes it and acknowledges it, the subscriber verifies
 //! and delivers it, and the publisher takes the acknowledgement.
 #![allow(
@@ -12,9 +12,9 @@
 use std::hint::black_box;
 
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
-use vinc_broadcast::wire::ty;
-use vinc_broadcast::{Config, Event, Host, IdKey, Lane, Topics};
-use vinc_crypto::{IdentityAlg, Keypair};
+use pinc_broadcast::wire::ty;
+use pinc_broadcast::{Config, Event, Host, IdKey, Lane, Topics};
+use pinc_crypto::{IdentityAlg, Keypair};
 
 type NodeId = [u8; 32];
 
@@ -111,7 +111,7 @@ impl Rig {
                 hubs: &hubs,
                 incarnation: 1 << 16,
                 trace: false,
-                limits: vinc_broadcast::Limits::default(),
+                limits: pinc_broadcast::Limits::default(),
                 map_keys: IdKey::new(0x5eed, &MAP_SECRETS).unwrap(),
             };
             Topics::start(&cfg, Box::new(it.next().unwrap()), 1_000_000_000, WALL).unwrap()

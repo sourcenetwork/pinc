@@ -1,5 +1,5 @@
 //! Trace generation for the bundle layout (`SliceLayout`): the real code on boundary parameters, recorded as ndjson
-//! (`dtn_layout.ndjson`) for the TLA+ trace check (`TraceDtnLayout.tla`) and the Lean replay (`Vinc/TraceDtnLayout.lean`).
+//! (`dtn_layout.ndjson`) for the TLA+ trace check (`TraceDtnLayout.tla`) and the Lean replay (`Pinc/TraceDtnLayout.lean`).
 //!
 //! A run sweeps `(k, m)` over the validity boundary (`k = 0`, `k + m = 255` and `256`), the slice logs 0, 3, 4 and 5
 //! and payload lengths around the data counts: 0, 1, `D * plain` and its neighbours for small `D`, for `D = 2^j` and
@@ -8,7 +8,7 @@
 //! the boundary indices `block_k`, `block_n`, `block_start`, `locate`, `data_symbol` and `byte_range`. A `u64` is
 //! four 16-bit limbs, as in the other layout traces. Every result is checked here against `u128` arithmetic written
 //! apart from the code, so the test is meaningful without the proof tools. The trace is written to the directory in
-//! `VINC_TRACE_DIR` when it is set; otherwise nothing is written.
+//! `PINC_TRACE_DIR` when it is set; otherwise nothing is written.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -30,9 +30,9 @@ mod dtn_common;
 use std::fmt::Write as _;
 
 use dtn_common::{keypair, make, plan, recipient};
-use vinc_crypto::IdentityAlg;
-use vinc_dtn::hlc::Hlc;
-use vinc_dtn::layout::SliceLayout;
+use pinc_crypto::IdentityAlg;
+use pinc_dtn::hlc::Hlc;
+use pinc_dtn::layout::SliceLayout;
 
 fn limbs(v: u64) -> String {
     format!(
@@ -395,7 +395,7 @@ fn layout_trace() {
     }
     assert!(valid > 100);
     clock_events(&mut out);
-    if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
+    if let Ok(dir) = std::env::var("PINC_TRACE_DIR") {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             std::path::Path::new(&dir).join("dtn_layout.ndjson"),

@@ -1,4 +1,4 @@
-//! Network events of the VINCER connection: path MTU discovery, key updates, migration, NAT rebinding, path
+//! Network events of the PINCER connection: path MTU discovery, key updates, migration, NAT rebinding, path
 //! validation, and the choice between relay and direct paths.
 #![allow(
     clippy::unwrap_used,
@@ -12,11 +12,11 @@
     clippy::cast_precision_loss
 )]
 
-use vinc_crypto::IdentityAlg;
-use vinc_tests::*;
-use vinc_transport::conn::{PathId, PathInfo};
-use vinc_transport::frame::ext;
-use vinc_transport::recovery::PathKind;
+use pinc_crypto::IdentityAlg;
+use pinc_tests::*;
+use pinc_transport::conn::{PathId, PathInfo};
+use pinc_transport::frame::ext;
+use pinc_transport::recovery::PathKind;
 
 fn connected<'a>(w: &'a mut World, sa: &'a mut Store, sb: &'a mut Store, link: Link) -> Net<'a, 'a> {
     let mut net = setup(w, sa, sb, link);

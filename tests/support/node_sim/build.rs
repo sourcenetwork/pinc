@@ -13,7 +13,7 @@ fn build<A: SimApps>(
     let tag = spec.tag;
     let kp = Keypair::from_seed(alg, &vec![tag; alg.seed_len()]).unwrap();
     let identity = LocalIdentity::from_keypair(&kp, KeyHandle(1)).unwrap();
-    let prov = Caps(vinc_crypto::Software, true);
+    let prov = Caps(pinc_crypto::Software, true);
     let mut drbg = Drbg::new(&[tag ^ 0x5a; 32]);
     let mut cfg = EndpointConfig::new(u64::from(tag) * 0x9E37_79B9);
     cfg.conn.max_gso = 1;

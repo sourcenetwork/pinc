@@ -10,7 +10,7 @@
 (* received at a time not after the clock. Records are verified or not     *)
 (* (the signature check is a predicate of the bytes, see the Ops module).  *)
 (*                                                                         *)
-(* Invariants (Lean: Vinc/ConnectRecordsThm.lean):                         *)
+(* Invariants (Lean: Pinc/ConnectRecordsThm.lean):                         *)
 (*  Bounded     at most cf.R records                                       *)
 (*  Keyed       the store keeps at most one record per node id, and the    *)
 (*              record under an id names that id                           *)

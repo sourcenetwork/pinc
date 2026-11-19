@@ -1,6 +1,6 @@
 name = "low-bandwidth"
 about = "A 2G or NB-IoT class link, emulated (its delay, loss and rate, not the radio): 1 s round trip (500 ms each way), 2% loss per packet each way, 0.05 Mbit/s each way; typical is 10 to 100 kbit/s, round trips of 600 ms to 2 s and 1 to 5% loss."
-stacks = ["vinc", "iroh", "libp2p"]
+stacks = ["pinc", "iroh", "libp2p"]
 repetitions = 3
 
 [[sites]]

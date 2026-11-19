@@ -1,6 +1,6 @@
 ------------------------------ MODULE DtnLayout ------------------------------
 (***************************************************************************)
-(* The geometry of a bundle, vinc-dtn/src/layout.rs, written step for step *)
+(* The geometry of a bundle, pinc-dtn/src/layout.rs, written step for step *)
 (* on the machine integers of U64.tla: `SliceLayout::new`, `try_total_len`,*)
 (* `data_symbols`, `padded_len`, `blocks`, `block_k`, `block_n`,           *)
 (* `block_start`, `total_symbols`, `total_len`, `locate`, `data_symbol`    *)
@@ -27,7 +27,7 @@
 (* block_n, block_start at the boundary blocks, locate, data_symbol and    *)
 (* byte_range at the boundary symbols and every pair of boundary symbols.  *)
 (*                                                                         *)
-(* Lean counterpart (proofs/lean/Vinc/DtnLayout.lean, on unbounded         *)
+(* Lean counterpart (proofs/lean/Pinc/DtnLayout.lean, on unbounded         *)
 (* naturals): NewOK new_iff / valid_iff, CountsOK data_spec blocks_spec    *)
 (* padding_lt, FitOK all_fit, BlockOK blockK_spec blockN_spec              *)
 (* blockStart_spec blocks_cover last_block_end, LocateOK locate_iff        *)

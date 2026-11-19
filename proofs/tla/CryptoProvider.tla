@@ -1,11 +1,11 @@
 ---------------------------- MODULE CryptoProvider ----------------------------
 (***************************************************************************)
-(* The provider of vinc-crypto (provider.rs, software.rs): the length      *)
+(* The provider of pinc-crypto (provider.rs, software.rs): the length      *)
 (* checks and errors of every method, the AEAD wrappers, the sampling of   *)
 (* the header protection mask (RFC 9001 5.4.3 and 5.4.4), the X25519       *)
 (* non-contributory check and the ML-KEM parsers. The primitives are       *)
 (* abstract; the nonce of an AEAD call is a [u8; 12] passed through        *)
-(* (the protocol nonce is vinc-security's record.rs, checked in Record.tla *)
+(* (the protocol nonce is pinc-security's record.rs, checked in Record.tla *)
 (* NoNonceReuse).                                                          *)
 (*                                                                         *)
 (* A ChaCha20 mask: the first 4 bytes of the 16-byte sample are the block  *)
@@ -26,7 +26,7 @@
 (*                     nonce                                               *)
 (*   AeadErrors, DhRule, KemRules  the exact errors                        *)
 (* TraceCrypto.tla checks the recorded calls against these operators.      *)
-(* Lean counterpart: proofs/lean/Vinc/CryptoProvider.lean.                 *)
+(* Lean counterpart: proofs/lean/Pinc/CryptoProvider.lean.                 *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
 

@@ -1,6 +1,6 @@
 ------------------------------ MODULE ReachOps ------------------------------
 (***************************************************************************)
-(* The operations of vinc-core reach.rs (ReachRing), step for step: the    *)
+(* The operations of pinc-core reach.rs (ReachRing), step for step: the    *)
 (* REACH_OUT bodies received from peers, in N (REACH_SLOTS = 4) places     *)
 (* numbered from 0, each holding a session, its body and the stamp of its  *)
 (* put, or nothing, and the ring's put counter `clock`.                    *)

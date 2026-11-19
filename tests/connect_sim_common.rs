@@ -17,12 +17,12 @@
 
 use std::net::{IpAddr, SocketAddr};
 
-use vinc_connect::client::Notice;
-use vinc_core::{Event, SessionId};
-use vinc_sim::{
+use pinc_connect::client::Notice;
+use pinc_core::{Event, SessionId};
+use pinc_sim::{
     LanConfig, LanId, LinkConfig, MS, NatConfig, NatId, NatKind, NodeId, PortPolicy, SEC, Sim, SimConfig, Time,
 };
-use vinc_tests::{CNode, ClientSpec, Cmd, Ev, RelaySpec, add_relay, ip4, spec};
+use pinc_tests::{CNode, ClientSpec, Cmd, Ev, RelaySpec, add_relay, ip4, spec};
 
 pub const OWD: Time = 10 * MS;
 
@@ -81,7 +81,7 @@ impl World {
 
     /// A client behind `nat`.
     pub fn client_behind(&mut self, s: &ClientSpec, nat: NatId) -> NodeId {
-        let c = vinc_tests::Client::new(s);
+        let c = pinc_tests::Client::new(s);
         let n = self.sim.add_node(CNode::Client(Box::new(c)));
         self.sim.add_iface_behind(n, s.addr.ip(), nat);
         self.sim.command(s.start, n, Cmd::Tick);
@@ -90,7 +90,7 @@ impl World {
 
     /// A client with a public address.
     pub fn client_public(&mut self, s: &ClientSpec) -> NodeId {
-        let c = vinc_tests::Client::new(s);
+        let c = pinc_tests::Client::new(s);
         let n = self.sim.add_node_at(CNode::Client(Box::new(c)), s.addr.ip());
         self.sim.command(s.start, n, Cmd::Tick);
         n
@@ -98,7 +98,7 @@ impl World {
 
     /// A client on a LAN.
     pub fn client_in(&mut self, s: &ClientSpec, lan: LanId) -> NodeId {
-        let c = vinc_tests::Client::new(s);
+        let c = pinc_tests::Client::new(s);
         let n = self.sim.add_node(CNode::Client(Box::new(c)));
         self.sim.add_iface_in(n, s.addr.ip(), lan);
         self.sim.command(s.start, n, Cmd::Tick);
@@ -115,11 +115,11 @@ impl World {
         out
     }
 
-    pub fn client(&self, n: NodeId) -> &vinc_tests::Client {
+    pub fn client(&self, n: NodeId) -> &pinc_tests::Client {
         self.sim.node(n).client()
     }
 
-    pub fn relay_node(&self, n: NodeId) -> &vinc_tests::RelayNode {
+    pub fn relay_node(&self, n: NodeId) -> &pinc_tests::RelayNode {
         self.sim.node(n).relay()
     }
 
@@ -135,7 +135,7 @@ impl World {
             Cmd::Dial {
                 node,
                 hints,
-                role: vinc_core::Role::Other,
+                role: pinc_core::Role::Other,
             },
         );
     }

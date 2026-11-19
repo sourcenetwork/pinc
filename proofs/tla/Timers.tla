@@ -1,7 +1,7 @@
 -------------------------------- MODULE Timers --------------------------------
 (***************************************************************************)
-(* The timers and the closing state of the VINCER connection               *)
-(* (vinc-transport conn/timer.rs, conn/life.rs; TimersOps.tla has the      *)
+(* The timers and the closing state of the PINCER connection               *)
+(* (pinc-transport conn/timer.rs, conn/life.rs; TimersOps.tla has the      *)
 (* operators) over every interleaving of the calls that move them, on a    *)
 (* small clock: handle_timeout (with every close a component may decide    *)
 (* in it), a datagram heard or refused (with SLEEP and CLOSE), frames that *)
@@ -55,7 +55,7 @@
 (* handshaking connection, so a dialing side whose peer never confirmed    *)
 (* the session stays connected); Timers_close is the reachability witness  *)
 (* of a CLOSE leaving and Timers_carrier that of a carrier close.          *)
-(* Lean counterpart: proofs/lean/Vinc/TransportTimers*.lean.               *)
+(* Lean counterpart: proofs/lean/Pinc/TransportTimers*.lean.               *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
 CONSTANTS IDLE, HOLD, WAKE, LDM, CF, IR, TMAX, KMAX, KAS, ERR, CD, BUG

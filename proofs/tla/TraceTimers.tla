@@ -1,7 +1,7 @@
 ----------------------------- MODULE TraceTimers ------------------------------
 (***************************************************************************)
-(* Trace validation of the timers and the closing state of the VINCER     *)
-(* connection: vinc-transport conn/timer.rs and conn/life.rs.              *)
+(* Trace validation of the timers and the closing state of the PINCER     *)
+(* connection: pinc-transport conn/timer.rs and conn/life.rs.              *)
 (*                                                                         *)
 (* The Rust test tests/trace_timers.rs drives scripted pairs of real       *)
 (* connections (built with the cargo feature `trace`) call by call: the    *)
@@ -40,7 +40,7 @@
 (* microseconds), with the real constants.                                 *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds timers.ndjson.        *)
+(* variable PINC_TRACE_DIR, the directory that holds timers.ndjson.        *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, TLC, Json, IOUtils
 CONSTANTS IDLE, HOLD, WAKE, LDM, CF, IR
@@ -49,7 +49,7 @@ vars == <<i, s, closes>>
 INSTANCE TimersOps
 
 K == [idle |-> IDLE, hold |-> HOLD, wake |-> WAKE, ldm |-> LDM, cf |-> CF, ir |-> IR]
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/timers.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/timers.ndjson")
 E == Trace[i]
 N == E.n
 St == s[N]

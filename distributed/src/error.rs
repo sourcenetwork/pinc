@@ -42,7 +42,7 @@ impl fmt::Display for Error {
             }
             Self::Leftovers(l) => write!(
                 f,
-                "a previous run left {} object(s) behind ({}); run `vinc-distributed clean` first",
+                "a previous run left {} object(s) behind ({}); run `pinc-distributed clean` first",
                 l.len(),
                 l.join(", ")
             ),

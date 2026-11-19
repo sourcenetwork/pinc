@@ -1,6 +1,6 @@
 -------------------------- MODULE ConnectTableOps --------------------------
 (***************************************************************************)
-(* The operators of the bounded tables of vinc-connect/src/relay/table.rs, *)
+(* The operators of the bounded tables of pinc-connect/src/relay/table.rs, *)
 (* step for step: Table (open addressing, linear probing, backward-shift   *)
 (* deletion, retain) and Cache (direct mapped).                            *)
 (*                                                                         *)

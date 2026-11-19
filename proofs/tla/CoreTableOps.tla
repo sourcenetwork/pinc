@@ -1,7 +1,7 @@
 ---------------------------- MODULE CoreTableOps -----------------------------
 (***************************************************************************)
-(* The operators of the vinc-core endpoint's connection-id table           *)
-(* (crates/vinc-core/src/table.rs, Table), step for step: a hash table     *)
+(* The operators of the pinc-core endpoint's connection-id table           *)
+(* (crates/pinc-core/src/table.rs, Table), step for step: a hash table     *)
 (* with chaining over a fixed array of N entries, a free list threaded     *)
 (* through the entries' `chain` links, and a second list through `older`   *)
 (* and `newer` that holds the entries in insertion order. CoreTable.tla    *)

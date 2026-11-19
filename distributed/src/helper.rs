@@ -1,4 +1,4 @@
-//! The privileged helper: the one process of a run that holds root (`sudo -n vinc-distributed helper`), so the
+//! The privileged helper: the one process of a run that holds root (`sudo -n pinc-distributed helper`), so the
 //! orchestrator itself runs as the user.
 //!
 //! It reads one JSON request per line on its standard input and answers one JSON line each, in order. It does only
@@ -290,7 +290,7 @@ struct Gateway {
 }
 
 /// Where the helper keeps the files of the gateways it starts.
-const GATEWAY_DIR: &str = "/run/vinc-distributed";
+const GATEWAY_DIR: &str = "/run/pinc-distributed";
 
 fn iface_ok(s: &str) -> bool {
     (1..=15).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')

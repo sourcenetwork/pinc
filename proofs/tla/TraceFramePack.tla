@@ -1,6 +1,6 @@
 --------------------------- MODULE TraceFramePack ---------------------------
 (***************************************************************************)
-(* Trace validation of the VINCER packet builder: vinc-transport           *)
+(* Trace validation of the PINCER packet builder: pinc-transport           *)
 (* conn/send.rs.                                                           *)
 (*                                                                         *)
 (* The Rust test tests/trace_framepack.rs runs pairs of real connections   *)
@@ -36,13 +36,13 @@
 (* offsets and lengths up to 2^64 - 1).                                    *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds framepack.ndjson.     *)
+(* variable PINC_TRACE_DIR, the directory that holds framepack.ndjson.     *)
 (***************************************************************************)
 EXTENDS FramePackOps, TLC, Json, IOUtils
 
 VARIABLE c
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/framepack.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/framepack.ndjson")
 
 Init == c = [t |-> "root"]
 

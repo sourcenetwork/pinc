@@ -16,12 +16,12 @@ use std::cell::RefCell;
 use std::net::SocketAddr;
 use std::rc::Rc;
 
-use vinc_core::{Answer, Command, Event, NodeStats, Query, Role, Value};
-use vinc_crypto::IdentityAlg;
-use vinc_security::ConnId;
-use vinc_tests::*;
-use vinc_transport::packet::{LongHeader, LongType};
-use vinc_wire::{Reader, Writer};
+use pinc_core::{Answer, Command, Event, NodeStats, Query, Role, Value};
+use pinc_crypto::IdentityAlg;
+use pinc_security::ConnId;
+use pinc_tests::*;
+use pinc_transport::packet::{LongHeader, LongType};
+use pinc_wire::{Reader, Writer};
 
 const MS: u64 = MS_NS;
 
@@ -224,7 +224,7 @@ fn a_forged_part_given_to_a_new_session_does_not_stop_the_real_dial() {
             (2, 1, 0),
             "the forged session was freed"
         );
-        net.run_for(vinc_core::HALF_OPEN_HOLD + SEC_NS);
+        net.run_for(pinc_core::HALF_OPEN_HOLD + SEC_NS);
         let s = net.nodes[b].ep.node_stats();
         assert_eq!((s.sessions, s.half_open, s.fragments_waiting), (1, 0, 0));
         assert!(balanced(&s));

@@ -2,10 +2,10 @@
 
 use std::rc::Rc;
 
-use vinc_sim::suite::grade::fixture::blank_world;
-use vinc_sim::suite::grade::{GATES, GateReport, GateStatus, RunFacts, evaluate_gates, gate_det};
-use vinc_sim::suite::rec::{IntentMeta, MemberEvent, MustArg, Rec};
-use vinc_sim::suite::world::model::{Change, ChangeKind, Cut, IntentKind, Param, World};
+use pinc_sim::suite::grade::fixture::blank_world;
+use pinc_sim::suite::grade::{GATES, GateReport, GateStatus, RunFacts, evaluate_gates, gate_det};
+use pinc_sim::suite::rec::{IntentMeta, MemberEvent, MustArg, Rec};
+use pinc_sim::suite::world::model::{Change, ChangeKind, Cut, IntentKind, Param, World};
 
 use crate::common::*;
 

@@ -14,10 +14,10 @@
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-use vinc_portmap::client::PORT;
-use vinc_portmap::lease::SEC;
-use vinc_portmap::upnp;
-use vinc_portmap::{Config, PortMap, natpmp, pcp};
+use pinc_portmap::client::PORT;
+use pinc_portmap::lease::SEC;
+use pinc_portmap::upnp;
+use pinc_portmap::{Config, PortMap, natpmp, pcp};
 
 const GW: Ipv4Addr = Ipv4Addr::new(192, 168, 1, 1);
 const T0: u64 = 1_000 * SEC;
@@ -33,7 +33,7 @@ fn client(gateway: Option<IpAddr>, local: SocketAddr) -> PortMap {
 
 fn sent(pm: &mut PortMap) -> Vec<(SocketAddr, Vec<u8>)> {
     let mut out = Vec::new();
-    let mut b = [0u8; vinc_portmap::MAX_DATAGRAM];
+    let mut b = [0u8; pinc_portmap::MAX_DATAGRAM];
     while let Some((to, n)) = pm.poll_datagram(&mut b) {
         out.push((to, b[..n].to_vec()));
     }
@@ -863,8 +863,8 @@ fn stop_deletes_a_upnp_mapping_whose_request_is_in_flight() {
     assert!(del.contains("#DeletePortMapping") && del.contains("<NewExternalPort>4433<"));
 }
 
-fn only(f: impl FnOnce(&mut vinc_portmap::Stats)) -> vinc_portmap::Stats {
-    let mut s = vinc_portmap::Stats::default();
+fn only(f: impl FnOnce(&mut pinc_portmap::Stats)) -> pinc_portmap::Stats {
+    let mut s = pinc_portmap::Stats::default();
     f(&mut s);
     s
 }

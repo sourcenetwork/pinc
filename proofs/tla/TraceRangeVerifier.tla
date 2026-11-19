@@ -1,6 +1,6 @@
 --------------------------- MODULE TraceRangeVerifier ---------------------------
 (***************************************************************************)
-(* Trace validation of vinc-dag RangeVerifier<GROUP> (tree/verify.rs).     *)
+(* Trace validation of pinc-dag RangeVerifier<GROUP> (tree/verify.rs).     *)
 (*                                                                         *)
 (* The Rust test tests/trace_verifier.rs runs the real verifier on genuine *)
 (* and tampered streams, fed in pieces of every size, and records one      *)
@@ -31,7 +31,7 @@
 (*    parent, value offset and length of the group).                       *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds verifier.ndjson.      *)
+(* variable PINC_TRACE_DIR, the directory that holds verifier.ndjson.      *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
 
@@ -43,7 +43,7 @@ RV == INSTANCE RangeVerifier WITH MaxGroups <- 6
 VB == INSTANCE VerifierBytes WITH Extra <- 0, cfg <- 0, its <- 0, vs <- 0, pos <- 0, rem <- 0, stop <- FALSE, j <- 0
 U == INSTANCE U64
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/verifier.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/verifier.ndjson")
 
 Min(a, b) == IF a < b THEN a ELSE b
 

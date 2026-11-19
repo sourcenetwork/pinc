@@ -15,7 +15,7 @@
 mod common;
 
 use common::{Ev, Net, SEC, WALL0, ty};
-use vinc_crypto::IdentityAlg;
+use pinc_crypto::IdentityAlg;
 
 const T: &[u8] = b"gap";
 
@@ -26,7 +26,7 @@ fn world() -> Net {
     net
 }
 
-/// A GET for more than the subscriber's stream takes is not answered in part (vinc#504): the messages the stream has
+/// A GET for more than the subscriber's stream takes is not answered in part (pinc#504): the messages the stream has
 /// no room for are owed from the hub's log, the hub keeping one place for them, and arrive in order when the stream
 /// has room, without waiting for the next periodic check.
 #[test]
@@ -257,7 +257,7 @@ fn a_have_carries_at_most_512_ids_and_the_offer_goes_on_in_further_frames() {
 }
 
 /// A replay (a SUB with the replay flag) is answered with every message the log holds since the time asked, oldest
-/// first, not only the newest 256 (vinc#510).
+/// first, not only the newest 256 (pinc#510).
 #[test]
 fn a_replay_is_answered_with_every_message_the_log_holds_oldest_first() {
     let mut net = Net::new(IdentityAlg::Ed25519, 1, 2, SEC);

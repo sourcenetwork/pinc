@@ -1,4 +1,4 @@
-//! Tests of vinc-transport's congestion control and pacing: the cubic growth against an exact integer model and a
+//! Tests of pinc-transport's congestion control and pacing: the cubic growth against an exact integer model and a
 //! floating-point reference of the same update, the loss responses and the loss filter, the slow-start exit, the
 //! delivery-rate estimate, the rate gate against the two caps it generalises, and the pacer.
 //!
@@ -17,7 +17,7 @@
 )]
 
 use proptest::prelude::*;
-use vinc_transport::recovery::{
+use pinc_transport::recovery::{
     AckInput, CONGESTION_BETA_SMALL, Cubic, INITIAL_CWND, MAX_CWND, MIN_CWND, MS, Pacer, SECOND,
 };
 

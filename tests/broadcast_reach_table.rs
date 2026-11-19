@@ -1,4 +1,4 @@
-//! The hub's adjacency table (vinc#86): it changes only for a record that verifies, a full table fails closed, a
+//! The hub's adjacency table (pinc#86): it changes only for a record that verifies, a full table fails closed, a
 //! released member's tombstone makes room once no log holds its messages, a revoked member is forgotten, an older
 //! record is taken only from its member, the components are worked out once per check, and a lost mirror between
 //! hubs is repaired by the refresh.
@@ -11,9 +11,9 @@ mod support;
 
 use common::{Net, SEC, ty};
 use support::{T, adj, ask, capture, room, sends, session};
-use vinc_broadcast::consts::{LOG_WINDOW, RECORD_TTL, REFRESH};
-use vinc_broadcast::{Limits, ReachStats};
-use vinc_crypto::IdentityAlg;
+use pinc_broadcast::consts::{LOG_WINDOW, RECORD_TTL, REFRESH};
+use pinc_broadcast::{Limits, ReachStats};
+use pinc_crypto::IdentityAlg;
 
 /// A hub and `members` members, the hub's table holding `bytes` bytes ([`room`]).
 fn small(members: usize, bytes: usize) -> Net {

@@ -1,6 +1,6 @@
 ---------------------------- MODULE TraceConnectClient ----------------------------
 (***************************************************************************)
-(* Trace validation of the client rules of connectivity: vinc-connect      *)
+(* Trace validation of the client rules of connectivity: pinc-connect      *)
 (* client/{punch,tunnel,dial,lookup,netcheck}.rs.                          *)
 (*                                                                         *)
 (* The Rust test tests/trace_connect_client.rs drives the real punch       *)
@@ -12,14 +12,14 @@
 (* verify, ConnectCodecOps.tla for the record). Times are microseconds.   *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds connect_client.ndjson.*)
+(* variable PINC_TRACE_DIR, the directory that holds connect_client.ndjson.*)
 (***************************************************************************)
 EXTENDS ConnectClientOps, ConnectCodecOps, Json, IOUtils
 
 VARIABLES i, P, T, PE, LK, NC
 vars == <<i, P, T, PE, LK, NC>>
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/connect_client.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/connect_client.ndjson")
 Ev == Trace[i]
 
 Init == /\ i = 1 /\ P = 0 /\ T = NewSplices(3, 2) /\ PE = NewPending(3, 2) /\ LK = NewLookups(3) /\ NC = NewNet(3)

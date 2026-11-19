@@ -1,9 +1,9 @@
 name = "lan-per-core"
-about = """Two nodes on one switched LAN: 0.2 ms round trip, 1 Gbit/s each way. Only the many test: VINC runs one \
+about = """Two nodes on one switched LAN: 0.2 ms round trip, 1 Gbit/s each way. Only the many test: PINC runs one \
 endpoint on each of a node's two CPUs and the other libraries run their runtime over both."""
-stacks = ["vinc", "iroh", "libp2p"]
+stacks = ["pinc", "iroh", "libp2p"]
 repetitions = 3
-vinc_endpoints = "per-core"
+pinc_endpoints = "per-core"
 
 [resources]
 cpus = 2

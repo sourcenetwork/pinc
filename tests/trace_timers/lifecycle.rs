@@ -1,8 +1,8 @@
 //! The scripted lifecycle runs of the timers trace: idle timeout, local close, violation, sleep hold, WAKE, silent end
 //! and link outage.
 
-use vinc_tests::*;
-use vinc_transport::conn::{IDLE_TIMEOUT, PathId};
+use pinc_tests::*;
+use pinc_transport::conn::{IDLE_TIMEOUT, PathId};
 
 use crate::duo::{How, app, close, inject, simple, with_pair};
 use crate::rec::Log;

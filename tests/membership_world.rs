@@ -17,9 +17,9 @@ pub use host::*;
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use vinc_membership::session::LEAVE_CODE;
-use vinc_membership::{Carrier, CloseReason, Config, Event, Evidence, Frame, Membership, NodeId, Route, Trace};
-use vinc_tests::SplitMix64;
+use pinc_membership::session::LEAVE_CODE;
+use pinc_membership::{Carrier, CloseReason, Config, Event, Evidence, Frame, Membership, NodeId, Route, Trace};
+use pinc_tests::SplitMix64;
 
 pub struct Node {
     pub m: Membership,
@@ -97,7 +97,7 @@ pub enum Op {
 /// The public state of a machine after a call.
 #[derive(Debug, Clone)]
 pub struct StSnap {
-    pub members: Vec<(NodeId, vinc_membership::Record)>,
+    pub members: Vec<(NodeId, pinc_membership::Record)>,
     pub epoch: u64,
     pub primary: Option<NodeId>,
     pub inc: u64,
@@ -648,10 +648,10 @@ impl World {
         let r = Membership::start(&cfg, &mut self.nodes[i].h, now, wall_ms, floor);
         let ret = match &r {
             Ok(_) => "ok",
-            Err(vinc_membership::StartError::TooManyHubs) => "toomany",
-            Err(vinc_membership::StartError::Incarnation(e)) => match e {
-                vinc_membership::incarnation::IncarnationError::Store(_) => "store",
-                vinc_membership::incarnation::IncarnationError::Exhausted => "exhausted",
+            Err(pinc_membership::StartError::TooManyHubs) => "toomany",
+            Err(pinc_membership::StartError::Incarnation(e)) => match e {
+                pinc_membership::incarnation::IncarnationError::Store(_) => "store",
+                pinc_membership::incarnation::IncarnationError::Exhausted => "exhausted",
             },
         };
         if let Ok(m) = r {
@@ -703,7 +703,7 @@ impl World {
     }
 
     /// Deliver bytes that need not be a whole frame to `to` as if `from` sent them, now; returns what `on_bytes` said.
-    pub fn inject_bytes(&mut self, to: usize, from: usize, bytes: &[u8]) -> Result<usize, vinc_membership::FrameError> {
+    pub fn inject_bytes(&mut self, to: usize, from: usize, bytes: &[u8]) -> Result<usize, pinc_membership::FrameError> {
         let peer = id(from);
         let mf = self.nodes[to].m.max_frame();
         self.call(

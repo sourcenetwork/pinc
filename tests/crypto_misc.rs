@@ -9,14 +9,14 @@
 )]
 
 use proptest::prelude::*;
-use vinc_crypto::drbg::MAX_FILL;
-use vinc_crypto::{CryptoError, Drbg, Transcript, expand, extract, labels};
+use pinc_crypto::drbg::MAX_FILL;
+use pinc_crypto::{CryptoError, Drbg, Transcript, expand, extract, labels};
 
 mod blake3_vectors;
 mod hexutil;
 use hexutil::{arr, hex};
 
-vinc_tests::install_counting_allocator!();
+pinc_tests::install_counting_allocator!();
 
 fn input(len: usize) -> Vec<u8> {
     (0..len).map(|i| (i % 251) as u8).collect()
@@ -32,7 +32,7 @@ fn extract_is_the_official_blake3_keyed_hash() {
 
 #[test]
 fn expand_is_the_official_blake3_derive_key() {
-    // derive_key(context, material) with material = prk || ctx; the official context string is not a VINC label, so
+    // derive_key(context, material) with material = prk || ctx; the official context string is not a PINC label, so
     // it is passed through `expand` directly (its `&'static str` is any string).
     for (len, _, derived) in blake3_vectors::CASES.iter().filter(|c| c.0 >= 32) {
         let data = input(*len);
@@ -66,7 +66,7 @@ fn expand_is_an_xof_and_separates_labels() {
 #[test]
 fn every_label_has_the_prefix_and_is_unique() {
     for (i, a) in labels::ALL.iter().enumerate() {
-        assert!(a.starts_with("VINC 2026 v1 "), "{a}");
+        assert!(a.starts_with("PINC 2026 v1 "), "{a}");
         assert!(a.starts_with(labels::RESERVED), "{a}");
         assert!(a.len() > labels::PREFIX.len(), "{a}");
         assert!(!a.contains('\u{2013}') && !a.contains('\u{2014}'));
@@ -86,7 +86,7 @@ fn the_prefix_starts_with_the_reserved_start() {
 fn kdf_does_not_allocate() {
     let mut out = [0u8; 64];
     let mut prk = [0u8; 32];
-    let stats = vinc_tests::measure(|| {
+    let stats = pinc_tests::measure(|| {
         prk = extract(&[1; 32], b"input keying material");
         expand(&prk, labels::NODE_ID, b"context", &mut out);
     });
@@ -173,7 +173,7 @@ proptest! {
 
 #[test]
 fn transcript_does_not_allocate() {
-    let stats = vinc_tests::measure(|| {
+    let stats = pinc_tests::measure(|| {
         let mut t = Transcript::with_label(labels::NODE_ID);
         t.absorb("f", b"hello");
         t.absorb("f", &[0u8; 5000]);
@@ -281,7 +281,7 @@ fn drbg_bounds_one_call() {
 fn drbg_does_not_allocate() {
     let mut d = Drbg::new(&[1; 32]);
     let mut out = [0u8; 1024];
-    let stats = vinc_tests::measure(|| {
+    let stats = pinc_tests::measure(|| {
         d.fill(&mut out).unwrap();
         d.reseed(&[2; 32]);
     });

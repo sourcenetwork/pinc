@@ -1,7 +1,7 @@
 ----------------------------- MODULE MbtRanges ------------------------------
 (***************************************************************************)
 (* Model-based tests of the received-packet tracker's range set and the    *)
-(* ACK ranges it reports (vinc-transport recovery/recv.rs,                 *)
+(* ACK ranges it reports (pinc-transport recovery/recv.rs,                 *)
 (* ReceivedPackets<RANGES>): the state graph of the operators of           *)
 (* RxOps.tla at a small capacity, for a Rust test to walk.                 *)
 (*                                                                         *)

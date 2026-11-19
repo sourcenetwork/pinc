@@ -46,7 +46,7 @@ for row in open("docs/PROOFS.md"):
 
 src = {}
 for p in glob.glob("crates/*/src/**/*.rs", recursive=True):
-    if p.startswith("crates/vinc-sim/"):
+    if p.startswith("crates/pinc-sim/"):
         continue
     src[p] = open(p).read().split("\n")
 

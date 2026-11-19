@@ -1,6 +1,6 @@
 ------------------------------ MODULE DtnReception ------------------------------
 (***************************************************************************)
-(* The receiving side of a bundle, vinc-dtn/src/bundle.rs `Reception`:     *)
+(* The receiving side of a bundle, pinc-dtn/src/bundle.rs `Reception`:     *)
 (* `feed`, `holds`, `next_missing`, `is_complete`, `is_decodable`,         *)
 (* `finish` (with its scratch) and `resume`, over the verified-range set   *)
 (* of VerifiedRanges                                                       *)
@@ -55,7 +55,7 @@
 (* harmless because they are not held and a later feed or finish rewrites  *)
 (* them from verified symbols only.                                        *)
 (*                                                                         *)
-(* Lean counterpart (proofs/lean/Vinc/DtnReception.lean, unbounded in the *)
+(* Lean counterpart (proofs/lean/Pinc/DtnReception.lean, unbounded in the *)
 (* number of symbols, blocks and in the symbol size): feedGo_buf (only     *)
 (* verified bytes enter the buffer), feedGo_verified (held means verified),*)
 (* feedGo_mono and feedGo_reach (the held set only grows and stays within  *)

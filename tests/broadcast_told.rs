@@ -1,4 +1,4 @@
-//! A hub that cannot give a subscriber every message it asks for says so (vinc#505): a subscriber that comes back
+//! A hub that cannot give a subscriber every message it asks for says so (pinc#505): a subscriber that comes back
 //! to a log that moved past it, one whose session ended while the hub still owed it messages, and one that asks
 //! for a message the log dropped meanwhile are each told once (RESTORED, `Event::Restored`); a subscriber that
 //! subscribes for the first time is not; and the notice waits for room in the subscriber's stream as a message does.
@@ -16,18 +16,18 @@
 mod common;
 
 use common::{Ev, Net, NodeHost, SEC, ty};
-use vinc_broadcast::Topics;
-use vinc_crypto::IdentityAlg;
+use pinc_broadcast::Topics;
+use pinc_crypto::IdentityAlg;
 
 const T: &[u8] = b"told";
 
 /// Hub 0, publisher 1, subscriber 2 and member 3 (not subscribed), over a log of 64 KiB, so about sixty messages of
 /// 1 KiB fit.
 fn world() -> Net {
-    let limits = vinc_broadcast::Limits {
+    let limits = pinc_broadcast::Limits {
         max_body: 2048,
         log_bytes: 64 << 10,
-        ..vinc_broadcast::Limits::default()
+        ..pinc_broadcast::Limits::default()
     };
     let mut net = Net::with_limits(&[IdentityAlg::Ed25519; 4], 1, SEC, limits);
     for i in 1..4 {

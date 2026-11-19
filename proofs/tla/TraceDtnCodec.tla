@@ -14,7 +14,7 @@
 (* mutated bytes, as it does in the code.                                  *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds dtn_codec.ndjson.     *)
+(* variable PINC_TRACE_DIR, the directory that holds dtn_codec.ndjson.     *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, TLC, Json, IOUtils
 
@@ -22,7 +22,7 @@ VARIABLE c
 
 D == INSTANCE DtnCodec WITH s <- 0
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/dtn_codec.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/dtn_codec.ndjson")
 
 Encs == SelectSeq(Trace, LAMBDA e : e.op = "enc")
 

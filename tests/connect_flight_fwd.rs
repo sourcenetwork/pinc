@@ -13,15 +13,15 @@ mod connect_common;
 use core::net::SocketAddr;
 
 use connect_common::{SEC, big_stack, ed, id, record_bytes};
-use vinc_connect::carrier::DnsAnswer;
-use vinc_connect::client::{Config, Connectivity, Port, RelayCfg};
-use vinc_connect::relay::datagram::Datagram;
-use vinc_core::{
+use pinc_connect::carrier::DnsAnswer;
+use pinc_connect::client::{Config, Connectivity, Port, RelayCfg};
+use pinc_connect::relay::datagram::Datagram;
+use pinc_core::{
     Command, CommandError, Event, Events, NodeStats, PeerInfo, Reply, Role, SessionId, SessionStats, Value,
 };
-use vinc_crypto::{Drbg, Software};
-use vinc_security::{Alpn, ConnId, Env};
-use vinc_tests::Host;
+use pinc_crypto::{Drbg, Software};
+use pinc_security::{Alpn, ConnId, Env};
+use pinc_tests::Host;
 
 const MS: u64 = 1_000_000;
 
@@ -37,7 +37,7 @@ struct Stub {
 }
 
 impl Port for Stub {
-    type Src = vinc_transport::stream::NoSource;
+    type Src = pinc_transport::stream::NoSource;
 
     fn command(&mut self, _: u64, cmd: Command<'_, Self::Src>) -> Result<Reply, CommandError> {
         let value = match cmd {
@@ -59,7 +59,7 @@ impl Port for Stub {
 
     fn stats(&self, session: SessionId) -> Option<SessionStats> {
         let hub = session == SessionId(1);
-        let transport = vinc_transport::conn::Stats {
+        let transport = pinc_transport::conn::Stats {
             handshake_retransmits: self.retx,
             ..Default::default()
         };
@@ -124,11 +124,11 @@ impl Port for Stub {
         })
     }
 
-    fn peer(&self, _: &vinc_crypto::NodeId) -> Option<PeerInfo> {
+    fn peer(&self, _: &pinc_crypto::NodeId) -> Option<PeerInfo> {
         None
     }
 
-    fn reach_body(&self, _: SessionId, _: &mut [u8; vinc_core::REACH_BODY_MAX]) -> usize {
+    fn reach_body(&self, _: SessionId, _: &mut [u8; pinc_core::REACH_BODY_MAX]) -> usize {
         0
     }
 
@@ -210,7 +210,7 @@ fn an_early_connected_keeps_the_home_relay_in_the_flight_of_a_dial_without_a_rec
         assert_eq!(conn.home(), Some(1), "the hub became the home relay");
         ep.now = t;
         // Session 1 (the hub, established in the stub) comes first, so the dial below is session 2, in its handshake.
-        conn.dial(t, &mut ep, hub, b"vinc/hub", Role::Hub, &[hub_udp]).unwrap();
+        conn.dial(t, &mut ep, hub, b"pinc/hub", Role::Hub, &[hub_udp]).unwrap();
         let peer_kp = ed(0x79);
         let peer = id(&peer_kp);
         let dial = conn.dial(t, &mut ep, peer, b"app/1", Role::Other, &[]).unwrap();

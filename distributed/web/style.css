@@ -1,4 +1,4 @@
-/* vinc distributed: an instrument for network engineers. Dense, calm, exact.
+/* pinc distributed: an instrument for network engineers. Dense, calm, exact.
  * One accent (cobalt) for selection and focus; good, degraded and failed have their own colours and their own shapes;
  * the three stacks have their own hues and line patterns. Every colour is a token below. IBM Plex Sans and Mono are
  * served by the binary itself (SIL Open Font License, fonts/OFL.txt). */
@@ -29,7 +29,7 @@
   --warn-weak: oklch(95% 0.05 80);
   --bad: oklch(52% 0.19 27);
   --bad-weak: oklch(95% 0.035 27);
-  --s-vinc: oklch(48% 0.2 268);
+  --s-pinc: oklch(48% 0.2 268);
   --s-iroh: oklch(58% 0.12 200);
   --s-libp2p: oklch(55% 0.19 330);
   --shadow: 0 1px 0 oklch(80% 0.01 255 / 0.5), 0 8px 24px -12px oklch(30% 0.03 262 / 0.25);
@@ -78,7 +78,7 @@
     --warn-weak: oklch(30% 0.05 78);
     --bad: oklch(70% 0.16 27);
     --bad-weak: oklch(30% 0.06 27);
-    --s-vinc: oklch(72% 0.15 268);
+    --s-pinc: oklch(72% 0.15 268);
     --s-iroh: oklch(76% 0.11 200);
     --s-libp2p: oklch(74% 0.15 330);
     --shadow: 0 1px 0 oklch(10% 0.01 260 / 0.6), 0 10px 28px -12px oklch(5% 0.01 260 / 0.7);
@@ -105,7 +105,7 @@
   --warn-weak: oklch(30% 0.05 78);
   --bad: oklch(70% 0.16 27);
   --bad-weak: oklch(30% 0.06 27);
-  --s-vinc: oklch(72% 0.15 268);
+  --s-pinc: oklch(72% 0.15 268);
   --s-iroh: oklch(76% 0.11 200);
   --s-libp2p: oklch(74% 0.15 330);
   --shadow: 0 1px 0 oklch(10% 0.01 260 / 0.6), 0 10px 28px -12px oklch(5% 0.01 260 / 0.7);
@@ -235,7 +235,7 @@ input:disabled { opacity: 0.55; }
 .glyph-bad::before { content: "\2715"; }
 .glyph-warn::before { content: "!"; font-weight: 700; }
 
-.stack-vinc { --s: var(--s-vinc); }
+.stack-pinc { --s: var(--s-pinc); }
 .stack-iroh { --s: var(--s-iroh); }
 .stack-libp2p { --s: var(--s-libp2p); }
 .swatch { display: inline-block; width: 18px; height: 0; border-top: 2px solid var(--s); vertical-align: middle; margin-right: 6px; }

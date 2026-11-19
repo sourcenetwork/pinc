@@ -1,4 +1,4 @@
-//! Benchmarks of the `vinc-transport` stream layer: receiving and reading 1400-byte frames in order and with 10%
+//! Benchmarks of the `pinc-transport` stream layer: receiving and reading 1400-byte frames in order and with 10%
 //! reordering, buffered writes through to acknowledgement, and building frames from a source-backed stream.
 #![allow(
     missing_docs,
@@ -10,8 +10,8 @@
 use std::hint::black_box;
 
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
-use vinc_transport::stream::pool::BufferPool;
-use vinc_transport::stream::{Config, NoSource, PeerLimits, StreamSource, Streams};
+use pinc_transport::stream::pool::BufferPool;
+use pinc_transport::stream::{Config, NoSource, PeerLimits, StreamSource, Streams};
 
 const FRAME: usize = 1400;
 /// Frames per received stream: about 700 KB, below the initial window.

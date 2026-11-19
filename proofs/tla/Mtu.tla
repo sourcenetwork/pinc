@@ -1,6 +1,6 @@
 --------------------------------- MODULE Mtu ---------------------------------
 (***************************************************************************)
-(* Path MTU discovery of vinc-transport conn/mtu.rs over every interleaving *)
+(* Path MTU discovery of pinc-transport conn/mtu.rs over every interleaving *)
 (* of the calls the connection makes, at small sizes (MtuOps.tla has the   *)
 (* operators and the scaling).                                             *)
 (*                                                                         *)
@@ -16,7 +16,7 @@
 (*  - a black-hole suspicion exists only above the floor, and the          *)
 (*    fallback leaves the floor, nothing in flight, the path marked        *)
 (*    probed and the jumbo probe done (SuspectShape, DropShape).           *)
-(* Lean counterpart: proofs/lean/Vinc/TransportMtu*.lean.                  *)
+(* Lean counterpart: proofs/lean/Pinc/TransportMtu*.lean.                  *)
 (***************************************************************************)
 EXTENDS Integers, Sequences
 CONSTANTS TOP, MINMTU, PROBEMTU, JFLOOR, JMTU, REPROBE, KMAX

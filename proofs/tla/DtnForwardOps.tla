@@ -1,6 +1,6 @@
 ---------------------------- MODULE DtnForwardOps ----------------------------
 (***************************************************************************)
-(* The operations of vinc-dtn forward.rs (Forwarder::step and poll), one   *)
+(* The operations of pinc-dtn forward.rs (Forwarder::step and poll), one   *)
 (* node, step for step.                                                    *)
 (*                                                                         *)
 (* The four tables are fixed arrays of slots, as in the code: a slot is a *)
@@ -37,7 +37,7 @@
 (* DtnForwardNet.tla (several nodes and a lossy network) and the scenario  *)
 (* models, which instantiate this module. The trace check              *)
 (* (TraceDtnForward.tla) compares the real code with the same operators.   *)
-(* Lean counterpart: proofs/lean/Vinc/DtnForward.lean.                     *)
+(* Lean counterpart: proofs/lean/Pinc/DtnForward.lean.                     *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
 

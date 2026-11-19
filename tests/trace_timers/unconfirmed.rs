@@ -1,8 +1,8 @@
 //! The handshake-end runs of the timers trace: a dialing side whose Finish never arrived, and a dial nobody answers.
 
-use vinc_crypto::IdentityAlg;
-use vinc_security::ClientTickets;
-use vinc_tests::*;
+use pinc_crypto::IdentityAlg;
+use pinc_security::ClientTickets;
+use pinc_tests::*;
 
 use crate::duo::{app, close, init, poll, take_over, timeout};
 use crate::rec::Log;

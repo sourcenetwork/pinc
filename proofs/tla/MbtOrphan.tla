@@ -1,7 +1,7 @@
 ------------------------------ MODULE MbtOrphan ------------------------------
 (***************************************************************************)
 (* Model-based tests of the endpoint's table of held first-flight          *)
-(* fragments (vinc-core orphan.rs): the state graph of the operators of    *)
+(* fragments (pinc-core orphan.rs): the state graph of the operators of    *)
 (* OrphanOps.tla at the size of the real table, for a Rust test to walk.   *)
 (*                                                                         *)
 (* TLC enumerates every state reachable by hold, take and expire and       *)

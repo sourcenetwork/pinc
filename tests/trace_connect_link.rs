@@ -1,6 +1,6 @@
 //! Trace generation for the client carrier state machine: seeded random runs of the real `Link` through its public API,
 //! recorded as ndjson (`connect_link.ndjson`) for the TLA+ trace check (`TraceConnectLink.tla`) and the Lean replay
-//! (`Vinc/TraceConnectLink.lean`).
+//! (`Pinc/TraceConnectLink.lean`).
 //!
 //! A run starts a link with some node-wide shared state (phone or not, `KEEP_LEARN` on or off, a lease learned or not, a
 //! restart pending or not) and calls it with every method of the module in a random order, at instants that step by
@@ -8,7 +8,7 @@
 //! link and the shared state are read back (through their `Debug` form, the fields are private) and recorded with the
 //! answer, so the model must agree on the state as well as on what the host is told to do. Instants are whole
 //! milliseconds and are recorded in microseconds, which TLC's 32-bit integers hold.
-//! The trace is written to the directory in `VINC_TRACE_DIR` when it is set; otherwise nothing is written.
+//! The trace is written to the directory in `PINC_TRACE_DIR` when it is set; otherwise nothing is written.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -25,8 +25,8 @@
 
 use std::collections::BTreeMap;
 
-use vinc_connect::client::link::{Act, Ctx, Link, Pulse, Shared};
-use vinc_tests::SplitMix64;
+use pinc_connect::client::link::{Act, Ctx, Link, Pulse, Shared};
+use pinc_tests::SplitMix64;
 
 const MS: u64 = 1_000_000;
 const S: u64 = 1_000_000_000;
@@ -305,7 +305,7 @@ fn connect_link_trace() {
     for seed in 0..220u64 {
         run(0x11C0 + seed, 450, &mut out);
     }
-    if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
+    if let Ok(dir) = std::env::var("PINC_TRACE_DIR") {
         std::fs::write(format!("{dir}/connect_link.ndjson"), out.join("\n") + "\n").unwrap();
     }
     assert!(out.len() > 10_000);

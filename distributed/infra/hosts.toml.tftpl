@@ -1,4 +1,4 @@
-# Written by `terraform apply` in distributed/infra; read by `vinc-distributed run --hosts <this file>`.
+# Written by `terraform apply` in distributed/infra; read by `pinc-distributed run --hosts <this file>`.
 # Each machine: the address the harness reaches it on over SSH, the user, its region (the site name a scenario can
 # map onto it) and whether it is in the cluster placement group.
 %{ for h in hosts ~}

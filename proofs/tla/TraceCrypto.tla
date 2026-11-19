@@ -1,6 +1,6 @@
 ------------------------------ MODULE TraceCrypto ------------------------------
 (***************************************************************************)
-(* Trace validation of vinc-crypto: the KDF, node ids and identities, the  *)
+(* Trace validation of pinc-crypto: the KDF, node ids and identities, the  *)
 (* DRBG, the provider and the secrets.                                     *)
 (*                                                                         *)
 (* The Rust test tests/trace_crypto.rs calls the public API and records    *)
@@ -25,13 +25,13 @@
 (* exact (U64.tla words; the 256-bit seeds as 16 limbs).                   *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds crypto.ndjson.        *)
+(* variable PINC_TRACE_DIR, the directory that holds crypto.ndjson.        *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, TLC, Json, IOUtils
 
 VARIABLE i
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/crypto.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/crypto.ndjson")
 
 U == INSTANCE U64
 K == INSTANCE CryptoKdf WITH x <- i

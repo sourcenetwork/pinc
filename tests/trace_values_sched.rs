@@ -2,7 +2,7 @@
 //! harness (several providers of different speeds, ranges and resume, liars, a silent provider, a dropped one, more
 //! providers than the fetch uses, no provider, a wrong root, nothing missing), recorded as ndjson
 //! (`values_sched.ndjson`) for the TLA+ trace check (`TraceValuesSched.tla`) and the Lean replay
-//! (`Vinc/TraceValuesSched.lean`).
+//! (`Pinc/TraceValuesSched.lean`).
 //!
 //! A run is one line `run` (the value length, the ranges asked, the verified intervals the store held at the start,
 //! the providers the fetch takes in slot order), the transitions the fetch reports through its `Trace` log in order
@@ -16,7 +16,7 @@
 //! tools. What is not observable: the spans of the lists (the log carries byte counts, the ranges on the wire are
 //! checked by the other value tests), so the checkers replay the byte accounting, the arithmetic and the order of the
 //! transitions; the span-level behaviour is proved in Lean (`ValuesSchedList` ... `ValuesSchedCover`) and model
-//! checked (`ValuesSchedList`, `ValuesSched`). The trace is written to the directory in `VINC_TRACE_DIR` when it is
+//! checked (`ValuesSchedList`, `ValuesSched`). The trace is written to the directory in `PINC_TRACE_DIR` when it is
 //! set; otherwise nothing is written.
 #![allow(
     clippy::unwrap_used,
@@ -40,10 +40,10 @@ use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
 use values_support::*;
-use vinc_tests::SplitMix64;
-use vinc_values::session::Provider;
-use vinc_values::span::Span;
-use vinc_values::trace::{Event, FailReason, Trace};
+use pinc_tests::SplitMix64;
+use pinc_values::session::Provider;
+use pinc_values::span::Span;
+use pinc_values::trace::{Event, FailReason, Trace};
 
 const G: u64 = GROUP;
 
@@ -632,7 +632,7 @@ fn the_scheduler_runs_are_recorded_and_conserve_the_work() {
         "{c:?}"
     );
 
-    if let Some(dir) = std::env::var_os("VINC_TRACE_DIR") {
+    if let Some(dir) = std::env::var_os("PINC_TRACE_DIR") {
         std::fs::write(std::path::Path::new(&dir).join("values_sched.ndjson"), rec.out).unwrap();
     }
 }

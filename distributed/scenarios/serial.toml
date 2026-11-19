@@ -1,6 +1,6 @@
 name = "serial"
 about = "A serial line at 115200 baud, emulated (its delay, loss, rate and datagram size, not the line or any radio): ten bits a byte makes 11520 bytes a second, 0.0922 Mbit/s each way, 0.1 ms delay each way, no loss; framing is the host's, so datagrams of any size pass."
-stacks = ["vinc", "iroh", "libp2p"]
+stacks = ["pinc", "iroh", "libp2p"]
 repetitions = 3
 
 [[sites]]

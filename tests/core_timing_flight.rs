@@ -18,10 +18,10 @@ mod common;
 use std::net::SocketAddr;
 
 use common::{S, is_connected};
-use vinc_core::{Answer, Command, EndReason, Event, IfaceEvent, IfaceId, Query, Role, Value};
-use vinc_crypto::NodeId;
-use vinc_tests::*;
-use vinc_transport::conn::{PathId, PathInfo};
+use pinc_core::{Answer, Command, EndReason, Event, IfaceEvent, IfaceId, Query, Role, Value};
+use pinc_crypto::NodeId;
+use pinc_tests::*;
+use pinc_transport::conn::{PathId, PathInfo};
 
 #[test]
 fn a_resume_that_cannot_be_woken_closes_at_once_for_a_redial() {
@@ -259,8 +259,8 @@ fn ordinary_sessions_are_flushed_before_broadcast_ones() {
 #[test]
 fn a_handshake_flight_can_leave_on_several_candidate_paths() {
     big_stack(|| {
-        use vinc_security::ClientTickets;
-        let w = World::new(vinc_crypto::IdentityAlg::Ed25519);
+        use pinc_security::ClientTickets;
+        let w = World::new(pinc_crypto::IdentityAlg::Ed25519);
         let mut store = Store::new(true);
         let mut client = w.client(&mut store, None, ClientTickets::new());
         let now = T0;
@@ -283,7 +283,7 @@ fn a_handshake_flight_can_leave_on_several_candidate_paths() {
         client.conn.set_flight_fanout(&[second]);
         paths.clear();
         let later = now + 600 * MS;
-        client.with_env(later, vinc_transport::conn::Connection::handle_timeout);
+        client.with_env(later, pinc_transport::conn::Connection::handle_timeout);
         let mut buf2 = vec![0u8; 65_536];
         while let Some(t) = client.with_env(later, |c, env| c.poll_transmit(env, &mut buf2)) {
             paths.push((t.path, t.len));
@@ -356,7 +356,7 @@ fn a_relay_path_at_the_end_of_a_long_list_of_flight_paths_still_carries_the_flig
         let sa = net.nodes[a].session(&rep);
         // More direct addresses than the path table holds, then the relay path that is sure to reach the peer.
         let mut addrs: Vec<SocketAddr> = (1..=6).map(|i| format!("10.0.9.{i}:4433").parse().unwrap()).collect();
-        let relay = vinc_core::relay_addr(false, 0, 7);
+        let relay = pinc_core::relay_addr(false, 0, 7);
         addrs.push(relay);
         net.nodes[a]
             .cmd(
@@ -386,8 +386,8 @@ fn a_relay_path_at_the_end_of_a_long_list_of_flight_paths_still_carries_the_flig
 #[test]
 fn a_flight_can_skip_the_primary_path_and_leave_on_the_listed_ones_only() {
     big_stack(|| {
-        use vinc_security::ClientTickets;
-        let w = World::new(vinc_crypto::IdentityAlg::Ed25519);
+        use pinc_security::ClientTickets;
+        let w = World::new(pinc_crypto::IdentityAlg::Ed25519);
         let mut store = Store::new(true);
         let mut client = w.client(&mut store, None, ClientTickets::new());
         let now = T0;
@@ -408,7 +408,7 @@ fn a_flight_can_skip_the_primary_path_and_leave_on_the_listed_ones_only() {
         // The resend after the timer goes the same way, and only there.
         paths.clear();
         let later = now + 600 * MS;
-        client.with_env(later, vinc_transport::conn::Connection::handle_timeout);
+        client.with_env(later, pinc_transport::conn::Connection::handle_timeout);
         while let Some(t) = client.with_env(later, |c, env| c.poll_transmit(env, &mut buf)) {
             paths.push((t.path, t.len));
         }
@@ -420,7 +420,7 @@ fn a_flight_can_skip_the_primary_path_and_leave_on_the_listed_ones_only() {
         client.conn.set_flight_fanout(&[]);
         paths.clear();
         let later = later + 2 * SEC_NS;
-        client.with_env(later, vinc_transport::conn::Connection::handle_timeout);
+        client.with_env(later, pinc_transport::conn::Connection::handle_timeout);
         while let Some(t) = client.with_env(later, |c, env| c.poll_transmit(env, &mut buf)) {
             paths.push((t.path, t.len));
         }
@@ -428,7 +428,7 @@ fn a_flight_can_skip_the_primary_path_and_leave_on_the_listed_ones_only() {
         // Turned off, the flight returns to the primary path.
         client.conn.set_flight_skip_primary(false);
         let later = later + 10 * SEC_NS;
-        client.with_env(later, vinc_transport::conn::Connection::handle_timeout);
+        client.with_env(later, pinc_transport::conn::Connection::handle_timeout);
         while let Some(t) = client.with_env(later, |c, env| c.poll_transmit(env, &mut buf)) {
             paths.push((t.path, t.len));
         }

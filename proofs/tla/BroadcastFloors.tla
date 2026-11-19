@@ -1,6 +1,6 @@
 ----------------------------- MODULE BroadcastFloors -----------------------------
 (***************************************************************************)
-(* The replay floors of vinc-broadcast floors.rs, step for step: the       *)
+(* The replay floors of pinc-broadcast floors.rs, step for step: the       *)
 (* SentFloors a hub keeps (note, write) with its table caps and overflow   *)
 (* flags, and what a restarted member does with the FLOOR bodies of every  *)
 (* hub (on_floor, floor_settle, is_old).                                   *)
@@ -31,7 +31,7 @@
 (* shows the residual that holds with TopFix: a restarted hub's floor is   *)
 (* its start time, so a message stamped ahead of it is not covered.        *)
 (*                                                                         *)
-(* Lean counterpart: proofs/lean/Vinc/BroadcastFloors.lean.                *)
+(* Lean counterpart: proofs/lean/Pinc/BroadcastFloors.lean.                *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC
 

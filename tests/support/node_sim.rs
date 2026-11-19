@@ -1,4 +1,4 @@
-//! A simulated VINC node: the real `vinc_node::Node` (endpoint, connectivity client, membership, broadcast) with the
+//! A simulated PINC node: the real `pinc_node::Node` (endpoint, connectivity client, membership, broadcast) with the
 //! host duties around it: carriers over simulated TCP and WebSocket streams, key answers, access checks, and, for a hub,
 //! the relay that accepts the carriers of its members.
 #![allow(
@@ -23,26 +23,26 @@ use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
 use std::rc::Rc;
 
-use vinc_broadcast::Limits;
-use vinc_connect::carrier::MAX_FRAME_LEN;
-use vinc_connect::carrier::session::{self, Poll, ProtectedCarrier};
-use vinc_connect::carrier::ws::{self, Decoder, Opcode, Role as WsRole, WsFrame};
-use vinc_connect::client::{Config as ConnCfg, Io, Kind, RelayCfg};
-use vinc_connect::relay::{Config as RelayConfig, Effect, Relay, SessionId as RSession, Sink, Trace, UdpTarget};
-use vinc_core::{Command, Endpoint, EndpointConfig, Event, Query, Slot, relay_addr, relay_parts};
-use vinc_crypto::{Drbg, IdentityAlg, Keypair, NodeId};
-use vinc_keystore::{KeyStore, SoftwareStore};
-use vinc_membership::session::StoreError;
-use vinc_node::{
+use pinc_broadcast::Limits;
+use pinc_connect::carrier::MAX_FRAME_LEN;
+use pinc_connect::carrier::session::{self, Poll, ProtectedCarrier};
+use pinc_connect::carrier::ws::{self, Decoder, Opcode, Role as WsRole, WsFrame};
+use pinc_connect::client::{Config as ConnCfg, Io, Kind, RelayCfg};
+use pinc_connect::relay::{Config as RelayConfig, Effect, Relay, SessionId as RSession, Sink, Trace, UdpTarget};
+use pinc_core::{Command, Endpoint, EndpointConfig, Event, Query, Slot, relay_addr, relay_parts};
+use pinc_crypto::{Drbg, IdentityAlg, Keypair, NodeId};
+use pinc_keystore::{KeyStore, SoftwareStore};
+use pinc_membership::session::StoreError;
+use pinc_node::{
     Apps, Config as NodeConfig, DtnRestored, HUB_ALPN, MemberNotice, NoApps, Node, NodeEvent, ServeSource, Store,
     TraceItem, is_relay_request,
 };
-use vinc_security::{ConnId, Env, KeyHandle, LocalIdentity, PrekeyPolicy, ResponderStores, SoftKeys, SoftPrekeys};
-use vinc_sim::{Clock, IfaceEvent, StreamEvent, StreamId, StreamKind, StreamOp, Time, WALL_EPOCH};
-use vinc_transport::conn::{Machines, Resources, Tables};
-use vinc_transport::recovery::LossEstimate;
-use vinc_transport::stream::pool::BufferPool;
-use vinc_transport::stream::{self, NoSource, StreamSource, Streams};
+use pinc_security::{ConnId, Env, KeyHandle, LocalIdentity, PrekeyPolicy, ResponderStores, SoftKeys, SoftPrekeys};
+use pinc_sim::{Clock, IfaceEvent, StreamEvent, StreamId, StreamKind, StreamOp, Time, WALL_EPOCH};
+use pinc_transport::conn::{Machines, Resources, Tables};
+use pinc_transport::recovery::LossEstimate;
+use pinc_transport::stream::pool::BufferPool;
+use pinc_transport::stream::{self, NoSource, StreamSource, Streams};
 
 use crate::Caps;
 use crate::connect_host::{Outbox, answer_parts};

@@ -1,6 +1,6 @@
 [package]
-name = "vinc-tests"
-description = "Every test of the VINC workspace: integration, property, scenario and trace tests"
+name = "pinc-tests"
+description = "Every test of the PINC workspace: integration, property, scenario and trace tests"
 version.workspace = true
 authors.workspace = true
 edition.workspace = true
@@ -14,31 +14,31 @@ path = "support/lib.rs"
 
 [features]
 # Compiles the TPM backend and its tests (they need `swtpm` installed).
-hwenc = ["vinc-keystore/hwenc"]
+hwenc = ["pinc-keystore/hwenc"]
 
 [dependencies]
-vinc-wire = { workspace = true }
-vinc-dag = { workspace = true, features = ["alloc"] }
-vinc-crypto = { workspace = true, features = ["trace"] }
-vinc-security = { workspace = true }
-vinc-keystore = { workspace = true, features = ["std"] }
-vinc-transport = { workspace = true, features = ["alloc", "trace", "inject"] }
-vinc-membership = { workspace = true, features = ["alloc"] }
-vinc-sim = { workspace = true, features = ["reference", "suite"] }
-vinc-connect = { workspace = true }
-vinc-portmap = { workspace = true }
-vinc-reconcile = { workspace = true, features = ["alloc"] }
-vinc-dtn = { workspace = true }
-vinc-values = { workspace = true }
-vinc-core = { workspace = true, features = ["alloc", "trace", "inject"] }
-vinc-broadcast = { workspace = true, features = ["alloc"] }
+pinc-wire = { workspace = true }
+pinc-dag = { workspace = true, features = ["alloc"] }
+pinc-crypto = { workspace = true, features = ["trace"] }
+pinc-security = { workspace = true }
+pinc-keystore = { workspace = true, features = ["std"] }
+pinc-transport = { workspace = true, features = ["alloc", "trace", "inject"] }
+pinc-membership = { workspace = true, features = ["alloc"] }
+pinc-sim = { workspace = true, features = ["reference", "suite"] }
+pinc-connect = { workspace = true }
+pinc-portmap = { workspace = true }
+pinc-reconcile = { workspace = true, features = ["alloc"] }
+pinc-dtn = { workspace = true }
+pinc-values = { workspace = true }
+pinc-core = { workspace = true, features = ["alloc", "trace", "inject"] }
+pinc-broadcast = { workspace = true, features = ["alloc"] }
 rapidhash = { workspace = true }
-vinc = { workspace = true, features = ["trace"] }
+pinc = { workspace = true, features = ["trace"] }
 nuclei = { workspace = true }
 tokio = { workspace = true }
 smol = { workspace = true }
-vinc-node = { workspace = true, features = ["trace"] }
-vinc-table = { workspace = true, features = ["alloc"] }
+pinc-node = { workspace = true, features = ["trace"] }
+pinc-table = { workspace = true, features = ["alloc"] }
 
 [dev-dependencies]
 proptest = { workspace = true }
@@ -558,8 +558,8 @@ name = "core_unanswered"
 path = "core_unanswered.rs"
 
 [[test]]
-name = "vinc_hub_redial"
-path = "vinc_hub_redial.rs"
+name = "pinc_hub_redial"
+path = "pinc_hub_redial.rs"
 
 [[test]]
 name = "core_timing_flight"
@@ -590,96 +590,96 @@ name = "scenario_crypto"
 path = "scenario_crypto.rs"
 
 [[test]]
-name = "vinc_cores"
-path = "vinc_cores.rs"
+name = "pinc_cores"
+path = "pinc_cores.rs"
 
 [[test]]
-name = "vinc_async"
-path = "vinc_async.rs"
+name = "pinc_async"
+path = "pinc_async.rs"
 
 [[test]]
-name = "vinc_cancel"
-path = "vinc_cancel.rs"
+name = "pinc_cancel"
+path = "pinc_cancel.rs"
 
 [[test]]
-name = "vinc_drive"
-path = "vinc_drive.rs"
+name = "pinc_drive"
+path = "pinc_drive.rs"
 
 [[test]]
-name = "vinc_hosts"
-path = "vinc_hosts.rs"
+name = "pinc_hosts"
+path = "pinc_hosts.rs"
 
 [[test]]
-name = "vinc_examples"
-path = "vinc_examples.rs"
+name = "pinc_examples"
+path = "pinc_examples.rs"
 
 [[test]]
-name = "vinc_portmap"
-path = "vinc_portmap.rs"
+name = "pinc_portmap"
+path = "pinc_portmap.rs"
 
 [[test]]
-name = "vinc_size"
-path = "vinc_size.rs"
+name = "pinc_size"
+path = "pinc_size.rs"
 
 [[test]]
-name = "vinc_portmap_churn"
-path = "vinc_portmap_churn.rs"
+name = "pinc_portmap_churn"
+path = "pinc_portmap_churn.rs"
 
 [[test]]
-name = "vinc_datagram"
-path = "vinc_datagram.rs"
+name = "pinc_datagram"
+path = "pinc_datagram.rs"
 
 [[test]]
-name = "vinc_discovery"
-path = "vinc_discovery.rs"
+name = "pinc_discovery"
+path = "pinc_discovery.rs"
 
 [[test]]
-name = "vinc_scale"
-path = "vinc_scale.rs"
+name = "pinc_scale"
+path = "pinc_scale.rs"
 
 [[test]]
-name = "vinc_stop"
-path = "vinc_stop.rs"
+name = "pinc_stop"
+path = "pinc_stop.rs"
 
 [[test]]
-name = "vinc_accept_backlog"
-path = "vinc_accept_backlog.rs"
+name = "pinc_accept_backlog"
+path = "pinc_accept_backlog.rs"
 
 [[test]]
-name = "vinc_dial_failure"
-path = "vinc_dial_failure.rs"
+name = "pinc_dial_failure"
+path = "pinc_dial_failure.rs"
 
 [[test]]
-name = "vinc_answered"
-path = "vinc_answered.rs"
+name = "pinc_answered"
+path = "pinc_answered.rs"
 
 [[test]]
-name = "vinc_per_core"
-path = "vinc_per_core.rs"
+name = "pinc_per_core"
+path = "pinc_per_core.rs"
 
 [[test]]
 name = "connect_record_seq"
 path = "connect_record_seq.rs"
 
 [[test]]
-name = "vinc_api"
-path = "vinc_api.rs"
+name = "pinc_api"
+path = "pinc_api.rs"
 
 [[test]]
-name = "vinc_revoke"
-path = "vinc_revoke.rs"
+name = "pinc_revoke"
+path = "pinc_revoke.rs"
 
 [[test]]
-name = "vinc_relay"
-path = "vinc_relay.rs"
+name = "pinc_relay"
+path = "pinc_relay.rs"
 
 [[test]]
-name = "vinc_topics"
-path = "vinc_topics.rs"
+name = "pinc_topics"
+path = "pinc_topics.rs"
 
 [[test]]
-name = "vinc_relay_role"
-path = "vinc_relay_role.rs"
+name = "pinc_relay_role"
+path = "pinc_relay_role.rs"
 
 [[test]]
 name = "core_relay_paths"
@@ -1287,16 +1287,16 @@ name = "relay_host"
 path = "relay_host.rs"
 
 [[test]]
-name = "vinc_access"
-path = "vinc_access.rs"
+name = "pinc_access"
+path = "pinc_access.rs"
 
 [[test]]
 name = "relay_e2e"
 path = "relay_e2e.rs"
 
 [[test]]
-name = "vinc_state"
-path = "vinc_state.rs"
+name = "pinc_state"
+path = "pinc_state.rs"
 
 [[test]]
 name = "layers_dtn_capacity"
@@ -1395,20 +1395,20 @@ name = "node_member_at"
 path = "node_member_at.rs"
 
 [[test]]
-name = "vinc_addr_roundtrip"
-path = "vinc_addr_roundtrip.rs"
+name = "pinc_addr_roundtrip"
+path = "pinc_addr_roundtrip.rs"
 
 [[test]]
-name = "vinc_client_memory"
-path = "vinc_client_memory.rs"
+name = "pinc_client_memory"
+path = "pinc_client_memory.rs"
 
 [[test]]
-name = "vinc_standby_order"
-path = "vinc_standby_order.rs"
+name = "pinc_standby_order"
+path = "pinc_standby_order.rs"
 
 [[test]]
-name = "vinc_access_protocols"
-path = "vinc_access_protocols.rs"
+name = "pinc_access_protocols"
+path = "pinc_access_protocols.rs"
 
 [[test]]
 name = "node_portmap"
@@ -1427,8 +1427,8 @@ name = "node_timer_bound"
 path = "node_timer_bound.rs"
 
 [[test]]
-name = "vinc_timer_bound"
-path = "vinc_timer_bound.rs"
+name = "pinc_timer_bound"
+path = "pinc_timer_bound.rs"
 
 [[test]]
 name = "layers_dtn_wake"

@@ -12,10 +12,10 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use vinc_crypto::IdentityAlg;
-use vinc_tests::*;
-use vinc_transport::conn::credit_for_streams;
-use vinc_transport::stream;
+use pinc_crypto::IdentityAlg;
+use pinc_tests::*;
+use pinc_transport::conn::credit_for_streams;
+use pinc_transport::stream;
 
 /// Chunk-ring slots per stream: 2600 x 16 KiB holds a window of 42 MB, above the 4 MiB of the default harness.
 const WIDE_RING: usize = 2600;

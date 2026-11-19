@@ -8,7 +8,7 @@
 (* monotone and takes values of the finite set Times. A delivery pass is   *)
 (* Look, the hand-over (which the caller may refuse), then Remove.         *)
 (*                                                                         *)
-(* Properties (Lean: Vinc/ConnectMailbox.lean):                            *)
+(* Properties (Lean: Pinc/ConnectMailbox.lean):                            *)
 (*  Bounds       used = sum of sizes <= B, count = length, members <= N,   *)
 (*               head < B (mailbox_bounds)                                 *)
 (*  Conserved    stored = delivered + dropped + expired + held             *)

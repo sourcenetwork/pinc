@@ -1,6 +1,6 @@
 ------------------------- MODULE ConnectMailboxOps -------------------------
 (***************************************************************************)
-(* The operators of the mailbox of vinc-connect/src/mailbox.rs and of the  *)
+(* The operators of the mailbox of pinc-connect/src/mailbox.rs and of the  *)
 (* hold and wake step of relay/route.rs, as pure functions of the state.   *)
 (* ConnectMailbox.tla (the model check) and TraceConnectMailbox.tla (the   *)
 (* trace validation) both use these operators, so the two cannot differ.   *)

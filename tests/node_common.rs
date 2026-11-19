@@ -1,4 +1,4 @@
-//! Scenario scaffolding for the node tests: hubs and members as real `vinc_node::Node`s in the simulator.
+//! Scenario scaffolding for the node tests: hubs and members as real `pinc_node::Node`s in the simulator.
 #![allow(
     dead_code,
     unreachable_pub,
@@ -15,11 +15,11 @@
 use std::collections::BTreeSet;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-use vinc_broadcast::Limits;
-use vinc_membership::Event as MEvent;
-use vinc_node::NodeEvent;
-use vinc_sim::{LinkConfig, MS, NodeId as SimId, SEC, Sim, SimConfig, StreamKind, Time};
-use vinc_tests::{HubAddr, NCmd, NEv, NodeSpec, SimNode, hub_addr, id_of};
+use pinc_broadcast::Limits;
+use pinc_membership::Event as MEvent;
+use pinc_node::NodeEvent;
+use pinc_sim::{LinkConfig, MS, NodeId as SimId, SEC, Sim, SimConfig, StreamKind, Time};
+use pinc_tests::{HubAddr, NCmd, NEv, NodeSpec, SimNode, hub_addr, id_of};
 
 pub const OWD: Time = 10 * MS;
 

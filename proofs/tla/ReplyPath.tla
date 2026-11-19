@@ -1,6 +1,6 @@
 ------------------------------ MODULE ReplyPath ------------------------------
 (***************************************************************************)
-(* The path a dialing side's handshake reply arrives on (vinc#399), and    *)
+(* The path a dialing side's handshake reply arrives on (pinc#399), and    *)
 (* the bound of the path table for every path a connection learns by       *)
 (* receiving on it, through the operators of PathOps.tla (conn/recv.rs     *)
 (* handle_inner, on_handshake, process_payload; conn/drive.rs              *)

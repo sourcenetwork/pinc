@@ -12,9 +12,9 @@
 mod layers_common;
 
 use layers_common::{LWorld, big, secs};
-use vinc_node::{DtnPlan, Enabled, NodeEvent};
-use vinc_sim::NodeId as SimId;
-use vinc_tests::{LayerApps, NCmd, SplitMix64};
+use pinc_node::{DtnPlan, Enabled, NodeEvent};
+use pinc_sim::NodeId as SimId;
+use pinc_tests::{LayerApps, NCmd, SplitMix64};
 
 fn plan(lifetime_s: u64) -> DtnPlan {
     DtnPlan {

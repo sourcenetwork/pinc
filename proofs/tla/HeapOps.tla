@@ -1,6 +1,6 @@
 ------------------------------ MODULE HeapOps -------------------------------
 (***************************************************************************)
-(* The operations of vinc-core heap.rs (DeadlineHeap), step for step: the  *)
+(* The operations of pinc-core heap.rs (DeadlineHeap), step for step: the  *)
 (* indexed binary min-heap that orders the deadlines of the endpoint's     *)
 (* sessions. Heap.tla checks them over every sequence of calls at small    *)
 (* sizes; TraceHeap.tla replays the recorded calls of the real code.       *)

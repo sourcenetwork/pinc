@@ -1,6 +1,6 @@
 ------------------------------- MODULE CidOps -------------------------------
 (***************************************************************************)
-(* The operations of vinc-transport conn/cid.rs (Cids), step for step:     *)
+(* The operations of pinc-transport conn/cid.rs (Cids), step for step:     *)
 (* the connection ids of one connection, derived from the session secret. *)
 (* Cid.tla checks them over every interleaving at small sizes;             *)
 (* TraceCid.tla replays the recorded calls of the real code.               *)

@@ -1,6 +1,6 @@
 name = "wan"
 about = "Two nodes in two sites across a WAN: 50 ms round trip, 1% loss per packet each way, 100 Mbit/s each way."
-stacks = ["vinc", "iroh", "libp2p"]
+stacks = ["pinc", "iroh", "libp2p"]
 repetitions = 3
 
 [resources]

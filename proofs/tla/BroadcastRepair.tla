@@ -1,6 +1,6 @@
 ----------------------------- MODULE BroadcastRepair -----------------------------
 (***************************************************************************)
-(* Gap repair of vinc-broadcast gap.rs, step for step: one subscriber S    *)
+(* Gap repair of pinc-broadcast gap.rs, step for step: one subscriber S    *)
 (* whose primary hub is hub 1, a publisher P, a second hub 2. S asks its   *)
 (* primary SUB(since); the hub answers HAVE with the newest HaveMax ids it *)
 (* logged at or after `since` (its wall clock); S asks GET for the ids it  *)
@@ -32,7 +32,7 @@
 (* topic with no other traffic is asked about only when membership         *)
 (* resubscribes; the _have config shows the HaveMax limit.                 *)
 (*                                                                         *)
-(* Lean counterpart: proofs/lean/Vinc/BroadcastRepair.lean.                *)
+(* Lean counterpart: proofs/lean/Pinc/BroadcastRepair.lean.                *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC
 

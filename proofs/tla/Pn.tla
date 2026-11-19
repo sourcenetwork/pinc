@@ -1,6 +1,6 @@
 --------------------------------- MODULE Pn ---------------------------------
 (***************************************************************************)
-(* Packet-number truncation and expansion of vinc-transport                *)
+(* Packet-number truncation and expansion of pinc-transport                *)
 (* packet/number.rs, checked exhaustively at a small byte size (PnOps.tla  *)
 (* has the operators).                                                     *)
 (*                                                                         *)
@@ -18,7 +18,7 @@
 (*  - an error is exact: a number above MAXPN is PacketNumber before the   *)
 (*    width is looked at, a width other than 2 or 3 is PnLength            *)
 (*    (Errors).                                                            *)
-(* Lean counterpart: proofs/lean/Vinc/TransportPn.lean (any byte size, the *)
+(* Lean counterpart: proofs/lean/Pinc/TransportPn.lean (any byte size, the *)
 (* real one).                                                              *)
 (***************************************************************************)
 EXTENDS Integers, Sequences

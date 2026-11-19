@@ -1,6 +1,6 @@
 ------------------------------ MODULE TraceCoreState ------------------------------
 (***************************************************************************)
-(* Trace validation of the saved state of the endpoint (vinc-core          *)
+(* Trace validation of the saved state of the endpoint (pinc-core          *)
 (* state.rs).                                                              *)
 (*                                                                         *)
 (* The Rust test tests/trace_core_state.rs calls the real `restore_state`  *)
@@ -24,7 +24,7 @@
 (* 2^64 - 1, is replayed by Lean only.                                     *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR.                                                *)
+(* variable PINC_TRACE_DIR.                                                *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, TLC, Json, IOUtils
 
@@ -32,7 +32,7 @@ VARIABLE c
 
 O == INSTANCE CoreStateOps WITH CT <- 3, KR <- 256, EK <- 256, LAZY <- FALSE, LAXTAIL <- FALSE
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/core_state.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/core_state.ndjson")
 
 \* the tables the endpoint held: what its own export reads as
 Held(pre) == LET p == O!Parse(pre) IN p.ok /\ O!Enc(p.v) = pre

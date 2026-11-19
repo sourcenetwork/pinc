@@ -1,11 +1,11 @@
 //! The big endpoint of the half-open trace beside one dialer on a simulated network, joined by hand, and the choice of
 //! the times to run the timers at.
 
-use vinc_core::{Command, Event, Role, SessionId};
-use vinc_security::{KeyHandle, LocalIdentity};
-use vinc_tests::*;
-use vinc_transport::packet::LongHeader;
-use vinc_wire::Reader;
+use pinc_core::{Command, Event, Role, SessionId};
+use pinc_security::{KeyHandle, LocalIdentity};
+use pinc_tests::*;
+use pinc_transport::packet::LongHeader;
+use pinc_wire::Reader;
 
 use crate::common::{BK, craft, kind_of, source};
 use crate::rec::Rec;

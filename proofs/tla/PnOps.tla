@@ -1,6 +1,6 @@
 ------------------------------- MODULE PnOps --------------------------------
 (***************************************************************************)
-(* The operations of vinc-transport packet/number.rs, step for step: the   *)
+(* The operations of pinc-transport packet/number.rs, step for step: the   *)
 (* packet-number truncation and expansion over 62 bits at a width fixed per *)
 (* connection. Pn.tla checks them exhaustively at a small byte size;        *)
 (* TracePn.tla replays the recorded calls of the real code.                *)

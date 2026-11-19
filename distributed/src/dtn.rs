@@ -1,5 +1,5 @@
 //! The delay-tolerant workload: bundles sent to nodes that are offline, carried by others, with the checks that decide
-//! whether the rules of `vinc-dtn` held. The node programs report what happened to every bundle (see
+//! whether the rules of `pinc-dtn` held. The node programs report what happened to every bundle (see
 //! `node::proto::DtnReport`); [`evaluate`] reads those logs against the scenario's checks.
 //!
 //! Each check is a rule of the crate, as its models name it:
@@ -110,7 +110,7 @@ pub struct Send {
     #[serde(default = "two8")]
     pub m: u8,
     /// The slice size log (slices of 1 KiB to 16 KiB). The default, 4 (16 KiB slices), keeps a 1 MiB bundle inside
-    /// vinc-node's 64-interval reception cap; smaller slices make more erasure blocks, so more disjoint verified
+    /// pinc-node's 64-interval reception cap; smaller slices make more erasure blocks, so more disjoint verified
     /// ranges, and a large bundle overflows that cap (see the PR's gaps).
     #[serde(default = "four8")]
     pub slice_log: u8,
@@ -254,7 +254,7 @@ impl Dtn {
     /// The sealed size of a bundle of `size` payload bytes under the first send's code, for budgets.
     pub fn sealed_len(&self, size: u64) -> Option<u64> {
         let s = self.sends.first()?;
-        vinc_dtn::layout::SliceLayout::new(s.k, s.m, s.slice_log, size)
+        pinc_dtn::layout::SliceLayout::new(s.k, s.m, s.slice_log, size)
             .ok()
             .map(|l| l.total_len())
     }
@@ -346,10 +346,10 @@ impl Dtn {
         if !(self.duration_s.is_finite() && (1.0..=3600.0).contains(&self.duration_s)) {
             out.push(Problem::new("workload.duration_s", "use 1 to 3600 seconds"));
         }
-        if !self.baseline && sc.stacks.iter().any(|s| *s != Stack::Vinc) {
+        if !self.baseline && sc.stacks.iter().any(|s| *s != Stack::Pinc) {
             out.push(Problem::new(
                 "stacks",
-                "only VINC has delay-tolerant delivery; set workload.baseline to run the others without it",
+                "only PINC has delay-tolerant delivery; set workload.baseline to run the others without it",
             ));
         }
         crate::workloads::check_group(sc, nodes, out);

@@ -25,13 +25,13 @@
 )]
 
 use proptest::prelude::*;
-use vinc_membership::NodeId;
-use vinc_membership::codec::{
+use pinc_membership::NodeId;
+use pinc_membership::codec::{
     Alive, Down, ENTRY_LEN, Frame, FrameError, Hello, MAX_BODY, Other, Path, Probe, Proof, Record, SNAP_CHUNK, Snap,
     entry_bytes, ty,
 };
 
-vinc_tests::install_counting_allocator!();
+pinc_tests::install_counting_allocator!();
 
 fn rec(n: u8) -> Record {
     Record {
@@ -80,7 +80,7 @@ fn ack_probe_delta_snap_down_roundtrip() {
     roundtrip(&Frame::Probe);
     let m: NodeId = [9; 32];
     for alive in [Alive::Down, Alive::Alive, Alive::Left] {
-        let b = roundtrip(&Frame::Delta(vinc_membership::codec::Entry {
+        let b = roundtrip(&Frame::Delta(pinc_membership::codec::Entry {
             member: &m,
             rec: rec(3),
             alive,
@@ -239,7 +239,7 @@ fn stream_reading() {
     assert_eq!(Frame::read(&big), Err(FrameError::TooLarge));
     assert_eq!(
         Frame::read(&0u32.to_be_bytes()),
-        Err(FrameError::Wire(vinc_wire::WireError::Truncated { needed: 1 }))
+        Err(FrameError::Wire(pinc_wire::WireError::Truncated { needed: 1 }))
     );
     // output too small
     assert!(matches!(Frame::Ack.encode(&mut [0u8; 3]), Err(FrameError::Wire(_))));
@@ -280,7 +280,7 @@ fn the_codec_never_allocates() {
             Alive::Alive,
         ));
     }
-    let stats = vinc_tests::measure(|| {
+    let stats = pinc_tests::measure(|| {
         for _ in 0..100 {
             let snap = Snap::new(false, true, &entries).unwrap();
             let n = Frame::Snap(snap).encode(&mut buf).unwrap().len();
@@ -288,7 +288,7 @@ fn the_codec_never_allocates() {
                 panic!()
             };
             assert_eq!((used, s.entries().count()), (n, SNAP_CHUNK));
-            let d = Frame::Delta(vinc_membership::codec::Entry {
+            let d = Frame::Delta(pinc_membership::codec::Entry {
                 member: &m,
                 rec: rec(2),
                 alive: Alive::Down,
@@ -320,7 +320,7 @@ proptest! {
 
     #[test]
     fn delta_roundtrips(m in any::<[u8; 32]>(), r in arb_record(), a in arb_alive()) {
-        roundtrip(&Frame::Delta(vinc_membership::codec::Entry { member: &m, rec: r, alive: a }));
+        roundtrip(&Frame::Delta(pinc_membership::codec::Entry { member: &m, rec: r, alive: a }));
     }
 
     #[test]

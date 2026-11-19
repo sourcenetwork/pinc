@@ -1,6 +1,6 @@
 -------------------------------- MODULE Early --------------------------------
 (***************************************************************************)
-(* The buffer of packets that arrive before their keys (vinc-transport     *)
+(* The buffer of packets that arrive before their keys (pinc-transport     *)
 (* conn/recv.rs, drive.rs, life.rs and stream/datagram.rs) over every      *)
 (* interleaving of packets (0-RTT and 1-RTT, opening or not), the early    *)
 (* keys, the establishment of the session and the close, at small sizes    *)
@@ -41,7 +41,7 @@
 (* in the buffer: Drain), "ampopen" (a packet counts only when it opens:   *)
 (* Amp) and "anyframe" (the rule before #295: a 0-RTT packet that opens is *)
 (* applied whatever its frames: EarlyRefused). Lean counterpart:           *)
-(* proofs/lean/Vinc/TransportEarly*.lean.                                  *)
+(* proofs/lean/Pinc/TransportEarly*.lean.                                  *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
 CONSTANTS CAP, KMAX, RULE

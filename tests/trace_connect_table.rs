@@ -1,6 +1,6 @@
 //! Trace generation for the bounded tables: seeded random runs of the real `Table` and `Cache` through their public API,
 //! recorded as ndjson (`connect_table.ndjson`) for the TLA+ trace check (`TraceConnectTable.tla`) and the Lean replay
-//! (`Vinc/TraceConnectTable.lean`).
+//! (`Pinc/TraceConnectTable.lean`).
 //!
 //! A run is one table (or cache) of a small capacity `N` and `N + 2` keys. The bucket of every key is read with
 //! `bucket_of` and recorded first, so the checkers use the hash of the real code: the node ids are searched so that the
@@ -8,7 +8,7 @@
 //! remove, and retain with the predicate "the value is odd" (the predicate's calls are counted, and every entry must be
 //! visited). After every operation the table's entries in slot order (`iter`) are recorded. The test compares everything
 //! with a plain map and checks the entries it holds.
-//! The trace is written to the directory in `VINC_TRACE_DIR` when it is set; otherwise nothing is written.
+//! The trace is written to the directory in `PINC_TRACE_DIR` when it is set; otherwise nothing is written.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -28,10 +28,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
 use connect_common::nid;
-use vinc_connect::relay::table::{Cache, Table};
-use vinc_tests::SplitMix64;
+use pinc_connect::relay::table::{Cache, Table};
+use pinc_tests::SplitMix64;
 
-fn slots_json<'a>(it: impl Iterator<Item = (&'a vinc_crypto::NodeId, &'a u32)>) -> String {
+fn slots_json<'a>(it: impl Iterator<Item = (&'a pinc_crypto::NodeId, &'a u32)>) -> String {
     let parts: Vec<String> = it.map(|(k, v)| format!("[{},{v}]", k.bytes[0])).collect();
     format!("[{}]", parts.join(","))
 }
@@ -147,7 +147,7 @@ fn the_tables_match_a_map_and_record_their_trace() {
             _ => run_cache::<5>(seed, &mut out),
         }
     }
-    let Some(dir) = std::env::var_os("VINC_TRACE_DIR") else {
+    let Some(dir) = std::env::var_os("PINC_TRACE_DIR") else {
         return;
     };
     let dir = std::path::PathBuf::from(dir);

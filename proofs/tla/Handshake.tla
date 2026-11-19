@@ -1,6 +1,6 @@
 ------------------------------ MODULE Handshake ------------------------------
 (***************************************************************************)
-(* Model of the vinc-security handshake: the Initiator and Responder       *)
+(* Model of the pinc-security handshake: the Initiator and Responder       *)
 (* state machines at the message level, running against a network that an  *)
 (* attacker controls. The step functions are in HsOps.tla, shared with the *)
 (* trace check; this module adds the honest nodes' sessions, the shared    *)

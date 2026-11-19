@@ -19,7 +19,7 @@ use std::collections::BTreeMap;
 
 use connect_common::nid;
 use proptest::prelude::*;
-use vinc_connect::relay::table::{Cache, Table};
+use pinc_connect::relay::table::{Cache, Table};
 
 #[derive(Debug, Clone)]
 enum Op {

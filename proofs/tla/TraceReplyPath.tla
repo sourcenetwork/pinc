@@ -1,7 +1,7 @@
 ---------------------------- MODULE TraceReplyPath ----------------------------
 (***************************************************************************)
 (* Trace validation of the path a dialing side's handshake reply arrives   *)
-(* on and of its path table: vinc-transport conn/recv.rs, conn/drive.rs    *)
+(* on and of its path table: pinc-transport conn/recv.rs, conn/drive.rs    *)
 (* follow_reply, conn/path.rs.                                             *)
 (*                                                                         *)
 (* The Rust test tests/trace_reply_path.rs drives real dialing sides       *)
@@ -19,7 +19,7 @@
 (* a later key answer moves the session to checks it.                      *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds reply_path.ndjson.    *)
+(* variable PINC_TRACE_DIR, the directory that holds reply_path.ndjson.    *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, TLC, Json, IOUtils
 CONSTANTS NP
@@ -27,7 +27,7 @@ VARIABLES i, c
 vars == <<i, c>>
 INSTANCE PathOps
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/reply_path.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/reply_path.ndjson")
 Ev0 == Trace[i]
 
 \* the dialing side on path id: the path validated and active in the first slot

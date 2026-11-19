@@ -1,8 +1,8 @@
 //! The relay runs of the timers trace: the session closed behind a live carrier, and the near misses.
 
-use vinc_tests::*;
-use vinc_transport::conn::{PathId, PathInfo};
-use vinc_transport::recovery::PathKind;
+use pinc_tests::*;
+use pinc_transport::conn::{PathId, PathInfo};
+use pinc_transport::recovery::PathKind;
 
 use crate::duo::{app, simple, with_pair_at};
 use crate::rec::Log;

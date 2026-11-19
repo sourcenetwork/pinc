@@ -1,6 +1,6 @@
-//! Trace generation for the WebSocket framing of the carrier (`vinc_connect::carrier::ws`): seeded and boundary calls of
+//! Trace generation for the WebSocket framing of the carrier (`pinc_connect::carrier::ws`): seeded and boundary calls of
 //! the real encoder and decoder, recorded as ndjson (`connect_ws.ndjson`) for the TLA+ trace check
-//! (`TraceConnectWs.tla`) and the Lean replay (`Vinc/TraceConnectWs.lean`).
+//! (`TraceConnectWs.tla`) and the Lean replay (`Pinc/TraceConnectWs.lean`).
 //!
 //! Three kinds of call, one event each:
 //! - `enc`: `ws::encode` for every opcode, with and without a mask key, with payloads of every boundary length (0, 1,
@@ -36,8 +36,8 @@
 
 use std::fmt::Write as _;
 
-use vinc_connect::carrier::ws::{self, Decoder, MAX_HEADER, MAX_PAYLOAD, Opcode, Role, WsError, WsFrame};
-use vinc_tests::SplitMix64;
+use pinc_connect::carrier::ws::{self, Decoder, MAX_HEADER, MAX_PAYLOAD, Opcode, Role, WsError, WsFrame};
+use pinc_tests::SplitMix64;
 
 const OPS: [(Opcode, u8); 5] = [
     (Opcode::Continuation, 0),
@@ -526,7 +526,7 @@ fn websocket_calls_match_the_models() {
     for line in &t.ev {
         let _ = writeln!(all, "{line}");
     }
-    if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
+    if let Ok(dir) = std::env::var("PINC_TRACE_DIR") {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(std::path::Path::new(&dir).join("connect_ws.ndjson"), &all).unwrap();
     }

@@ -14,7 +14,7 @@
     clippy::many_single_char_names
 )]
 
-use vinc_connect::client::dial::{
+use pinc_connect::client::dial::{
     Cand, HUB_RELAY_DELAY, RelayView, TG_SLOW, THIN_HS0_WAIT, Try, direct_first, flight_relays, hs0, select,
 };
 

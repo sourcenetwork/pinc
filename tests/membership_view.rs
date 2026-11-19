@@ -28,9 +28,9 @@
 #[path = "membership_world.rs"]
 mod world;
 
-use vinc_membership::codec::{Alive, Down, Entry, Frame, Path, Probe, Proof, Record, Snap, entry_bytes, ty};
-use vinc_membership::event::{QuietCause, Removal};
-use vinc_membership::{Event, NodeId, Trace};
+use pinc_membership::codec::{Alive, Down, Entry, Frame, Path, Probe, Proof, Record, Snap, entry_bytes, ty};
+use pinc_membership::event::{QuietCause, Removal};
+use pinc_membership::{Event, NodeId, Trace};
 use world::{Bc, LEAVE, MS, SEC, World, id};
 
 const START: u64 = 100 * SEC;
@@ -111,7 +111,7 @@ fn a_hub_view_is_the_union_of_hub_copies_and_the_highest_incarnation_wins() {
     w.inject(
         0,
         0,
-        &Frame::Hello(vinc_membership::codec::Hello {
+        &Frame::Hello(pinc_membership::codec::Hello {
             rec: rec(9, 0, 1),
             snap: false,
             homed: false,

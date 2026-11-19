@@ -1,5 +1,5 @@
 output "hosts_file" {
-  description = "The fleet file to pass to `vinc-distributed run --hosts`."
+  description = "The fleet file to pass to `pinc-distributed run --hosts`."
   value       = local_file.hosts.filename
 }
 

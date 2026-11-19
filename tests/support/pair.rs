@@ -12,8 +12,8 @@
     clippy::must_use_candidate
 )]
 
-use vinc_security::{Env, ResponderStores};
-use vinc_transport::conn::{Drop, KeyEvent, KeysView, PathId, Transmit};
+use pinc_security::{Env, ResponderStores};
+use pinc_transport::conn::{Drop, KeyEvent, KeysView, PathId, Transmit};
 
 use super::{Net, Node, PK, TK};
 

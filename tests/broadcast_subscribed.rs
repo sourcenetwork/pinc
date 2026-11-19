@@ -6,7 +6,7 @@
 mod common;
 
 use common::{Ev, Net, SEC};
-use vinc_crypto::IdentityAlg;
+use pinc_crypto::IdentityAlg;
 
 const T: &[u8] = b"joined";
 

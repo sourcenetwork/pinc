@@ -1,4 +1,4 @@
-//! The `vinc-sim` NATs: mapping and filtering for each kind, mapping timeouts, rebinding, address families.
+//! The `pinc-sim` NATs: mapping and filtering for each kind, mapping timeouts, rebinding, address families.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -15,8 +15,8 @@
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
-use vinc_sim::toy::{Probe, ProbeCmd, ProbeEvent};
-use vinc_sim::{DropReason, LinkConfig, MS, NatConfig, NatId, NatKind, NodeId, PortPolicy, SEC, Sim, SimConfig};
+use pinc_sim::toy::{Probe, ProbeCmd, ProbeEvent};
+use pinc_sim::{DropReason, LinkConfig, MS, NatConfig, NatId, NatKind, NodeId, PortPolicy, SEC, Sim, SimConfig};
 
 const EXT: IpAddr = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 1));
 const PRIV: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 0, 2)), 4000);

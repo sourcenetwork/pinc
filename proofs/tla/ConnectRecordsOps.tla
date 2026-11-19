@@ -1,6 +1,6 @@
 ------------------------- MODULE ConnectRecordsOps -------------------------
 (***************************************************************************)
-(* The record store of the relay (vinc-connect/src/relay/records.rs) as    *)
+(* The record store of the relay (pinc-connect/src/relay/records.rs) as    *)
 (* pure operators, step for step: RecordStore::accept and sweep,           *)
 (* Relay::store, publish, replica, restore_record, set_own_record,         *)
 (* republish_due, sync_record, lookup and answer, and the part of          *)

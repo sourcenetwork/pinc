@@ -14,14 +14,14 @@
 (* operators of ConnectPackOps.tla (Offer, Seal) compute.                  *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds connect_pack.ndjson.  *)
+(* variable PINC_TRACE_DIR, the directory that holds connect_pack.ndjson.  *)
 (***************************************************************************)
 EXTENDS ConnectPackOps, Json, IOUtils
 
 VARIABLES i, c, st
 vars == <<i, c, st>>
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/connect_pack.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/connect_pack.ndjson")
 Ev == Trace[i]
 
 Init == i = 1 /\ c = [F |-> 1, B |-> 1, Head |-> 5, Cap |-> 0] /\ st = Empty

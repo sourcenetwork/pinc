@@ -1,6 +1,6 @@
-//! Trace generation for the node's table of failed dials: seeded runs of a real table (`vinc-node`, built with the
+//! Trace generation for the node's table of failed dials: seeded runs of a real table (`pinc-node`, built with the
 //! `trace` feature), recorded as ndjson (`nobo.ndjson`) for the TLA+ trace check (`TraceNodeBackoff.tla`) and the
-//! Lean replay (`Vinc/TraceNodeBackoff.lean`).
+//! Lean replay (`Pinc/TraceNodeBackoff.lean`).
 //!
 //! The table is the node's own (`Io`, over an endpoint that does nothing): the calls are `backoff` (a dial failed),
 //! `deny_back` (the peer's access check refused the dial) and `gate`, which hands a frame to the node's own stream
@@ -44,10 +44,10 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use node_script::{DIALED, ScriptNode, hub_alpn, id_of, node_with};
-use vinc_core::{Event, SessionId};
-use vinc_crypto::NodeId;
-use vinc_node::{BackoffProbe, HUB_ALPN, NoApps};
-use vinc_tests::SplitMix64;
+use pinc_core::{Event, SessionId};
+use pinc_crypto::NodeId;
+use pinc_node::{BackoffProbe, HUB_ALPN, NoApps};
+use pinc_tests::SplitMix64;
 
 const MAX: usize = BackoffProbe::TABLE_MAX;
 const FIRST: u64 = BackoffProbe::FIRST;
@@ -467,7 +467,7 @@ fn the_failed_dials_match_the_models() {
     assert!(seen.refused > 0, "a full table never met a new peer");
     assert!(seen.full_updated > 0, "a full table never updated an entry");
     assert!(seen.stepped_back > 0, "the clock never stepped back");
-    if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
+    if let Ok(dir) = std::env::var("PINC_TRACE_DIR") {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(std::path::Path::new(&dir).join("nobo.ndjson"), &out).unwrap();
     }

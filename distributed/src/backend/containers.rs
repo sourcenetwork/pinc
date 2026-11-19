@@ -22,7 +22,7 @@ use crate::plan::{Container, LABEL, Ns, Plan, ShapePoint, netem_args};
 use crate::scenario::Shape;
 
 /// Where the node binary is mounted in every node container.
-pub const BIN: &str = "/opt/vd/vinc-distributed";
+pub const BIN: &str = "/opt/vd/pinc-distributed";
 /// The base image when the host does not say which distribution it runs: small, with a C library and the GCC runtime.
 pub const FALLBACK_IMAGE: &str = "debian:bookworm-slim";
 
@@ -134,7 +134,7 @@ struct State {
 
 fn state_path() -> PathBuf {
     let dir = std::env::var_os("XDG_RUNTIME_DIR").map_or_else(std::env::temp_dir, PathBuf::from);
-    dir.join("vinc-distributed-state.json")
+    dir.join("pinc-distributed-state.json")
 }
 
 /// The container backend of one run.
@@ -192,8 +192,8 @@ fn run_args(c: &Container, run: &str, image: &str, bin: Option<&Path>) -> Vec<St
         // Bound read-only, so a rebuild needs no image and every node runs the orchestrator's own build.
         a.extend(["-v".into(), format!("{}:{BIN}:ro", b.display())]);
     }
-    if let Some(r) = std::env::var_os("VINC_RELAY_BIN") {
-        let at = crate::node::vinc::relay_server::RELAY_BIN;
+    if let Some(r) = std::env::var_os("PINC_RELAY_BIN") {
+        let at = crate::node::pinc::relay_server::RELAY_BIN;
         a.extend(["-v".into(), format!("{}:{at}:ro", Path::new(&r).display())]);
     }
     a.extend([image.to_owned(), "infinity".into()]);

@@ -11,7 +11,7 @@
 (* members. ViewIsUnion: the members they list are those some hub copy      *)
 (* lists.                                                                   *)
 (*                                                                         *)
-(* Lean counterpart: Vinc/MembershipConvAll.lean (recomputeAll_view_agree). *)
+(* Lean counterpart: Pinc/MembershipConvAll.lean (recomputeAll_view_agree). *)
 (***************************************************************************)
 EXTENDS MembershipOps
 

@@ -1,4 +1,4 @@
-//! The delivery paths under the scope (vinc#86): the catch-up of a subscriber that is behind, the repair after a
+//! The delivery paths under the scope (pinc#86): the catch-up of a subscriber that is behind, the repair after a
 //! split heals, and the hub's own application, which is never scoped.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::expect_used)]
 
@@ -9,8 +9,8 @@ mod support;
 
 use common::{Net, SEC};
 use support::{T, adj, got, session};
-use vinc_broadcast::consts::GAP_EVERY;
-use vinc_crypto::IdentityAlg;
+use pinc_broadcast::consts::GAP_EVERY;
+use pinc_crypto::IdentityAlg;
 
 #[test]
 fn a_subscriber_that_is_behind_catches_up_only_on_its_component() {

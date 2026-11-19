@@ -1,6 +1,6 @@
 ------------------------------ MODULE TraceCid -------------------------------
 (***************************************************************************)
-(* Trace validation of the connection id tables: vinc-transport conn/cid.rs.*)
+(* Trace validation of the connection id tables: pinc-transport conn/cid.rs.*)
 (*                                                                         *)
 (* The Rust test tests/trace_cid.rs drives real tables (built with the     *)
 (* cargo feature `trace`) through seeded runs: the peer's first id learned,*)
@@ -22,7 +22,7 @@
 (* installed is false (it has no id to derive).                            *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds cid.ndjson.           *)
+(* variable PINC_TRACE_DIR, the directory that holds cid.ndjson.           *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
 
@@ -35,7 +35,7 @@ Id(j) == ids[j + 1]
 
 INSTANCE CidOps
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/cid.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/cid.ndjson")
 Ev0 == Trace[i]
 
 \* the view does not show the count of ids handed out again (ru): the model carries it, and a wrong count shows as

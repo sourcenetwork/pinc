@@ -1,6 +1,6 @@
 ------------------------------- MODULE Queue --------------------------------
 (***************************************************************************)
-(* The endpoint's bounded event queue (vinc-core queue.rs), over every     *)
+(* The endpoint's bounded event queue (pinc-core queue.rs), over every     *)
 (* interleaving of push, pop, purge and a burst of pushes, at small sizes  *)
 (* (QueueOps.tla has the operators, a ring of cells with a head, as the    *)
 (* code has it).                                                           *)
@@ -34,7 +34,7 @@
 (* (BurstKeeps fails); Queue_head evicts the oldest event always, not the  *)
 (* oldest recoverable one (PushRule fails); Queue_lost and Queue_drop are  *)
 (* reachability witnesses: a loss and a drop happen.                       *)
-(* Lean counterpart: proofs/lean/Vinc/CoreQueue*.lean.                     *)
+(* Lean counterpart: proofs/lean/Pinc/CoreQueue*.lean.                     *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
 CONSTANTS CAP, H, HB, PMAX, BL, CL, PS, HEAD_FIRST

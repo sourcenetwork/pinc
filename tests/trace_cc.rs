@@ -1,6 +1,6 @@
 //! Trace generation for congestion control and pacing: seeded random runs of a real `Cubic` controller and `Pacer`
-//! (`vinc-transport`, built with the `trace` feature), recorded as ndjson (`cc.ndjson`) for the TLA+ trace check
-//! (`TraceCc.tla`) and the Lean replay (`Vinc/TraceCc.lean`).
+//! (`pinc-transport`, built with the `trace` feature), recorded as ndjson (`cc.ndjson`) for the TLA+ trace check
+//! (`TraceCc.tla`) and the Lean replay (`Pinc/TraceCc.lean`).
 //!
 //! A run feeds the controller the calls the recovery engine makes: round-trip samples, acknowledgements (with and
 //! without a smoothed or minimum round trip, a segment size, packets in order and out), losses (with and without a
@@ -27,9 +27,9 @@
 
 use std::fmt::Write as _;
 
-use vinc_tests::SplitMix64;
-use vinc_transport::recovery::trace::CcView;
-use vinc_transport::recovery::{AckInput, BURST_PACKETS, Cubic, MAX_CWND, MIN_CWND, MS, Pacer};
+use pinc_tests::SplitMix64;
+use pinc_transport::recovery::trace::CcView;
+use pinc_transport::recovery::{AckInput, BURST_PACKETS, Cubic, MAX_CWND, MIN_CWND, MS, Pacer};
 
 /// The largest value of a 32-bit checker integer.
 const TOP: u64 = (1 << 31) - 1;
@@ -363,11 +363,11 @@ fn congestion_control_runs_match_the_models() {
         r#""r":false"#,
     ] {
         assert!(
-            vinc_tests::soaking() || out.contains(needle),
+            pinc_tests::soaking() || out.contains(needle),
             "the runs never reach {needle}"
         );
     }
-    if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
+    if let Ok(dir) = std::env::var("PINC_TRACE_DIR") {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(std::path::Path::new(&dir).join("cc.ndjson"), &out).unwrap();
         std::fs::write(std::path::Path::new(&dir).join("cc_wide.ndjson"), &wide).unwrap();

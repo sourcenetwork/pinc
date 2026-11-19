@@ -1,6 +1,6 @@
 //! Trace generation for the packet header codecs: seeded calls of the real `LongHeader::write` and `parse`,
-//! `ShortHeader::write`, `short_dcid`, `unprotect_header`, `packets`, `seal` and `open` (`vinc-transport`), recorded
-//! as ndjson (`hdr.ndjson`) for the TLA+ trace check (`TraceHdr.tla`) and the Lean replay (`Vinc/TraceHdr.lean`).
+//! `ShortHeader::write`, `short_dcid`, `unprotect_header`, `packets`, `seal` and `open` (`pinc-transport`), recorded
+//! as ndjson (`hdr.ndjson`) for the TLA+ trace check (`TraceHdr.tla`) and the Lean replay (`Pinc/TraceHdr.lean`).
 //!
 //! A long header is written with every packet-number length, into buffers around its size, with body lengths at the
 //! varint boundaries; what was written is parsed back whole, cut at every length, with its body one byte short and
@@ -50,7 +50,7 @@ mod helpers;
 use body::hs_run;
 use headers::{datagram_run, long_run, sealed_run, short_run};
 use helpers::{pad_run, sample_run};
-use vinc_tests::{SplitMix64, big_stack};
+use pinc_tests::{SplitMix64, big_stack};
 
 #[test]
 fn header_calls_match_the_models() {
@@ -109,7 +109,7 @@ fn header_calls_match_the_models() {
         wide.contains(r#""err":"VarintOverflow""#),
         "the wide calls never reach VarintOverflow"
     );
-    if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
+    if let Ok(dir) = std::env::var("PINC_TRACE_DIR") {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(std::path::Path::new(&dir).join("hdr.ndjson"), &out).unwrap();
         std::fs::write(std::path::Path::new(&dir).join("hdr_wide.ndjson"), &wide).unwrap();

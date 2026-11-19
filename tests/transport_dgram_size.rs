@@ -1,18 +1,18 @@
 //! No datagram leaves larger than its path's datagram size, except the two the rules build larger on purpose: a first
 //! flight sent whole (up to 1452 bytes, with nothing behind it) and a path MTU probe. Before
-//! [#554](https://github.com/sourcenetwork/vinc/issues/554) the packet coalesced behind a whole flight filled the room
+//! [#554](https://github.com/sourcenetwork/pinc/issues/554) the packet coalesced behind a whole flight filled the room
 //! the flight was given, up to 1452 bytes on a 1200-byte path.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use vinc_crypto::IdentityAlg;
-use vinc_tests::*;
-use vinc_transport::conn::MIN_MTU;
-use vinc_transport::packet::{LongHeader, LongType};
+use pinc_crypto::IdentityAlg;
+use pinc_tests::*;
+use pinc_transport::conn::MIN_MTU;
+use pinc_transport::packet::{LongHeader, LongType};
 
-vinc_tests::install_counting_allocator!();
+pinc_tests::install_counting_allocator!();
 
 type Log = Rc<RefCell<Vec<(bool, Vec<u8>)>>>;
 
@@ -32,7 +32,7 @@ fn resumed_exchange(len: usize) -> Vec<(bool, Vec<u8>)> {
     let mut tickets = first_session(&mut w);
     let ticket = tickets.take(&w.rp.id.node_id(), ALPN, T0).unwrap();
     let (mut sa, mut sb) = (Store::new(true), Store::new(false));
-    let a = w.client(&mut sa, Some(ticket), vinc_security::ClientTickets::new());
+    let a = w.client(&mut sa, Some(ticket), pinc_security::ClientTickets::new());
     let b = w.server(&mut sb);
     let mut net = Net::new(a, b, Link::new(7, Params::new(10 * MS)), &mut w.stores);
     let log: Log = Rc::default();

@@ -1,6 +1,6 @@
 ------------------------------ MODULE HeldOps -------------------------------
 (***************************************************************************)
-(* The operations of vinc-core slot.rs (Held), step for step: the          *)
+(* The operations of pinc-core slot.rs (Held), step for step: the          *)
 (* application events of a session that wait for its access check. The     *)
 (* ring, its cells, head and length, and the loop that closes the gap an   *)
 (* eviction leaves are those of QueueOps.tla (the event queue's ring), and *)

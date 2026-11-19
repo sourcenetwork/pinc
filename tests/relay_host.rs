@@ -16,7 +16,7 @@
 )]
 
 mod relay_members;
-mod vinc_common;
+mod pinc_common;
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -26,15 +26,15 @@ use std::time::{Duration, Instant};
 
 use nuclei::Handle;
 use relay_members::{Member, Ports, bind_ports, build_relay, decode, on_big_stack, wall_ns};
-use vinc::relay::{Event, Limits, MemStore, Peer, Reason, Relay, Stats, Store};
-use vinc::{CarrierKind, Identity};
-use vinc_common::{client, eventually, within};
-use vinc_connect::carrier::session::{ALPN, PEER_ALPN};
-use vinc_connect::carrier::{DnsAnswer, Frame};
-use vinc_connect::record::{self, Reach, RecordFields};
-use vinc_connect::relay::datagram::Datagram;
-use vinc_connect::relay::{Quota, sleep};
-use vinc_crypto::{IdentityAlg, Keypair, NodeId};
+use pinc::relay::{Event, Limits, MemStore, Peer, Reason, Relay, Stats, Store};
+use pinc::{CarrierKind, Identity};
+use pinc_common::{client, eventually, within};
+use pinc_connect::carrier::session::{ALPN, PEER_ALPN};
+use pinc_connect::carrier::{DnsAnswer, Frame};
+use pinc_connect::record::{self, Reach, RecordFields};
+use pinc_connect::relay::datagram::Datagram;
+use pinc_connect::relay::{Quota, sleep};
+use pinc_crypto::{IdentityAlg, Keypair, NodeId};
 
 const HUB: &[u8] = b"t/hub";
 
@@ -46,7 +46,7 @@ struct TestRelay {
     stats: Box<dyn Fn() -> Stats>,
     events: Box<dyn Fn() -> Option<Event>>,
     stop: Box<dyn Fn()>,
-    task: Option<nuclei::Task<vinc::Result<()>>>,
+    task: Option<nuclei::Task<pinc::Result<()>>>,
 }
 
 async fn start(seed: u8, limits: Limits, store: MemStore) -> TestRelay {
@@ -251,7 +251,7 @@ fn packets_for_a_sleeping_member_are_held_within_the_bound_and_delivered_on_wake
             let s = (r.stats)();
             let held = s.mailbox.stored - s.mailbox.dropped_oldest;
             assert!(s.mailbox.dropped_oldest > 0, "the bound pushed packets out: {s:?}");
-            assert!(held * 1000 <= vinc::relay::MAILBOX_BYTES as u64, "held {held} packets");
+            assert!(held * 1000 <= pinc::relay::MAILBOX_BYTES as u64, "held {held} packets");
             assert_eq!(s.mailbox_members, 1);
             let mut woke = false;
             while let Some(e) = (r.events)() {
@@ -355,7 +355,7 @@ fn a_member_with_a_udp_session_to_the_hub_is_counted_and_released() {
             let r = start(0x77, Limits::default(), MemStore::new()).await;
             let ep = client().await;
             let conn = ep
-                .connect(vinc::NodeAddr::new(r.id).with_direct(r.addr), HUB)
+                .connect(pinc::NodeAddr::new(r.id).with_direct(r.addr), HUB)
                 .await
                 .unwrap();
             stats_where(&r, "the hub holds the session", |s| s.hub_sessions == 1).await;
@@ -448,7 +448,7 @@ fn a_restored_record_keeps_its_remaining_lifetime_and_a_dropped_one_leaves_the_s
     on_big_stack(|| {
         within(60, async {
             let relay_id = Identity::from_seed(&[0x79; 32]).unwrap().node_id();
-            let ttl = vinc_connect::relay::rule::RECORD_TTL_NS;
+            let ttl = pinc_connect::relay::rule::RECORD_TTL_NS;
             let now = wall_ns();
             let store = MemStore::new();
             let (almost, rec_almost) = signed_record(0x91, relay_id, 1);
@@ -604,10 +604,10 @@ fn packets_cross_the_hub_tunnel_up_and_down_between_a_udp_session_and_a_carrier(
             let r = start(0x7c, Limits::default(), MemStore::new()).await;
             // member `a` is a facade endpoint with a validated UDP session to the relay; its socket is also used for
             // the tunnel datagrams, and the datagrams the relay tunnels down to it are set aside
-            let sock = Rc::new(Handle::<UdpSocket>::bind(vinc_common::lo()).await.unwrap());
+            let sock = Rc::new(Handle::<UdpSocket>::bind(pinc_common::lo()).await.unwrap());
             let down: Rc<RefCell<VecDeque<Vec<u8>>>> = Rc::default();
             let (rs, ss, rd) = (Rc::clone(&sock), Rc::clone(&sock), Rc::clone(&down));
-            let ep = vinc::Vinc::builder()
+            let ep = pinc::Pinc::builder()
                 .alpn(HUB)
                 .local_addr(sock.local_addr().unwrap())
                 .build(
@@ -629,7 +629,7 @@ fn packets_cross_the_hub_tunnel_up_and_down_between_a_udp_session_and_a_carrier(
             })
             .detach();
             let _session = ep
-                .connect(vinc::NodeAddr::new(r.id).with_direct(r.addr), HUB)
+                .connect(pinc::NodeAddr::new(r.id).with_direct(r.addr), HUB)
                 .await
                 .unwrap();
             stats_where(&r, "the hub holds the session", |s| s.hub_sessions == 1).await;
@@ -650,7 +650,7 @@ fn packets_cross_the_hub_tunnel_up_and_down_between_a_udp_session_and_a_carrier(
             .encode(&mut buf)
             .unwrap();
             sock.send_to(&buf[..n], r.addr).await.unwrap();
-            let up = vinc_common::poll_drop(b.recv(), 2500)
+            let up = pinc_common::poll_drop(b.recv(), 2500)
                 .await
                 .unwrap_or_else(|| panic!("nothing came up the tunnel: {:?}", (r.stats)()))
                 .unwrap();

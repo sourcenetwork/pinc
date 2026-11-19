@@ -33,14 +33,12 @@ PINC is a library, not a framework:
 - **Hot path:** zero-copy parsing and no heap allocation in steady state are design rules.
 
 > **Status: pre-release.** The protocol crates are built and tested, and their proofs land crate by crate. Open work
-> is tracked in the [issues](https://github.com/sourcenetwork/vinc/issues). PINC was named VINC until November 2026:
-> the crates and this repository keep the `vinc` name until the rename lands
-> ([#668](https://github.com/sourcenetwork/vinc/issues/668)).
+> is tracked in the [issues](https://github.com/sourcenetwork/pinc/issues).
 
 ## Usage
 
 An echo over loopback. The host's whole contribution is the three closures; here they sit on a
-[nuclei](https://crates.io/crates/nuclei) UDP socket. Hosts with no executor drive the SANS-IO crates (`vinc-core`)
+[nuclei](https://crates.io/crates/nuclei) UDP socket. Hosts with no executor drive the SANS-IO crates (`pinc-core`)
 directly.
 
 ```rust
@@ -50,15 +48,15 @@ use std::time::Instant;
 
 use nuclei::Handle;
 use nuclei::time::sleep_until_precise;
-use vinc::{Endpoint, Hosted, Vinc};
+use pinc::{Endpoint, Hosted, Pinc};
 
 const ALPN: &[u8] = b"echo/1";
 
-async fn bind() -> vinc::Result<Endpoint<impl Hosted>> {
+async fn bind() -> pinc::Result<Endpoint<impl Hosted>> {
     let any = SocketAddr::from(([127, 0, 0, 1], 0));
     let sock = Arc::new(Handle::<UdpSocket>::bind(any).await.expect("bind"));
     let (rx, tx) = (Arc::clone(&sock), Arc::clone(&sock));
-    Vinc::builder().alpn(ALPN).local_addr(sock.local_addr().expect("address")).build(
+    Pinc::builder().alpn(ALPN).local_addr(sock.local_addr().expect("address")).build(
         async move |buf: &mut [u8]| rx.recv_from(buf).await,         // receive a datagram
         async move |pkt: &[u8], to: SocketAddr| tx.send_to(pkt, to).await, // send a datagram
         async |at: Instant| sleep_until_precise(at).await,           // sleep until a deadline
@@ -66,7 +64,7 @@ async fn bind() -> vinc::Result<Endpoint<impl Hosted>> {
 }
 
 #[nuclei::main]
-async fn main() -> vinc::Result<()> {
+async fn main() -> pinc::Result<()> {
     let (server, client) = (bind().await?, bind().await?);
     let addr = server.addr(); // node id and socket address
 
@@ -76,14 +74,14 @@ async fn main() -> vinc::Result<()> {
         tx.write_all(&rx.read_to_end(1 << 20).await?).await?;
         tx.finish().await?;
         conn.closed().await; // dropping a connection closes it: wait for the client to finish reading
-        vinc::Result::Ok(())
+        pinc::Result::Ok(())
     });
 
     let conn = client.connect(addr, ALPN).await?;
     let (mut tx, mut rx) = conn.open_bi().await?;
-    tx.write_all(b"hello, vinc").await?;
+    tx.write_all(b"hello, pinc").await?;
     tx.finish().await?;
-    assert_eq!(rx.read_to_end(1 << 20).await?, b"hello, vinc");
+    assert_eq!(rx.read_to_end(1 << 20).await?, b"hello, pinc");
     conn.close(0).await;
     accept.await
 }
@@ -109,27 +107,27 @@ keepalives) awaits `Endpoint::run()`.
 
 | Crate | What it does | `no_std` | Status |
 |---|---|---|---|
-| `vinc` | the facade: builder, connections, streams, datagrams, topics, lookup by id, the hub and relay roles, over the host's three closures | std ([#99](https://github.com/sourcenetwork/vinc/issues/99)) | built |
-| `vinc-wire` | varints and a strict canonical DAG-CBOR codec, parsed in place | yes | built; varints proven, the codec tested ([#606](https://github.com/sourcenetwork/vinc/issues/606)) |
-| `vinc-dag` | content-addressed blocks and CIDs, value roots, range proofs | yes, heap-free | built; roots and range proofs proven, CIDs, blocks and CAR tested ([#606](https://github.com/sourcenetwork/vinc/issues/606)) |
-| `vinc-crypto` | RustCrypto primitives behind one `Provider`: AEADs, X25519, ML-KEM-768, four identity algorithms, BLAKE3 | yes | built |
-| `vinc-keystore` | long-term keys behind a `KeyStore` trait; a software store and a pure-Rust TPM 2.0 store (`hwenc`) | no | built |
-| `vinc-security` | hybrid post-quantum handshake, resumption with 0-RTT, key schedule, packet protection, key roll | yes | built, proven |
-| `vinc-transport` | PINCER: streams, datagrams, flow and congestion control, loss recovery, pacing, path MTU, migration | yes | built |
-| `vinc-core` | the SANS-IO endpoint: host interface, protocol dispatch, commands, events, queries | yes | built |
-| `vinc-node` | the endpoint, the connectivity client and every layer composed over real sessions | yes | built |
-| `vinc-connect` | carriers, relays, signed records and lookup, hole punching, the hub tunnel, the mailbox | yes | built; relay side proven |
-| `vinc-portmap` | a UDP port mapping from the home gateway (PCP, NAT-PMP, UPnP-IGD), off unless turned on | yes, heap-free | built |
-| `vinc-table` | fixed tables over one block of bytes made once: sorted slab, array, ring, slot pool; no allocation after setup | yes, heap-free | built |
-| `vinc-membership` | hub roster and member view: leases, probes, incarnations, leave, revocation | yes | built |
-| `vinc-values` | verified streaming of values of any size from up to four providers, with resume | yes | built, proven |
-| `vinc-broadcast` | topic broadcast through hubs with origin authentication, replay floors and a bounded log | yes | built, proven |
-| `vinc-reconcile` | range-based set reconciliation whose cost scales with the difference | yes | built |
-| `vinc-dtn` | bundles sealed to a recipient, erasure coding, custody, copy-limited forwarding | yes | built, proven |
-| `vinc-sim` | deterministic network simulator and scenario suite | no | built |
+| `pinc` | the facade: builder, connections, streams, datagrams, topics, lookup by id, the hub and relay roles, over the host's three closures | std ([#99](https://github.com/sourcenetwork/pinc/issues/99)) | built |
+| `pinc-wire` | varints and a strict canonical DAG-CBOR codec, parsed in place | yes | built; varints proven, the codec tested ([#606](https://github.com/sourcenetwork/pinc/issues/606)) |
+| `pinc-dag` | content-addressed blocks and CIDs, value roots, range proofs | yes, heap-free | built; roots and range proofs proven, CIDs, blocks and CAR tested ([#606](https://github.com/sourcenetwork/pinc/issues/606)) |
+| `pinc-crypto` | RustCrypto primitives behind one `Provider`: AEADs, X25519, ML-KEM-768, four identity algorithms, BLAKE3 | yes | built |
+| `pinc-keystore` | long-term keys behind a `KeyStore` trait; a software store and a pure-Rust TPM 2.0 store (`hwenc`) | no | built |
+| `pinc-security` | hybrid post-quantum handshake, resumption with 0-RTT, key schedule, packet protection, key roll | yes | built, proven |
+| `pinc-transport` | PINCER: streams, datagrams, flow and congestion control, loss recovery, pacing, path MTU, migration | yes | built |
+| `pinc-core` | the SANS-IO endpoint: host interface, protocol dispatch, commands, events, queries | yes | built |
+| `pinc-node` | the endpoint, the connectivity client and every layer composed over real sessions | yes | built |
+| `pinc-connect` | carriers, relays, signed records and lookup, hole punching, the hub tunnel, the mailbox | yes | built; relay side proven |
+| `pinc-portmap` | a UDP port mapping from the home gateway (PCP, NAT-PMP, UPnP-IGD), off unless turned on | yes, heap-free | built |
+| `pinc-table` | fixed tables over one block of bytes made once: sorted slab, array, ring, slot pool; no allocation after setup | yes, heap-free | built |
+| `pinc-membership` | hub roster and member view: leases, probes, incarnations, leave, revocation | yes | built |
+| `pinc-values` | verified streaming of values of any size from up to four providers, with resume | yes | built, proven |
+| `pinc-broadcast` | topic broadcast through hubs with origin authentication, replay floors and a bounded log | yes | built, proven |
+| `pinc-reconcile` | range-based set reconciliation whose cost scales with the difference | yes | built |
+| `pinc-dtn` | bundles sealed to a recipient, erasure coding, custody, copy-limited forwarding | yes | built, proven |
+| `pinc-sim` | deterministic network simulator and scenario suite | no | built |
 
 **proven**: every property has a TLA+ model, a Lean theorem and trace validation; the others are being closed
-([docs/PROOFS.md](docs/PROOFS.md), [#105](https://github.com/sourcenetwork/vinc/issues/105)).
+([docs/PROOFS.md](docs/PROOFS.md), [#105](https://github.com/sourcenetwork/pinc/issues/105)).
 
 ## Build and test
 
@@ -159,7 +157,7 @@ bulk, many connections) and the layers above (publish and subscribe, fetching a 
 delay-tolerant delivery). Scenarios are TOML files in `distributed/scenarios/`; a run writes its raw rows, its
 conditions and a summary to `distributed/results/`, measures only on a quiet machine and says so when it could not.
 With `--hosts` the same run places the nodes on real machines over SSH; that has run on one machine only
-([#530](https://github.com/sourcenetwork/vinc/issues/530)).
+([#530](https://github.com/sourcenetwork/pinc/issues/530)).
 
 `just compare` and `just distributed` compile every library for the machine that runs them (`-C target-cpu=native`)
 and say so in their results. Every dependency is declared once, in its workspace's root `Cargo.toml`. The benchmarks
@@ -181,7 +179,7 @@ still being closed.
 
 Measured on one build host (AMD EPYC 7R13, 16 cores), PINC, iroh and rust-libp2p in one quiet window, medians of the
 session of 15 November 2026 at commit `9dd66f05`. The best value of a row is in bold; a row PINC does not lead is
-tracked in [#579](https://github.com/sourcenetwork/vinc/issues/579), which lists every such row, not only these.
+tracked in [#579](https://github.com/sourcenetwork/pinc/issues/579), which lists every such row, not only these.
 
 | | PINC | iroh | rust-libp2p |
 |---|---|---|---|
@@ -198,5 +196,5 @@ tracked in [#579](https://github.com/sourcenetwork/vinc/issues/579), which lists
 | Memory per connection, client and server (KiB) | 177 and 113 | 178 and 120 | **107 and 88** |
 
 The 1% loss row is an 8 MiB transfer; a 64 MiB fetch on the same path runs at 1.16 MiB/s against 0.31 and 0.32
-([#564](https://github.com/sourcenetwork/vinc/issues/564)). `just compare` and the harness print every row, the ones
+([#564](https://github.com/sourcenetwork/pinc/issues/564)). `just compare` and the harness print every row, the ones
 PINC loses included.

@@ -1,6 +1,6 @@
 ------------------------------ MODULE CreditOps ------------------------------
 (***************************************************************************)
-(* The operations of vinc-security credit.rs (CreditRecord), over the     *)
+(* The operations of pinc-security credit.rs (CreditRecord), over the     *)
 (* field width W (bits, even; the byte width is W / 2) and the window unit *)
 (* Unit. Credit.tla checks them exhaustively at small widths; the trace   *)
 (* check (TraceSecurity.tla) instantiates the real width W = 16 and       *)

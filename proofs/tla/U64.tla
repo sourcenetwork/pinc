@@ -1,6 +1,6 @@
 ------------------------------- MODULE U64 -------------------------------
 (***************************************************************************)
-(* Machine integers for the specifications of vinc-wire and vinc-dag.      *)
+(* Machine integers for the specifications of pinc-wire and pinc-dag.      *)
 (*                                                                         *)
 (* TLC integers are 32 bits wide, so a u64 is a word of five 16-bit limbs  *)
 (* (little endian, 80 bits): a value of the code is a word whose fifth     *)
@@ -22,7 +22,7 @@
 (* without a check; the specifications state properties with them, as     *)
 (* every quantity a property mentions is below 2^80.                       *)
 (*                                                                         *)
-(* Lean counterpart: the operations of proofs/lean/Vinc/Machine.lean       *)
+(* Lean counterpart: the operations of proofs/lean/Pinc/Machine.lean       *)
 (* (add, mul, sub, satMul, shl, div, tryFrom) on Nat with the same         *)
 (* overflow rule.                                                          *)
 (***************************************************************************)

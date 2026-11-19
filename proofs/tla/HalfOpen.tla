@@ -1,6 +1,6 @@
 ------------------------------- MODULE HalfOpen ------------------------------
 (***************************************************************************)
-(* The endpoint's cap on half-open sessions and their lifetime (vinc-core  *)
+(* The endpoint's cap on half-open sessions and their lifetime (pinc-core  *)
 (* rx.rs, events.rs, endpoint.rs, timers.rs), over every interleaving of   *)
 (* first flights of any type and length, for an id no session holds or     *)
 (* one that sessions hold, resumptions, establishment, the end of a        *)
@@ -10,7 +10,7 @@
 (* is the id the session in slot j was made under (0 for a free slot and a *)
 (* dial); the sessions that hold an id are its holders.                    *)
 (*                                                                         *)
-(* With QCAP > 0 the host's accept queue is in the model too (vinc         *)
+(* With QCAP > 0 the host's accept queue is in the model too (pinc         *)
 (* engine.rs session_up, sync_backlog; ops.rs accept_route): QCAP is       *)
 (* accept_sessions, q the sessions waiting in it, and the room the host    *)
 (* gives the endpoint (set_backlog_room) is QCAP - q, set again at every   *)
@@ -83,7 +83,7 @@
 (* witness HalfOpen_supersede breaks HolderKept. HalfOpen_reach and        *)
 (* HalfOpen_holders are reachability witnesses: a resumption is admitted   *)
 (* while the count is at the cap; an id gets MAXH holders.                 *)
-(* The accept room (vinc#436): HalfOpen_room checks it all, HalfOpen_room2 *)
+(* The accept room (pinc#436): HalfOpen_room checks it all, HalfOpen_room2 *)
 (* at three slots and a queue of two. Each guard has a RED that breaks     *)
 (* NoBusy: BUG_ROOM admits with no room (HalfOpen_noroom); BUG_EST stops   *)
 (* owing a session at its establishment, before the host read its          *)
@@ -101,8 +101,8 @@
 (* keep out a peer that resumes. HalfOpen_half checks it at three slots,   *)
 (* a cap of two and a queue of two; BUG_HALF is the rule before, the whole *)
 (* room, and HalfOpen_flood breaks ResumeOpen with it.                     *)
-(* Lean counterpart: proofs/lean/Vinc/CoreHalfOpen*.lean, and              *)
-(* proofs/lean/Vinc/CoreBacklog*.lean for the room.                        *)
+(* Lean counterpart: proofs/lean/Pinc/CoreHalfOpen*.lean, and              *)
+(* proofs/lean/Pinc/CoreBacklog*.lean for the room.                        *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC
 CONSTANTS K, MAX, LIFE, HOLD, FULL, SHORT, HELLO, TMAX, LENS, IDS, MAXH, BUG_LE, BUG_GE, SUPERSEDE,

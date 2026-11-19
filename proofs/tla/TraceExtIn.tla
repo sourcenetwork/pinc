@@ -1,7 +1,7 @@
 ------------------------------- MODULE TraceExtIn -------------------------------
 (***************************************************************************)
 (* Trace validation of the ring of extension frames held for the           *)
-(* application: vinc-core ext_in.rs (ExtRing).                             *)
+(* application: pinc-core ext_in.rs (ExtRing).                             *)
 (*                                                                         *)
 (* The Rust test tests/trace_ext_in.rs drives real rings (built with the      *)
 (* cargo feature `trace`) with seeded calls: puts of frames of a few       *)
@@ -17,14 +17,14 @@
 (* first byte in the slot of its place in the order of puts.               *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds ext_in.ndjson.           *)
+(* variable PINC_TRACE_DIR, the directory that holds ext_in.ndjson.           *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, TLC, Json, IOUtils
 VARIABLES i, r, cap, mx
 vars == <<i, r, cap, mx>>
 INSTANCE ExtInOps
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/ext_in.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/ext_in.ndjson")
 Ev0 == Trace[i]
 
 \* a frame as the test records it: session, type, length, first byte; the model's: first byte, session, type, length

@@ -1,9 +1,9 @@
-name = "vinc"
+name = "pinc"
 version = "0.1.0"
-defaultTargets = ["Vinc", "replay"]
+defaultTargets = ["Pinc", "replay"]
 
 [[lean_lib]]
-name = "Vinc"
+name = "Pinc"
 
 [[lean_exe]]
 name = "replay"

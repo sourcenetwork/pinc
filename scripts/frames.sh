@@ -4,7 +4,7 @@
 # [count].
 set -euo pipefail
 bin=$1
-pat=${2:-vinc}
+pat=${2:-pinc}
 n=${3:-20}
 objdump -d --demangle --no-show-raw-insn "$bin" | awk -v pat="$pat" '
     /^[0-9a-f]+ <.*>:$/ { name = $0; sub(/^[0-9a-f]+ </, "", name); sub(/>:$/, "", name); seen = 0; next }

@@ -1,6 +1,6 @@
 name = "sync-trace"
-about = "Records the VINC nodes' traces and packet log for a first fetch of a 1 KiB value across a WAN (50 ms round trip) through a hub; timings are not comparable with an untraced run."
-stacks = ["vinc"]
+about = "Records the PINC nodes' traces and packet log for a first fetch of a 1 KiB value across a WAN (50 ms round trip) through a hub; timings are not comparable with an untraced run."
+stacks = ["pinc"]
 repetitions = 1
 
 [resources]

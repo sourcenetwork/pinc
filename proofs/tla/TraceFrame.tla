@@ -1,6 +1,6 @@
 ----------------------------- MODULE TraceFrame -----------------------------
 (***************************************************************************)
-(* Trace validation of the VINCER frame codecs: vinc-transport frame/.     *)
+(* Trace validation of the PINCER frame codecs: pinc-transport frame/.     *)
 (*                                                                         *)
 (* The Rust test tests/trace_frame.rs calls the real Frame::decode,        *)
 (* Frame::write, Frame::encoded_len, FrameIter, write_ack, ack_len,        *)
@@ -19,13 +19,13 @@
 (* real 2^63 and 2^62 - 1 and varints of nine bytes and more.              *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds frame.ndjson.         *)
+(* variable PINC_TRACE_DIR, the directory that holds frame.ndjson.         *)
 (***************************************************************************)
 EXTENDS FrameOps, TLC, Json, IOUtils
 
 VARIABLE c
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/frame.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/frame.ndjson")
 
 Init == c = [t |-> "root"]
 

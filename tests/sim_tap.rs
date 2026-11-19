@@ -1,4 +1,4 @@
-//! The inbound adversary of `vinc-sim`: capture of large first flights, replay and bit flips at victims, and direct
+//! The inbound adversary of `pinc-sim`: capture of large first flights, replay and bit flips at victims, and direct
 //! injection at a node.
 #![allow(
     clippy::unwrap_used,
@@ -11,8 +11,8 @@
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-use vinc_sim::toy::{Probe, ProbeCmd, ProbeEvent};
-use vinc_sim::{DropReason, LinkConfig, MS, NodeId, SEC, Sim, SimConfig, TapSpec};
+use pinc_sim::toy::{Probe, ProbeCmd, ProbeEvent};
+use pinc_sim::{DropReason, LinkConfig, MS, NodeId, SEC, Sim, SimConfig, TapSpec};
 
 const fn sa(d: u8) -> SocketAddr {
     SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 0, 0, d)), 1)
@@ -130,7 +130,7 @@ fn capture_keeps_large_first_flights_up_to_its_limit() {
             .all(|c| c.node == b && c.data == long && c.src == sa(1) && c.dst == sa(2))
     );
     assert_eq!(received(&sim, b).len(), 8, "capture does not stop delivery");
-    assert_eq!(sim.tap_stats(), vinc_sim::TapStats::default());
+    assert_eq!(sim.tap_stats(), pinc_sim::TapStats::default());
 }
 
 #[test]

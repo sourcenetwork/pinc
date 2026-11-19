@@ -1,4 +1,4 @@
-//! The node adapter of the scenario suite: real `vinc-core` endpoints with instrumented crypto driven by the
+//! The node adapter of the scenario suite: real `pinc-core` endpoints with instrumented crypto driven by the
 //! simulator, with a small test-local application (dial, echo round trip with real stream bytes, count incoming).
 #![allow(
     clippy::cast_precision_loss,
@@ -18,15 +18,15 @@ use std::collections::{BTreeMap, VecDeque};
 use std::net::{IpAddr, SocketAddr};
 use std::rc::Rc;
 
-use vinc_core::SessionId;
-use vinc_sim::suite::crypto::{PayloadKind, Registry};
-use vinc_sim::suite::grade::fixture::blank_world;
-use vinc_sim::suite::node::{Cmd, NodeEvent, Shared, SuiteCost, SuiteNode, iface_ip};
-use vinc_sim::suite::proto::host::{Host, LayerEvent, Layers};
-use vinc_sim::suite::rec::Rec;
-use vinc_sim::suite::world::model::{Addr, EnvAction, EnvArg, EnvKind, IfaceSpec, Intent, IntentKind, Must};
-use vinc_sim::{LinkConfig, NatConfig, NatKind, NodeId, NodeState, PortPolicy, Sim, SimConfig};
-use vinc_tests::big_stack;
+use pinc_core::SessionId;
+use pinc_sim::suite::crypto::{PayloadKind, Registry};
+use pinc_sim::suite::grade::fixture::blank_world;
+use pinc_sim::suite::node::{Cmd, NodeEvent, Shared, SuiteCost, SuiteNode, iface_ip};
+use pinc_sim::suite::proto::host::{Host, LayerEvent, Layers};
+use pinc_sim::suite::rec::Rec;
+use pinc_sim::suite::world::model::{Addr, EnvAction, EnvArg, EnvKind, IfaceSpec, Intent, IntentKind, Must};
+use pinc_sim::{LinkConfig, NatConfig, NatKind, NodeId, NodeState, PortPolicy, Sim, SimConfig};
+use pinc_tests::big_stack;
 
 const NS: u64 = 1_000_000_000;
 const ALPN: &[u8] = b"suite/echo";
@@ -225,7 +225,7 @@ fn intent(t: u64, node: usize, to: usize) -> Intent {
 type Node = SuiteNode<TestLayer>;
 
 struct Run {
-    sim: Sim<Node, vinc_sim::Rng, SuiteCost>,
+    sim: Sim<Node, pinc_sim::Rng, SuiteCost>,
     ids: Vec<NodeId>,
     rec: Rc<RefCell<Rec>>,
     reg: &'static Registry,
@@ -252,8 +252,8 @@ fn iface(kind: &str, host: u64, public: bool) -> IfaceSpec {
 fn make_world(
     n: usize,
     dur: u64,
-    tweak: impl FnOnce(&mut vinc_sim::suite::world::model::World),
-) -> vinc_sim::suite::world::model::World {
+    tweak: impl FnOnce(&mut pinc_sim::suite::world::model::World),
+) -> pinc_sim::suite::world::model::World {
     let mut w = blank_world("S1", n, dur);
     w.seed = 7;
     "cloud".clone_into(&mut w.nodes[0].device);
@@ -270,7 +270,7 @@ fn make_world(
     w
 }
 
-fn build(world: vinc_sim::suite::world::model::World, sim_seed: u64, trace: bool) -> Run {
+fn build(world: pinc_sim::suite::world::model::World, sim_seed: u64, trace: bool) -> Run {
     let world = Rc::new(world);
     let rec = Rc::new(RefCell::new(Rec::new(Rc::clone(&world))));
     let reg = Registry::leak(world.seed);

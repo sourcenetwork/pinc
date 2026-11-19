@@ -10,14 +10,14 @@
 
 use ml_kem::ExpandedKeyEncoding;
 use proptest::prelude::*;
-use vinc_crypto::provider::{KEM_CIPHERTEXT_LEN, KEM_ENCAPS_KEY_LEN};
-use vinc_crypto::{CryptoError, Provider, Software};
+use pinc_crypto::provider::{KEM_CIPHERTEXT_LEN, KEM_ENCAPS_KEY_LEN};
+use pinc_crypto::{CryptoError, Provider, Software};
 
 mod acvp_kem;
 mod hexutil;
 use hexutil::{arr, hex};
 
-vinc_tests::install_counting_allocator!();
+pinc_tests::install_counting_allocator!();
 
 #[test]
 fn acvp_key_generation() {
@@ -136,7 +136,7 @@ fn kem_operations_do_not_allocate() {
     let stats = std::thread::Builder::new()
         .stack_size(8 << 20)
         .spawn(move || {
-            vinc_tests::measure(|| {
+            pinc_tests::measure(|| {
                 let (_dk, ek) = p.kem_keygen(&[1; 32], &[2; 32]);
                 let ek2 = p.kem_encaps_key(&ek_bytes).unwrap();
                 let (ct, s) = p.kem_encapsulate(&ek2, &[3; 32]).unwrap();

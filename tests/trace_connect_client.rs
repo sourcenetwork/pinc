@@ -1,13 +1,13 @@
 //! Trace generation for the client rules of connectivity: seeded random calls of the real punch timer and probe gaps,
 //! the hub tunnel decisions and splice tables, the first-flight selection and pending dials, the lookup table and the
 //! verification of an answer, address classification and the probe state, recorded as ndjson (`connect_client.ndjson`)
-//! for the TLA+ trace check (`TraceConnectClient.tla`) and the Lean replay (`Vinc/TraceConnectClient.lean`).
+//! for the TLA+ trace check (`TraceConnectClient.tla`) and the Lean replay (`Pinc/TraceConnectClient.lean`).
 //!
 //! Every event is one call with its arguments and its answer; a stateful structure is read back after each call
 //! through its public accessors (the deadline, the round trips, the ages, the peers waiting), so the model must agree
 //! on the state as well as on the answer. Instants are whole milliseconds, recorded in microseconds; nodes and
 //! addresses are small numbers (the node `k` is `[k; 32]`, the address `k` is `10.0.0.k:k`).
-//! The trace is written to the directory in `VINC_TRACE_DIR` when it is set; otherwise nothing is written.
+//! The trace is written to the directory in `PINC_TRACE_DIR` when it is set; otherwise nothing is written.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -29,15 +29,15 @@ mod connect_common;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use connect_common::nid;
-use vinc_connect::carrier::frame::DnsAnswer;
-use vinc_connect::client::dial::{self, Cand, Pending, RelayView, Try};
-use vinc_connect::client::lookup::{Ask, LookupError, Lookups, verify};
-use vinc_connect::client::netcheck::{HomeStep, Netcheck, Observed, classify};
-use vinc_connect::client::punch::{self, Puncher, Step, View};
-use vinc_connect::client::tunnel::{self, Rides, Splices, ThinSplice, Via};
-use vinc_connect::record::{Reach, Record, RecordFields};
-use vinc_crypto::NodeId;
-use vinc_tests::SplitMix64;
+use pinc_connect::carrier::frame::DnsAnswer;
+use pinc_connect::client::dial::{self, Cand, Pending, RelayView, Try};
+use pinc_connect::client::lookup::{Ask, LookupError, Lookups, verify};
+use pinc_connect::client::netcheck::{HomeStep, Netcheck, Observed, classify};
+use pinc_connect::client::punch::{self, Puncher, Step, View};
+use pinc_connect::client::tunnel::{self, Rides, Splices, ThinSplice, Via};
+use pinc_connect::record::{Reach, Record, RecordFields};
+use pinc_crypto::NodeId;
+use pinc_tests::SplitMix64;
 
 const MS: u64 = 1_000_000;
 const S: u64 = 1_000_000_000;
@@ -458,7 +458,7 @@ fn lookup_events(out: &mut Vec<String>) {
         hints: &[],
     };
     let mut rec = vec![0u8; 400];
-    let n = vinc_connect::record::sign(&kp, &f, &mut rec).unwrap();
+    let n = pinc_connect::record::sign(&kp, &f, &mut rec).unwrap();
     rec.truncate(n);
     let mut cases: Vec<Vec<u8>> = vec![rec.clone()];
     for i in [0usize, 9, 40, 80, 83, 84, 100, n - 1] {
@@ -690,7 +690,7 @@ fn connect_client_trace() {
     dial_events(&mut out);
     lookup_events(&mut out);
     netcheck_events(&mut out);
-    if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
+    if let Ok(dir) = std::env::var("PINC_TRACE_DIR") {
         std::fs::write(format!("{dir}/connect_client.ndjson"), out.join("\n") + "\n").unwrap();
     }
     assert!(out.len() > 20_000);

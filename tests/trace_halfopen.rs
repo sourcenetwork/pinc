@@ -1,6 +1,6 @@
 //! Trace generation for the endpoint's half-open cap and the lifetime of an unauthenticated session: seeded runs of a
-//! real endpoint (`vinc-core`, built with the `trace` feature), recorded as ndjson (`halfopen.ndjson`) for the TLA+
-//! trace check (`TraceHalfOpen.tla`) and the Lean replay (`Vinc/TraceHalfOpen.lean`).
+//! real endpoint (`pinc-core`, built with the `trace` feature), recorded as ndjson (`halfopen.ndjson`) for the TLA+
+//! trace check (`TraceHalfOpen.tla`) and the Lean replay (`Pinc/TraceHalfOpen.lean`).
 //!
 //! The runs feed the endpoint first flights of every message type at, below and above the size floors, garbage, later
 //! parts and datagrams too long to be read; fill the half-open table to its cap with forgeries that arrive at staggered
@@ -59,7 +59,7 @@ mod runs;
 
 use rec::{Seen, add};
 use runs::{big_run, room_run, small_run};
-use vinc_tests::*;
+use pinc_tests::*;
 
 #[test]
 fn the_half_open_cap_matches_the_models() {
@@ -128,7 +128,7 @@ fn the_half_open_cap_matches_the_models() {
         seen.second_holder > 0,
         "no first message got a session beside a damaged one"
     );
-    if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
+    if let Ok(dir) = std::env::var("PINC_TRACE_DIR") {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(std::path::Path::new(&dir).join("halfopen.ndjson"), &ms).unwrap();
         std::fs::write(std::path::Path::new(&dir).join("halfopen_ns.ndjson"), &ns).unwrap();

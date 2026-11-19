@@ -1,6 +1,6 @@
 name = "lan"
 about = "Two nodes on one switched LAN: 0.2 ms round trip, 1 Gbit/s each way."
-stacks = ["vinc", "iroh", "libp2p"]
+stacks = ["pinc", "iroh", "libp2p"]
 repetitions = 3
 
 [resources]

@@ -1,6 +1,6 @@
 //! The key roll of a real connection: a lost answer is answered again, and a late copy of a request of a settled
 //! roll changes nothing. Each test drives two connections datagram by datagram (loss, delay and repetition are steps
-//! of the test) and reads what the key layer did through the `trace` feature of `vinc-transport`.
+//! of the test) and reads what the key layer did through the `trace` feature of `pinc-transport`.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -11,10 +11,10 @@
     unreachable_pub
 )]
 
-use vinc_crypto::IdentityAlg;
-use vinc_security::Rekey;
-use vinc_tests::*;
-use vinc_transport::conn::{KeyEvent, Slot};
+use pinc_crypto::IdentityAlg;
+use pinc_security::Rekey;
+use pinc_tests::*;
+use pinc_transport::conn::{KeyEvent, Slot};
 
 /// A settled connection whose keys roll after `after` packets, and its stream ids (A to B, B to A).
 fn connected<'a>(w: &'a mut World, sa: &'a mut Store, sb: &'a mut Store, after: u64) -> (Pair<'a>, u64, u64) {
@@ -75,7 +75,7 @@ fn a_repeated_request_is_answered_again_while_the_keys_are_staged() {
         pair.deliver_all(&built);
         let first = pair.pump(false);
         let answer = sent_rekey(&pair, false, true).expect("B answers");
-        assert_eq!(answer.echo, vinc_security::keyroll::request_id(&req.share));
+        assert_eq!(answer.echo, pinc_security::keyroll::request_id(&req.share));
         assert!(
             pair.b.conn.trace_keys().unwrap().next.is_some(),
             "B staged the new keys"

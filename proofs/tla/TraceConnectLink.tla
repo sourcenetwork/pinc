@@ -1,6 +1,6 @@
 ---------------------------- MODULE TraceConnectLink ----------------------------
 (***************************************************************************)
-(* Trace validation of the client carrier state machine: vinc-connect      *)
+(* Trace validation of the client carrier state machine: pinc-connect      *)
 (* client/link.rs.                                                          *)
 (*                                                                         *)
 (* The Rust test tests/trace_connect_link.rs drives the real Link with     *)
@@ -11,14 +11,14 @@
 (* state. Times are microseconds.                                           *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds connect_link.ndjson.  *)
+(* variable PINC_TRACE_DIR, the directory that holds connect_link.ndjson.  *)
 (***************************************************************************)
 EXTENDS ConnectLinkOps, Json, IOUtils
 
 VARIABLES i, L, S
 vars == <<i, L, S>>
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/connect_link.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/connect_link.ndjson")
 Ev == Trace[i]
 
 Init == i = 1 /\ L = NewLink /\ S = NewShared

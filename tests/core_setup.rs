@@ -15,8 +15,8 @@
     clippy::print_stderr
 )]
 
-use vinc_core::{Command, Event, Role, SessionId, Value};
-use vinc_tests::*;
+use pinc_core::{Command, Event, Role, SessionId, Value};
+use pinc_tests::*;
 
 const SEEDS: u64 = 200;
 

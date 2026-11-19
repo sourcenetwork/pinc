@@ -1,0 +1,47 @@
+[package]
+name = "pinc-sim"
+description = "Deterministic network simulator engine for PINC tests and benches: virtual time, links, NAT, faults, adversaries"
+keywords = ["simulation", "network", "deterministic", "testing"]
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[features]
+# The reference random source: a bit-exact port of CPython's `random` and the reference seed derivation.
+reference = ["dep:blake2"]
+# The scenario suite: the reference harness's worlds, protocols, gates and metrics run against the real `pinc-core`
+# endpoint with real crypto.
+suite = [
+    "reference",
+    "dep:pinc-connect",
+    "dep:pinc-core",
+    "dep:pinc-crypto",
+    "dep:blake3",
+    "dep:pinc-dag",
+    "dep:pinc-membership",
+    "dep:pinc-node",
+    "dep:pinc-reconcile",
+    "dep:pinc-security",
+    "dep:pinc-transport",
+    "dep:pinc-values",
+]
+
+[dependencies]
+blake2 = { workspace = true, optional = true }
+blake3 = { workspace = true, optional = true }
+pinc-connect = { workspace = true, optional = true }
+pinc-core = { workspace = true, optional = true, features = ["alloc"] }
+pinc-crypto = { workspace = true, optional = true, features = ["derive-trace"] }
+pinc-dag = { workspace = true, optional = true, features = ["alloc"] }
+pinc-membership = { workspace = true, optional = true, features = ["alloc"] }
+pinc-node = { workspace = true, optional = true }
+pinc-reconcile = { workspace = true, optional = true, features = ["alloc"] }
+pinc-security = { workspace = true, optional = true }
+pinc-transport = { workspace = true, optional = true, features = ["alloc"] }
+pinc-values = { workspace = true, optional = true }
+
+[lints]
+workspace = true

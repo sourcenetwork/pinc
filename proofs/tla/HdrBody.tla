@@ -70,7 +70,7 @@
 (*   HdrBody_skip3.cfg    SampleStable3: a sample offset of 3 (not 4)      *)
 (*                        overlaps a packet number of 4 bytes.             *)
 (*                                                                         *)
-(* Lean counterparts (proofs/lean/Vinc/TransportHdrBody.lean):             *)
+(* Lean counterparts (proofs/lean/Pinc/TransportHdrBody.lean):             *)
 (* hsWrite_ok, hsWrite_err, hsWrite_room, write_read, hsRead_hsBody,       *)
 (* hsRead_canonical, hsRecv_unparsed, hsRecv_bad_total, hsRecv_past,       *)
 (* add_trim, hsRecv_write, padTo_ok, padTo_err, padTo_noop, sampleAt_ok,   *)

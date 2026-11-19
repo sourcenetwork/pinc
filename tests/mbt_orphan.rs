@@ -1,13 +1,13 @@
-//! Model-based tests of the endpoint's table of held first-flight fragments: a real table (`vinc-core`, built with
+//! Model-based tests of the endpoint's table of held first-flight fragments: a real table (`pinc-core`, built with
 //! the `trace` feature) driven along every edge of the state graph of `proofs/tla/MbtOrphan.tla`.
 //!
 //! TLC enumerates every state the operators of `OrphanOps.tla` reach at the size of the real table within the bounds
 //! of a config and writes the graph; `scripts/mbt.py` turns it into paths from the empty table that take every edge,
-//! which `scripts/proofs.sh` writes to the directory `VINC_MBT_DIR`: `orphan.ndjson` from `MbtOrphan.cfg` and
+//! which `scripts/proofs.sh` writes to the directory `PINC_MBT_DIR`: `orphan.ndjson` from `MbtOrphan.cfg` and
 //! `orphan_edge.ndjson` from `MbtOrphan_edge.cfg`. This test runs each path on a fresh `OrphanProbe`: after every call
 //! the result must be the model's, and the whole table, every entry with its bytes, the order of arrival and the four
 //! counters, must be the model's state. It stops at the first difference and names the file, the case, the step and
-//! the calls that led there. Without `VINC_MBT_DIR` it checks nothing.
+//! the calls that led there. Without `PINC_MBT_DIR` it checks nothing.
 //!
 //! The model's numbers stand for the code's as `MbtOrphan.tla` says: model time `t` is `origin + t * step` with
 //! `step = ORPHAN_LIFE / LIFE`, so a datagram is older than the lifetime exactly when the model's is (the code
@@ -28,9 +28,9 @@ use std::cmp::Ordering;
 use std::fmt::Write as _;
 use std::net::SocketAddr;
 
-use vinc_core::{OrphanEntry, OrphanProbe};
-use vinc_security::ConnId;
-use vinc_tests::{Json, MbtCase, SplitMix64, mbt_cases};
+use pinc_core::{OrphanEntry, OrphanProbe};
+use pinc_security::ConnId;
+use pinc_tests::{Json, MbtCase, SplitMix64, mbt_cases};
 
 const N: usize = OrphanProbe::SLOTS;
 const MAX: usize = OrphanProbe::MAX;
@@ -224,7 +224,7 @@ fn run(file: &str, case: &MbtCase, init: &Json, max: u64, step: u64, tmax: u64) 
     case.steps.len()
 }
 
-/// Walks every case of `file`; false when `VINC_MBT_DIR` is unset.
+/// Walks every case of `file`; false when `PINC_MBT_DIR` is unset.
 fn walk(file: &str) -> bool {
     let Some(cases) = mbt_cases(file) else {
         return false;
@@ -273,6 +273,6 @@ fn the_held_fragments_follow_every_edge_of_the_model() {
     // MbtOrphan.cfg and MbtOrphan_edge.cfg
     let walked = ["orphan.ndjson", "orphan_edge.ndjson"].map(walk);
     if walked == [false; 2] {
-        eprintln!("mbt_orphan: VINC_MBT_DIR is not set, nothing checked (scripts/proofs.sh generates the cases)");
+        eprintln!("mbt_orphan: PINC_MBT_DIR is not set, nothing checked (scripts/proofs.sh generates the cases)");
     }
 }

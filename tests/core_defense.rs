@@ -15,22 +15,22 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 
-use vinc_core::{
+use pinc_core::{
     Answer, Command, Endpoint, EndpointConfig, Event, LEDGER_ENTRIES, MAX_HALF_OPEN, Query, Role, Slot, TraceEvent,
 };
-use vinc_crypto::identity::MAX_SIGNATURE_LEN;
-use vinc_crypto::{Aead, Drbg, IdentityAlg, Keypair, Software};
-use vinc_security::message::{FULL_INITIAL_MIN, Initial, MessageType, PrekeyField, ResumeHello, SHORT_INITIAL_MIN};
-use vinc_security::{
+use pinc_crypto::identity::MAX_SIGNATURE_LEN;
+use pinc_crypto::{Aead, Drbg, IdentityAlg, Keypair, Software};
+use pinc_security::message::{FULL_INITIAL_MIN, Initial, MessageType, PrekeyField, ResumeHello, SHORT_INITIAL_MIN};
+use pinc_security::{
     AeadSet, ConnId, CreditRecord, Env, KeyHandle, KeyResponse, LocalIdentity, SoftKeys, SoftPrekeys, VERSION,
 };
-use vinc_tests::*;
-use vinc_transport::conn::{Resources, Tables};
-use vinc_transport::packet::{LongHeader, LongType};
-use vinc_transport::recovery::LossEstimate;
-use vinc_transport::stream::pool::BufferPool;
-use vinc_transport::stream::{self, NoSource, Streams};
-use vinc_wire::Writer;
+use pinc_tests::*;
+use pinc_transport::conn::{Resources, Tables};
+use pinc_transport::packet::{LongHeader, LongType};
+use pinc_transport::recovery::LossEstimate;
+use pinc_transport::stream::pool::BufferPool;
+use pinc_transport::stream::{self, NoSource, Streams};
+use pinc_wire::Writer;
 
 /// An established pair where the server (ML-DSA identity) holds a ticket for the client; the client's second dial is
 /// captured on the wire without reaching the server. Returns the net, the server and the captured first flight.
@@ -512,7 +512,7 @@ impl Duo {
     }
 
     /// The dialer dials the server and the call returns the session once connected.
-    fn dial(&mut self) -> vinc_core::SessionId {
+    fn dial(&mut self) -> pinc_core::SessionId {
         let id = LocalIdentity::from_keypair(&self.host.kp, KeyHandle(1)).unwrap();
         let (now, to) = (self.net.now, self.addr);
         let n0 = self.net.nodes[0].count(|e| matches!(e, Event::Connected { .. }));
@@ -528,7 +528,7 @@ impl Duo {
         self.net.nodes[0].session(&rep)
     }
 
-    fn hang_up(&mut self, session: vinc_core::SessionId) {
+    fn hang_up(&mut self, session: pinc_core::SessionId) {
         let now = self.net.now;
         self.net.nodes[0]
             .cmd(now, Command::Close { session, error: 0 })
@@ -643,7 +643,7 @@ fn a_hello_with_a_forged_binder_is_not_exempt() {
 
 #[test]
 fn a_charge_near_the_top_of_the_range_saturates_instead_of_overflowing() {
-    use vinc_core::Ledger;
+    use pinc_core::Ledger;
     let v: SocketAddr = "10.9.9.8:1000".parse().unwrap();
     let mut l = Ledger::new(1);
     l.on_receive(v, u64::MAX);

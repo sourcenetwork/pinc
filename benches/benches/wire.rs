@@ -1,4 +1,4 @@
-//! Benchmarks of `vinc-wire`: varint and the DAG-CBOR decoder and encoder.
+//! Benchmarks of `pinc-wire`: varint and the DAG-CBOR decoder and encoder.
 #![allow(
     missing_docs,
     clippy::unwrap_used,
@@ -10,8 +10,8 @@
 use std::hint::black_box;
 
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
-use vinc_wire::cbor::{Decoder, Encoder, Item, MapReader};
-use vinc_wire::varint;
+use pinc_wire::cbor::{Decoder, Encoder, Item, MapReader};
+use pinc_wire::varint;
 
 fn bench_varint(c: &mut Criterion) {
     let mut g = c.benchmark_group("varint");

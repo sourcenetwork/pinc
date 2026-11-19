@@ -1,10 +1,10 @@
 ---------------------------- MODULE HandshakeConfirm ----------------------------
 (***************************************************************************)
-(* A dialing side's wait for the peer to confirm a session (vinc#385).     *)
-(* Code: crates/vinc-transport/src/conn/handshake.rs (Handshake::on_event  *)
+(* A dialing side's wait for the peer to confirm a session (pinc#385).     *)
+(* Code: crates/pinc-transport/src/conn/handshake.rs (Handshake::on_event  *)
 (* arms `confirm_at` when a dialing side establishes; Handshake::on_timer  *)
 (* ends it as `unconfirmed`; Handshake::confirm clears it on the first     *)
-(* 1-RTT packet), crates/vinc-transport/src/conn/drive.rs Connection::pump *)
+(* 1-RTT packet), crates/pinc-transport/src/conn/drive.rs Connection::pump *)
 (* (closes with CloseReason::Unconfirmed).                                 *)
 (*                                                                         *)
 (* The story. A dialer sends a Hello; the responder opens a half-done      *)

@@ -6,9 +6,9 @@
     clippy::cast_possible_truncation
 )]
 
-use vinc_core::{Command, Role};
-use vinc_tests::*;
-use vinc_transport::frame::ext;
+use pinc_core::{Command, Role};
+use pinc_tests::*;
+use pinc_transport::frame::ext;
 
 const FAST: u64 = 5 * MS_NS;
 

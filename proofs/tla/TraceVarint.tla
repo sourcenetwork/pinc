@@ -1,6 +1,6 @@
 ----------------------------- MODULE TraceVarint -----------------------------
 (***************************************************************************)
-(* Trace validation of vinc-wire varint (varint.rs).                       *)
+(* Trace validation of pinc-wire varint (varint.rs).                       *)
 (*                                                                         *)
 (* The Rust test tests/trace_tla.rs runs the real `encode` and `decode` on *)
 (* the boundary values of every width (2^j - 1, 2^j, 2^j + 1), the values  *)
@@ -14,7 +14,7 @@
 (* and DecodeOK) TLC checks exhaustively in Varint.cfg.                    *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds tla/varint.ndjson.    *)
+(* variable PINC_TRACE_DIR, the directory that holds tla/varint.ndjson.    *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, TLC, Json, IOUtils
 
@@ -22,7 +22,7 @@ VARIABLE c
 
 V == INSTANCE Varint WITH SmallMax <- 0, c <- 0
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/tla/varint.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/tla/varint.ndjson")
 
 Init == c = [t |-> "root"]
 

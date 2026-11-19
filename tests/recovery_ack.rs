@@ -2,7 +2,7 @@
 //! reported ranges and the confirmation bookkeeping. Part of the `transport_recovery` test target.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 
-use vinc_transport::recovery::{
+use pinc_transport::recovery::{
     MAX_ACK_RANGES, MAX_PACKET_NUMBER, MS, ReceivedPackets, RecoveryError, RxOutcome, RxPacket, SECOND,
 };
 

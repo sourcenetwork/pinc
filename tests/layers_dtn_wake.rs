@@ -13,9 +13,9 @@
 mod layers_common;
 
 use layers_common::{LWorld, OWD, big, secs};
-use vinc_node::{BACKOFF_CAP, DtnPlan, Enabled, NodeEvent};
-use vinc_sim::{MS, NodeId as SimId, SEC, Time};
-use vinc_tests::{LayerApps, NCmd, SplitMix64};
+use pinc_node::{BACKOFF_CAP, DtnPlan, Enabled, NodeEvent};
+use pinc_sim::{MS, NodeId as SimId, SEC, Time};
+use pinc_tests::{LayerApps, NCmd, SplitMix64};
 
 /// One dial of the delay-tolerant layer to a peer that is up, from the dial to the carrier's report of delivery: the
 /// handshake and the hand-over (offer, request, symbols, acknowledgement) on this link. Measured on the unchanged
@@ -66,7 +66,7 @@ fn first_at(w: &LWorld, n: SimId, want: impl Fn(&NodeEvent) -> bool) -> Option<T
 
 /// The times `n` heard a membership event about `peer`.
 fn member_events(w: &LWorld, n: SimId, peer: [u8; 32]) -> Vec<Time> {
-    use vinc_membership::Event::{
+    use pinc_membership::Event::{
         AddressChanged, MemberConfirmedDown, MemberJoined, MemberLeft, MemberRevoked, StackChanged,
     };
     w.node_events(n)

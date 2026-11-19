@@ -1,6 +1,6 @@
 //! The lenient scan of a message and the fault injection of `trace_reconcile`.
-use vinc_tests::SplitMix64;
-use vinc_wire::varint;
+use pinc_tests::SplitMix64;
+use pinc_wire::varint;
 
 type Item = Vec<u8>;
 

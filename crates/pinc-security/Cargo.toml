@@ -1,0 +1,23 @@
+[package]
+name = "pinc-security"
+description = "The PINC hybrid post-quantum handshake as a SANS-IO state machine, with the key schedule, record protection, replay window and address validation"
+keywords = ["no_std", "handshake", "post-quantum", "aead"]
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[features]
+default = []
+# Test-only observation of internal state for trace validation. Costs nothing when off.
+trace = ["pinc-crypto/trace"]
+
+[dependencies]
+pinc-wire = { workspace = true }
+pinc-crypto = { workspace = true }
+zeroize = { workspace = true }
+
+[lints]
+workspace = true

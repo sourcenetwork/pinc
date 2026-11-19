@@ -1,8 +1,8 @@
 ------------------------------ MODULE CoreStateOps ------------------------------
 (***************************************************************************)
-(* The operators of the endpoint's saved state (vinc-core state.rs, with   *)
-(* ClientTickets::{export, restore} of vinc-security and the two tables of *)
-(* vinc-core): the bytes `export_state` writes, the parse `restore_state`  *)
+(* The operators of the endpoint's saved state (pinc-core state.rs, with   *)
+(* ClientTickets::{export, restore} of pinc-security and the two tables of *)
+(* pinc-core): the bytes `export_state` writes, the parse `restore_state`  *)
 (* makes of them, and what a restore does to the three tables.             *)
 (*                                                                         *)
 (* A state is [tk, kr, ek]: the tickets (alg, node, alpn, tid, psk, aead,  *)
@@ -51,7 +51,7 @@ RECURSIVE Ge(_, _)
 Ge(a, b) == IF a = <<>> THEN TRUE ELSE IF Head(a) # Head(b) THEN Head(a) > Head(b) ELSE Ge(Tail(a), Tail(b))
 NonZero(a) == \E i \in 1..Len(a) : a[i] # 0
 
-(* ---- the reader of vinc-wire ---- *)
+(* ---- the reader of pinc-wire ---- *)
 Cur(bs) == [bs |-> bs, i |-> 0]
 Rd(c, n) == IF c.i + n > Len(c.bs) THEN [ok |-> FALSE, c |-> c, v |-> <<>>]
             ELSE [ok |-> TRUE, c |-> [c EXCEPT !.i = c.i + n], v |-> SubSeq(c.bs, c.i + 1, c.i + n)]

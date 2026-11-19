@@ -1,7 +1,7 @@
 ------------------------------ MODULE TimersOps ------------------------------
 (***************************************************************************)
-(* The timers and the closing state of the VINCER connection, step for     *)
-(* step: vinc-transport conn/timer.rs (poll_timeout, handle_timeout),      *)
+(* The timers and the closing state of the PINCER connection, step for     *)
+(* step: pinc-transport conn/timer.rs (poll_timeout, handle_timeout),      *)
 (* conn/life.rs (close, sleep, wake, the link outage, the idle deadline,   *)
 (* the three ends) and the parts of conn/send.rs and conn/recv.rs that     *)
 (* touch them (the CLOSE packet, the last send, SLEEP leaving, a packet    *)

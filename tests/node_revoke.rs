@@ -12,10 +12,10 @@
 mod node_common;
 
 use node_common::{World, big, secs};
-use vinc_core::{Answer, Query};
-use vinc_membership::Event;
-use vinc_sim::{NodeId as SimId, SEC};
-use vinc_tests::NCmd;
+use pinc_core::{Answer, Query};
+use pinc_membership::Event;
+use pinc_sim::{NodeId as SimId, SEC};
+use pinc_tests::NCmd;
 
 /// How many sessions of `n` are with the node `peer`.
 fn sessions_with(w: &World, n: SimId, peer: &[u8; 32]) -> usize {

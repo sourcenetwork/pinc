@@ -1,6 +1,6 @@
 ---------------------------- MODULE TraceHubCodec ----------------------------
 (***************************************************************************)
-(* Trace validation of the hub stream codec of vinc-membership (codec.rs). *)
+(* Trace validation of the hub stream codec of pinc-membership (codec.rs). *)
 (*                                                                         *)
 (* The Rust test tests/trace_membership.rs (part codec.rs) runs the real   *)
 (* Frame::parse, Frame::read and Frame::encode on valid frames of every    *)
@@ -16,7 +16,7 @@
 (* recorded as four 16-bit limbs (TLC integers are 32 bits wide).          *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds mcodec.ndjson.        *)
+(* variable PINC_TRACE_DIR, the directory that holds mcodec.ndjson.        *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, TLC, Json, IOUtils
 
@@ -25,7 +25,7 @@ VARIABLE c
 H == INSTANCE HubCodec WITH f <- 0, Part <- "hello"
 U == INSTANCE U64
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/mcodec.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/mcodec.ndjson")
 
 Init == c = [t |-> "root"]
 

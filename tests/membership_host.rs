@@ -13,8 +13,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use vinc_membership::session::StoreError;
-use vinc_membership::{Broadcast, Carrier, CloseReason, Evidence, Local, NodeId, Route, Session};
+use pinc_membership::session::StoreError;
+use pinc_membership::{Broadcast, Carrier, CloseReason, Evidence, Local, NodeId, Route, Session};
 
 pub const MS: u64 = 1_000_000;
 pub const SEC: u64 = 1_000_000_000;
@@ -78,7 +78,7 @@ impl Session for Host {
         self.gu
             .get(peer)
             .copied()
-            .unwrap_or(vinc_membership::consts::HEAL_SILENCE)
+            .unwrap_or(pinc_membership::consts::HEAL_SILENCE)
     }
     fn close(&mut self, peer: &NodeId, reason: CloseReason) {
         self.closed.push((*peer, reason));

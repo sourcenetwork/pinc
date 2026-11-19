@@ -1,6 +1,6 @@
 ----------------------------- MODULE RecoveryOps ------------------------------
 (***************************************************************************)
-(* The operations of vinc-transport recovery/engine.rs, ack.rs, loss.rs,   *)
+(* The operations of pinc-transport recovery/engine.rs, ack.rs, loss.rs,   *)
 (* pto.rs, sent.rs and rtt.rs (loss recovery), step for step. Recovery.tla *)
 (* checks them over every interleaving at small sizes; TraceRecovery.tla   *)
 (* replays the recorded calls of the real code through the same operators. *)

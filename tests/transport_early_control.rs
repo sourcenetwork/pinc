@@ -9,12 +9,12 @@
     clippy::cast_possible_truncation
 )]
 
-use vinc_crypto::IdentityAlg;
-use vinc_tests::*;
-use vinc_transport::conn::credit_for_streams;
-use vinc_transport::stream;
+use pinc_crypto::IdentityAlg;
+use pinc_tests::*;
+use pinc_transport::conn::credit_for_streams;
+use pinc_transport::stream;
 
-vinc_tests::install_counting_allocator!();
+pinc_tests::install_counting_allocator!();
 
 /// The streams the peer admits at once, and so the limit the early streams run into.
 const LIMIT: u64 = 4;

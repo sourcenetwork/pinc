@@ -1,0 +1,37 @@
+[package]
+name = "pinc-node"
+description = "The PINC node: the endpoint, the connectivity client, membership, broadcast, values, reconcile and delay-tolerant delivery composed over real sessions as one SANS-IO state machine"
+keywords = ["no_std", "node", "sans-io", "membership", "values", "dtn"]
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[features]
+default = []
+# Record every decision of the node, and forward the endpoint's records, as versioned trace records.
+trace = ["pinc-core/trace"]
+
+[dependencies]
+pinc-wire = { workspace = true }
+pinc-crypto = { workspace = true }
+pinc-security = { workspace = true }
+pinc-transport = { workspace = true }
+pinc-core = { workspace = true, features = ["alloc"] }
+pinc-connect = { workspace = true, features = ["alloc"] }
+pinc-portmap = { workspace = true }
+pinc-membership = { workspace = true, features = ["alloc"] }
+pinc-broadcast = { workspace = true, features = ["alloc"] }
+pinc-dag = { workspace = true }
+pinc-values = { workspace = true }
+pinc-reconcile = { workspace = true, features = ["alloc"] }
+pinc-dtn = { workspace = true }
+blake3 = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+
+[lints]
+workspace = true

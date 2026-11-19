@@ -26,7 +26,7 @@ data "aws_ssm_parameter" "al2023" {
 locals {
   count = var.hosts + var.cluster_hosts
   az    = data.aws_availability_zones.up.names[0]
-  tags  = { Name = var.name, purpose = "vinc-distributed" }
+  tags  = { Name = var.name, purpose = "pinc-distributed" }
 }
 
 resource "aws_vpc" "this" {
@@ -69,7 +69,7 @@ resource "aws_eip" "host" {
 
 resource "aws_security_group" "this" {
   name        = var.name
-  description = "vinc-distributed: SSH from the operator, everything between the fleet's machines"
+  description = "pinc-distributed: SSH from the operator, everything between the fleet's machines"
   vpc_id      = aws_vpc.this.id
   ingress {
     description = "SSH from the operator"

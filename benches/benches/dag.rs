@@ -1,4 +1,4 @@
-//! Benchmarks of `vinc-dag`: outboard building, range encoding, streaming verification and verified-range sets.
+//! Benchmarks of `pinc-dag`: outboard building, range encoding, streaming verification and verified-range sets.
 #![allow(
     missing_docs,
     clippy::unwrap_used,
@@ -11,8 +11,8 @@ use std::hint::black_box;
 use std::ops::Range;
 
 use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main};
-use vinc_dag::ranges::{VerifiedRanges, VerifiedRangesVec};
-use vinc_dag::tree::{Layout, RangeVerifier, build_outboard, encode_range, encoded_len};
+use pinc_dag::ranges::{VerifiedRanges, VerifiedRangesVec};
+use pinc_dag::tree::{Layout, RangeVerifier, build_outboard, encode_range, encoded_len};
 
 const MIB: usize = 1 << 20;
 const LOG: u32 = 4;
@@ -40,7 +40,7 @@ fn data(seed: u64, len: usize) -> Vec<u8> {
     v
 }
 
-fn outboard_of(value: &[u8]) -> (vinc_dag::tree::Cv, Vec<u8>) {
+fn outboard_of(value: &[u8]) -> (pinc_dag::tree::Cv, Vec<u8>) {
     let size = Layout::new(value.len() as u64, LOG).unwrap().outboard_size() as usize;
     let mut ob = vec![0u8; size];
     let root = build_outboard(value, LOG, &mut ob).unwrap();

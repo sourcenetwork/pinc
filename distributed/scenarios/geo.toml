@@ -1,6 +1,6 @@
 name = "geo"
 about = "A geostationary satellite link, emulated (its delay, loss and rate, not the radio): 600 ms round trip (300 ms each way), 1% loss per packet each way, 20 Mbit/s from the client to the server and 2 Mbit/s back; typical for the service is 20 Mbit/s down and 2 up, about 600 ms and about 1% loss."
-stacks = ["vinc", "iroh", "libp2p"]
+stacks = ["pinc", "iroh", "libp2p"]
 repetitions = 3
 
 [[sites]]

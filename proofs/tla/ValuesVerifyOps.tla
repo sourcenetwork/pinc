@@ -1,6 +1,6 @@
 ---------------------------- MODULE ValuesVerifyOps ----------------------------
 (***************************************************************************)
-(* The part of vinc-values GroupVerifier (verify.rs) that depends only on  *)
+(* The part of pinc-values GroupVerifier (verify.rs) that depends only on  *)
 (* the lengths, on the machine integers of U64.tla, shared by the model    *)
 (* check (ValuesVerify.tla) and the trace check (TraceValuesVerify.tla):  *)
 (*                                                                         *)

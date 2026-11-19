@@ -1,4 +1,4 @@
-//! Regressions for the findings of the model checks of `vinc-broadcast`: each test fails on the code as it was before
+//! Regressions for the findings of the model checks of `pinc-broadcast`: each test fails on the code as it was before
 //! the fix (see `proofs/tla/BroadcastNode_*.cfg`).
 #![allow(
     clippy::unwrap_used,
@@ -16,9 +16,9 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use common::{Ev, Net, SEC, ty};
-use vinc_broadcast::consts::HELD_MAX;
-use vinc_broadcast::{Limits, Reject, Trace};
-use vinc_crypto::IdentityAlg;
+use pinc_broadcast::consts::HELD_MAX;
+use pinc_broadcast::{Limits, Reject, Trace};
+use pinc_crypto::IdentityAlg;
 
 const T: &[u8] = b"fix";
 
@@ -52,7 +52,7 @@ fn a_message_that_found_the_held_set_full_is_repaired_not_lost() {
     assert_eq!(ids.len(), 1);
     answer(&mut net, 2, ids[0], true);
     // The held ones are delivered, and with room again the node asks the hub for the topic at once: the six that
-    // found no room arrive now, not at the next periodic check (vinc#510).
+    // found no room arrive now, not at the next periodic check (pinc#510).
     let mut got = net.delivered(2);
     got.sort_unstable();
     got.dedup();
@@ -209,7 +209,7 @@ fn a_fallback_message_does_not_hide_an_older_missed_one_from_the_repair() {
 fn log_eviction_does_not_spend_a_second_dedupe_record_per_id() {
     let limits = Limits {
         max_body: 16,
-        log_bytes: 16 + vinc_broadcast::wire::MAX_HEAD,
+        log_bytes: 16 + pinc_broadcast::wire::MAX_HEAD,
         ..Limits::default()
     };
     let mut net = Net::with_limits(&[IdentityAlg::Ed25519; 2], 1, SEC, limits);

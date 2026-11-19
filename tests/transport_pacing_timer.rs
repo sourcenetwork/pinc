@@ -11,9 +11,9 @@
     clippy::manual_assert_eq
 )]
 
-use vinc_crypto::IdentityAlg;
-use vinc_tests::*;
-use vinc_transport::stream::SendView;
+use pinc_crypto::IdentityAlg;
+use pinc_tests::*;
+use pinc_transport::stream::SendView;
 
 /// A connected pair on a fast link, quiet, with a round-trip sample on both ends so the pacer is on.
 fn quiet_pair<'a>(w: &'a mut World, sa: &'a mut Store, sb: &'a mut Store) -> Net<'a, 'a> {

@@ -1,10 +1,10 @@
 //! The scripted pair of the timers trace: two connected nodes with a pool of datagrams, the calls that drive one node
 //! and write the log, and the hand-over from the in-memory link.
 
-use vinc_crypto::IdentityAlg;
-use vinc_tests::*;
-use vinc_transport::conn::{Drop, PathId, code};
-use vinc_wire::Writer;
+use pinc_crypto::IdentityAlg;
+use pinc_tests::*;
+use pinc_transport::conn::{Drop, PathId, code};
+use pinc_wire::Writer;
 
 use crate::rec::{Log, carrier_decision, ous, probe_json};
 
@@ -147,7 +147,7 @@ pub fn inject(log: &mut Log, n: usize, node: &mut Node<'_>, now: u64, path: Path
         1
     } else {
         let mut w = Writer::new(&mut buf);
-        vinc_transport::frame::write_ack(&mut w, core::iter::once(1_000_000u64..=1_000_000)).unwrap();
+        pinc_transport::frame::write_ack(&mut w, core::iter::once(1_000_000u64..=1_000_000)).unwrap();
         w.written().len()
     };
     let _ = node.with_env(now, |c, env| c.inject_payload(env, path, now, 1 << 40, &buf[..len]));

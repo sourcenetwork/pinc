@@ -15,15 +15,15 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use vinc_crypto::IdentityAlg;
-use vinc_security::ClientTickets;
-use vinc_tests::*;
-use vinc_transport::conn::{CloseReason, ExtensionError, PathId, PathInfo, code};
-use vinc_transport::frame::ext;
-use vinc_transport::packet::{ConnId, LongHeader, short_dcid};
-use vinc_transport::recovery::PathKind;
+use pinc_crypto::IdentityAlg;
+use pinc_security::ClientTickets;
+use pinc_tests::*;
+use pinc_transport::conn::{CloseReason, ExtensionError, PathId, PathInfo, code};
+use pinc_transport::frame::ext;
+use pinc_transport::packet::{ConnId, LongHeader, short_dcid};
+use pinc_transport::recovery::PathKind;
 
-vinc_tests::install_counting_allocator!();
+pinc_tests::install_counting_allocator!();
 
 fn connected<'a>(w: &'a mut World, sa: &'a mut Store, sb: &'a mut Store, link: Link) -> Net<'a, 'a> {
     let mut net = setup(w, sa, sb, link);
@@ -404,7 +404,7 @@ fn any_packet_ends_a_sleep_and_data_flows_to_a_sleeping_peer() {
         let (mut sa, mut sb) = (Store::new(true), Store::new(false));
         let mut net = connected(&mut w, &mut sa, &mut sb, Link::new(11, Params::new(10 * MS)));
         let now = net.now;
-        net.a.with_env(now, vinc_transport::conn::Connection::sleep);
+        net.a.with_env(now, pinc_transport::conn::Connection::sleep);
         assert!(net.run(net.now + SEC, |n| n.b.conn.peer_asleep()));
         // Data is not held back for a peer that announced its sleep.
         let id = net.b.conn.open_bi().unwrap();
@@ -414,7 +414,7 @@ fn any_packet_ends_a_sleep_and_data_flows_to_a_sleeping_peer() {
         assert!(net.b.conn.stats().packets_sent > 0 && net.b.conn.peer_asleep());
         // Any packet from the sleeper ends the sleep, with or without a WAKE: here it simply sends data.
         let now = net.now;
-        net.a.with_env(now, vinc_transport::conn::Connection::wake);
+        net.a.with_env(now, pinc_transport::conn::Connection::wake);
         assert!(net.run(net.now + 5 * SEC, |n| !n.b.conn.peer_asleep()));
         assert!(net.b.saw(|r| *r == Rec::PeerAwake));
     });
@@ -427,12 +427,12 @@ fn a_lost_wake_does_not_leave_the_connection_suspended() {
         let (mut sa, mut sb) = (Store::new(true), Store::new(false));
         let mut net = connected(&mut w, &mut sa, &mut sb, Link::new(12, Params::new(10 * MS)));
         let now = net.now;
-        net.a.with_env(now, vinc_transport::conn::Connection::sleep);
+        net.a.with_env(now, pinc_transport::conn::Connection::sleep);
         assert!(net.run(net.now + SEC, |n| n.b.conn.peer_asleep()));
         // The datagram carrying the WAKE is lost; the sleeper then sends ordinary data.
         net.link.route(PathId(1)).ab.drop_next(1);
         let now = net.now;
-        net.a.with_env(now, vinc_transport::conn::Connection::wake);
+        net.a.with_env(now, pinc_transport::conn::Connection::wake);
         net.run(net.now + 10 * MS, |_| false);
         let id = net.a.conn.open_bi().unwrap();
         net.a.conn.write(id, b"I am back").unwrap();
@@ -455,10 +455,10 @@ fn the_wake_a_resume_sends_is_recorded_in_flight_until_it_is_acknowledged() {
         let mut net = connected(&mut w, &mut sa, &mut sb, Link::new(12, Params::new(10 * MS)));
         net.run(net.now + SEC, |_| false);
         let now = net.now;
-        net.a.with_env(now, vinc_transport::conn::Connection::sleep);
+        net.a.with_env(now, pinc_transport::conn::Connection::sleep);
         assert!(net.run(net.now + SEC, |n| n.b.conn.peer_asleep()));
         let now = net.now;
-        net.a.with_env(now, vinc_transport::conn::Connection::wake);
+        net.a.with_env(now, pinc_transport::conn::Connection::wake);
         // The WAKE has left and its acknowledgement is still on its way (the round trip is 20 ms).
         net.run(net.now + 5 * MS, |_| false);
         assert!(
@@ -898,8 +898,8 @@ fn a_handshake_message_dropped_for_not_authenticating_is_counted_on_either_side(
         assert!(net.run(now + SEC, |n| n.b.conn.has_path(PathId(2))));
         let finish = {
             let mut msg = vec![0u8; 256];
-            let mut wr = vinc_wire::Writer::new(&mut msg);
-            vinc_security::message::Finish { sealed: &[0xa5; 120] }
+            let mut wr = pinc_wire::Writer::new(&mut msg);
+            pinc_security::message::Finish { sealed: &[0xa5; 120] }
                 .write(&mut wr)
                 .unwrap();
             let len = wr.written().len();

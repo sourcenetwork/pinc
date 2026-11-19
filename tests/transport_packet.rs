@@ -17,21 +17,21 @@
 )]
 
 use proptest::prelude::*;
-use vinc_crypto::{Aead, Provider, Secret, Software};
-use vinc_security::{HeaderKey, PacketKey, RecordError};
-use vinc_tests::SplitMix64;
-use vinc_transport::frame::{Frame, FrameIter};
-use vinc_transport::packet::{
+use pinc_crypto::{Aead, Provider, Secret, Software};
+use pinc_security::{HeaderKey, PacketKey, RecordError};
+use pinc_tests::SplitMix64;
+use pinc_transport::frame::{Frame, FrameIter};
+use pinc_transport::packet::{
     ConnId, Header, LongHeader, LongType, MAX_PN, Opened, PN_LEN_BASE, PN_LEN_WIDE, PacketError, PnLayout, ShortHeader,
     VERSION, WIDE_WINDOW, decode_pn, encode_pn, open, packets, pad_to, pn_len_for, protect_header, sample_at, seal,
     short_dcid, short_header_len, unprotect_header,
 };
-use vinc_wire::{WireError, Writer};
+use pinc_wire::{WireError, Writer};
 
 mod hexutil;
 use hexutil::{arr, hex};
 
-vinc_tests::install_counting_allocator!();
+pinc_tests::install_counting_allocator!();
 
 const AEADS: [Aead; 2] = [Aead::ChaCha20Poly1305, Aead::Aes128Gcm];
 
@@ -308,9 +308,9 @@ fn header_protection_matches_a_manual_mask() {
         let s = secret(3);
         let hk = HeaderKey::from_secret(&p, aead, &s).unwrap();
         let mut hp = [0u8; 32];
-        vinc_crypto::expand(
+        pinc_crypto::expand(
             s.expose(),
-            vinc_security::labels::HEADER_KEY,
+            pinc_security::labels::HEADER_KEY,
             &[],
             &mut hp[..aead.key_len()],
         );
@@ -531,7 +531,7 @@ fn open_reports_authentication_and_pn_range() {
     // The first attempt with the wrong header key may or may not have reached the authentication step.
     assert!((1..=2).contains(&wrong.rx.failed_opens()));
     // A truncated number that expands past 2^62 is refused.
-    let un = vinc_transport::packet::Unprotected {
+    let un = pinc_transport::packet::Unprotected {
         first: 0x43,
         pn_len: 4,
         truncated: 0,
@@ -777,7 +777,7 @@ fn packet_paths_allocate_nothing() {
             implicit_len: false,
         },
     ];
-    let stats = vinc_tests::measure(|| {
+    let stats = pinc_tests::measure(|| {
         let len = build_short(&mut buf, &mut s, dcid, false, 3, Some(1), &frames);
         dg[..len].copy_from_slice(&buf[..len]);
         for item in packets(&mut dg[..len], 4) {

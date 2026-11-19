@@ -1,6 +1,6 @@
 ------------------------------- MODULE DtnRs -------------------------------
 (***************************************************************************)
-(* The systematic Reed-Solomon code of vinc-dtn's rs.rs, step for step on  *)
+(* The systematic Reed-Solomon code of pinc-dtn's rs.rs, step for step on  *)
 (* symbols (sequences of bytes), over the exact GF(2^8) of DtnGfOps.       *)
 (*                                                                         *)
 (* EncodeB is Rs::encode: parity symbol j is zero, then for each data      *)
@@ -30,7 +30,7 @@
 (*              the number of erasures is at most min(k, m) <= 127, the    *)
 (*              size of the ys buffer.                                     *)
 (*                                                                         *)
-(* Lean counterparts (proofs/lean/Vinc/DtnRs.lean, DtnCauchy.lean):        *)
+(* Lean counterparts (proofs/lean/Pinc/DtnRs.lean, DtnCauchy.lean):        *)
 (*   Recover  reconCol_ok     Mds  mds, cauchy_BA, cauchy_AB               *)
 (*   Bounds   validParams_iff, erasures_le, nodes_of                       *)
 (* The Lean model works on one byte column, which is sound because the     *)

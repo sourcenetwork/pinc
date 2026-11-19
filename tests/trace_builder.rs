@@ -19,7 +19,7 @@
 //! Every run is also checked here against the genuine value, so the test is meaningful without the proof tools: the
 //! outboard equals the pre-order list of the tree's pairs, the root is `blake3::hash(value)` (for the empty value,
 //! `blake3::hash(b"")`, the constant `RangeVerifier::new` checks), and the verifier accepts the builder's outboard.
-//! The trace is written to the directory in `VINC_TRACE_DIR` when it is set; otherwise nothing is written.
+//! The trace is written to the directory in `PINC_TRACE_DIR` when it is set; otherwise nothing is written.
 #![allow(
     clippy::unwrap_used,
     clippy::indexing_slicing,
@@ -32,8 +32,8 @@ use std::fmt::Write as _;
 
 use blake3::Hasher;
 use blake3::hazmat::{HasherExt, Mode, merge_subtrees_non_root, merge_subtrees_root};
-use vinc_dag::tree::{Cv, Layout, OutboardBuilder, RangeVerifier, TreeError};
-use vinc_tests::SplitMix64;
+use pinc_dag::tree::{Cv, Layout, OutboardBuilder, RangeVerifier, TreeError};
+use pinc_tests::SplitMix64;
 
 /// A value below `n` (`n > 0`).
 fn below(rng: &mut SplitMix64, n: u64) -> u64 {
@@ -368,12 +368,12 @@ fn builder_traces_are_consistent_with_the_genuine_value() {
         "\"ilen\":0,",
     ] {
         assert!(
-            vinc_tests::soaking() || trace.contains(needle),
+            pinc_tests::soaking() || trace.contains(needle),
             "the runs never produce {needle}"
         );
     }
     assert!(trace.lines().count() > 2000, "{} events", trace.lines().count());
-    let Some(dir) = std::env::var_os("VINC_TRACE_DIR") else {
+    let Some(dir) = std::env::var_os("PINC_TRACE_DIR") else {
         return;
     };
     let dir = std::path::PathBuf::from(dir);

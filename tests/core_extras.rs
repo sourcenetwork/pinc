@@ -15,13 +15,13 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use vinc_core::{
+use pinc_core::{
     Answer, Command, CommandError, EXT_BODY_MAX, Event, FAN_URGENCY, Query, Role, SessionId, TraceEvent, Value,
 };
-use vinc_tests::*;
-use vinc_transport::conn::ExtensionError;
-use vinc_transport::frame::ext;
-use vinc_transport::stream::StreamError;
+use pinc_tests::*;
+use pinc_transport::conn::ExtensionError;
+use pinc_transport::frame::ext;
+use pinc_transport::stream::StreamError;
 
 const S: u64 = SEC_NS;
 

@@ -2,7 +2,7 @@
 //! layout, written as ndjson for the TLA+ trace check and the Lean replay.
 //!
 //! Every run is also checked here against a naive reference, so the test is meaningful without the proof tools.
-//! The files are written to the directory in `VINC_TRACE_DIR` when it is set; otherwise nothing is written.
+//! The files are written to the directory in `PINC_TRACE_DIR` when it is set; otherwise nothing is written.
 #![allow(
     clippy::unwrap_used,
     clippy::indexing_slicing,
@@ -15,10 +15,10 @@ use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::ops::Range;
 
-use vinc_dag::ranges::{VerifiedRanges, VerifiedRangesVec};
-use vinc_dag::tree::{Layout, TreeError};
-use vinc_tests::SplitMix64;
-use vinc_wire::{WireError, varint};
+use pinc_dag::ranges::{VerifiedRanges, VerifiedRangesVec};
+use pinc_dag::tree::{Layout, TreeError};
+use pinc_tests::SplitMix64;
+use pinc_wire::{WireError, varint};
 
 /// A value below `n` (`n > 0`).
 fn below(rng: &mut SplitMix64, n: u64) -> u64 {
@@ -383,7 +383,7 @@ fn proof_traces_are_consistent_with_the_reference() {
         "the runs must exercise a capacity failure"
     );
     assert!(narrow.lines().count() > 2000);
-    let Some(dir) = std::env::var_os("VINC_TRACE_DIR") else {
+    let Some(dir) = std::env::var_os("PINC_TRACE_DIR") else {
         return;
     };
     let dir = std::path::PathBuf::from(dir);

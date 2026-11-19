@@ -16,8 +16,8 @@
 mod layers_common;
 
 use layers_common::{LWorld, big, secs};
-use vinc_node::{Body, DtnPlan, Enabled, NodeEvent, NodeTrace};
-use vinc_tests::{LayerApps, NCmd, SplitMix64};
+use pinc_node::{Body, DtnPlan, Enabled, NodeEvent, NodeTrace};
+use pinc_tests::{LayerApps, NCmd, SplitMix64};
 
 /// Send `len` random bytes at 4 KiB slices (k = 4, m = 2) from one member to another; returns the payloads the
 /// destination received, the parity symbols it asked for, and the payload sent.

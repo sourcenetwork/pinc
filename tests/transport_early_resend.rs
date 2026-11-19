@@ -10,11 +10,11 @@
     clippy::cast_possible_truncation
 )]
 
-use vinc_crypto::IdentityAlg;
-use vinc_tests::*;
-use vinc_transport::conn::PathId;
+use pinc_crypto::IdentityAlg;
+use pinc_tests::*;
+use pinc_transport::conn::PathId;
 
-vinc_tests::install_counting_allocator!();
+pinc_tests::install_counting_allocator!();
 
 /// The link's delay each way.
 const ONE_WAY: u64 = 25 * MS;
@@ -29,7 +29,7 @@ fn early_request(from_client: bool, k: u64) -> (u64, u64, Vec<u8>) {
     let mut tickets = first_session(&mut w);
     let ticket = tickets.take(&w.rp.id.node_id(), ALPN, T0).unwrap();
     let (mut sa, mut sb) = (Store::new(true), Store::new(false));
-    let a = w.client(&mut sa, Some(ticket), vinc_security::ClientTickets::new());
+    let a = w.client(&mut sa, Some(ticket), pinc_security::ClientTickets::new());
     let b = w.server(&mut sb);
     let mut link = Link::new(71, Params::new(ONE_WAY));
     if k > 0 {
@@ -97,7 +97,7 @@ fn the_early_data_of_a_dial_nobody_answers_goes_again_once() {
         let mut tickets = first_session(&mut w);
         let ticket = tickets.take(&w.rp.id.node_id(), ALPN, T0).unwrap();
         let (mut sa, mut sb) = (Store::new(true), Store::new(false));
-        let a = w.client(&mut sa, Some(ticket), vinc_security::ClientTickets::new());
+        let a = w.client(&mut sa, Some(ticket), pinc_security::ClientTickets::new());
         let b = w.server(&mut sb);
         let mut link = Link::new(72, Params::new(ONE_WAY));
         link.route(PathId(1)).ab.drop_next(u32::MAX);

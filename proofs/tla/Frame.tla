@@ -1,7 +1,7 @@
 ------------------------------- MODULE Frame -------------------------------
 (***************************************************************************)
-(* The VINCER frame codecs (FrameOps.tla, the operators that follow        *)
-(* vinc-transport frame/) checked on three domains, each case a state:     *)
+(* The PINCER frame codecs (FrameOps.tla, the operators that follow        *)
+(* pinc-transport frame/) checked on three domains, each case a state:     *)
 (*                                                                         *)
 (*   MODE = "frames"  every frame kind with its fields at the varint       *)
 (*                    boundaries, at LIMIT and around the stream end;      *)

@@ -14,8 +14,8 @@
 mod common;
 
 use common::{Ev, Net, SEC};
-use vinc_broadcast::consts::HELD_MAX;
-use vinc_crypto::IdentityAlg;
+use pinc_broadcast::consts::HELD_MAX;
+use pinc_crypto::IdentityAlg;
 
 const T: &[u8] = b"acp";
 
@@ -103,7 +103,7 @@ fn at_most_64_messages_are_held() {
     let c = checks(&net);
     assert_eq!(c.len(), 1);
     assert_eq!(net.delivered(3).len(), 0);
-    // The answer delivers the 64 held, and with room again the node asks the hub for the six it refused (vinc#510).
+    // The answer delivers the 64 held, and with room again the node asks the hub for the six it refused (pinc#510).
     answer(&mut net, c[0].0, true);
     assert_eq!(net.delivered(3).len(), HELD_MAX + 6);
 }

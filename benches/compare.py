@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Run the comparison matrix of VINC, iroh and rust-libp2p on this machine and write the results.
+"""Run the comparison matrix of PINC, iroh and rust-libp2p on this machine and write the results.
 
-Run it on the benchmark host with nothing else running (`VINC_JOB_EXCLUSIVE=1 vinc-job just compare`). It builds the
+Run it on the benchmark host with nothing else running (`PINC_JOB_EXCLUSIVE=1 pinc-job just compare`). It builds the
 three `compare_*` benches, then for every library, scenario and network profile starts a fresh server process and a
 fresh client process on loopback, repeats each run, and writes under `benches/results/<date>-<host>/`:
 
@@ -28,7 +28,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # (name shown, bench binary, variant argument)
 LIBS = [
-    ("vinc", "compare_vinc", None),
+    ("pinc", "compare_pinc", None),
     ("iroh", "compare_iroh", None),
     ("libp2p-quic", "compare_libp2p", "quic"),
     ("libp2p-tcp", "compare_libp2p", "tcp"),
@@ -82,7 +82,7 @@ SCENARIOS = {
         "rtt50-loss1": (["latency", "1024", "1000"], 3, 900, []),
         "rtt200-loss5-reorder": (["latency", "1024", "300"], 3, 900, []),
     },
-    # `many` leaves VINC's client endpoints undriven and reads after 500 ms; `many_driven` drives every client endpoint
+    # `many` leaves PINC's client endpoints undriven and reads after 500 ms; `many_driven` drives every client endpoint
     # and reads after 1.5 s. Each names its reading, so no environment setting changes either reading.
     "many": {"loopback": (["many", "1000", "65536", "--reading=undriven"], 3, 900, [])},
     "many_driven": {"loopback": (["many", "1000", "65536", "--reading=driven"], 3, 900, [])},
@@ -160,7 +160,7 @@ def build(cargo, target_dir):
     cmd = [cargo, "bench", "--manifest-path", os.path.join(ROOT, "benches", "Cargo.toml"), "--no-run", "--message-format=json"]
     if target_dir:
         cmd += ["--target-dir", target_dir]
-    for b in ("compare_vinc", "compare_iroh", "compare_libp2p"):
+    for b in ("compare_pinc", "compare_iroh", "compare_libp2p"):
         cmd += ["--bench", b]
     p = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
     if p.returncode != 0:
@@ -244,10 +244,10 @@ def cargo_lock_version(name):
 
 
 def settings():
-    """The environment settings that change what VINC runs, when they are not the default (the server and the client
+    """The environment settings that change what PINC runs, when they are not the default (the server and the client
     inherit them)."""
     found = {}
-    value = os.environ.get("VINC_BENCH_ENDPOINTS", "1")
+    value = os.environ.get("PINC_BENCH_ENDPOINTS", "1")
     if value != "1":
         found["endpoints"] = value
     return found
@@ -403,13 +403,13 @@ def collect(out):
 
 
 def write_md(out, info, libs, profiles, scen, results, a):
-    md = [f"# VINC against iroh and rust-libp2p\n"]
+    md = [f"# PINC against iroh and rust-libp2p\n"]
     md.append(f"Date {datetime.date.today().isoformat()}, host `{info['host']}`: {info['cpu']}, {info['cores']} cores, {info['mem_gib']} GiB, kernel {info['kernel']}, {info['rustc']}, commit {info['git']}.")
     md.append("Versions: " + ", ".join(f"{k} {v}" for k, v in info["versions"].items()) + ". Every library compiled with `RUSTFLAGS=" + (info.get("rustflags") or "") + "`.")
     md.append("Every cell is the median over the repetitions with the range [min..max]; a single value is one run. The client and the server are two processes on loopback.")
     if "endpoints" in info:
         md.append(
-            f"VINC runs `{info['endpoints']}` endpoints (`VINC_BENCH_ENDPOINTS`) on every scenario's server; "
+            f"PINC runs `{info['endpoints']}` endpoints (`PINC_BENCH_ENDPOINTS`) on every scenario's server; "
             "the default is one."
         )
         md.append(
@@ -429,7 +429,7 @@ def write_md(out, info, libs, profiles, scen, results, a):
             args, reps, _, _ = SCENARIOS[s][prof]
             md.append(f"### {s} ({' '.join(args)}; {reps} runs)\n")
             if s.startswith("many"):
-                md.append("`many` reads memory 500 ms after the burst with VINC's client endpoints left undriven.")
+                md.append("`many` reads memory 500 ms after the burst with PINC's client endpoints left undriven.")
                 md.append(
                     "`many_driven` drives every client endpoint, as the other libraries always do, "
                     "and reads after 1.5 s."

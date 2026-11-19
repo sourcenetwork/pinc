@@ -1,6 +1,6 @@
 ------------------------------- MODULE Record -------------------------------
 (***************************************************************************)
-(* Model of the packet key of vinc-security record.rs (PacketKey): the     *)
+(* Model of the packet key of pinc-security record.rs (PacketKey): the     *)
 (* sealed and failed-open counters, the last sealed packet number, the    *)
 (* usage limits and the key roll.                                          *)
 (*                                                                         *)
@@ -35,7 +35,7 @@
 (* 2^36, MaxGen for 2^32 - 1, MaxPn for 2^62 - 1, Sat for u64::MAX.       *)
 (*                                                                         *)
 (* The operators SealOp, OpenOp and RollOp are pure and are reused by     *)
-(* TraceKeyRoll.tla. Lean counterpart: Vinc/Record.lean.                   *)
+(* TraceKeyRoll.tla. Lean counterpart: Pinc/Record.lean.                   *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
 

@@ -5,18 +5,18 @@ manifest), the benchmarks (`benches/`) and the distributed harness (`distributed
 1. Every dependency of every member is declared once, in its workspace's root `[workspace.dependencies]`; a member
    manifest may only say `{ workspace = true }` (plus features or `optional`).
 2. Every member has its workspace's version (`version.workspace = true`), every workspace has the library's version,
-   and every VINC crate entry in any `[workspace.dependencies]` pins that same version.
+   and every PINC crate entry in any `[workspace.dependencies]` pins that same version.
 3. Every library crate under `crates/` forbids unsafe code in its root (`#![forbid(unsafe_code)]`); the workspace lint
    is only `deny` so the test allocator can allow it.
 4. No library crate under `crates/` depends, directly or transitively, on an async runtime. The facade takes the host's
    I/O as three async closures, so it needs none; nuclei, the runtime its documentation and examples run on, is a
-   dev-dependency of `vinc` only. The tests may use nuclei, tokio and smol; every other member of the library's
+   dev-dependency of `pinc` only. The tests may use nuclei, tokio and smol; every other member of the library's
    workspace refuses all of them, as a dependency of any kind.
 5. Pure Rust: no crate that compiles or links C (crypto or otherwise) is anywhere in the library's workspace.
-6. No QUIC library in VINC: no member of the library's workspace depends, directly or transitively, on a QUIC
+6. No QUIC library in PINC: no member of the library's workspace depends, directly or transitively, on a QUIC
    implementation.
 
-The benchmarks and the distributed harness measure VINC against iroh and rust-libp2p, so rules 4 to 6 do not apply to
+The benchmarks and the distributed harness measure PINC against iroh and rust-libp2p, so rules 4 to 6 do not apply to
 them: those libraries, their runtimes and their C code live there and nowhere else, which is why each is a workspace of
 its own with its own lockfile.
 """
@@ -32,8 +32,8 @@ WORKSPACES = [".", "benches", "distributed"]
 
 RUNTIMES = {"tokio", "async-std", "smol", "async-executor", "glommio", "monoio", "embassy-executor", "nuclei"}
 # The runtimes each member of the library's workspace may depend on directly; the facade only as a dev-dependency.
-RUNTIME_HOMES = {"vinc": {"nuclei"}, "vinc-tests": {"nuclei", "tokio", "smol"}}
-DEV_ONLY = {"vinc"}
+RUNTIME_HOMES = {"pinc": {"nuclei"}, "pinc-tests": {"nuclei", "tokio", "smol"}}
+DEV_ONLY = {"pinc"}
 SECTIONS = ("dependencies", "dev-dependencies", "build-dependencies")
 QUIC = {"quinn", "quinn-proto", "quinn-udp", "quiche", "s2n-quic", "s2n-quic-core", "noq", "noq-proto", "noq-udp",
         "msquic", "neqo-transport", "neqo-crypto", "tquic", "lsquic", "quic-rpc", "iroh-quinn", "iroh-quinn-proto",
@@ -111,12 +111,12 @@ def check_library(meta):
                 failed.append(f"{pkg['name']}: {lib} must contain `#![forbid(unsafe_code)]`")
             bad = sorted(names[d] for d in closure(nodes, pkg["id"], (None, "build")) if names[d] in RUNTIMES)
             if bad:
-                failed.append(f"{pkg['name']}: depends on an async runtime ({', '.join(bad)}); VINC crates must stay runtime-free")
+                failed.append(f"{pkg['name']}: depends on an async runtime ({', '.join(bad)}); PINC crates must stay runtime-free")
         reach = closure(nodes, pkg["id"])
         graph |= reach
         bad = sorted(names[d] for d in reach if names[d] in QUIC)
         if bad:
-            failed.append(f"{pkg['name']}: depends on a QUIC library ({', '.join(bad)}); VINC uses no QUIC implementation")
+            failed.append(f"{pkg['name']}: depends on a QUIC library ({', '.join(bad)}); PINC uses no QUIC implementation")
     bad = sorted({names[d] for d in graph if names[d] in C_CRATES or names[d].startswith("libcrux")})
     if bad:
         failed.append(f"pure Rust: crates that compile or link C are in the library's graph: {', '.join(bad)}")

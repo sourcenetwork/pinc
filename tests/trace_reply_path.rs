@@ -1,11 +1,11 @@
-//! Trace generation for the path a dialing side's handshake reply arrives on (vinc#399) and the path table of the
+//! Trace generation for the path a dialing side's handshake reply arrives on (pinc#399) and the path table of the
 //! connection: real dialing sides (`Connection::client` against a real responder) driven through a reply that comes
 //! back on the dialed path, on another path the dial holds, on a path it does not hold, on one its table gave up, at a
 //! full table, cut over two paths, after forged Replies and after a prekey reject, a resume Reply, and a resume Reply
 //! with a 1-RTT packet behind it in the same datagram. After every call the dialing side's path table (`path_list`, in
 //! slot order, and `active_path`), whether it is established, whether its round trip has a sample and its dropped
 //! handshake count are recorded as ndjson (`reply_path.ndjson`) for the TLA+ trace check (`TraceReplyPath.tla`) and
-//! the Lean replay (`Vinc/TraceReplyPath.lean`).
+//! the Lean replay (`Pinc/TraceReplyPath.lean`).
 //!
 //! A datagram is recorded with the path it arrived on, with what its handshake packet completed as the connection
 //! answered it (`bad` the dropped count rose, `auth` the session was established by it, `pend` it raised a key request:
@@ -32,10 +32,10 @@ use std::cell::RefCell;
 use std::fmt::Write as _;
 use std::rc::Rc;
 
-use vinc_crypto::IdentityAlg;
-use vinc_tests::*;
-use vinc_transport::conn::{PathError, PathId, PathInfo};
-use vinc_transport::packet::{Header, packets};
+use pinc_crypto::IdentityAlg;
+use pinc_tests::*;
+use pinc_transport::conn::{PathError, PathId, PathInfo};
+use pinc_transport::packet::{Header, packets};
 
 /// The length of the connection ids in a 1-RTT header: the transport's default.
 const CID_LEN: usize = 4;
@@ -123,7 +123,7 @@ fn rx(l: &mut Log, net: &mut Net<'_, '_>, p: u64, d: &[u8]) {
     let mut d = d.to_vec();
     let r = net.a.with_env(now, |c, env| c.handle_datagram(env, PathId(p), &mut d));
     assert!(
-        !matches!(r, Err(vinc_transport::conn::Drop::NoPath)),
+        !matches!(r, Err(pinc_transport::conn::Drop::NoPath)),
         "a datagram on path {p} was dropped for its path"
     );
     net.a.service(now);
@@ -324,7 +324,7 @@ fn resume(l: &mut Log, seed: u64, added: &[u64], p: u64, coalesce: bool) {
     let mut tickets = first_session(&mut w);
     let ticket = tickets.take(&w.rp.id.node_id(), ALPN, T0).unwrap();
     let (mut sa, mut sb) = (Store::new(true), Store::new(false));
-    let a = w.client(&mut sa, Some(ticket), vinc_security::ClientTickets::new());
+    let a = w.client(&mut sa, Some(ticket), pinc_security::ClientTickets::new());
     let b = w.server(&mut sb);
     let mut net = Net::new(a, b, Link::new(seed, Params::new(10 * MS)), &mut w.stores);
     start(l, &mut net);
@@ -379,7 +379,7 @@ fn reply_path_traces() {
         // is held once, and at a full table one path is given up, not the one the session left.
         resume(&mut l, 93, &[], 9, true);
         resume(&mut l, 94, &[3, 4, 5], 9, true);
-        if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
+        if let Ok(dir) = std::env::var("PINC_TRACE_DIR") {
             std::fs::write(std::path::Path::new(&dir).join("reply_path.ndjson"), &l.out).unwrap();
         }
         for k in ["bad", "auth", "pend", "rej", "other"] {

@@ -12,12 +12,12 @@
 mod node_common;
 
 use node_common::{OWD, World, big, secs};
-use vinc_broadcast::Trace as BTrace;
-use vinc_node::NodeEvent;
-use vinc_node::trace::Body;
-use vinc_node::trace::NodeTrace;
-use vinc_sim::{LinkConfig, Loss, MS, Sim, SimConfig, Time};
-use vinc_tests::{NCmd, NEv};
+use pinc_broadcast::Trace as BTrace;
+use pinc_node::NodeEvent;
+use pinc_node::trace::Body;
+use pinc_node::trace::NodeTrace;
+use pinc_sim::{LinkConfig, Loss, MS, Sim, SimConfig, Time};
+use pinc_tests::{NCmd, NEv};
 
 const TOPIC: &[u8] = b"pushlog";
 const N: usize = 2000;
@@ -79,7 +79,7 @@ fn world_lan(seed: u64) -> World {
     w
 }
 
-fn count(w: &World, n: vinc_sim::NodeId, until: Time, f: impl Fn(&NodeEvent) -> bool) -> usize {
+fn count(w: &World, n: pinc_sim::NodeId, until: Time, f: impl Fn(&NodeEvent) -> bool) -> usize {
     w.sim
         .events(n)
         .iter()
@@ -146,17 +146,17 @@ fn every_publish_of_a_burst_is_acked_or_given_up() {
 }
 
 /// The burst starts here, once every subscription is in.
-const START: Time = 40 * vinc_sim::SEC;
+const START: Time = 40 * pinc_sim::SEC;
 /// The harness's drain: 15 s after the last publish.
-const DRAINED: Time = START + 15 * vinc_sim::SEC + 200 * MS;
+const DRAINED: Time = START + 15 * pinc_sim::SEC + 200 * MS;
 
 /// Subscribe every subscriber and schedule the burst at [`START`].
-fn burst(w: &mut World, writer: vinc_sim::NodeId, subs: &[vinc_sim::NodeId]) {
+fn burst(w: &mut World, writer: pinc_sim::NodeId, subs: &[pinc_sim::NodeId]) {
     burst_of(w, writer, subs, N);
 }
 
 /// The same with `n` messages.
-fn burst_of(w: &mut World, writer: vinc_sim::NodeId, subs: &[vinc_sim::NodeId], n: usize) {
+fn burst_of(w: &mut World, writer: pinc_sim::NodeId, subs: &[pinc_sim::NodeId], n: usize) {
     for s in subs {
         w.sim.command(secs(20), *s, NCmd::Subscribe(TOPIC.to_vec()));
     }
@@ -173,7 +173,7 @@ fn burst_of(w: &mut World, writer: vinc_sim::NodeId, subs: &[vinc_sim::NodeId], 
 }
 
 /// The publisher's acknowledged publishes per second, from the first publish to the last acknowledgement.
-fn ack_rate(w: &World, writer: vinc_sim::NodeId) -> f64 {
+fn ack_rate(w: &World, writer: pinc_sim::NodeId) -> f64 {
     let last = w
         .sim
         .events(writer)
@@ -183,7 +183,7 @@ fn ack_rate(w: &World, writer: vinc_sim::NodeId) -> f64 {
         .max()
         .unwrap_or(START);
     let acked = count(w, writer, Time::MAX, |e| matches!(e, NodeEvent::PublishAcked { .. }));
-    acked as f64 / ((last - START) as f64 / vinc_sim::SEC as f64)
+    acked as f64 / ((last - START) as f64 / pinc_sim::SEC as f64)
 }
 
 /// A subscriber whose stream stops draining (the hub's packets to it are dropped for 10 s, its session stays up)
@@ -354,7 +354,7 @@ fn a_burst_on_a_fast_lan_is_not_paced() {
         );
         assert_eq!(acks.len(), N, "the publisher must hear every publish acknowledged");
         assert!(
-            last < START + vinc_broadcast::consts::PUB_RETRY,
+            last < START + pinc_broadcast::consts::PUB_RETRY,
             "a publish waited for a retry: the hub refused a store"
         );
         for (j, g) in got.iter().enumerate() {
@@ -378,7 +378,7 @@ fn a_burst_longer_than_the_log_acknowledges_nothing_it_loses() {
         // Past the 90 s give-up of the last publish, so every accepted publish has an outcome.
         let end = START + secs(100);
         w.run(end);
-        let mids = |n: vinc_sim::NodeId, acked: bool| -> std::collections::BTreeSet<[u8; 8]> {
+        let mids = |n: pinc_sim::NodeId, acked: bool| -> std::collections::BTreeSet<[u8; 8]> {
             w.sim
                 .events(n)
                 .iter()

@@ -5,12 +5,12 @@
 # Usage: scripts/trace-soak.sh [-n iterations] [-b first_seed] [-k tlc_every]
 #   -n  stop after this many iterations (default: run until a mismatch or until interrupted)
 #   -b  the seed base of the first iteration (default: from the clock); iteration i uses base+i, so a failure
-#       reproduces with: VINC_TRACE_SEED=<seed> VINC_TRACE_DIR=<dir> cargo test -p vinc-tests --features hwenc --test trace_<x>
+#       reproduces with: PINC_TRACE_SEED=<seed> PINC_TRACE_DIR=<dir> cargo test -p pinc-tests --features hwenc --test trace_<x>
 #   -x  comma-separated names of ndjson files (without the extension) not to replay: those of a component whose model
 #       is known to be stale, so that it does not hide a mismatch in the others
 #   -k  also run every TLC trace check on the recorded files every k-th iteration (default 0: Lean replay only);
 #       TLC uses 2 workers. Needs the jars of scripts/proofs.sh.
-# Each iteration sets VINC_TRACE_SEED, which moves every seed of every trace test that draws from `SplitMix64::traced`
+# Each iteration sets PINC_TRACE_SEED, which moves every seed of every trace test that draws from `SplitMix64::traced`
 # (tests/support/lib.rs); unset, the tests run their fixed seeds. On a mismatch the recorded ndjson is kept in
 # target/trace-soak/fail-<seed>/ and the script exits 1. A trace test that fails one of its own assertions (it then writes no
 # trace) is reported, its log kept in target/trace-soak/assert-<seed>.log, and the run goes on.
@@ -34,7 +34,7 @@ replay=proofs/lean/.lake/build/bin/replay
 # The trace tests are the ones the gate runs: its cargo line names them.
 tests=$(grep -o -- '--test trace_[a-z_]*' scripts/proofs.sh | sort -u | tr '\n' ' ')
 # shellcheck disable=SC2086
-cargo test -q -p vinc-tests --features hwenc --no-run $tests >/dev/null 2>&1 || true
+cargo test -q -p pinc-tests --features hwenc --no-run $tests >/dev/null 2>&1 || true
 
 tlc_check() { # tlc_check <dir> : the TLC trace checks of the gate over the ndjson in <dir>
     local tla="${TLA_HOME:-$HOME/.local/share/tla}" spec out st
@@ -43,7 +43,7 @@ tlc_check() { # tlc_check <dir> : the TLC trace checks of the gate over the ndjs
         # a -x name that is the spec's name without "Trace" (membership, streams) skips its TLC check too
         lower=$(echo "${spec#Trace}" | tr 'A-Z' 'a-z')
         case "$skip" in *,"$lower",*) continue ;; esac
-        out=$(VINC_TRACE_DIR="$1" java -Xss256m -XX:+UseParallelGC -Djava.io.tmpdir="$st" \
+        out=$(PINC_TRACE_DIR="$1" java -Xss256m -XX:+UseParallelGC -Djava.io.tmpdir="$st" \
             -cp "$tla/tla2tools-2026.11.06.jar:$tla/CommunityModules-deps-202611060952.jar" tlc2.TLC -workers 2 \
             -metadir "$st/$spec" -config "proofs/tla/$spec.cfg" "proofs/tla/$spec.tla" 2>&1) \
             || {
@@ -64,11 +64,11 @@ while [ "$iters" -eq 0 ] || [ "$i" -lt "$iters" ]; do
     dir=$(mktemp -d)
     ok=1
     # shellcheck disable=SC2086
-    VINC_TRACE_SEED=$seed VINC_TRACE_DIR="$dir" cargo test -q -p vinc-tests --features hwenc --no-fail-fast $tests >"$dir/cargo.log" 2>&1 \
+    PINC_TRACE_SEED=$seed PINC_TRACE_DIR="$dir" cargo test -q -p pinc-tests --features hwenc --no-fail-fast $tests >"$dir/cargo.log" 2>&1 \
         || {
             # A test's own assertion failed (not a model mismatch): the test writes no trace, the others are still replayed.
             # It is a finding about the test or the code, so its log is kept.
-            echo "trace-soak: seed $seed: a trace test failed its own assertions: $(grep -o '`-p vinc-tests --test [a-z_]*`' "$dir/cargo.log" | sort -u | tr '\n' ' ')"
+            echo "trace-soak: seed $seed: a trace test failed its own assertions: $(grep -o '`-p pinc-tests --test [a-z_]*`' "$dir/cargo.log" | sort -u | tr '\n' ' ')"
             mkdir -p target/trace-soak && cp "$dir/cargo.log" "target/trace-soak/assert-$seed.log"
             asserts=$((asserts + 1))
         }

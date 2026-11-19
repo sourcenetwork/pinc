@@ -15,9 +15,9 @@
 mod values_support;
 
 use values_support::*;
-use vinc_values::session::Provider;
-use vinc_values::span::Span;
-use vinc_values::trace::{FailReason, LiarWhy, Trace};
+use pinc_values::session::Provider;
+use pinc_values::span::Span;
+use pinc_values::trace::{FailReason, LiarWhy, Trace};
 
 /// Run a whole-value fetch to its end and check the store holds exactly the truth.
 fn fetch_all(mut sim: Sim, limit_s: u64) -> Sim {
@@ -164,7 +164,7 @@ fn request_streams_of_one_provider_are_bounded_only_by_the_table_on_a_long_fat_l
     assert!(sim.rec.complete(), "fetch failed: {:?}", sim.rec.failed());
     sim.store.assert_matches(sim.provs[0].cfg.store.content());
     eprintln!("peak request streams of one provider: {}", sim.sess.peak);
-    assert!(sim.sess.peak <= vinc_values::fetch::MAX_STREAMS);
+    assert!(sim.sess.peak <= pinc_values::fetch::MAX_STREAMS);
 }
 
 #[test]
@@ -448,7 +448,7 @@ fn the_machine_can_run_a_second_fetch_after_the_first() {
         sim.rec
             .events
             .iter()
-            .filter(|(_, e)| matches!(e, vinc_values::trace::Event::Complete))
+            .filter(|(_, e)| matches!(e, pinc_values::trace::Event::Complete))
             .count(),
         2
     );
@@ -486,28 +486,28 @@ fn ranges_in_any_order_and_overlapping_are_all_fetched() {
 fn bad_specs_are_refused_and_change_nothing() {
     let mut sim = Sim::uniform(1, 10_000, 100);
     let ps = sim.all_providers();
-    let too_many = vec![Span { off: 0, len: 1 }; vinc_values::knobs::MAX_REQ_RANGES + 1];
+    let too_many = vec![Span { off: 0, len: 1 }; pinc_values::knobs::MAX_REQ_RANGES + 1];
     let spec = sim.spec(&too_many, &ps);
     {
-        let mut io = vinc_values::fetch::Io {
+        let mut io = pinc_values::fetch::Io {
             session: &mut sim.sess,
             store: &mut sim.store,
             out: &mut sim.rec,
         };
         assert_eq!(
             sim.fetch.start(&mut io, 0, &spec),
-            Err(vinc_values::fetch::StartError::TooManyRanges)
+            Err(pinc_values::fetch::StartError::TooManyRanges)
         );
         let past = [Span { off: 9_999, len: 2 }];
         let spec = FetchSpecOf::new(&past, &ps, sim.root, sim.length);
         assert_eq!(
             sim.fetch.start(&mut io, 0, &spec.0),
-            Err(vinc_values::fetch::StartError::OutOfBounds)
+            Err(pinc_values::fetch::StartError::OutOfBounds)
         );
     }
     assert!(!sim.fetch.is_running() && !sim.fetch.is_done());
     sim.start();
-    let mut io = vinc_values::fetch::Io {
+    let mut io = pinc_values::fetch::Io {
         session: &mut sim.sess,
         store: &mut sim.store,
         out: &mut sim.rec,
@@ -515,15 +515,15 @@ fn bad_specs_are_refused_and_change_nothing() {
     let spec = FetchSpecOf::new(&[], &ps, sim.root, sim.length);
     assert_eq!(
         sim.fetch.start(&mut io, 0, &spec.0),
-        Err(vinc_values::fetch::StartError::Busy)
+        Err(pinc_values::fetch::StartError::Busy)
     );
 }
 
-struct FetchSpecOf<'a>(vinc_values::fetch::FetchSpec<'a>);
+struct FetchSpecOf<'a>(pinc_values::fetch::FetchSpec<'a>);
 
 impl<'a> FetchSpecOf<'a> {
     fn new(ranges: &'a [Span], providers: &'a [Provider], root: [u8; 32], length: u64) -> Self {
-        Self(vinc_values::fetch::FetchSpec {
+        Self(pinc_values::fetch::FetchSpec {
             root,
             length,
             ranges,

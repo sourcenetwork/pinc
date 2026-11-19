@@ -1,4 +1,4 @@
-//! Delivery scoped to the publisher's connected component (vinc#86): members that name the peers they hold sessions
+//! Delivery scoped to the publisher's connected component (pinc#86): members that name the peers they hold sessions
 //! with are reached by a hub only from origins a chain of such sessions links them to, as on a gossip mesh.
 #![allow(
     clippy::unwrap_used,
@@ -16,10 +16,10 @@ mod support;
 
 use common::{Net, SEC, WALL0, ty};
 use support::{T, adj, ask, capture, got, offered, sends, session};
-use vinc_broadcast::Topics;
-use vinc_broadcast::consts::{ADJ_MAX, RECORD_TTL, REFRESH};
-use vinc_crypto::IdentityAlg;
-use vinc_membership::NodeId;
+use pinc_broadcast::Topics;
+use pinc_broadcast::consts::{ADJ_MAX, RECORD_TTL, REFRESH};
+use pinc_crypto::IdentityAlg;
+use pinc_membership::NodeId;
 
 #[test]
 fn two_groups_on_one_hub_hear_only_their_own_group_even_through_gap_repair() {

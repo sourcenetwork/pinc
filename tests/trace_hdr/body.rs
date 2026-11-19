@@ -2,16 +2,16 @@
 
 use std::fmt::Write as _;
 
-use vinc_crypto::IdentityAlg;
-use vinc_security::ClientTickets;
-use vinc_tests::{SplitMix64, Store, T0, World};
-use vinc_transport::conn::{FragmentView, ReasmProbe};
-use vinc_transport::packet::{LongHeader, LongType};
-use vinc_wire::Writer;
+use pinc_crypto::IdentityAlg;
+use pinc_security::ClientTickets;
+use pinc_tests::{SplitMix64, Store, T0, World};
+use pinc_transport::conn::{FragmentView, ReasmProbe};
+use pinc_transport::packet::{LongHeader, LongType};
+use pinc_wire::Writer;
 
 use super::headers::{arr, bytes, pick};
 
-pub fn view_json(v: &vinc_transport::conn::ReasmView) -> String {
+pub fn view_json(v: &pinc_transport::conn::ReasmView) -> String {
     let runs: Vec<String> = v.runs.iter().map(|(s, e)| format!("[{s},{e}]")).collect();
     format!(r#"{{"runs":[{}],"total":{}}}"#, runs.join(","), v.total)
 }
@@ -28,14 +28,14 @@ pub fn hs_body(total: u64, off: u64, data: &[u8]) -> Vec<u8> {
     b
 }
 
-pub type Srv<'a> = vinc_tests::Node<'a>;
+pub type Srv<'a> = pinc_tests::Node<'a>;
 
 /// One body handed to `Handshake::on_fragment` of a real connection: the event has the body, the reassembly before
 /// and after, the length of the message if it completed, and the first bytes of the message buffer at the offset the
 /// body names (the whole window is compared here, against the bytes of the fragment).
 pub fn frag(out: &mut String, srv: &mut Srv<'_>, body: &[u8]) -> FragmentView {
     let v = srv.conn.trace_fragment(body);
-    let mut r = vinc_wire::Reader::new(body);
+    let mut r = pinc_wire::Reader::new(body);
     let parsed = r.read_varint().ok().and_then(|t| r.read_varint().ok().map(|o| (t, o)));
     let data = r.read_bytes(r.remaining()).unwrap_or_default();
     let mut mo = 0;
@@ -78,14 +78,14 @@ pub fn hw_event(out: &mut String, d: &[u8], win: usize, srv: &mut Srv<'_>) {
     let (h, hl) = LongHeader::parse(d).unwrap();
     assert_eq!(h.ty, LongType::Handshake);
     let body = &d[hl..hl + h.body_len];
-    let mut r = vinc_wire::Reader::new(body);
+    let mut r = pinc_wire::Reader::new(body);
     let total = usize::try_from(r.read_varint().unwrap()).unwrap();
     let off = usize::try_from(r.read_varint().unwrap()).unwrap();
     let data = r.read_bytes(r.remaining()).unwrap();
     assert!(!data.is_empty() && off + data.len() <= total && total <= ReasmProbe::MAX_MESSAGE);
     assert_eq!(
         h.body_len,
-        vinc_wire::varint::encoded_len(total as u64) + vinc_wire::varint::encoded_len(off as u64) + data.len()
+        pinc_wire::varint::encoded_len(total as u64) + pinc_wire::varint::encoded_len(off as u64) + data.len()
     );
     assert!(hl + h.body_len <= win);
     let _ = writeln!(out, r#"{{"t":"txhd","op":"hw","d":{},"win":{win}}}"#, arr(d));

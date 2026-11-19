@@ -1,6 +1,6 @@
 --------------------------- MODULE Incarnation ----------------------------
 (***************************************************************************)
-(* The incarnation of vinc-membership incarnation.rs, and the address tag. *)
+(* The incarnation of pinc-membership incarnation.rs, and the address tag. *)
 (*                                                                         *)
 (* An incarnation word is a 48-bit epoch above a 16-bit record sequence.   *)
 (* The words are the 80-bit machine words of U64.tla (limbs), so the       *)
@@ -32,7 +32,7 @@
 (* and the witness Incarnation_clock.cfg: with the clock fallback and no   *)
 (* floor, a clock that jumped back reissues a lower word, so Mono does     *)
 (* not hold without the counter or the floor (TLC must find it).           *)
-(* Lean counterpart: Vinc/MembershipInc.lean and MembershipIncThm.lean     *)
+(* Lean counterpart: Pinc/MembershipInc.lean and MembershipIncThm.lean     *)
 (* (restart_word_gt, start_epoch_gt, start_hlc_gt_floor, nextRecord_word_lt,*)
 (* observe_word_lt, start_inv, nextRecord_inv, observe_inv, the            *)
 (* *_exhausted theorems).                                                  *)

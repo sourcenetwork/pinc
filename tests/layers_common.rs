@@ -1,4 +1,4 @@
-//! Scaffolding for the layer tests: hubs and members as real `vinc_node::Node`s with values, reconcile and
+//! Scaffolding for the layer tests: hubs and members as real `pinc_node::Node`s with values, reconcile and
 //! delay-tolerant delivery enabled on the members.
 #![allow(
     dead_code,
@@ -15,10 +15,10 @@
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-use vinc_broadcast::Limits;
-use vinc_node::{Enabled, NodeEvent};
-use vinc_sim::{LinkConfig, Loss, MS, NodeId as SimId, SEC, Sim, SimConfig, StreamKind, Time};
-use vinc_tests::{HubAddr, LayerApps, NCmd, NEv, NodeSpec, SimNode, hub_addr, id_of};
+use pinc_broadcast::Limits;
+use pinc_node::{Enabled, NodeEvent};
+use pinc_sim::{LinkConfig, Loss, MS, NodeId as SimId, SEC, Sim, SimConfig, StreamKind, Time};
+use pinc_tests::{HubAddr, LayerApps, NCmd, NEv, NodeSpec, SimNode, hub_addr, id_of};
 
 pub const OWD: Time = 10 * MS;
 
@@ -168,7 +168,7 @@ pub fn tag_id(tag: u8) -> [u8; 32] {
 
 use std::collections::BTreeSet;
 
-use vinc_tests::{Lie, SplitMix64};
+use pinc_tests::{Lie, SplitMix64};
 
 /// A world where every layer has worked and is idle: a value fetched, a set reconciled, a bundle held with no
 /// contact to carry it. Returns the world after `until`.
@@ -226,7 +226,7 @@ pub fn all_layers(seed: u64, until: Time) -> LWorld {
         NCmd::DtnSend {
             to: Box::new(keys),
             payload: vec![5; 2000],
-            plan: vinc_node::DtnPlan {
+            plan: pinc_node::DtnPlan {
                 lifetime_ms: 3_600_000,
                 copies: 4,
                 k: 2,

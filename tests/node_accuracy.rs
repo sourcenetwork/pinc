@@ -13,10 +13,10 @@
 mod node_common;
 
 use node_common::{World, big, secs};
-use vinc_membership::event::Refusal;
-use vinc_node::{Body, TraceItem};
-use vinc_sim::{LinkChange, LinkConfig, Loss, MS, NodeId as SimId};
-use vinc_tests::NCmd;
+use pinc_membership::event::Refusal;
+use pinc_node::{Body, TraceItem};
+use pinc_sim::{LinkChange, LinkConfig, Loss, MS, NodeId as SimId};
+use pinc_tests::NCmd;
 
 fn lossy(delay: u64, p: f64) -> LinkConfig {
     LinkConfig {
@@ -42,7 +42,7 @@ fn no_one_accused(w: &World, seed: u64, what: &str) {
             .filter(|(_, e)| {
                 matches!(
                     e,
-                    vinc_membership::Event::MemberConfirmedDown { .. } | vinc_membership::Event::MemberLeft { .. }
+                    pinc_membership::Event::MemberConfirmedDown { .. } | pinc_membership::Event::MemberLeft { .. }
                 )
             })
             .collect();
@@ -106,8 +106,8 @@ fn a_member_that_answers_late_and_drops_its_carrier_is_never_confirmed_down() {
 /// wait (1 s), a probe on the session and a probe on an independent path were both sent and each had its wait (250
 /// ms), and nothing from the member was heard from the drop to the confirmation. Returns how many were checked.
 fn check_confirmations(w: &World, seed: u64) -> usize {
-    use vinc_membership::Trace as T;
-    use vinc_membership::codec::Path;
+    use pinc_membership::Trace as T;
+    use pinc_membership::codec::Path;
     let mut checked = 0;
     for (hub, _) in &w.hubs {
         let traces = &w.sim.node(*hub).traces;
@@ -204,22 +204,22 @@ fn a_snapshot_after_a_heal_removes_nobody() {
             // hub that confirmed first, which it accepts only once its own carrier of the member is closed. Which of
             // the two a hub does depends on whose carrier closed first, so the rule is stated for both.
             let cut: Vec<[u8; 32]> = m[3..].iter().map(|n| w.id(*n)).collect();
-            let first = |h: SimId, pick: fn(&vinc_membership::Trace) -> Option<[u8; 32]>, member: &[u8; 32]| {
+            let first = |h: SimId, pick: fn(&pinc_membership::Trace) -> Option<[u8; 32]>, member: &[u8; 32]| {
                 w.sim.node(h).traces.iter().find_map(|(t, it)| match &it.body {
                     Body::Membership(x) if pick(x) == Some(*member) => Some(*t),
                     _ => None,
                 })
             };
-            let gone_of: fn(&vinc_membership::Trace) -> Option<[u8; 32]> = |x| match x {
-                vinc_membership::Trace::CarrierGone { member } => Some(*member),
+            let gone_of: fn(&pinc_membership::Trace) -> Option<[u8; 32]> = |x| match x {
+                pinc_membership::Trace::CarrierGone { member } => Some(*member),
                 _ => None,
             };
-            let confirmed_of: fn(&vinc_membership::Trace) -> Option<[u8; 32]> = |x| match x {
-                vinc_membership::Trace::Confirmed { member, .. } => Some(*member),
+            let confirmed_of: fn(&pinc_membership::Trace) -> Option<[u8; 32]> = |x| match x {
+                pinc_membership::Trace::Confirmed { member, .. } => Some(*member),
                 _ => None,
             };
-            let accepted_of: fn(&vinc_membership::Trace) -> Option<[u8; 32]> = |x| match x {
-                vinc_membership::Trace::DownAccepted { member } => Some(*member),
+            let accepted_of: fn(&pinc_membership::Trace) -> Option<[u8; 32]> = |x| match x {
+                pinc_membership::Trace::DownAccepted { member } => Some(*member),
                 _ => None,
             };
             for c in &cut {
@@ -236,7 +236,7 @@ fn a_snapshot_after_a_heal_removes_nobody() {
                         .min()
                         .unwrap_or_else(|| panic!("seed {seed}: hub {h:?} did not take a cut member down"));
                     assert!(
-                        gone >= cut_at && down >= gone && down <= gone + 2 * vinc_membership::consts::CONFIRM,
+                        gone >= cut_at && down >= gone && down <= gone + 2 * pinc_membership::consts::CONFIRM,
                         "seed {seed}: hub {h:?} took a cut member down at {down} after the carrier closed at {gone}"
                     );
                     if let Some(t) = accepted {
@@ -250,8 +250,8 @@ fn a_snapshot_after_a_heal_removes_nobody() {
             for h in &hubs {
                 for (_, it) in &w.sim.node(*h).traces {
                     if let Body::Membership(
-                        vinc_membership::Trace::Confirmed { member, .. }
-                        | vinc_membership::Trace::DownAccepted { member },
+                        pinc_membership::Trace::Confirmed { member, .. }
+                        | pinc_membership::Trace::DownAccepted { member },
                     ) = &it.body
                     {
                         assert!(
@@ -264,8 +264,8 @@ fn a_snapshot_after_a_heal_removes_nobody() {
             // The events: only cut members are ever removed, before the heal, and they are back in every view.
             for n in all_nodes(&w) {
                 for (t, e) in w.member_events(n) {
-                    let (vinc_membership::Event::MemberConfirmedDown { member: down }
-                    | vinc_membership::Event::MemberLeft { member: down }) = e
+                    let (pinc_membership::Event::MemberConfirmedDown { member: down }
+                    | pinc_membership::Event::MemberLeft { member: down }) = e
                     else {
                         continue;
                     };
@@ -284,7 +284,7 @@ fn refusals(traces: &[(u64, TraceItem)], why: Refusal) -> usize {
     traces
         .iter()
         .filter(
-            |(_, t)| matches!(t.body, Body::Membership(vinc_membership::Trace::DownRefused { why: w, .. }) if w == why),
+            |(_, t)| matches!(t.body, Body::Membership(pinc_membership::Trace::DownRefused { why: w, .. }) if w == why),
         )
         .count()
 }
@@ -307,7 +307,7 @@ fn a_down_from_another_hub_is_refused_while_the_lease_is_fresh() {
                 .node(a)
                 .traces
                 .iter()
-                .filter(|(_, t)| matches!(t.body, Body::Membership(vinc_membership::Trace::Confirmed { .. })))
+                .filter(|(_, t)| matches!(t.body, Body::Membership(pinc_membership::Trace::Confirmed { .. })))
                 .count();
             let refused = refusals(&w.sim.node(c).traces, Refusal::LeaseFresh);
             assert!(

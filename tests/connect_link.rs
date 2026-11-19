@@ -15,7 +15,7 @@
     clippy::many_single_char_names
 )]
 
-use vinc_connect::client::link::{Act, Ctx, Link, Pulse, Shared, State, check_wait, dial_wait, lease_keep, rule};
+use pinc_connect::client::link::{Act, Ctx, Link, Pulse, Shared, State, check_wait, dial_wait, lease_keep, rule};
 
 const S: u64 = 1_000_000_000;
 

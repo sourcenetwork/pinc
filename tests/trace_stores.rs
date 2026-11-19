@@ -1,6 +1,6 @@
 //! Trace generation for the ticket stores and the prekey cache: real runs of `ClientTickets`, `ServerTickets` and
 //! `PrekeyCache` through the public API, recorded as ndjson for the TLA+ trace check (`TraceStores.tla`) and the Lean
-//! replay (`Vinc.TraceStores`).
+//! replay (`Pinc.TraceStores`).
 //!
 //! Every run drives one store with seeded random operations over a small world: seven peers (four identity
 //! algorithms, two of them with the same node bytes), two ALPNs, six ticket ids, lifetimes of 0 and 1 seconds and
@@ -16,7 +16,7 @@
 //!
 //! An id stands for one distinct byte string (`idef` lines define them for the Lean replay). Every scenario is
 //! asserted here, so the test is meaningful without the proof tools. The trace is written to `stores.ndjson` in the
-//! directory in `VINC_TRACE_DIR` when it is set; otherwise nothing is written.
+//! directory in `PINC_TRACE_DIR` when it is set; otherwise nothing is written.
 //!
 //! What is not observable through the public API: the slot an issued ticket lands in (its eviction order), and
 //! whether a particular ticket is still in a `ServerTickets` store; the server store is checked here for the batch
@@ -40,19 +40,19 @@
 use std::collections::HashMap;
 use std::fmt::Write as _;
 
-use vinc_crypto::provider::KEM_ENCAPS_KEY_LEN;
-use vinc_crypto::{Aead, Drbg, IdentityAlg, NodeId, Secret, Software};
-use vinc_security::tickets::{ID_ATTEMPTS, MAX_EXPORT_ENTRY_LEN};
-use vinc_security::{
+use pinc_crypto::provider::KEM_ENCAPS_KEY_LEN;
+use pinc_crypto::{Aead, Drbg, IdentityAlg, NodeId, Secret, Software};
+use pinc_security::tickets::{ID_ATTEMPTS, MAX_EXPORT_ENTRY_LEN};
+use pinc_security::{
     Alpn, ClientTickets, CreditRecord, Env, Established, Failure, PrekeyCache, ServerTickets, TicketBatch, TicketEntry,
     Traffic,
 };
-use vinc_tests::SplitMix64;
+use pinc_tests::SplitMix64;
 
 const NS: u64 = 1_000_000_000;
 /// The times of the world: a ticket of lifetime 1 s accepted at 0 expires after 10^9.
 const NOWS: [u64; 6] = [0, 1, 2, NS, NS + 1, NS + 2];
-const ALPNS: [&[u8]; 2] = [b"vinc/1", b"vinc/2"];
+const ALPNS: [&[u8]; 2] = [b"pinc/1", b"pinc/2"];
 const ALGS: [IdentityAlg; 4] = [
     IdentityAlg::Ed25519,
     IdentityAlg::EcdsaP256,
@@ -822,7 +822,7 @@ fn trace_stores() {
         "no issue ever overwrote a ticket of a full store"
     );
 
-    let Some(dir) = std::env::var_os("VINC_TRACE_DIR") else {
+    let Some(dir) = std::env::var_os("PINC_TRACE_DIR") else {
         return;
     };
     let dir = std::path::PathBuf::from(dir);

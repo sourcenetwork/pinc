@@ -1,6 +1,6 @@
 --------------------------- MODULE TraceDtnCustody ---------------------------
 (***************************************************************************)
-(* Trace validation of custody (vinc-dtn/src/custody.rs) on the shared     *)
+(* Trace validation of custody (pinc-dtn/src/custody.rs) on the shared     *)
 (* ledger (store.rs).                                                       *)
 (*                                                                          *)
 (* The Rust test tests/trace_dtn_custody.rs drives the real CustodyBook on a *)
@@ -21,7 +21,7 @@
 (* The signature check of an acknowledgement is the recorded boolean (the    *)
 (* signature scheme is assumed, as in the Lean model). Needs the TLA+       *)
 (* CommunityModules (Json, IOUtils) and the environment variable            *)
-(* VINC_TRACE_DIR, the directory that holds dtn_custody.ndjson.            *)
+(* PINC_TRACE_DIR, the directory that holds dtn_custody.ndjson.            *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
 
@@ -30,7 +30,7 @@ vars == <<i, B, L, nx>>
 
 C == INSTANCE DtnCustodyOps WITH MaxU <- 1073741823
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/dtn_custody.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/dtn_custody.ndjson")
 
 Ent(j) == [key |-> <<j.s, j.i>>, bytes |-> j.b, cls |-> IF j.c = 0 THEN "custody" ELSE "transit", exp |-> j.x]
 Proj(e) == [key |-> e.key, bytes |-> e.bytes, cls |-> e.cls, exp |-> e.exp]

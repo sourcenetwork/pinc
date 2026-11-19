@@ -17,18 +17,18 @@ use std::collections::BTreeMap;
 use std::ops::Range;
 use std::rc::Rc;
 
-use vinc_crypto::provider::Provider;
-use vinc_crypto::{IdentityAlg, Keypair, NodeId};
-use vinc_dag::ranges::VerifiedRanges;
-use vinc_dag::tree::build_outboard_vec;
-use vinc_dtn::forward::Policy;
-use vinc_dtn::head::BundleId;
-use vinc_dtn::seal::RecipientKeys;
-use vinc_node::{Apps, DtnApp, Enabled, Recipient, SetsApp};
-use vinc_reconcile::{Fingerprint, ItemIndex, Limits, MemError, MemIndex};
-use vinc_sim::WALL_EPOCH;
-use vinc_values::source::ValueSource;
-use vinc_values::store::{StoreError, ValueRead, ValueStore, verified_after};
+use pinc_crypto::provider::Provider;
+use pinc_crypto::{IdentityAlg, Keypair, NodeId};
+use pinc_dag::ranges::VerifiedRanges;
+use pinc_dag::tree::build_outboard_vec;
+use pinc_dtn::forward::Policy;
+use pinc_dtn::head::BundleId;
+use pinc_dtn::seal::RecipientKeys;
+use pinc_node::{Apps, DtnApp, Enabled, Recipient, SetsApp};
+use pinc_reconcile::{Fingerprint, ItemIndex, Limits, MemError, MemIndex};
+use pinc_sim::WALL_EPOCH;
+use pinc_values::source::ValueSource;
+use pinc_values::store::{StoreError, ValueRead, ValueStore, verified_after};
 
 use crate::node_sim::SimApps;
 use crate::{Caps, SplitMix64};
@@ -244,7 +244,7 @@ impl DtnStore {
     pub fn new(tag: u8) -> Self {
         let alg = IdentityAlg::Ed25519;
         let key = Keypair::from_seed(alg, &vec![tag; alg.seed_len()]).unwrap();
-        let p = Caps(vinc_crypto::Software, true);
+        let p = Caps(pinc_crypto::Software, true);
         let seed = 0x1000 + u64::from(tag) * 16;
         let d: [u8; 32] = bytes(seed + 1, 32).try_into().unwrap();
         let z: [u8; 32] = bytes(seed + 2, 32).try_into().unwrap();

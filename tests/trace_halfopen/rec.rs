@@ -4,13 +4,13 @@
 use std::fmt::Write as _;
 use std::net::SocketAddr;
 
-use vinc_core::{Answer, Command, CommandError, Event, HalfOpenSlot, Query, Reply, SessionId, TraceEvent};
-use vinc_crypto::identity::MAX_SIGNATURE_LEN;
-use vinc_crypto::{Drbg, IdentityAlg, Keypair, Software};
-use vinc_security::message::{FULL_INITIAL_MIN, RESUME_HELLO_MIN, SHORT_INITIAL_MIN};
-use vinc_security::{Env, KeyHandle, KeyResponse, SoftKeys, SoftPrekeys};
-use vinc_tests::*;
-use vinc_transport::stream::NoSource;
+use pinc_core::{Answer, Command, CommandError, Event, HalfOpenSlot, Query, Reply, SessionId, TraceEvent};
+use pinc_crypto::identity::MAX_SIGNATURE_LEN;
+use pinc_crypto::{Drbg, IdentityAlg, Keypair, Software};
+use pinc_security::message::{FULL_INITIAL_MIN, RESUME_HELLO_MIN, SHORT_INITIAL_MIN};
+use pinc_security::{Env, KeyHandle, KeyResponse, SoftKeys, SoftPrekeys};
+use pinc_tests::*;
+use pinc_transport::stream::NoSource;
 
 use crate::common::{Ep, HOLD, HOLDERS, LIFE, MAX, floor, kind_of, server};
 

@@ -17,10 +17,10 @@
 mod connect_common;
 
 use connect_common::{ed, id, nid};
-use vinc_connect::carrier::frame::DnsAnswer;
-use vinc_connect::client::dial::Pending;
-use vinc_connect::client::lookup::{Ask, CARRIER_WAIT_NS, LookupError, Lookups, RETRY_NS, THIN_WAIT_MAX_NS, verify};
-use vinc_connect::record::{self, Reach, RecordFields};
+use pinc_connect::carrier::frame::DnsAnswer;
+use pinc_connect::client::dial::Pending;
+use pinc_connect::client::lookup::{Ask, CARRIER_WAIT_NS, LookupError, Lookups, RETRY_NS, THIN_WAIT_MAX_NS, verify};
+use pinc_connect::record::{self, Reach, RecordFields};
 
 const MS: u64 = 1_000_000;
 
@@ -139,7 +139,7 @@ fn dial_prune_keeps_only_sessions_in_handshake() {
     assert!(!p.add(c, 4));
 }
 
-fn signed(tag: u8, seq: u64) -> (vinc_crypto::Keypair, Vec<u8>) {
+fn signed(tag: u8, seq: u64) -> (pinc_crypto::Keypair, Vec<u8>) {
     let kp = ed(tag);
     let mut buf = vec![0u8; record::MAX_RECORD_LEN];
     let addrs = ["203.0.113.9:6000".parse().unwrap()];

@@ -1,6 +1,6 @@
-//! Trace generation for the facade's standby slab (`crates/vinc/src/standby.rs`): seeded runs of a real slab (built
+//! Trace generation for the facade's standby slab (`crates/pinc/src/standby.rs`): seeded runs of a real slab (built
 //! with the `trace` feature, `StandbyProbe`), recorded as ndjson (`standby.ndjson`) for the TLA+ trace check
-//! (`TraceFacadeStandby.tla`) and the Lean replay (`Vinc/TraceFacadeStandby.lean`).
+//! (`TraceFacadeStandby.tla`) and the Lean replay (`Pinc/TraceFacadeStandby.lean`).
 //!
 //! A run allocates tickets for up to six futures, arms them with wakers numbered 1 to 5 (the same waker again, and
 //! another), notifies them, passes the baton, wakes every armed ticket and releases them, with stale tickets (released
@@ -27,8 +27,8 @@
 use std::collections::HashSet;
 use std::fmt::Write as _;
 
-use vinc::{StandbyProbe, StandbySlot};
-use vinc_tests::SplitMix64;
+use pinc::{StandbyProbe, StandbySlot};
+use pinc_tests::SplitMix64;
 
 /// No waker woken.
 const NONE: Vec<u32> = Vec::new();
@@ -361,7 +361,7 @@ fn the_standby_slab_matches_the_models() {
     assert!(seen.skipped > 0, "the baton never skipped an entry");
     assert!(seen.empty_baton > 0, "the baton always found a slot");
     assert!(seen.woken_all > 0, "notify_all woke no one");
-    if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
+    if let Ok(dir) = std::env::var("PINC_TRACE_DIR") {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(std::path::Path::new(&dir).join("standby.ndjson"), &out).unwrap();
     }

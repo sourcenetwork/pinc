@@ -1,6 +1,6 @@
-//! Trace generation for `vinc_values::verify::GroupVerifier` next to `vinc_dag::tree::RangeVerifier`: seeded random
+//! Trace generation for `pinc_values::verify::GroupVerifier` next to `pinc_dag::tree::RangeVerifier`: seeded random
 //! runs of both real verifiers on one stream, fed the same pieces, recorded as ndjson (`values_verify.ndjson`) for
-//! the TLA+ trace check (`TraceValuesVerify.tla`) and the Lean replay (`Vinc/ValuesVerifyTrace.lean`).
+//! the TLA+ trace check (`TraceValuesVerify.tla`) and the Lean replay (`Pinc/ValuesVerifyTrace.lean`).
 //!
 //! A run proves a random byte range of a random value. The stream is the genuine `encode_range` output, or that
 //! stream with a flipped bit, cut short, or followed by extra bytes. Both verifiers are fed every piece of the
@@ -17,7 +17,7 @@
 //! pair, after a failure, on a complete stream) are recorded too: the verifier must be left as it was.
 //!
 //! The test asserts everything itself (both verifiers agree on every call, and with the genuine value), so it is
-//! meaningful without the proof tools. The trace is written to the directory in `VINC_TRACE_DIR` when it is set;
+//! meaningful without the proof tools. The trace is written to the directory in `PINC_TRACE_DIR` when it is set;
 //! otherwise nothing is written.
 #![allow(
     clippy::unwrap_used,
@@ -35,11 +35,11 @@ use std::ops::Range;
 
 use blake3::Hasher;
 use blake3::hazmat::{HasherExt, Mode, merge_subtrees_non_root, merge_subtrees_root};
-use vinc_dag::tree::{
+use pinc_dag::tree::{
     Cv, Layout, RangeEncoder, RangeVerifier, Step, TreeError, build_outboard_vec, encode_range, encoded_len,
 };
-use vinc_tests::SplitMix64;
-use vinc_values::verify::{GroupVerifier, Item};
+use pinc_tests::SplitMix64;
+use pinc_values::verify::{GroupVerifier, Item};
 
 /// A value below `n` (`n > 0`).
 fn below(rng: &mut SplitMix64, n: u64) -> u64 {
@@ -611,13 +611,13 @@ fn group_and_range_verifiers_agree_on_every_call() {
         "\"gi\":[\"g\"",
     ] {
         assert!(
-            vinc_tests::soaking() || tr.out.contains(needle),
+            pinc_tests::soaking() || tr.out.contains(needle),
             "the runs never produce {needle}"
         );
     }
     let lines = tr.out.lines().count();
     assert!(lines > 2000, "{lines} events");
-    let Some(dir) = std::env::var_os("VINC_TRACE_DIR") else {
+    let Some(dir) = std::env::var_os("PINC_TRACE_DIR") else {
         return;
     };
     let dir = std::path::PathBuf::from(dir);

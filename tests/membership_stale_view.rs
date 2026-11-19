@@ -1,7 +1,7 @@
 //! A member that switches its home to a hub that never heard of another member keeps that member in its view: the
 //! crash of that member never reaches it, not even after every partition healed.
 //!
-//! The real hub and member machines of `vinc-membership` over the membership test world (`membership_world.rs`),
+//! The real hub and member machines of `pinc-membership` over the membership test world (`membership_world.rs`),
 //! through the scenario TLC finds on `MembershipSys` (`LiveCompleteAll` and `LiveConverged` violated). World indices
 //! 0 and 1 are the hubs 1 and 2 of the model, 2 and 3 its members 3 and 4; times are seconds after the start.
 //!
@@ -30,7 +30,7 @@
 #[path = "membership_world.rs"]
 mod world;
 
-use vinc_membership::Trace;
+use pinc_membership::Trace;
 use world::{MS, SEC, World, id};
 
 const START: u64 = 100 * SEC;

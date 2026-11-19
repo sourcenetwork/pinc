@@ -1,6 +1,6 @@
 ------------------------------- MODULE Credit -------------------------------
 (***************************************************************************)
-(* The credit record of vinc-security credit.rs: three u16 fields (stream  *)
+(* The credit record of pinc-security credit.rs: three u16 fields (stream  *)
 (* window in units, concurrent streams, largest datagram), 6 bytes on the  *)
 (* wire, three big-endian u16s.                                            *)
 (*                                                                         *)
@@ -28,7 +28,7 @@
 (* NewFromUnits takes the quotient window_bytes / Unit, which is how the   *)
 (* trace check supplies a window request that does not fit a TLC integer.  *)
 (* The operators are CreditOps.tla, which the trace check instantiates.    *)
-(* Lean counterpart: proofs/lean/Vinc/Credit.lean.                         *)
+(* Lean counterpart: proofs/lean/Pinc/Credit.lean.                         *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
 

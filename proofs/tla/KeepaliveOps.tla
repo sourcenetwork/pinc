@@ -1,6 +1,6 @@
 ---------------------------- MODULE KeepaliveOps ----------------------------
 (***************************************************************************)
-(* The keepalive schedule of vinc-core keepalive.rs (Inputs::plan and      *)
+(* The keepalive schedule of pinc-core keepalive.rs (Inputs::plan and      *)
 (* standby_due), step for step, on the u64 nanosecond words of Nanos.tla   *)
 (* (a time is five 16-bit limbs; saturating_add saturates). Keepalive.tla  *)
 (* checks the properties over boundary inputs; TraceKeepalive.tla replays  *)
@@ -17,7 +17,7 @@
 (* idle interval in seconds) and actrev = TRUE (the close of the 20 s     *)
 (* window of the standby paths is a review moment); other values are the   *)
 (* deliberate bugs of the witness configs. Plan(x) is the code.            *)
-(* Lean counterpart: proofs/lean/Vinc/CoreKeepalive*.lean.                 *)
+(* Lean counterpart: proofs/lean/Pinc/CoreKeepalive*.lean.                 *)
 (***************************************************************************)
 EXTENDS Integers
 
@@ -29,7 +29,7 @@ ActiveKeep == Sc(20)
 IdleDrop == Sc(90)
 DirectSilence == Sc(14)
 HoldWindow == Sc(120)
-\* the idle timeout of a connection (vinc-transport conn/config.rs IDLE_TIMEOUT)
+\* the idle timeout of a connection (pinc-transport conn/config.rs IDLE_TIMEOUT)
 IdleTimeout == Sc(75)
 
 None == [some |-> FALSE, v |-> N!Zero]

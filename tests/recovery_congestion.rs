@@ -3,7 +3,7 @@
 //! of the `transport_recovery` test target.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 
-use vinc_transport::recovery::{BURST_PACKETS, INITIAL_CWND, MIN_CWND, MS, PathKind, Recovery, SECOND, Sent};
+use pinc_transport::recovery::{BURST_PACKETS, INITIAL_CWND, MIN_CWND, MS, PathKind, Recovery, SECOND, Sent};
 
 use crate::{MSS, Rec, ack, assert_conserved, established, fire, on_path, sent};
 

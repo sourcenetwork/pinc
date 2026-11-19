@@ -1,6 +1,6 @@
 ----------------------------- MODULE BroadcastSystem -----------------------------
 (***************************************************************************)
-(* The scenarios of vinc-broadcast at system level: two hubs, a publisher  *)
+(* The scenarios of pinc-broadcast at system level: two hubs, a publisher  *)
 (* P and subscribers S (several), with churn (any link cut or healed), the *)
 (* late publish (P and a subscriber cut off from every hub but able to     *)
 (* reach each other), hub failover (a subscriber whose primary is           *)
@@ -34,7 +34,7 @@
 (* The _fb config shows that a message only the fallback delivered can be  *)
 (* delivered again after a restart (AtMostOnceStrict fails).                                         *)
 (*                                                                         *)
-(* Lean counterpart: proofs/lean/Vinc/BroadcastSystem.lean.                *)
+(* Lean counterpart: proofs/lean/Pinc/BroadcastSystem.lean.                *)
 (***************************************************************************)
 EXTENDS Integers, FiniteSets, TLC
 

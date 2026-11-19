@@ -15,7 +15,7 @@
     unreachable_pub
 )]
 
-use vinc_transport::conn::CidTable;
+use pinc_transport::conn::CidTable;
 
 const SECRET: [u8; 32] = [7; 32];
 

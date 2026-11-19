@@ -1,6 +1,6 @@
 ------------------------------- MODULE PathOps -------------------------------
 (***************************************************************************)
-(* The path table of vinc-transport conn/path.rs and what a connection's  *)
+(* The path table of pinc-transport conn/path.rs and what a connection's  *)
 (* datagram input does to it (conn/recv.rs handle_inner, on_handshake,     *)
 (* process_payload; conn/drive.rs follow_reply), call for call.            *)
 (* ReplyPath.tla checks the operators over every interleaving and every    *)

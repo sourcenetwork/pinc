@@ -3,17 +3,17 @@
 
 use std::net::SocketAddr;
 
-use vinc_core::{Endpoint, EndpointConfig, HALF_OPEN_HOLD, HALF_OPEN_LIFE, MAX_HALF_OPEN, Slot};
-use vinc_crypto::{Drbg, IdentityAlg, Keypair, Software};
-use vinc_security::message::{FULL_INITIAL_MIN, RESUME_HELLO_MIN, SHORT_INITIAL_MIN};
-use vinc_security::{ConnId, KeyHandle, LocalIdentity};
-use vinc_tests::*;
-use vinc_transport::conn::{Resources, Tables};
-use vinc_transport::packet::{LongHeader, LongType};
-use vinc_transport::recovery::LossEstimate;
-use vinc_transport::stream::pool::BufferPool;
-use vinc_transport::stream::{self, NoSource, Streams};
-use vinc_wire::{Reader, Writer};
+use pinc_core::{Endpoint, EndpointConfig, HALF_OPEN_HOLD, HALF_OPEN_LIFE, MAX_HALF_OPEN, Slot};
+use pinc_crypto::{Drbg, IdentityAlg, Keypair, Software};
+use pinc_security::message::{FULL_INITIAL_MIN, RESUME_HELLO_MIN, SHORT_INITIAL_MIN};
+use pinc_security::{ConnId, KeyHandle, LocalIdentity};
+use pinc_tests::*;
+use pinc_transport::conn::{Resources, Tables};
+use pinc_transport::packet::{LongHeader, LongType};
+use pinc_transport::recovery::LossEstimate;
+use pinc_transport::stream::pool::BufferPool;
+use pinc_transport::stream::{self, NoSource, Streams};
+use pinc_wire::{Reader, Writer};
 
 pub const LIFE: u64 = HALF_OPEN_LIFE;
 pub const HOLD: u64 = HALF_OPEN_HOLD;

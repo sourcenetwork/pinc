@@ -13,10 +13,10 @@ use std::collections::BTreeMap;
 use std::net::SocketAddr;
 
 use proptest::prelude::*;
-use vinc_core::{
+use pinc_core::{
     DeadlineHeap, FIRST_RESEND, FLOOR_MAX, KeepaliveInputs, LEDGER_ENTRIES, Ledger, NodeRtt, Role, Table, standby_due,
 };
-use vinc_crypto::{IdentityAlg, NodeId};
+use pinc_crypto::{IdentityAlg, NodeId};
 
 #[derive(Debug, Clone)]
 enum Op {

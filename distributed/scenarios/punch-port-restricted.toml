@@ -1,6 +1,6 @@
 name = "punch-port-restricted"
 about = "Two nodes each behind a port-restricted home router, a public relay and hub: the pair punches, and the relay carries only the start of the dial."
-stacks = ["vinc"]
+stacks = ["pinc"]
 repetitions = 3
 
 [[sites]]

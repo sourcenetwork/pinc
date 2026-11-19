@@ -15,8 +15,8 @@
 mod common;
 
 use common::{Net, SEC, ty};
-use vinc_broadcast::Trace;
-use vinc_crypto::IdentityAlg;
+use pinc_broadcast::Trace;
+use pinc_crypto::IdentityAlg;
 
 const T: &[u8] = b"det";
 
@@ -120,5 +120,5 @@ fn a_full_trace_queue_reports_how_many_records_it_dropped() {
         }
     }
     assert!(lost > 0, "the hub traced more than the queue holds");
-    assert!(kept <= vinc_broadcast::consts::QUEUE_CAP + 1);
+    assert!(kept <= pinc_broadcast::consts::QUEUE_CAP + 1);
 }

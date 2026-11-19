@@ -18,18 +18,18 @@
 mod dtn_common;
 
 use dtn_common::{ALGS, bytes, keypair, make, plan, recipient, seeds};
-use vinc_crypto::{IdentityAlg, Software};
-use vinc_dtn::bundle::{Outgoing, Reception, seal_bundle, serve, serve_len};
-use vinc_dtn::custody::{CustodyBook, Incoming};
-use vinc_dtn::forward::{Forwarder, Held, Input, Policy};
-use vinc_dtn::head::{BundleId, MAX_SIGNED_HEAD_LEN, SignedHead};
-use vinc_dtn::hlc::Hlc;
-use vinc_dtn::rs::Rs;
-use vinc_dtn::seal::decapsulate;
-use vinc_dtn::store::{Class, Key, Ledger, Space};
-use vinc_tests::measure;
+use pinc_crypto::{IdentityAlg, Software};
+use pinc_dtn::bundle::{Outgoing, Reception, seal_bundle, serve, serve_len};
+use pinc_dtn::custody::{CustodyBook, Incoming};
+use pinc_dtn::forward::{Forwarder, Held, Input, Policy};
+use pinc_dtn::head::{BundleId, MAX_SIGNED_HEAD_LEN, SignedHead};
+use pinc_dtn::hlc::Hlc;
+use pinc_dtn::rs::Rs;
+use pinc_dtn::seal::decapsulate;
+use pinc_dtn::store::{Class, Key, Ledger, Space};
+use pinc_tests::measure;
 
-vinc_tests::install_counting_allocator!();
+pinc_tests::install_counting_allocator!();
 
 #[test]
 fn erasure_coding_does_not_allocate() {
@@ -51,7 +51,7 @@ fn sealing_receiving_and_opening_do_not_allocate() {
     let to = recipient(IdentityAlg::Ed25519, 2, 1);
     let payload = bytes(3, 20_000);
     let pl = plan(4, 2, 1);
-    let layout = vinc_dtn::layout::SliceLayout::new(4, 2, 1, payload.len() as u64).unwrap();
+    let layout = pinc_dtn::layout::SliceLayout::new(4, 2, 1, payload.len() as u64).unwrap();
     let mut sealed = vec![0; layout.total_len() as usize];
     let mut outboard = vec![0; layout.outboard_len().unwrap() as usize];
     let sd = seeds(9);
@@ -116,7 +116,7 @@ fn heads_and_acks_do_not_allocate_for_any_algorithm() {
             let n = s.signed.encode(&mut enc).unwrap();
             let back = SignedHead::decode(&enc[..n]).unwrap();
             back.verify().unwrap();
-            let ack = vinc_dtn::custody::CustodyAck::sign(
+            let ack = pinc_dtn::custody::CustodyAck::sign(
                 back.head().id,
                 back.head().destination,
                 7,
@@ -132,7 +132,7 @@ fn heads_and_acks_do_not_allocate_for_any_algorithm() {
 
 #[test]
 fn store_custody_and_forwarding_do_not_allocate() {
-    let node = |n: u8| vinc_crypto::NodeId {
+    let node = |n: u8| pinc_crypto::NodeId {
         alg: IdentityAlg::Ed25519,
         bytes: [n; 32],
     };

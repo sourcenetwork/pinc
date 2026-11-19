@@ -11,8 +11,8 @@
     clippy::cast_possible_truncation
 )]
 
-use vinc_core::{Answer, Command, Event, Query, Role, SessionId, TraceEvent, Value};
-use vinc_tests::*;
+use pinc_core::{Answer, Command, Event, Query, Role, SessionId, TraceEvent, Value};
+use pinc_tests::*;
 
 fn drain_trace(net: &mut CoreNet, n: usize) -> Vec<TraceEvent> {
     let mut v = Vec::new();

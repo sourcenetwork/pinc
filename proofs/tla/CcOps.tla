@@ -1,6 +1,6 @@
 ------------------------------- MODULE CcOps --------------------------------
 (***************************************************************************)
-(* The operations of vinc-transport recovery/cubic.rs, round_exit.rs,      *)
+(* The operations of pinc-transport recovery/cubic.rs, round_exit.rs,      *)
 (* delivery.rs and pacer.rs (congestion control and pacing), call for     *)
 (* call. Cc.tla checks them over every interleaving at small sizes;        *)
 (* TraceCc.tla replays the recorded calls of the real code through the    *)

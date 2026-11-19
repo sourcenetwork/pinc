@@ -1,4 +1,4 @@
-//! The lifecycle of the VINCER connection: idle and keepalive, one close, the give-up, sleep and wake, link
+//! The lifecycle of the PINCER connection: idle and keepalive, one close, the give-up, sleep and wake, link
 //! outages, amplification limits, early packets, tail repair, connection ids, memory bounds and hostile input.
 #![allow(
     clippy::unwrap_used,
@@ -18,13 +18,13 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use proptest::prelude::*;
-use vinc_crypto::IdentityAlg;
-use vinc_security::Env;
-use vinc_tests::*;
-use vinc_transport::conn::{CloseReason, PathId, PathInfo};
-use vinc_transport::packet::LongHeader;
+use pinc_crypto::IdentityAlg;
+use pinc_security::Env;
+use pinc_tests::*;
+use pinc_transport::conn::{CloseReason, PathId, PathInfo};
+use pinc_transport::packet::LongHeader;
 
-vinc_tests::install_counting_allocator!();
+pinc_tests::install_counting_allocator!();
 
 fn connected<'a>(w: &'a mut World, sa: &'a mut Store, sb: &'a mut Store, link: Link) -> Net<'a, 'a> {
     let mut net = setup(w, sa, sb, link);
@@ -107,7 +107,7 @@ fn a_held_back_stream_does_not_discard_the_frames_behind_it_in_its_packet() {
         let mut w = World::new(IdentityAlg::Ed25519);
         // A server whose pool holds two windows, one chunk of it taken for good by a stream nobody reads: the second
         // stream fits only once the first has been received whole and read.
-        let mut small = vinc_transport::stream::Config::new(false);
+        let mut small = pinc_transport::stream::Config::new(false);
         small.initial_stream_window = 64 * 1024;
         small.max_stream_window = 64 * 1024;
         let mut sa = Store::new(true);
@@ -145,7 +145,7 @@ fn a_stream_the_pool_cannot_hold_waits_unacknowledged_and_is_delivered_once_ther
         let mut w = World::new(IdentityAlg::Ed25519);
         // A server whose pool holds the windows of three streams: a fourth stream waits for room, and is never
         // reset or dropped silently.
-        let mut small = vinc_transport::stream::Config::new(false);
+        let mut small = pinc_transport::stream::Config::new(false);
         small.initial_stream_window = 192 * 1024;
         small.max_stream_window = 192 * 1024;
         let mut sa = Store::new(true);
@@ -229,7 +229,7 @@ fn sleep_and_wake_resume_a_transfer_without_collapse() {
         let cwnd_before = net.b.conn.stats().cwnd;
         let ptos_before = net.b.conn.stats().ptos;
         let now = net.now;
-        net.a.with_env(now, vinc_transport::conn::Connection::sleep);
+        net.a.with_env(now, pinc_transport::conn::Connection::sleep);
         net.run(now + 50 * MS, |n| {
             serve(n, &data, &mut off, id);
             false
@@ -248,7 +248,7 @@ fn sleep_and_wake_resume_a_transfer_without_collapse() {
         assert!(net.b.closed().is_none() && net.a.closed().is_none());
         net.link.route(PathId(1)).up = true;
         let now = net.now;
-        net.a.with_env(now, vinc_transport::conn::Connection::wake);
+        net.a.with_env(now, pinc_transport::conn::Connection::wake);
         let mut finished = false;
         let ok = net.run(net.now + 120 * SEC, |n| {
             serve(n, &data, &mut off, id);
@@ -279,12 +279,12 @@ fn an_unanswered_wake_is_reported_after_800_ms() {
         let (mut sa, mut sb) = (Store::new(true), Store::new(false));
         let mut net = connected(&mut w, &mut sa, &mut sb, Link::new(9, Params::new(10 * MS)));
         let now = net.now;
-        net.a.with_env(now, vinc_transport::conn::Connection::sleep);
+        net.a.with_env(now, pinc_transport::conn::Connection::sleep);
         net.run(now + 100 * MS, |_| false);
         net.link.route(PathId(1)).up = false;
         net.run(net.now + 2 * SEC, |_| false);
         let at = net.now;
-        net.a.with_env(at, vinc_transport::conn::Connection::wake);
+        net.a.with_env(at, pinc_transport::conn::Connection::wake);
         assert!(net.run(at + 5 * SEC, |n| n.a.saw(|r| *r == Rec::WakeUnanswered)));
         let waited = net.now - at;
         assert!(

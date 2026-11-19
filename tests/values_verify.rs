@@ -16,11 +16,11 @@ mod values_support;
 
 use proptest::prelude::*;
 use std::ops::Range;
-use vinc_dag::tree::{
+use pinc_dag::tree::{
     Cv, Layout, PARENT_LEN, RangeEncoder, RangeVerifier, Step, TreeError, build_outboard_vec, encode_range, encoded_len,
 };
-use vinc_tests::SplitMix64;
-use vinc_values::verify::{GroupMatch, GroupVerifier, Item};
+use pinc_tests::SplitMix64;
+use pinc_values::verify::{GroupMatch, GroupVerifier, Item};
 
 const GROUP: usize = 16384;
 

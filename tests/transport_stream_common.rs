@@ -13,9 +13,9 @@
 
 use std::cell::RefCell;
 
-use vinc_tests::SplitMix64;
-use vinc_transport::stream::pool::BufferPool;
-use vinc_transport::stream::{Config, ControlFrame, NoSource, PeerLimits, StreamChunk, StreamSource, Streams};
+use pinc_tests::SplitMix64;
+use pinc_transport::stream::pool::BufferPool;
+use pinc_transport::stream::{Config, ControlFrame, NoSource, PeerLimits, StreamChunk, StreamSource, Streams};
 
 pub const MIB: u64 = 1 << 20;
 /// A send buffer cap that never binds.

@@ -1,6 +1,6 @@
 ---------------------------- MODULE ValuesSchedList ----------------------------
 (***************************************************************************)
-(* Model of vinc-values span.rs: Span, the bounded RangeList<N> (push,      *)
+(* Model of pinc-values span.rs: Span, the bounded RangeList<N> (push,      *)
 (* push_front, pop_front, push_new, total), holes, align and split. Every   *)
 (* operator is the code step for step, with the saturating arithmetic of    *)
 (* Span::end: End(s) = min(off + len, MAXU), MAXU standing for u64::MAX     *)

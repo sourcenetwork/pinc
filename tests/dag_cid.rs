@@ -1,4 +1,4 @@
-//! Tests of vinc-dag's CIDs.
+//! Tests of pinc-dag's CIDs.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -12,11 +12,11 @@
 use std::cmp::Ordering;
 
 use proptest::prelude::*;
-use vinc_dag::cid::{BLAKE3, Cid, CidError, CidRef, DAG_CBOR, MAX_TEXT_LEN, RAW, SHA2_256, cmp_text};
+use pinc_dag::cid::{BLAKE3, Cid, CidError, CidRef, DAG_CBOR, MAX_TEXT_LEN, RAW, SHA2_256, cmp_text};
 
 mod golden;
 
-vinc_tests::install_counting_allocator!();
+pinc_tests::install_counting_allocator!();
 
 fn arb_cid() -> impl Strategy<Value = Cid> {
     let known = (
@@ -220,7 +220,7 @@ fn cid_parse_and_text_do_not_allocate() {
     let other = Cid::for_block(DAG_CBOR, BLAKE3, b"alloc").unwrap();
     let bytes = cid.as_bytes().to_vec();
     let text = cid.to_string();
-    let info = vinc_tests::measure(|| {
+    let info = pinc_tests::measure(|| {
         let r = CidRef::parse(&bytes).unwrap();
         let c = Cid::from_bytes(&bytes).unwrap();
         let mut buf = [0u8; MAX_TEXT_LEN];

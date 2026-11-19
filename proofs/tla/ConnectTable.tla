@@ -15,7 +15,7 @@
 (*  Visited    retain calls the predicate on every entry at least once     *)
 (*  CacheRule  put evicts exactly the previous occupant of the key's      *)
 (*             bucket; get hits iff the bucket holds the key               *)
-(* Lean: Vinc/ConnectTable.lean.                                           *)
+(* Lean: Pinc/ConnectTable.lean.                                           *)
 (***************************************************************************)
 EXTENDS ConnectTableOps
 

@@ -1,4 +1,4 @@
-//! The NAT of `vinc-sim` against the reference NAT: operation sequences recorded from the reference harness's NAT
+//! The NAT of `pinc-sim` against the reference NAT: operation sequences recorded from the reference harness's NAT
 //! class (`data/reference_nat.txt`) are replayed as datagrams, and every
 //! translated port, every admitted or refused reply, every rebind and the final mapping count must be the same.
 //! Covers port allocation (advance then return, wrap above 65000), expiry, filtering and the rebind order.
@@ -14,9 +14,9 @@
 use std::fmt::Write;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-use vinc_sim::reference::{RefRng, blake2b_128};
-use vinc_sim::toy::{Probe, ProbeCmd, ProbeEvent};
-use vinc_sim::{FlatCost, LinkConfig, NatConfig, NatKind, PortPolicy, Sim, SimConfig, Time};
+use pinc_sim::reference::{RefRng, blake2b_128};
+use pinc_sim::toy::{Probe, ProbeCmd, ProbeEvent};
+use pinc_sim::{FlatCost, LinkConfig, NatConfig, NatKind, PortPolicy, Sim, SimConfig, Time};
 
 const DATA: &str = include_str!("data/reference_nat.txt");
 const EXT: u32 = 2_000_000;
@@ -45,9 +45,9 @@ fn world(
     timeout: Time,
 ) -> (
     Sim<Probe, RefRng>,
-    vinc_sim::NatId,
-    vinc_sim::NodeId,
-    Vec<vinc_sim::NodeId>,
+    pinc_sim::NatId,
+    pinc_sim::NodeId,
+    Vec<pinc_sim::NodeId>,
 ) {
     let cfg = SimConfig {
         default_link: Some(LinkConfig::default()),

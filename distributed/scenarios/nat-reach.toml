@@ -1,6 +1,6 @@
 name = "nat-reach"
 about = "Publish and subscribe between nodes behind home routers (one port-restricted, one symmetric) through a public hub: 20 and 15 ms one way, 50 and 20 Mbit/s up."
-stacks = ["vinc", "iroh", "libp2p"]
+stacks = ["pinc", "iroh", "libp2p"]
 repetitions = 3
 
 [resources]

@@ -1,6 +1,6 @@
 ------------------------------ MODULE TraceRtt ------------------------------
 (***************************************************************************)
-(* Trace validation of the node's round trips: vinc-core rtt.rs (NodeRtt). *)
+(* Trace validation of the node's round trips: pinc-core rtt.rs (NodeRtt). *)
 (*                                                                         *)
 (* The Rust test tests/trace_rtt.rs drives real nodes with seeded calls of *)
 (* note_handshake, restore_peer, note_peak and note_timeout, with values   *)
@@ -15,14 +15,14 @@
 (* and thin_node and thin must be the model's.                             *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds rtt.ndjson.           *)
+(* variable PINC_TRACE_DIR, the directory that holds rtt.ndjson.           *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, TLC, Json, IOUtils
 VARIABLES i, r, cap
 vars == <<i, r, cap>>
 INSTANCE RttOps
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/rtt.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/rtt.ndjson")
 Ev0 == Trace[i]
 Lm(l) == U!FromLimbs(l)
 Op(l) == IF l = <<>> THEN None ELSE Some(Lm(l))

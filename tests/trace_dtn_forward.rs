@@ -1,6 +1,6 @@
 //! Trace generation for the spray-and-wait forwarder: seeded random runs of the real `Forwarder` through its public
 //! API (`step`, `poll`, `copies_held`, `copies_handed`, `timer_remaining`), recorded as ndjson for the TLA+ trace
-//! check (`TraceDtnForward.tla`) and the Lean replay (`Vinc/TraceDtnForward.lean`).
+//! check (`TraceDtnForward.tla`) and the Lean replay (`Pinc/TraceDtnForward.lean`).
 //!
 //! The world is small so that every branch is met: three peers (node ids 1 to 3), three bundles (ids 1 to 3), tables of
 //! two bundles, two links and two transfers, a memory table of two accepted bundles, retry 3 ms and 3 sends, times of a few tens of milliseconds (time also
@@ -23,7 +23,7 @@
 //! forwarder was met, so it is meaningful without the proof tools. The main world goes to `dtn_forward.ndjson` and is
 //! checked by both TLA+ and Lean; `dtn_forward_edge.ndjson` holds other capacities and policies (a retry of 0, a
 //! limit of 0 and 1 sends) and times next to `u64::MAX`, and is replayed by Lean only (the TLA+ constants are those of
-//! the main world). The trace is written to the directory in `VINC_TRACE_DIR` when it is set; otherwise nothing is
+//! the main world). The trace is written to the directory in `PINC_TRACE_DIR` when it is set; otherwise nothing is
 //! written.
 #![allow(
     clippy::unwrap_used,
@@ -43,10 +43,10 @@
 
 use std::collections::{HashMap, HashSet};
 
-use vinc_crypto::{IdentityAlg, NodeId};
-use vinc_dtn::forward::{Action, ForwardError, Forwarder, Held, Input, Policy};
-use vinc_dtn::head::BundleId;
-use vinc_tests::SplitMix64;
+use pinc_crypto::{IdentityAlg, NodeId};
+use pinc_dtn::forward::{Action, ForwardError, Forwarder, Held, Input, Policy};
+use pinc_dtn::head::BundleId;
+use pinc_tests::SplitMix64;
 
 const PEERS: u8 = 3;
 const IDS: u8 = 3;
@@ -584,7 +584,7 @@ impl<const B: usize, const L: usize, const T: usize, const F: usize> Run<B, L, T
 }
 
 fn write(name: &str, lines: &[String]) {
-    if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
+    if let Ok(dir) = std::env::var("PINC_TRACE_DIR") {
         std::fs::create_dir_all(&dir).unwrap();
         let mut text = lines.join("\n");
         text.push('\n');
@@ -607,7 +607,7 @@ fn the_forwarder_matches_its_models() {
         cover.extend(run.cover);
     }
     for b in BRANCHES {
-        assert!(vinc_tests::soaking() || cover.contains(b), "branch {b} was never met");
+        assert!(pinc_tests::soaking() || cover.contains(b), "branch {b} was never met");
     }
     write("dtn_forward", &lines);
 }

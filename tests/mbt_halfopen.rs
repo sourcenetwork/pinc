@@ -1,9 +1,9 @@
-//! Model-based tests of the endpoint's half-open cap: a real endpoint (`vinc-core`, built with the `trace` feature, the
+//! Model-based tests of the endpoint's half-open cap: a real endpoint (`pinc-core`, built with the `trace` feature, the
 //! cap of 256 the code has) driven along every edge of the state graph of `proofs/tla/MbtHalfOpen.tla`.
 //!
 //! TLC enumerates every state the admission and expiry operators of `HalfOpenOps.tla` reach at the real cap within
 //! the bounds of a config and writes the graph; `scripts/mbt.py` turns it into paths from the empty endpoint that take
-//! every edge, which `scripts/proofs.sh` writes to the directory `VINC_MBT_DIR`: `halfopen.ndjson` from
+//! every edge, which `scripts/proofs.sh` writes to the directory `PINC_MBT_DIR`: `halfopen.ndjson` from
 //! `MbtHalfOpen.cfg` and `halfopen_back.ndjson` from `MbtHalfOpen_back.cfg`. This test runs each path on a fresh
 //! endpoint: a `CallFlood` hands it a forged first flight (a message id and a source it has not seen) of the type and
 //! length the call names, a `CallTimer` runs its timers. After every call the endpoint's own record of the decision
@@ -12,7 +12,7 @@
 //! half-open sessions must be the model's, and the sessions it holds, read through the `trace` view `half_open_slot`
 //! and grouped by their creation time, must be the model's: every one unauthenticated and counted, as many made at
 //! each time as the model says. It stops at the first difference and names the file, the case, the step and the calls
-//! that led there. Without `VINC_MBT_DIR` it checks nothing.
+//! that led there. Without `PINC_MBT_DIR` it checks nothing.
 //!
 //! The model's numbers stand for the code's as `MbtHalfOpen.tla` says: model time `t` is `origin + t * step` with
 //! `step = HALF_OPEN_LIFE / LIFE`, and a model length is the real floor of the type (`FULL_INITIAL_MIN`,
@@ -31,17 +31,17 @@ use std::fmt::Write as _;
 use std::net::SocketAddr;
 use std::rc::Rc;
 
-use vinc_core::{Endpoint, EndpointConfig, HALF_OPEN_LIFE, MAX_HALF_OPEN, Slot, TraceEvent};
-use vinc_crypto::{Drbg, IdentityAlg, Keypair, Software};
-use vinc_security::message::{FULL_INITIAL_MIN, RESUME_HELLO_MIN, SHORT_INITIAL_MIN};
-use vinc_security::{ConnId, KeyHandle, LocalIdentity};
-use vinc_tests::{ALPN_A, Caps, Json, MS_NS, MbtCase, big_stack, mbt_cases};
-use vinc_transport::conn::{Held, Resources, Shared, Tables};
-use vinc_transport::packet::{LongHeader, LongType};
-use vinc_transport::recovery::LossEstimate;
-use vinc_transport::stream::pool::BufferPool;
-use vinc_transport::stream::{self, NoSource, Streams};
-use vinc_wire::Writer;
+use pinc_core::{Endpoint, EndpointConfig, HALF_OPEN_LIFE, MAX_HALF_OPEN, Slot, TraceEvent};
+use pinc_crypto::{Drbg, IdentityAlg, Keypair, Software};
+use pinc_security::message::{FULL_INITIAL_MIN, RESUME_HELLO_MIN, SHORT_INITIAL_MIN};
+use pinc_security::{ConnId, KeyHandle, LocalIdentity};
+use pinc_tests::{ALPN_A, Caps, Json, MS_NS, MbtCase, big_stack, mbt_cases};
+use pinc_transport::conn::{Held, Resources, Shared, Tables};
+use pinc_transport::packet::{LongHeader, LongType};
+use pinc_transport::recovery::LossEstimate;
+use pinc_transport::stream::pool::BufferPool;
+use pinc_transport::stream::{self, NoSource, Streams};
+use pinc_wire::Writer;
 
 /// The table of the endpoint: room past the cap, so the cap and not the table refuses.
 const K: usize = MAX_HALF_OPEN + 44;
@@ -262,7 +262,7 @@ fn run(file: &str, case: &MbtCase, init: &Json, (full, short, hello): (u64, u64,
     case.steps.len()
 }
 
-/// Walks every case of `file`; false when `VINC_MBT_DIR` is unset.
+/// Walks every case of `file`; false when `PINC_MBT_DIR` is unset.
 fn walk(file: &str) -> bool {
     let Some(cases) = mbt_cases(file) else {
         return false;
@@ -312,6 +312,6 @@ fn the_half_open_cap_follows_every_edge_of_the_model() {
     // MbtHalfOpen.cfg and MbtHalfOpen_back.cfg
     let walked = big_stack(|| ["halfopen.ndjson", "halfopen_back.ndjson"].map(walk));
     if walked == [false; 2] {
-        eprintln!("mbt_halfopen: VINC_MBT_DIR is not set, nothing checked (scripts/proofs.sh generates the cases)");
+        eprintln!("mbt_halfopen: PINC_MBT_DIR is not set, nothing checked (scripts/proofs.sh generates the cases)");
     }
 }

@@ -19,14 +19,14 @@ mod dtn_common;
 
 use dtn_common::{ALGS, Sealed, bytes, keypair, make, plan, recipient};
 use proptest::prelude::*;
-use vinc_crypto::{CryptoError, IdentityAlg, Software};
-use vinc_dag::ranges::VerifiedRanges;
-use vinc_dtn::bundle::Reception;
-use vinc_dtn::error::DtnError;
-use vinc_dtn::head::{BundleId, MAX_SIGNED_HEAD_LEN, SignedHead};
-use vinc_dtn::hlc::Hlc;
-use vinc_dtn::layout::SliceLayout;
-use vinc_dtn::seal::decapsulate;
+use pinc_crypto::{CryptoError, IdentityAlg, Software};
+use pinc_dag::ranges::VerifiedRanges;
+use pinc_dtn::bundle::Reception;
+use pinc_dtn::error::DtnError;
+use pinc_dtn::head::{BundleId, MAX_SIGNED_HEAD_LEN, SignedHead};
+use pinc_dtn::hlc::Hlc;
+use pinc_dtn::layout::SliceLayout;
+use pinc_dtn::seal::decapsulate;
 
 const NOW: u64 = 2_000;
 
@@ -282,7 +282,7 @@ fn inconsistent_parity_is_detected_not_trusted() {
     let mut sealed = good.sealed.clone();
     sealed[2 * g] ^= 0xff;
     let mut outboard = vec![0; layout.outboard_len().unwrap() as usize];
-    let root = vinc_dag::tree::build_outboard(&sealed, 0, &mut outboard).unwrap();
+    let root = pinc_dag::tree::build_outboard(&sealed, 0, &mut outboard).unwrap();
     let mut head = *good.signed.head();
     head.root = root;
     let signed = SignedHead::sign(head, &sender).unwrap();
@@ -331,7 +331,7 @@ fn every_slice_size_works() {
 
 #[test]
 fn invalid_parameters_are_refused() {
-    use vinc_dtn::layout::SliceLayout;
+    use pinc_dtn::layout::SliceLayout;
     assert!(SliceLayout::new(0, 1, 0, 10).is_err());
     assert!(SliceLayout::new(200, 56, 0, 10).is_err());
     assert!(SliceLayout::new(255, 0, 0, 10).is_ok());
@@ -343,19 +343,19 @@ fn invalid_parameters_are_refused() {
 #[test]
 fn labels_are_unique_and_prefixed() {
     use std::collections::HashSet;
-    let all: Vec<&str> = vinc_dtn::labels::ALL
+    let all: Vec<&str> = pinc_dtn::labels::ALL
         .into_iter()
-        .chain(vinc_crypto::labels::ALL)
-        .chain([vinc_crypto::labels::STATEMENT])
-        .chain(vinc_security::labels::ALL)
+        .chain(pinc_crypto::labels::ALL)
+        .chain([pinc_crypto::labels::STATEMENT])
+        .chain(pinc_security::labels::ALL)
         .collect();
     let set: HashSet<_> = all.iter().collect();
     assert_eq!(set.len(), all.len());
-    assert!(all.iter().all(|l| l.starts_with(vinc_crypto::labels::RESERVED)));
-    for l in vinc_dtn::labels::ALL {
-        assert!(l.starts_with(vinc_dtn::labels::PREFIX));
-        assert!(l.starts_with("VINC 2026 v1 "));
-        assert!(l.starts_with(vinc_crypto::labels::RESERVED));
+    assert!(all.iter().all(|l| l.starts_with(pinc_crypto::labels::RESERVED)));
+    for l in pinc_dtn::labels::ALL {
+        assert!(l.starts_with(pinc_dtn::labels::PREFIX));
+        assert!(l.starts_with("PINC 2026 v1 "));
+        assert!(l.starts_with(pinc_crypto::labels::RESERVED));
     }
 }
 
@@ -388,7 +388,7 @@ fn bundle_ids_are_unique_per_ephemeral() {
 }
 
 /// The probe of a cipher: its sealing of 16 zero bytes at index 0; equal probes mean equal keys.
-fn key_probe(c: &vinc_dtn::seal::Cipher<Software>) -> Vec<u8> {
+fn key_probe(c: &pinc_dtn::seal::Cipher<Software>) -> Vec<u8> {
     let mut buf = [0u8; 16];
     let tag = c.seal_slice(&Software, 0, &mut buf).unwrap();
     buf.iter().chain(tag.iter()).copied().collect()
@@ -396,8 +396,8 @@ fn key_probe(c: &vinc_dtn::seal::Cipher<Software>) -> Vec<u8> {
 
 #[test]
 fn the_slice_key_is_bound_to_every_input_and_to_nothing_else() {
-    use vinc_crypto::Secret;
-    use vinc_dtn::seal::{SealSeeds, encapsulate};
+    use pinc_crypto::Secret;
+    use pinc_dtn::seal::{SealSeeds, encapsulate};
     let sender = keypair(IdentityAlg::Ed25519, 1).node_id();
     let r = recipient(IdentityAlg::Ed25519, 2, 1);
     let key = |to: &dtn_common::Recipient, a: u8, b: u8, ctr: u32| {
@@ -464,7 +464,7 @@ fn bundle_with_bad_symbol(bad: usize) -> (Sealed, SliceLayout) {
     let mut sealed = good.sealed.clone();
     sealed[bad * g] ^= 0xff;
     let mut outboard = vec![0; layout.outboard_len().unwrap() as usize];
-    let root = vinc_dag::tree::build_outboard(&sealed, 0, &mut outboard).unwrap();
+    let root = pinc_dag::tree::build_outboard(&sealed, 0, &mut outboard).unwrap();
     let mut head = *good.signed.head();
     head.root = root;
     let signed = SignedHead::sign(head, &sender).unwrap();

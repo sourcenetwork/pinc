@@ -1,4 +1,4 @@
-//! A simulated client node: a `vinc-core` endpoint plus the connectivity layer, driven by the simulator through the
+//! A simulated client node: a `pinc-core` endpoint plus the connectivity layer, driven by the simulator through the
 //! host loop the layer documents, with the real protected carrier running over simulated TCP and WebSocket streams.
 #![allow(
     missing_docs,
@@ -18,12 +18,12 @@
 use std::collections::VecDeque;
 use std::net::SocketAddr;
 
-use vinc_connect::carrier::ws::{self, Decoder, Opcode, Role as WsRole, WsFrame};
-use vinc_connect::client::{Config, Connectivity, Io, Kind, RelayCfg};
-use vinc_core::{Command, Role, SessionId, Value};
-use vinc_crypto::NodeId;
-use vinc_security::Env;
-use vinc_sim::{IfaceEvent, StreamEvent, StreamId, StreamKind, StreamOp, Time};
+use pinc_connect::carrier::ws::{self, Decoder, Opcode, Role as WsRole, WsFrame};
+use pinc_connect::client::{Config, Connectivity, Io, Kind, RelayCfg};
+use pinc_core::{Command, Role, SessionId, Value};
+use pinc_crypto::NodeId;
+use pinc_security::Env;
+use pinc_sim::{IfaceEvent, StreamEvent, StreamId, StreamKind, StreamOp, Time};
 
 use crate::Caps;
 use crate::connect_host::{Answer, Ev, Host, Outbox, answer_parts};
@@ -318,7 +318,7 @@ impl Client {
         let mut buf = vec![0u8; 2048];
         while let Some((to, n)) = self.conn.poll_udp(&mut buf) {
             did = true;
-            if to.port() == vinc_connect::local::PORT {
+            if to.port() == pinc_connect::local::PORT {
                 self.beacons.push(buf[..n].to_vec());
                 continue;
             }
@@ -452,10 +452,10 @@ impl Client {
         self.pump(now);
     }
 
-    pub fn poll_transmit(&mut self, buf: &mut [u8]) -> Option<vinc_sim::Transmit> {
+    pub fn poll_transmit(&mut self, buf: &mut [u8]) -> Option<pinc_sim::Transmit> {
         let (local, remote, d) = self.out.datagrams.pop_front()?;
         buf[..d.len()].copy_from_slice(&d);
-        Some(vinc_sim::Transmit {
+        Some(pinc_sim::Transmit {
             local,
             remote,
             len: d.len(),
@@ -548,9 +548,9 @@ impl Client {
         self.pump(now);
     }
 
-    pub fn session_stats(&self, s: SessionId) -> Option<vinc_core::SessionStats> {
-        match self.host.ep.query(vinc_core::Query::Stats(s)) {
-            vinc_core::Answer::Stats(st) => Some(st),
+    pub fn session_stats(&self, s: SessionId) -> Option<pinc_core::SessionStats> {
+        match self.host.ep.query(pinc_core::Query::Stats(s)) {
+            pinc_core::Answer::Stats(st) => Some(st),
             _ => None,
         }
     }

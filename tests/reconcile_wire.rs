@@ -11,10 +11,10 @@
 mod common;
 
 use common::{Dir, Err, fixed_set, index, run_with};
-use vinc_reconcile::wire::{frame_body, put_bound, read_bound, read_parts, tag};
-use vinc_reconcile::{Error, Initiator, Limits, Reason, Responder};
-use vinc_tests::SplitMix64;
-use vinc_wire::Reader;
+use pinc_reconcile::wire::{frame_body, put_bound, read_bound, read_parts, tag};
+use pinc_reconcile::{Error, Initiator, Limits, Reason, Responder};
+use pinc_tests::SplitMix64;
+use pinc_wire::Reader;
 
 fn read(last: &[u8], bytes: &[u8]) -> Result<Vec<u8>, Reason> {
     let mut l = last.to_vec();

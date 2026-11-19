@@ -13,8 +13,8 @@
 mod layers_common;
 
 use layers_common::{LWorld, big, secs};
-use vinc_node::{DtnPlan, Enabled, NodeEvent};
-use vinc_tests::{LayerApps, NCmd, SplitMix64};
+use pinc_node::{DtnPlan, Enabled, NodeEvent};
+use pinc_tests::{LayerApps, NCmd, SplitMix64};
 
 fn dtn_on(tag: u8) -> LayerApps {
     let mut apps = LayerApps::new(
@@ -45,7 +45,7 @@ fn payload(seed: u64, len: usize) -> Vec<u8> {
     v
 }
 
-fn received(w: &LWorld, n: vinc_sim::NodeId) -> Vec<Vec<u8>> {
+fn received(w: &LWorld, n: pinc_sim::NodeId) -> Vec<Vec<u8>> {
     w.node_events(n)
         .into_iter()
         .filter_map(|(_, e)| match e {
@@ -55,7 +55,7 @@ fn received(w: &LWorld, n: vinc_sim::NodeId) -> Vec<Vec<u8>> {
         .collect()
 }
 
-fn dump(w: &LWorld, a: vinc_sim::NodeId, c: vinc_sim::NodeId) {
+fn dump(w: &LWorld, a: pinc_sim::NodeId, c: pinc_sim::NodeId) {
     for (name, n) in [("holder", a), ("destination", c)] {
         for (at, t) in &w.sim.node(n).traces {
             let line = format!("{:?}", t.body);

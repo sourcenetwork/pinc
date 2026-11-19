@@ -14,14 +14,14 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use vinc_core::{Answer, Command, EndReason, Event, Query, Role, SessionId, Value};
-use vinc_tests::*;
+use pinc_core::{Answer, Command, EndReason, Event, Query, Role, SessionId, Value};
+use pinc_tests::*;
 
 fn is_connected(e: &Event) -> bool {
     matches!(e, Event::Connected { .. })
 }
 
-fn dial(net: &mut CoreNet, a: usize, b: usize, alpn: &[u8]) -> (SessionId, vinc_core::Reply) {
+fn dial(net: &mut CoreNet, a: usize, b: usize, alpn: &[u8]) -> (SessionId, pinc_core::Reply) {
     let (peer, to, now) = (net.nodes[b].node, net.nodes[b].addr, net.now);
     let rep = net.nodes[a].connect(now, peer, alpn, to, Role::Other).unwrap();
     (net.nodes[a].session(&rep), rep)
@@ -503,7 +503,7 @@ fn incoming_not_allowed() -> (CoreNet, usize, usize) {
 #[test]
 fn a_third_protocol_rides_the_root_session_and_does_not_wait_on_a_sub_session() {
     big_stack(|| {
-        const ALPN_C: &[u8] = b"vinc/c";
+        const ALPN_C: &[u8] = b"pinc/c";
         let mut net = CoreNet::new(10 * MS_NS);
         net.capture = true;
         let (a, b) = (net.add(1), net.add(2));

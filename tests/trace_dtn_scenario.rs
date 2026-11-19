@@ -1,7 +1,7 @@
 //! Trace generation for the delay-tolerant scenarios: four nodes that each run the real `Forwarder`, `CustodyBook`
 //! and `Ledger` joined by a seeded network that delays and loses messages and by contacts that come and go, recorded
 //! as ndjson (`dtn_scenario.ndjson`) for the TLA+ trace check (`TraceDtnScenario.tla`) and the Lean replay
-//! (`Vinc/TraceDtnScenario.lean`).
+//! (`Pinc/TraceDtnScenario.lean`).
 //!
 //! One bundle (id 1, one byte) is created at node 1 with `BUDGET` copies for node 4. The host glue of a node is what
 //! the models call the system: a handover of copies is offered custody (`CustodyBook::offer`) only to a higher node
@@ -21,7 +21,7 @@
 //! timers. The test asserts the facts of every scenario itself (the copy account, the ledgers, custody never leaves a
 //! node before expiry except by delivery or by an ack from the node it was offered to, some node holds custody until
 //! the bundle is delivered or expired), so it is meaningful without the proof tools. The trace is written to the
-//! directory in `VINC_TRACE_DIR` when it is set; otherwise nothing is written.
+//! directory in `PINC_TRACE_DIR` when it is set; otherwise nothing is written.
 //!
 //! The end-to-end chain test seals a real bundle, moves it over two hops through `Reception` with range proofs and
 //! opens it at the destination.
@@ -42,13 +42,13 @@
 
 mod dtn_common;
 
-use vinc_crypto::{IdentityAlg, Keypair, NodeId};
-use vinc_dtn::custody::{CustodyAck, CustodyBook, CustodyError, Incoming};
-use vinc_dtn::forward::{Action, ForwardError, Forwarder, Held, Input, Policy};
-use vinc_dtn::head::BundleId;
-use vinc_dtn::hlc::Hlc;
-use vinc_dtn::store::{Class, Key, Ledger, Space, StoreError};
-use vinc_tests::SplitMix64;
+use pinc_crypto::{IdentityAlg, Keypair, NodeId};
+use pinc_dtn::custody::{CustodyAck, CustodyBook, CustodyError, Incoming};
+use pinc_dtn::forward::{Action, ForwardError, Forwarder, Held, Input, Policy};
+use pinc_dtn::head::BundleId;
+use pinc_dtn::hlc::Hlc;
+use pinc_dtn::store::{Class, Key, Ledger, Space, StoreError};
+use pinc_tests::SplitMix64;
 
 const N: usize = 4;
 const BUDGET: u16 = 4;
@@ -779,12 +779,12 @@ fn scenarios_hold_and_write_the_trace() {
         "forged",
     ] {
         assert!(
-            vinc_tests::soaking() || met.get(want).copied().unwrap_or(0) > 0,
+            pinc_tests::soaking() || met.get(want).copied().unwrap_or(0) > 0,
             "outcome {want} was never met"
         );
     }
     println!("met {met:?}");
-    if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
+    if let Ok(dir) = std::env::var("PINC_TRACE_DIR") {
         std::fs::create_dir_all(&dir).unwrap();
         let mut text = all.join("\n");
         text.push('\n');
@@ -797,9 +797,9 @@ fn scenarios_hold_and_write_the_trace() {
 #[test]
 fn a_sealed_bundle_crosses_a_chain_and_opens() {
     use dtn_common::{ALGS, make, plan, recipient};
-    use vinc_crypto::Software;
-    use vinc_dtn::bundle::{Reception, serve, serve_len};
-    use vinc_dtn::seal::decapsulate;
+    use pinc_crypto::Software;
+    use pinc_dtn::bundle::{Reception, serve, serve_len};
+    use pinc_dtn::seal::decapsulate;
 
     let src = dtn_common::keypair(ALGS[0], 11);
     let dst = recipient(ALGS[0], 12, 1);

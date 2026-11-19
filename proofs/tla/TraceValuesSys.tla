@@ -1,6 +1,6 @@
 ---------------------------- MODULE TraceValuesSys ----------------------------
 (***************************************************************************)
-(* Trace validation of the multi-provider value fetch: vinc-values          *)
+(* Trace validation of the multi-provider value fetch: pinc-values          *)
 (* fetch/{mod,sched,recv,rx,wt,stall}.rs against ValuesSys.tla.             *)
 (*                                                                          *)
 (* The Rust test tests/trace_values_sys.rs runs the real Fetch against real *)
@@ -36,14 +36,14 @@
 (* ValuesSched slice.                                                       *)
 (*                                                                          *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment      *)
-(* variable VINC_TRACE_DIR, the directory that holds values_sys.ndjson.     *)
+(* variable PINC_TRACE_DIR, the directory that holds values_sys.ndjson.     *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils, ValuesSysCore
 
 VARIABLES i, T
 vars == <<i, T>>
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/values_sys.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/values_sys.ndjson")
 
 Ev == Trace[i]
 SetOf(s) == {s[k] : k \in 1..Len(s)}

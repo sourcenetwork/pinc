@@ -1,6 +1,6 @@
 ------------------------------ MODULE BroadcastAuth ------------------------------
 (***************************************************************************)
-(* Origin authentication of vinc-broadcast auth.rs and msg.rs (on_msg).    *)
+(* Origin authentication of pinc-broadcast auth.rs and msg.rs (on_msg).    *)
 (*                                                                         *)
 (* A signature is an unforgeable oracle per identity: the term <<signer,   *)
 (* statement>> exists only if the signer's Sign step produced it, and a    *)
@@ -26,7 +26,7 @@
 (* that field alone is delivered, so DeliverExact is violated: each of the *)
 (* five fields is needed.                                                  *)
 (*                                                                         *)
-(* Lean counterpart: proofs/lean/Vinc/BroadcastAuth.lean (delivered_exact, *)
+(* Lean counterpart: proofs/lean/Pinc/BroadcastAuth.lean (delivered_exact, *)
 (* statement_injective, mutated_*_refused). TraceBroadcast.tla checks the  *)
 (* recorded verdicts of the real code against Verify.                      *)
 (***************************************************************************)

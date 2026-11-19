@@ -14,9 +14,9 @@ use std::net::SocketAddr;
 
 use connect_common::{Rec, SEC, big_stack};
 use connect_rig::Rig;
-use vinc_crypto::Software;
-use vinc_security::Env;
-use vinc_tests::Host;
+use pinc_crypto::Software;
+use pinc_security::Env;
+use pinc_tests::Host;
 
 #[test]
 fn a_record_due_while_the_home_carrier_is_not_open_is_no_deadline() {
@@ -73,14 +73,14 @@ fn a_record_due_while_the_home_carrier_is_not_open_is_no_deadline() {
 
 #[test]
 fn a_relay_datagram_from_the_address_its_session_runs_over_is_taken() {
-    use vinc_connect::relay::datagram::Datagram;
+    use pinc_connect::relay::datagram::Datagram;
     big_stack(|| {
         let host = Box::new(Host::new(0x31, "192.168.1.2:4433".parse().unwrap(), 1000 * SEC));
         let (identity, prekey) = (host.identity, host.prekey_info.clone());
         let mut rig = Rig::new(&identity, prekey);
         let other: SocketAddr = "[fd00::1]:4433".parse().unwrap();
-        let src = vinc_crypto::NodeId {
-            alg: vinc_crypto::IdentityAlg::Ed25519,
+        let src = pinc_crypto::NodeId {
+            alg: pinc_crypto::IdentityAlg::Ed25519,
             bytes: [7; 32],
         };
         let mut buf = [0u8; 256];

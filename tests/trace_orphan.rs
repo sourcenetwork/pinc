@@ -1,6 +1,6 @@
 //! Trace generation for the endpoint's table of held first-flight fragments: seeded runs of a real table
-//! (`vinc-core`, built with the `trace` feature), recorded as ndjson (`orphan.ndjson`) for the TLA+ trace check
-//! (`TraceOrphan.tla`) and the Lean replay (`Vinc/TraceOrphan.lean`).
+//! (`pinc-core`, built with the `trace` feature), recorded as ndjson (`orphan.ndjson`) for the TLA+ trace check
+//! (`TraceOrphan.tla`) and the Lean replay (`Pinc/TraceOrphan.lean`).
 //!
 //! A run holds datagrams of random lengths (the largest one held, one byte more and longer ones included) for a
 //! few messages from a few addresses, takes them for the same message, for another id, another message length and
@@ -28,9 +28,9 @@ use std::collections::HashSet;
 use std::fmt::Write as _;
 use std::net::SocketAddr;
 
-use vinc_core::OrphanProbe;
-use vinc_security::ConnId;
-use vinc_tests::SplitMix64;
+use pinc_core::OrphanProbe;
+use pinc_security::ConnId;
+use pinc_tests::SplitMix64;
 
 const N: usize = OrphanProbe::SLOTS;
 const MAX: usize = OrphanProbe::MAX;
@@ -373,7 +373,7 @@ fn the_held_fragments_match_the_models() {
         seen.given_at_bound > 0,
         "no datagram was given out at the last moment it is fresh"
     );
-    if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
+    if let Ok(dir) = std::env::var("PINC_TRACE_DIR") {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(std::path::Path::new(&dir).join("orphan.ndjson"), &out).unwrap();
         std::fs::write(std::path::Path::new(&dir).join("orphan_wide.ndjson"), &wide).unwrap();

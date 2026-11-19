@@ -14,11 +14,11 @@
     unreachable_pub
 )]
 
-use vinc_crypto::IdentityAlg;
-use vinc_keystore::{KeyStore, SoftwareStore};
-use vinc_security::responder::RESEND_BUDGET;
-use vinc_security::tickets::MAX_EXPORT_ENTRY_LEN;
-use vinc_security::{
+use pinc_crypto::IdentityAlg;
+use pinc_keystore::{KeyStore, SoftwareStore};
+use pinc_security::responder::RESEND_BUDGET;
+use pinc_security::tickets::MAX_EXPORT_ENTRY_LEN;
+use pinc_security::{
     ClientTickets, Env, Established, Event, Failure, Initiator, Output, Responder, ResponderStores, ServerTickets,
     SoftKeys,
 };
@@ -445,7 +445,7 @@ fn an_export_keeps_the_newest_tickets_and_a_server_store_has_no_export() {
         let mut kept: ClientTickets<8> = ClientTickets::new();
         let mut est = out.i_est().unwrap().clone();
         for n in 0..5u8 {
-            est.peer = vinc_crypto::NodeId {
+            est.peer = pinc_crypto::NodeId {
                 alg: IdentityAlg::Ed25519,
                 bytes: [n + 1; 32],
             };
@@ -458,7 +458,7 @@ fn an_export_keeps_the_newest_tickets_and_a_server_store_has_no_export() {
         let mut back: ClientTickets<8> = ClientTickets::new();
         assert_eq!(back.restore(&buf[..n], w.now).unwrap(), 3);
         for n in 0..5u8 {
-            let peer = vinc_crypto::NodeId {
+            let peer = pinc_crypto::NodeId {
                 alg: IdentityAlg::Ed25519,
                 bytes: [n + 1; 32],
             };
@@ -476,11 +476,11 @@ fn soft_keys_still_answer_for_a_fallen_back_handshake() {
         let (sent, _) = retransmit(&mut h.w, &mut h.i);
         let mut rsp = h.w.responder();
         let soft_i = SoftKeys {
-            signer: Some((vinc_security::KeyHandle(1), &h.w.ip.kp)),
+            signer: Some((pinc_security::KeyHandle(1), &h.w.ip.kp)),
             prekeys: Some(&h.w.prekeys),
         };
         let soft_r = SoftKeys {
-            signer: Some((vinc_security::KeyHandle(1), &h.w.rp.kp)),
+            signer: Some((pinc_security::KeyHandle(1), &h.w.rp.kp)),
             prekeys: None,
         };
         let mut env_r = Env {

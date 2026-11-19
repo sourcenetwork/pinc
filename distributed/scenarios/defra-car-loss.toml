@@ -1,6 +1,6 @@
 name = "defra-car-loss"
 about = "One 64 MiB CAR file, as a DefraDB backup or a large document DAG moves, from one provider to one consumer through a hub on a lossy WAN without reordering: 50 ms round trip, 1% loss per packet each way, 100 Mbit/s, MTU 1500."
-stacks = ["vinc", "iroh", "libp2p"]
+stacks = ["pinc", "iroh", "libp2p"]
 repetitions = 3
 
 [resources]

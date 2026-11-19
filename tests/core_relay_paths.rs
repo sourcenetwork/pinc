@@ -11,8 +11,8 @@ mod common;
 use std::net::SocketAddr;
 
 use common::{dial, flights};
-use vinc_core::{Command, Event, PathState, Role, SessionId, Value, relay_addr};
-use vinc_tests::*;
+use pinc_core::{Command, Event, PathState, Role, SessionId, Value, relay_addr};
+use pinc_tests::*;
 
 const MS: u64 = MS_NS;
 /// The size of a datagram that carries only a path challenge.
@@ -79,8 +79,8 @@ fn the_sessions_of_a_thin_node_space_their_rejoin_challenges_to_one_address() {
     big_stack(|| {
         // One-way 150 ms: every session is thin, and each would challenge the abandoned path once a second.
         let (mut net, direct, via) = pair(150 * MS);
-        let s1 = session(&mut net, b"vinc/a", via);
-        let s2 = session(&mut net, b"vinc/b", via);
+        let s1 = session(&mut net, b"pinc/a", via);
+        let s2 = session(&mut net, b"pinc/b", via);
         outage(&mut net, direct, via);
         send(&mut net, s1, &pattern(2_000, 1));
         send(&mut net, s2, &pattern(2_000, 2));
@@ -117,7 +117,7 @@ fn the_sessions_of_a_thin_node_space_their_rejoin_challenges_to_one_address() {
 /// carrier of the relay is reported as answering at every step when `carrier_answers`.
 fn time_to_close(carrier_answers: bool) -> Option<u64> {
     let (mut net, direct, via) = pair(10 * MS);
-    let s = session(&mut net, b"vinc/a", via);
+    let s = session(&mut net, b"pinc/a", via);
     outage(&mut net, direct, via);
     send(&mut net, s, &pattern(2_000, 1));
     let start = net.now;
@@ -325,7 +325,7 @@ fn a_session_on_a_slow_direct_path_stays_on_it_when_a_datagram_comes_from_a_new_
         let (mut net, direct, via) = pair(one_way);
         let via2 = relay_addr(false, 4, 7);
         net.nodes[1].extra.push(via2);
-        let (s, _) = net.connect_pair(0, 1, b"vinc/a", Role::Other);
+        let (s, _) = net.connect_pair(0, 1, b"pinc/a", Role::Other);
         // A relay path the session adds and never hears on: nothing passes through that relay.
         net.loss = Some(Box::new(move |f, to, _| f == via || to == via));
         let t = net.now;
@@ -383,7 +383,7 @@ fn a_punch_round_probes_the_direct_path_the_session_abandoned() {
     big_stack(|| {
         let one_way = 5 * MS;
         let (mut net, direct, via) = pair(one_way);
-        let s = session(&mut net, b"vinc/a", via);
+        let s = session(&mut net, b"pinc/a", via);
         // The direct path is lost for 40 s while the relay path carries the session: the session abandons it and its
         // re-join probes run out.
         net.loss = Some(Box::new(move |f, to, _| f == direct || to == direct));

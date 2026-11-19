@@ -1,4 +1,4 @@
-//! Benchmarks of `vinc-values`: the incremental, caller-retains verifier against the copying verifier at packet-sized
+//! Benchmarks of `pinc-values`: the incremental, caller-retains verifier against the copying verifier at packet-sized
 //! pieces, and the store-reading response source.
 #![allow(
     missing_docs,
@@ -11,13 +11,13 @@
 use std::hint::black_box;
 
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
-use vinc_dag::tree::{Layout, RangeVerifier, build_outboard, encode_range, encoded_len};
-use vinc_transport::stream::StreamSource;
-use vinc_values::plan::Plan;
-use vinc_values::source::ValueSource;
-use vinc_values::span::Span;
-use vinc_values::store::ValueRead;
-use vinc_values::verify::GroupVerifier;
+use pinc_dag::tree::{Layout, RangeVerifier, build_outboard, encode_range, encoded_len};
+use pinc_transport::stream::StreamSource;
+use pinc_values::plan::Plan;
+use pinc_values::source::ValueSource;
+use pinc_values::span::Span;
+use pinc_values::store::ValueRead;
+use pinc_values::verify::GroupVerifier;
 
 const MIB: usize = 1 << 20;
 const LOG: u32 = 4;

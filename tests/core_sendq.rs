@@ -10,8 +10,8 @@
 
 use std::collections::HashSet;
 
-use vinc_core::{Command, Role, SessionId, Transmit, Value};
-use vinc_tests::*;
+use pinc_core::{Command, Role, SessionId, Transmit, Value};
+use pinc_tests::*;
 
 const DATA: usize = 30_000;
 

@@ -14,9 +14,9 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use common::{Net, SEC, ty};
-use vinc_broadcast::{SubsDrop, Trace};
-use vinc_crypto::IdentityAlg;
-use vinc_membership::NodeId;
+use pinc_broadcast::{SubsDrop, Trace};
+use pinc_crypto::IdentityAlg;
+use pinc_membership::NodeId;
 
 const T: &[u8] = b"roster";
 
@@ -135,9 +135,9 @@ fn every_subscriber_ends_with_the_hubs_list() {
 /// brings in the next one.
 #[test]
 fn a_capped_list_takes_in_the_next_subscriber_when_one_leaves() {
-    let limits = vinc_broadcast::Limits {
+    let limits = pinc_broadcast::Limits {
         max_subscribers: 4,
-        ..vinc_broadcast::Limits::default()
+        ..pinc_broadcast::Limits::default()
     };
     let mut net = Net::with_limits(&[IdentityAlg::Ed25519; 9], 1, SEC, limits);
     for i in 1..=8 {
@@ -204,7 +204,7 @@ fn a_member_that_missed_the_last_change_is_repaired_by_its_next_gap_check() {
     losing_subs_to(&mut net, 1, |net| net.subscribe(4, T));
     // A message keeps the topic live, so the members check it.
     net.publish(4, T, b"live");
-    net.advance(vinc_broadcast::consts::GAP_EVERY + SEC);
+    net.advance(pinc_broadcast::consts::GAP_EVERY + SEC);
     assert_all_hold(&net, &[1, 2, 3, 4], 256);
 }
 
@@ -359,16 +359,16 @@ fn a_hub_owes_the_list_only_to_streams_that_refused_one() {
 /// the list it holds is not applied (the id after the cut would never come back): it asks for the whole list.
 #[test]
 fn a_member_whose_subscriber_limit_is_under_its_hubs_asks_for_the_list_when_a_change_removes_from_a_cut_list() {
-    let small = vinc_broadcast::Limits {
+    let small = pinc_broadcast::Limits {
         max_subscribers: 2,
-        ..vinc_broadcast::Limits::default()
+        ..pinc_broadcast::Limits::default()
     };
     let mut net = Net::with_limits(&[IdentityAlg::Ed25519; 4], 1, SEC, small);
     for i in 1..=3 {
         net.attach(i);
     }
     // The hub keeps the default limit; the members keep two.
-    net.limits = vinc_broadcast::Limits::default();
+    net.limits = pinc_broadcast::Limits::default();
     let at = net.now;
     net.restart(0, at);
     let mut order: Vec<usize> = (1..=3).collect();
@@ -571,7 +571,7 @@ fn an_exact_duplicate_of_a_change_is_ignored_and_a_late_older_list_is_repaired_b
     assert!(inject(&mut net, 0, 2, &old).is_empty());
     assert_eq!(net.nodes[2].t.known_subscribers(T), [net.id(1)].as_slice());
     net.publish(2, T, b"live");
-    net.advance(vinc_broadcast::consts::GAP_EVERY + SEC);
+    net.advance(pinc_broadcast::consts::GAP_EVERY + SEC);
     assert_eq!(
         net.nodes[2].t.known_subscribers(T),
         expected(&net, &[1, 2, 3], 256).as_slice()
@@ -581,15 +581,15 @@ fn an_exact_duplicate_of_a_change_is_ignored_and_a_late_older_list_is_repaired_b
 /// A removal of an id the member never held (past its cut) changes nothing and asks for nothing.
 #[test]
 fn a_removal_past_the_cut_of_a_member_with_a_lower_limit_asks_for_nothing() {
-    let small = vinc_broadcast::Limits {
+    let small = pinc_broadcast::Limits {
         max_subscribers: 2,
-        ..vinc_broadcast::Limits::default()
+        ..pinc_broadcast::Limits::default()
     };
     let mut net = Net::with_limits(&[IdentityAlg::Ed25519; 5], 1, SEC, small);
     for i in 1..=4 {
         net.attach(i);
     }
-    net.limits = vinc_broadcast::Limits::default();
+    net.limits = pinc_broadcast::Limits::default();
     let at = net.now;
     net.restart(0, at);
     let mut order: Vec<usize> = (1..=4).collect();

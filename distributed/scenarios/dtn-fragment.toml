@@ -1,6 +1,6 @@
 name = "dtn-fragment"
-about = "Fine-sliced bundles of 1 MiB and 4 MiB are received whole: cut into 4 KiB slices (slice_log 2) they make 65 and 258 erasure blocks, and a data-only reception holds one disjoint run per block. The reception counts held symbols per block, with no cap on runs, so the carrier receives both, takes custody and delivers to the phone, asking for no parity since nothing is lost. Before (an interval cap of 256 runs) the 4 MiB bundle overflowed and was refused as fragmented. VINC only."
-stacks = ["vinc"]
+about = "Fine-sliced bundles of 1 MiB and 4 MiB are received whole: cut into 4 KiB slices (slice_log 2) they make 65 and 258 erasure blocks, and a data-only reception holds one disjoint run per block. The reception counts held symbols per block, with no cap on runs, so the carrier receives both, takes custody and delivers to the phone, asking for no parity since nothing is lost. Before (an interval cap of 256 runs) the 4 MiB bundle overflowed and was refused as fragmented. PINC only."
+stacks = ["pinc"]
 repetitions = 3
 
 [resources]

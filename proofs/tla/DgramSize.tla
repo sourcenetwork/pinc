@@ -1,6 +1,6 @@
 ------------------------------ MODULE DgramSize ------------------------------
 (***************************************************************************)
-(* How big a datagram build_datagram (vinc-transport conn/send.rs) writes  *)
+(* How big a datagram build_datagram (pinc-transport conn/send.rs) writes  *)
 (* for one path, for every input it reads, with the real sizes.            *)
 (*                                                                         *)
 (* The story: a connection writes one datagram for a path. The path is     *)
@@ -34,7 +34,7 @@
 (* packet are given by how many bytes each would take (HsWant, AppWant)    *)
 (* and take at most the room they are given; their content is the          *)
 (* FramePack and HdrBody rows. Lean counterpart:                           *)
-(* proofs/lean/Vinc/TransportDgramSize.lean.                               *)
+(* proofs/lean/Pinc/TransportDgramSize.lean.                               *)
 (***************************************************************************)
 EXTENDS Integers
 

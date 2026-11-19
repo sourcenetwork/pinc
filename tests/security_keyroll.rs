@@ -11,9 +11,9 @@
     unreachable_pub
 )]
 
-use vinc_crypto::{Aead, Drbg, Provider, Secret, Software};
-use vinc_security::keyroll::{MAX_KEY_AGE_NS, MAX_REKEY_LEN, due, request_id};
-use vinc_security::{Env, Failure, Limits, PacketKey, Rekey, Roll, roll_secret};
+use pinc_crypto::{Aead, Drbg, Provider, Secret, Software};
+use pinc_security::keyroll::{MAX_KEY_AGE_NS, MAX_REKEY_LEN, due, request_id};
+use pinc_security::{Env, Failure, Limits, PacketKey, Rekey, Roll, roll_secret};
 
 fn env<'a>(p: &'a Software, drbg: &'a mut Drbg) -> Env<'a, Software> {
     Env {
@@ -210,7 +210,7 @@ fn the_echo_is_bound_into_the_derived_value() {
     assert_ne!(done.dh.expose(), raw.expose());
     assert_eq!(
         done.dh.expose(),
-        &vinc_crypto::extract(raw.expose(), &request_id(&request.share)),
+        &pinc_crypto::extract(raw.expose(), &request_id(&request.share)),
         "the value is extract(dh, request id)"
     );
 }
@@ -255,7 +255,7 @@ fn a_roll_does_not_follow_from_the_old_secret_alone() {
     assert_ne!(roll_secret(&old, &dh1).expose(), roll_secret(&old, &dh2).expose());
     // The next secret also differs from the old one run through a hash-only step.
     let mut hash_only = [0u8; 32];
-    vinc_crypto::expand(old.expose(), "VINC 2026 v1 key roll", &[], &mut hash_only);
+    pinc_crypto::expand(old.expose(), "PINC 2026 v1 key roll", &[], &mut hash_only);
     assert_ne!(&hash_only, roll_secret(&old, &dh1).expose());
 }
 
@@ -309,7 +309,7 @@ fn rolling_allocates_nothing() {
     let secret = Secret::new([4; 32]);
     let key = PacketKey::from_secret(&p, Aead::Aes128Gcm, &secret).unwrap();
     let mut body = [0u8; MAX_REKEY_LEN];
-    let stats = vinc_tests::measure(|| {
+    let stats = pinc_tests::measure(|| {
         let request = a.start(&mut env(&p, &mut da)).unwrap();
         let n = request.encode(&mut body).unwrap();
         let request = Rekey::decode(&body[..n]).unwrap();
@@ -321,4 +321,4 @@ fn rolling_allocates_nothing() {
     assert_eq!(stats.count(), 0, "{stats:?}");
 }
 
-vinc_tests::install_counting_allocator!();
+pinc_tests::install_counting_allocator!();

@@ -1,6 +1,6 @@
 //! Trace generation for the relay's record store: seeded random runs of the real `Relay` through its public API,
 //! recorded as ndjson (`connect_records.ndjson`) for the TLA+ trace check (`TraceConnectRecords.tla`) and the Lean replay
-//! (`Vinc/TraceConnectRecords.lean`).
+//! (`Pinc/TraceConnectRecords.lean`).
 //!
 //! A run is one relay with three record slots, five carrier sessions open (four Ed25519 nodes and one ML-DSA-65 node,
 //! whose records are too large for a UDP answer) and the relay's own key, driven by every way a record arrives (PUB on a
@@ -18,7 +18,7 @@
 //! relay emitted in order (frames to peer relays and the `Trace` transitions of the record rules; the carrier PINGs of
 //! `handle_timeout` are not about records and are left out), and after every call the store of the relay (for each
 //! stored node: sequence number, home, tag, length and receive time, read back from the stored bytes) and its counters.
-//! The trace is written to the directory in `VINC_TRACE_DIR` when it is set; otherwise nothing is written.
+//! The trace is written to the directory in `PINC_TRACE_DIR` when it is set; otherwise nothing is written.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -40,14 +40,14 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
 
 use connect_common::{addr, dg, keypair, nid};
-use vinc_connect::carrier::Frame;
-use vinc_connect::carrier::frame::DnsAnswer;
-use vinc_connect::record::{self, MAX_RECORD_LEN, Reach, Record, RecordFields};
-use vinc_connect::relay::datagram::Datagram;
-use vinc_connect::relay::{Config, Effect, Quota, RecordOrigin, Reject, Relay, SessionId, Sink, Trace, UdpTarget};
-use vinc_crypto::identity::MAX_PUBLIC_KEY_LEN;
-use vinc_crypto::{IdentityAlg, Keypair, NodeId};
-use vinc_tests::SplitMix64;
+use pinc_connect::carrier::Frame;
+use pinc_connect::carrier::frame::DnsAnswer;
+use pinc_connect::record::{self, MAX_RECORD_LEN, Reach, Record, RecordFields};
+use pinc_connect::relay::datagram::Datagram;
+use pinc_connect::relay::{Config, Effect, Quota, RecordOrigin, Reject, Relay, SessionId, Sink, Trace, UdpTarget};
+use pinc_crypto::identity::MAX_PUBLIC_KEY_LEN;
+use pinc_crypto::{IdentityAlg, Keypair, NodeId};
+use pinc_tests::SplitMix64;
 
 const SEC: u64 = 1_000_000_000;
 const TTL: u64 = 5400;
@@ -372,7 +372,7 @@ fn run(seed: u64, out: &mut Vec<String>, cov: &mut Cov) {
     };
     out.push(format!(
         r#"{{"t":"qnew","me":6,"r":{CAP},"p":{}}}"#,
-        vinc_connect::relay::rule::MAX_PEERS
+        pinc_connect::relay::rule::MAX_PEERS
     ));
     let mut now_s = 1000u64;
     let mut sess: Vec<SessionId> = Vec::new();
@@ -629,7 +629,7 @@ fn the_relay_records_its_record_trace() {
     assert!(cov.hit > 0, "no lookup hit");
     assert!(cov.toolarge > 0, "no too-large answer");
     assert!(cov.sync > 0, "no sync_record");
-    let Some(dir) = std::env::var_os("VINC_TRACE_DIR") else {
+    let Some(dir) = std::env::var_os("PINC_TRACE_DIR") else {
         return;
     };
     let dir = std::path::PathBuf::from(dir);

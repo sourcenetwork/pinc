@@ -1,4 +1,4 @@
-//! Shared helpers for the VINC tests.
+//! Shared helpers for the PINC tests.
 //!
 //! The tests themselves are the `[[test]]` targets of this package (`tests/*.rs`); this library holds what several of
 //! them use.
@@ -31,15 +31,15 @@ pub use route::*;
 #[cfg(feature = "hwenc")]
 pub use swtpm::Swtpm;
 
-/// The number in the environment variable `VINC_TRACE_SEED`, mixed; zero when it is unset or not a number.
+/// The number in the environment variable `PINC_TRACE_SEED`, mixed; zero when it is unset or not a number.
 fn trace_salt() -> u64 {
-    std::env::var("VINC_TRACE_SEED")
+    std::env::var("PINC_TRACE_SEED")
         .ok()
         .and_then(|v| v.trim().parse::<u64>().ok())
         .map_or(0, |n| SplitMix64::new(n).next_u64())
 }
 
-/// Whether the trace tests run under a shifted seed (`VINC_TRACE_SEED` is set). A trace test's "the runs reach every
+/// Whether the trace tests run under a shifted seed (`PINC_TRACE_SEED` is set). A trace test's "the runs reach every
 /// branch" assertions describe its fixed seeds only, so they are skipped then; the recorded trace is still written and
 /// still checked against the models, which is the point of the soak.
 pub fn soaking() -> bool {
@@ -58,7 +58,7 @@ impl SplitMix64 {
         Self(seed)
     }
 
-    /// A generator for a trace test (see [`soaking`]): `seed`, unless the environment variable `VINC_TRACE_SEED` is set to a number, in
+    /// A generator for a trace test (see [`soaking`]): `seed`, unless the environment variable `PINC_TRACE_SEED` is set to a number, in
     /// which case every seed of every trace test is moved by it (the soak script `scripts/trace-soak.sh` does this to
     /// record runs the fixed seeds never produce). Unset, it is exactly `new(seed)`, so the gate's runs do not change.
     pub fn traced(seed: u64) -> Self {
@@ -177,7 +177,7 @@ pub fn measure(f: impl FnOnce()) -> AllocStats {
     drop(std::hint::black_box(Box::new(0u8)));
     assert!(
         AllocStats::now() != probe,
-        "the counting allocator is not installed: add `vinc_tests::install_counting_allocator!();` to the test target"
+        "the counting allocator is not installed: add `pinc_tests::install_counting_allocator!();` to the test target"
     );
     let before = AllocStats::now();
     f();
@@ -206,6 +206,6 @@ pub static MAP_SECRETS: [u64; 7] = [
     clippy::missing_panics_doc,
     reason = "the secrets are fixed and nonzero"
 )]
-pub fn id_key(seed: u64) -> vinc_broadcast::IdKey {
-    vinc_broadcast::IdKey::new(seed, &MAP_SECRETS).unwrap()
+pub fn id_key(seed: u64) -> pinc_broadcast::IdKey {
+    pinc_broadcast::IdKey::new(seed, &MAP_SECRETS).unwrap()
 }

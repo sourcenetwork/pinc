@@ -1,13 +1,13 @@
 //! Trace generation for the reconcile wire layer: the real `put_bound`, `read_bound`, `common_prefix`, `count`,
-//! `put_parts`, `read_parts`, `frame_body`, `frame_len` and `first_set_ref` of `vinc-reconcile` on generated, boundary
+//! `put_parts`, `read_parts`, `frame_body`, `frame_len` and `first_set_ref` of `pinc-reconcile` on generated, boundary
 //! and mutated inputs, and the head and count field of the messages a real session writes (and of mutations of them),
 //! recorded as ndjson (`reconcile_wire.ndjson`) for the TLA+ trace check (`TraceReconcileWire.tla`) and the Lean
-//! replay (`Vinc/TraceReconcileWire.lean`).
+//! replay (`Pinc/TraceReconcileWire.lean`).
 //!
 //! Every line is `{"t":"rw","e":<event>,...}`; bytes, bounds and messages are int arrays and every number is below
 //! 2^31 (a varint of 2^30 or more is recorded as 2^30, the value the checkers saturate at). The test asserts the
 //! properties itself (round trip, one encoding per bound, the reasons of the refusals), so it is meaningful without the
-//! proof tools. The trace is written to `$VINC_TRACE_DIR` when it is set and the lines are not even built otherwise.
+//! proof tools. The trace is written to `$PINC_TRACE_DIR` when it is set and the lines are not even built otherwise.
 //! `Items` is crate-private: the item lists are checked through the session traces (`trace_reconcile`) and, over all
 //! inputs, by the specification and the Lean proofs only.
 #![allow(
@@ -27,21 +27,21 @@ mod common;
 use std::fmt::Write as _;
 
 use common::{Dir, fixed_set, index, mutate, run_with, var_set};
-use vinc_reconcile::wire::{
+use pinc_reconcile::wire::{
     common_prefix, count, first_set_ref, frame_body, frame_len, put_bound, put_parts, read_bound, read_parts, tag,
 };
-use vinc_reconcile::{Initiator, Limits, Reason, Responder};
-use vinc_tests::SplitMix64;
-use vinc_wire::{Reader, varint};
+use pinc_reconcile::{Initiator, Limits, Reason, Responder};
+use pinc_tests::SplitMix64;
+use pinc_wire::{Reader, varint};
 
 const SAT: u64 = 1 << 30;
 
-/// The lines of the trace; built only when `$VINC_TRACE_DIR` is set.
+/// The lines of the trace; built only when `$PINC_TRACE_DIR` is set.
 struct Trace(Option<String>);
 
 impl Trace {
     fn new() -> Self {
-        Self(std::env::var_os("VINC_TRACE_DIR").map(|_| String::new()))
+        Self(std::env::var_os("PINC_TRACE_DIR").map(|_| String::new()))
     }
 
     fn line(&mut self, f: impl FnOnce() -> String) {
@@ -542,7 +542,7 @@ fn reconcile_wire_traces_are_consistent_with_the_code() {
     counts_traces(&mut tr);
     frame_traces(&mut tr);
     message_traces(&mut tr);
-    if let (Some(text), Some(dir)) = (tr.0, std::env::var_os("VINC_TRACE_DIR")) {
+    if let (Some(text), Some(dir)) = (tr.0, std::env::var_os("PINC_TRACE_DIR")) {
         assert!(text.lines().count() > 5000);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(std::path::Path::new(&dir).join("reconcile_wire.ndjson"), text).unwrap();

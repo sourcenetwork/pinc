@@ -11,9 +11,9 @@
     clippy::cast_possible_truncation
 )]
 
-use vinc_core::{Answer, Command, CommandError, ConnectFailure, EndReason, Event, Query, Role, Value};
-use vinc_tests::*;
-use vinc_transport::conn::{CloseReason, code};
+use pinc_core::{Answer, Command, CommandError, ConnectFailure, EndReason, Event, Query, Role, Value};
+use pinc_tests::*;
+use pinc_transport::conn::{CloseReason, code};
 
 const SLOW: u64 = 15 * MS_NS; // one way; a round trip of 30 ms is above the 20 ms READY threshold
 const FAST: u64 = 5 * MS_NS; // a round trip of 10 ms is below it
@@ -329,9 +329,9 @@ fn a_flood_before_the_answer_fills_the_hold_and_stalls_the_session_without_losin
         assert!(opened < first_dg, "order kept");
         // Every datagram the hold took reached the host: 64 places less the stream, less one recoverable read.
         assert!(
-            datagrams >= vinc_core::HELD_EVENTS - 2,
+            datagrams >= pinc_core::HELD_EVENTS - 2,
             "{datagrams} datagrams of the {} held",
-            vinc_core::HELD_EVENTS
+            pinc_core::HELD_EVENTS
         );
     });
 }
@@ -475,7 +475,7 @@ fn a_stalled_session_still_takes_a_close_and_the_peers_acks() {
         let Answer::Stats(st) = net.nodes[b].ep.query(Query::Stats(sb)) else {
             panic!()
         };
-        assert_eq!(st.held, vinc_core::HELD_EVENTS, "the hold is full");
+        assert_eq!(st.held, pinc_core::HELD_EVENTS, "the hold is full");
         assert!(net.nodes[b].ep.node_stats().stalled_in > 0);
         // The dialer closes while the server's session is stalled and unanswered: the close gets through.
         let t = net.now;
@@ -543,7 +543,7 @@ fn a_peer_first_heard_while_events_are_left_unread_is_reported_when_the_host_rea
 }
 
 /// Opens a unidirectional stream on `n`'s session `s` and writes `data` to it.
-fn write_once(net: &mut CoreNet, n: usize, s: vinc_core::SessionId, data: &[u8]) {
+fn write_once(net: &mut CoreNet, n: usize, s: pinc_core::SessionId, data: &[u8]) {
     let t = net.now;
     let Value::Stream(id) = net.nodes[n]
         .cmd(
@@ -672,7 +672,7 @@ fn a_session_the_host_closes_when_it_is_reported_names_nothing_after_its_closed(
 }
 
 /// The sessions `ep` holds with `node`, as [`Query::PeerSession`] walks them: the session, its protocol, who dialed.
-fn sessions_of(ep: &CoreEp, node: vinc_crypto::NodeId) -> Vec<(vinc_core::SessionId, Vec<u8>, bool)> {
+fn sessions_of(ep: &CoreEp, node: pinc_crypto::NodeId) -> Vec<(pinc_core::SessionId, Vec<u8>, bool)> {
     let (mut out, mut after) = (Vec::new(), None);
     while let Answer::Stats(st) = ep.query(Query::PeerSession { node, after }) {
         out.push((st.session, st.alpn.unwrap().as_bytes().to_vec(), st.dialer));

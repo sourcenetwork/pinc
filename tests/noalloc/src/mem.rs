@@ -6,7 +6,7 @@
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use vinc_transport::stream::pool::{CHUNK_SIZE, RawChunk};
+use pinc_transport::stream::pool::{CHUNK_SIZE, RawChunk};
 
 /// Session slots of one endpoint.
 pub(crate) const SLOTS: usize = 2;

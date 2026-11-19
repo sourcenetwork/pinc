@@ -1,4 +1,4 @@
-//! Benchmarks of `vinc-crypto`: key agreement, signatures, the AEADs, header protection, the KDF and the DRBG.
+//! Benchmarks of `pinc-crypto`: key agreement, signatures, the AEADs, header protection, the KDF and the DRBG.
 #![allow(
     missing_docs,
     clippy::unwrap_used,
@@ -10,8 +10,8 @@
 use std::hint::black_box;
 
 use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main};
-use vinc_crypto::identity::{MAX_PUBLIC_KEY_LEN, MAX_SIGNATURE_LEN, verify};
-use vinc_crypto::{Aead, Drbg, IdentityAlg, Keypair, Provider, Software, expand, labels};
+use pinc_crypto::identity::{MAX_PUBLIC_KEY_LEN, MAX_SIGNATURE_LEN, verify};
+use pinc_crypto::{Aead, Drbg, IdentityAlg, Keypair, Provider, Software, expand, labels};
 
 fn bench_capabilities(c: &mut Criterion) {
     let caps = Software.capabilities();

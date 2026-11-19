@@ -1,14 +1,14 @@
-//! Trace generation for the wire formats of `vinc-connect`: the carrier frame, the relay datagram, the signed record,
+//! Trace generation for the wire formats of `pinc-connect`: the carrier frame, the relay datagram, the signed record,
 //! the beacon, the sleep notice, the ticket (binary and text) and the candidate list of a `REACH_OUT`, recorded as ndjson
 //! (`connect_codec.ndjson`) for the TLA+ trace check (`TraceConnectCodec.tla`) and the Lean replay
-//! (`Vinc/TraceConnectCodec.lean`).
+//! (`Pinc/TraceConnectCodec.lean`).
 //!
 //! Every event is one call of the real code on bytes: valid values of every kind and boundary, every proper cut of
 //! them, trailing bytes, single bytes changed, encodings into buffers of every nearby size, and seeded random garbage
 //! with a valid type byte. What is recorded is the input bytes and the result: the decoded fields as byte sequences
 //! (a node is its 33 bytes, a flag one byte, a batch its member frames) or the refusal as the tag of its error. The
 //! test also asserts what the decoders must satisfy on their own: a decoded value re-encodes to its input.
-//! The trace is written to the directory in `VINC_TRACE_DIR` when it is set; otherwise nothing is written.
+//! The trace is written to the directory in `PINC_TRACE_DIR` when it is set; otherwise nothing is written.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -30,17 +30,17 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
 use connect_codec_out::{Out, enc};
 use connect_common::{keypair, nid, node_bytes};
-use vinc_connect::carrier::frame::{
+use pinc_connect::carrier::frame::{
     BATCH_MAX_BYTES, BATCH_MAX_FRAMES, DnsAnswer, Frame, MAX_FRAME_LEN, MAX_NOTICE_LEN, MAX_PACKET_LEN,
 };
-use vinc_connect::client::punch;
-use vinc_connect::local;
-use vinc_connect::record::{self, MAX_RECORD_LEN, Reach, Record, RecordFields};
-use vinc_connect::relay::datagram::{Datagram, MAX_TUNNEL_DATAGRAM};
-use vinc_connect::relay::sleep;
-use vinc_connect::ticket::{Ticket, TicketError};
-use vinc_crypto::{IdentityAlg, NodeId};
-use vinc_tests::SplitMix64;
+use pinc_connect::client::punch;
+use pinc_connect::local;
+use pinc_connect::record::{self, MAX_RECORD_LEN, Reach, Record, RecordFields};
+use pinc_connect::relay::datagram::{Datagram, MAX_TUNNEL_DATAGRAM};
+use pinc_connect::relay::sleep;
+use pinc_connect::ticket::{Ticket, TicketError};
+use pinc_crypto::{IdentityAlg, NodeId};
+use pinc_tests::SplitMix64;
 
 fn a4(i: u8, port: u16) -> SocketAddr {
     SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 0, i, 1)), port)
@@ -218,10 +218,10 @@ fn gen_frames(o: &mut Out, rng: &mut SplitMix64) {
     ];
     let build = |ms: &[&[u8]]| -> Vec<u8> {
         let mut buf = vec![0u8; MAX_FRAME_LEN + 64];
-        let mut bb = vinc_connect::carrier::BatchBuilder::new(&mut buf);
+        let mut bb = pinc_connect::carrier::BatchBuilder::new(&mut buf);
         for m in ms {
             let f = Frame::decode(m).unwrap();
-            assert_eq!(bb.offer(&f).unwrap(), vinc_connect::carrier::Offer::Added);
+            assert_eq!(bb.offer(&f).unwrap(), pinc_connect::carrier::Offer::Added);
         }
         bb.finish().unwrap().unwrap().to_vec()
     };
@@ -502,10 +502,10 @@ fn gen_dgrams(o: &mut Out, rng: &mut SplitMix64) {
 }
 
 /// A key pair with the algorithm's real public key, to sign real records.
-fn key(alg: IdentityAlg, tag: u8) -> (vinc_crypto::Keypair, NodeId, Vec<u8>) {
+fn key(alg: IdentityAlg, tag: u8) -> (pinc_crypto::Keypair, NodeId, Vec<u8>) {
     let kp = keypair(alg, tag);
     let node = kp.node_id();
-    let mut pk = vec![0u8; vinc_crypto::identity::MAX_PUBLIC_KEY_LEN];
+    let mut pk = vec![0u8; pinc_crypto::identity::MAX_PUBLIC_KEY_LEN];
     let n = kp.public_key(&mut pk).unwrap();
     pk.truncate(n);
     (kp, node, pk)
@@ -799,7 +799,7 @@ fn connect_codec_trace() {
     let mut rng = SplitMix64::traced(0xC0DEC);
     o.lines.push(format!(
         r#"{{"t":"consts","rec":{MAX_RECORD_LEN},"pkt":{MAX_PACKET_LEN},"notice":{MAX_NOTICE_LEN},"frames":{BATCH_MAX_FRAMES},"bytes":{BATCH_MAX_BYTES},"frame":{MAX_FRAME_LEN},"tunnel":{MAX_TUNNEL_DATAGRAM},"alias":{},"bcn":{},"ntc":{}}}"#,
-        vinc_connect::carrier::ALIAS_MAX,
+        pinc_connect::carrier::ALIAS_MAX,
         local::MAX_LEN,
         sleep::MAX_LEN
     ));
@@ -808,7 +808,7 @@ fn connect_codec_trace() {
     gen_signed(&mut o, &mut rng);
     gen_tickets(&mut o, &mut rng);
     gen_cands(&mut o, &mut rng);
-    if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
+    if let Ok(dir) = std::env::var("PINC_TRACE_DIR") {
         std::fs::write(format!("{dir}/connect_codec.ndjson"), o.lines.join("\n") + "\n").unwrap();
     }
     assert!(o.lines.len() > 1000);

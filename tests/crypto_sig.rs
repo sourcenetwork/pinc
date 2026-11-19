@@ -9,14 +9,14 @@
 )]
 
 use ml_dsa::{ExpandedSigningKey, ExpandedSigningKeyBytes, MlDsa65};
-use vinc_crypto::identity::{MAX_PUBLIC_KEY_LEN, MAX_SIGNATURE_LEN, verify, verify_ml_dsa_65, verify_node};
-use vinc_crypto::{CryptoError, IdentityAlg, Keypair, NodeId};
+use pinc_crypto::identity::{MAX_PUBLIC_KEY_LEN, MAX_SIGNATURE_LEN, verify, verify_ml_dsa_65, verify_node};
+use pinc_crypto::{CryptoError, IdentityAlg, Keypair, NodeId};
 
 mod acvp_dsa;
 mod hexutil;
 use hexutil::{arr, hex};
 
-vinc_tests::install_counting_allocator!();
+pinc_tests::install_counting_allocator!();
 
 const ALL: [IdentityAlg; 4] = [
     IdentityAlg::Ed25519,
@@ -328,7 +328,7 @@ fn node_ids_bind_the_algorithm_and_key() {
             let pk = public(&kp);
             let id = NodeId::from_public(alg, &pk).unwrap();
             assert_eq!(id, kp.node_id());
-            let mut h = blake3::Hasher::new_derive_key("VINC 2026 v1 node id");
+            let mut h = blake3::Hasher::new_derive_key("PINC 2026 v1 node id");
             h.update(&[alg.tag()]);
             h.update(&pk);
             assert_eq!(id.bytes, *h.finalize().as_bytes(), "{alg:?}");
@@ -362,7 +362,7 @@ fn sign_and_verify_do_not_allocate() {
                 let pk = public(&kp);
                 let mut sig = vec![0u8; MAX_SIGNATURE_LEN];
                 let mut pkbuf = vec![0u8; MAX_PUBLIC_KEY_LEN];
-                vinc_tests::measure(|| {
+                pinc_tests::measure(|| {
                     let n = kp.sign(b"msg", &mut sig).unwrap();
                     verify(alg, &pk, b"msg", &sig[..n]).unwrap();
                     kp.public_key(&mut pkbuf).unwrap();

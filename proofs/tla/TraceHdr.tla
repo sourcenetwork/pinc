@@ -1,6 +1,6 @@
 ------------------------------ MODULE TraceHdr ------------------------------
 (***************************************************************************)
-(* Trace validation of the packet header codecs: vinc-transport            *)
+(* Trace validation of the packet header codecs: pinc-transport            *)
 (* packet/header.rs, packet/datagram.rs and the associated data of         *)
 (* packet/protect.rs, and the body of a Handshake packet (write_handshake  *)
 (* and on_fragment), pad_to and sample_at: hw (a datagram a real client    *)
@@ -23,7 +23,7 @@
 (* bytes does not fit a TLC integer and is compared by the Lean replay.    *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds hdr.ndjson.           *)
+(* variable PINC_TRACE_DIR, the directory that holds hdr.ndjson.           *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, TLC, Json, IOUtils
 
@@ -31,7 +31,7 @@ CONSTANT Late
 VARIABLE i
 INSTANCE HdrOps
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/hdr.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/hdr.ndjson")
 Ev0 == Trace[i]
 
 HdrOf(e) == [ty |-> e.ty, dcid |-> e.dcid, scid |-> e.scid, bl |-> U!W(e.bl)]

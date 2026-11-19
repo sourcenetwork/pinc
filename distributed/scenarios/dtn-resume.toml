@@ -1,6 +1,6 @@
 name = "dtn-resume"
-about = "Resumed reception from a partial set of slices: two carriers hold the update; the phone, on a slow link, starts receiving from c1, which is killed mid-transfer and never comes back; cloud's later contact finishes the reception from where it stopped, never asking again for a slice it already verified. VINC only: iroh and libp2p have no resumable bundle reception."
-stacks = ["vinc"]
+about = "Resumed reception from a partial set of slices: two carriers hold the update; the phone, on a slow link, starts receiving from c1, which is killed mid-transfer and never comes back; cloud's later contact finishes the reception from where it stopped, never asking again for a slice it already verified. PINC only: iroh and libp2p have no resumable bundle reception."
+stacks = ["pinc"]
 repetitions = 3
 
 [resources]

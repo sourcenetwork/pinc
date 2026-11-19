@@ -18,7 +18,7 @@ mod connect_common;
 
 use connect_common::{ed, id};
 use proptest::prelude::*;
-use vinc_connect::local::{BURST, BURST_GAP, Beacon, BeaconError, Duty, MAX_LEN, Radio, STEADY_GAP, sign};
+use pinc_connect::local::{BURST, BURST_GAP, Beacon, BeaconError, Duty, MAX_LEN, Radio, STEADY_GAP, sign};
 
 const S: u64 = 1_000_000_000;
 

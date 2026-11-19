@@ -1,6 +1,6 @@
 ------------------------------- MODULE HsOps -------------------------------
 (***************************************************************************)
-(* The pure core of the vinc-security handshake: the symbolic terms, the   *)
+(* The pure core of the pinc-security handshake: the symbolic terms, the   *)
 (* attacker's knowledge of them, and the step function of each state       *)
 (* machine (Initiator in initiator.rs, Responder in responder.rs, the      *)
 (* ticket stores in tickets.rs). Shared by the model (Handshake.tla) and   *)

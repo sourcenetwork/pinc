@@ -17,15 +17,15 @@ mod values_support;
 use std::collections::HashMap;
 
 use values_support::*;
-use vinc_transport::frame::ext;
-use vinc_transport::stream::{StreamId, StreamSource};
-use vinc_values::fetch::{Fetch, FetchSpec, In, Io};
-use vinc_values::plan::Plan;
-use vinc_values::session::{OpenError, Outbound, PeerInfo, Provider, Session};
-use vinc_values::source::ValueSource;
-use vinc_values::span::Span;
-use vinc_values::trace::{Event, LiarWhy, Release, Trace};
-use vinc_values::wire::ProofFrame;
+use pinc_transport::frame::ext;
+use pinc_transport::stream::{StreamId, StreamSource};
+use pinc_values::fetch::{Fetch, FetchSpec, In, Io};
+use pinc_values::plan::Plan;
+use pinc_values::session::{OpenError, Outbound, PeerInfo, Provider, Session};
+use pinc_values::source::ValueSource;
+use pinc_values::span::Span;
+use pinc_values::trace::{Event, LiarWhy, Release, Trace};
+use pinc_values::wire::ProofFrame;
 
 const G: u64 = GROUP;
 

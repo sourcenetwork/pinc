@@ -13,10 +13,10 @@
 mod layers_common;
 
 use layers_common::{LWorld, big, completes, data, ids, secs, values_on};
-use vinc_node::NodeEvent;
-use vinc_node::trace::{Body, NodeTrace};
-use vinc_sim::{LinkChange, Loss, MS, NodeId as SimId};
-use vinc_tests::{Lie, NCmd};
+use pinc_node::NodeEvent;
+use pinc_node::trace::{Body, NodeTrace};
+use pinc_sim::{LinkChange, Loss, MS, NodeId as SimId};
+use pinc_tests::{Lie, NCmd};
 
 fn fails(w: &LWorld, n: SimId) -> usize {
     w.node_events(n)
@@ -69,7 +69,7 @@ fn a_fetch_from_four_providers_survives_a_liar_and_a_stalled_provider() {
 }
 
 /// The value traces of node `n` that match `f`.
-fn value_traces(w: &LWorld, n: SimId, f: impl Fn(&vinc_values::trace::Trace) -> bool) -> usize {
+fn value_traces(w: &LWorld, n: SimId, f: impl Fn(&pinc_values::trace::Trace) -> bool) -> usize {
     w.sim
         .node(n)
         .traces
@@ -247,8 +247,8 @@ fn a_fetch_refused_at_start_holds_no_provider() {
     big(|| {
         let (mut w, root, length, providers, at) = stored_value(272);
         let m0 = w.members[0];
-        let past_the_end = [vinc_values::span::Span { off: length, len: 1 }];
-        let req = vinc_node::ValuesRequest {
+        let past_the_end = [pinc_values::span::Span { off: length, len: 1 }];
+        let req = pinc_node::ValuesRequest {
             root,
             length,
             ranges: &past_the_end,
@@ -258,7 +258,7 @@ fn a_fetch_refused_at_start_holds_no_provider() {
         let node = &mut w.sim.node_mut(m0).node;
         assert_eq!(
             node.values_fetch(secs(at) + MS, &req),
-            Err(vinc_node::ValuesError::OutOfBounds)
+            Err(pinc_node::ValuesError::OutOfBounds)
         );
         assert_eq!(node.values_stats().providers_in_use, 0, "a refused fetch holds nothing");
         w.run(secs(at + 30));
@@ -271,7 +271,7 @@ fn a_fetch_done_at_start_holds_no_provider() {
     big(|| {
         let (mut w, root, length, providers, at) = stored_value(273);
         let m0 = w.members[0];
-        let req = vinc_node::ValuesRequest {
+        let req = pinc_node::ValuesRequest {
             root,
             length,
             ranges: &[],
@@ -326,8 +326,8 @@ fn a_striped_fetch_asks_again_as_each_request_stream_ends() {
                 Some(value),
                 "seed {seed}"
             );
-            let asked = value_traces(&w, m[0], |t| matches!(t, vinc_values::trace::Trace::Requested { .. }));
-            let stalls = value_traces(&w, m[0], |t| matches!(t, vinc_values::trace::Trace::StallRedial { .. }));
+            let asked = value_traces(&w, m[0], |t| matches!(t, pinc_values::trace::Trace::Requested { .. }));
+            let stalls = value_traces(&w, m[0], |t| matches!(t, pinc_values::trace::Trace::StallRedial { .. }));
             assert!(
                 asked > 8,
                 "seed {seed}: the providers were asked again ({asked} requests)"
@@ -463,7 +463,7 @@ fn ahead_groups(w: &LWorld, n: SimId) -> usize {
         .filter(|(_, t)| {
             matches!(
                 &t.body,
-                Body::Values(_, vinc_values::trace::Trace::Verified { ahead: true, .. })
+                Body::Values(_, pinc_values::trace::Trace::Verified { ahead: true, .. })
             )
         })
         .count()
@@ -571,7 +571,7 @@ fn at_most_four_thousand_ninety_six_roots_are_provided() {
             r[..4].copy_from_slice(&i.to_be_bytes());
             r
         };
-        for i in 0..vinc_node::PROVIDED_MAX as u32 {
+        for i in 0..pinc_node::PROVIDED_MAX as u32 {
             assert!(node.values_provide(&root(i)), "root {i}");
         }
         assert!(!node.values_provide(&root(u32::MAX)), "the 4097th root is refused");
@@ -638,7 +638,7 @@ fn a_server_session_that_began_on_a_relay_moves_to_the_direct_path_that_validate
     // relay path. A direct path validates within milliseconds; the provider must take it, or a bulk transfer rides the
     // relay's quota and stalls when it is used up.
     big(|| {
-        use vinc_node::Ep;
+        use pinc_node::Ep;
         let mut w = LWorld::build_with(301, 2, 3, 400_000_000, false, values_on);
         let m = w.members.clone();
         let value = data(301, 16 << 20);
@@ -662,7 +662,7 @@ fn a_server_session_that_began_on_a_relay_moves_to_the_direct_path_that_validate
         assert_eq!(busy.len(), 1, "the provider is serving the value");
         let route = busy[0].route.map(|(_, r)| r);
         assert!(
-            route.is_some_and(|r| !vinc_core::is_relay_addr(&r)),
+            route.is_some_and(|r| !pinc_core::is_relay_addr(&r)),
             "the provider's session is on a direct path 400 ms after the fetch began, not {route:?}"
         );
         w.run(secs(60));
@@ -711,7 +711,7 @@ fn a_burst_for_a_relay_carrier_is_held_and_sent_not_lost() {
     // ones that do not fit wait and leave as the host drains the buffer; none is lost, so no probe timeout fires
     // and the window is not cut while the transfer starts.
     big(|| {
-        use vinc_node::Ep;
+        use pinc_node::Ep;
         let mut w = LWorld::build_with(301, 2, 3, 400_000_000, false, values_on);
         let m = w.members.clone();
         let value = data(301, 16 << 20);

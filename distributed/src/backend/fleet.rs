@@ -29,7 +29,7 @@ fn user() -> String {
 }
 
 fn bin() -> String {
-    "/tmp/vinc-distributed/vinc-distributed".into()
+    "/tmp/pinc-distributed/pinc-distributed".into()
 }
 
 const fn yes() -> bool {

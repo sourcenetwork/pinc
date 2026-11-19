@@ -1,7 +1,7 @@
 //! Trace generation for the set reconciliation: seeded sessions of the real `Initiator` and `Responder` through the
 //! public API, recorded as ndjson (`reconcile.ndjson`, and `reconcile_big.ndjson` for sessions whose messages hold a
 //! varint of 2^31 or more) for the TLA+ trace check (`TraceReconcile.tla`) and the Lean replay
-//! (`Vinc/TraceReconcile.lean`).
+//! (`Pinc/TraceReconcile.lean`).
 //!
 //! What is recorded is every handler call: who made it (`I` the initiator, `R` the responder), which (`start`,
 //! `handle`, `resume`), the bytes delivered to it (after any tampering), and the step and the bytes it wrote, or the
@@ -16,7 +16,7 @@
 //!
 //! The test asserts everything itself (an honest session reports exactly the symmetric difference, once each, every
 //! message body is within the frame cap), so it is meaningful without the proof tools. The trace is written to the
-//! directory in `VINC_TRACE_DIR` when it is set; when it is not, nothing is formatted or kept.
+//! directory in `PINC_TRACE_DIR` when it is set; when it is not, nothing is formatted or kept.
 #![allow(
     dead_code,
     clippy::unwrap_used,
@@ -40,8 +40,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
 use common::{Dir, Item, fixed_set, index, mutate, sorted, sym_diff, var_set};
-use vinc_reconcile::{Error, Fingerprint, Initiator, Limits, MemError, MemIndex, Reason, Responder, Step, item_id};
-use vinc_tests::SplitMix64;
+use pinc_reconcile::{Error, Fingerprint, Initiator, Limits, MemError, MemIndex, Reason, Responder, Step, item_id};
+use pinc_tests::SplitMix64;
 
 #[path = "trace_reconcile_scan.rs"]
 mod scanmod;
@@ -667,7 +667,7 @@ fn lying(checks: &mut usize, times: usize) -> impl FnMut(Dir, &mut Vec<u8>) + '_
 }
 
 fn common_kind(m: &[u8]) -> Option<u8> {
-    vinc_reconcile::frame_body(m)
+    pinc_reconcile::frame_body(m)
         .ok()
         .and_then(|b| b.get(1).map(|t| t & 0x7f))
 }
@@ -959,14 +959,14 @@ fn mutation_cases(tr: &mut Tr, rng: &mut SplitMix64) {
 #[test]
 fn reconcile_sessions_match_the_models() {
     let mut rng = SplitMix64::traced(0x7265_636f_6e63_696c);
-    let on = std::env::var("VINC_TRACE_DIR").is_ok();
+    let on = std::env::var("PINC_TRACE_DIR").is_ok();
     let mut tr = Tr { on, ..Tr::default() };
     basic_cases(&mut tr, &mut rng);
     error_cases(&mut tr, &mut rng);
     exactness_cases(&mut tr, &mut rng);
     header_cases(&mut tr, &mut rng);
     mutation_cases(&mut tr, &mut rng);
-    if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
+    if let Ok(dir) = std::env::var("PINC_TRACE_DIR") {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(std::path::Path::new(&dir).join("reconcile.ndjson"), &tr.norm).unwrap();
         std::fs::write(std::path::Path::new(&dir).join("reconcile_tla.ndjson"), &tr.tla).unwrap();

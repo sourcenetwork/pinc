@@ -1,6 +1,6 @@
 ---------------------------- MODULE TraceKeepalive ----------------------------
 (***************************************************************************)
-(* Trace validation of the keepalive schedule: vinc-core keepalive.rs.     *)
+(* Trace validation of the keepalive schedule: pinc-core keepalive.rs.     *)
 (*                                                                         *)
 (* The Rust test tests/trace_keepalive.rs runs the real Inputs::plan and   *)
 (* standby_due on seeded inputs and on inputs one nanosecond either side   *)
@@ -11,7 +11,7 @@
 (* standby due the operator StandbyDue.                                    *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds keepalive.ndjson.     *)
+(* variable PINC_TRACE_DIR, the directory that holds keepalive.ndjson.     *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, TLC, Json, IOUtils
 VARIABLE i
@@ -19,7 +19,7 @@ vars == <<i>>
 INSTANCE KeepaliveOps
 U == INSTANCE U64
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/keepalive.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/keepalive.ndjson")
 Lm(l) == U!FromLimbs(l)
 Op(l) == IF l = <<>> THEN None ELSE Some(Lm(l))
 

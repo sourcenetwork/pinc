@@ -14,9 +14,9 @@ mod layers_common;
 use std::collections::BTreeSet;
 
 use layers_common::{LWorld, big, secs};
-use vinc_node::{Enabled, NodeEvent, ReconcileFailure};
-use vinc_reconcile::Limits;
-use vinc_tests::{LayerApps, NCmd, SplitMix64};
+use pinc_node::{Enabled, NodeEvent, ReconcileFailure};
+use pinc_reconcile::Limits;
+use pinc_tests::{LayerApps, NCmd, SplitMix64};
 
 const SET: &[u8] = b"items";
 

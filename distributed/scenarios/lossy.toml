@@ -1,6 +1,6 @@
 name = "lossy"
 about = "A slow lossy path: 200 ms round trip, 30 ms jitter each way (which reorders packets), 5% loss per packet each way, 10 Mbit/s."
-stacks = ["vinc", "iroh", "libp2p"]
+stacks = ["pinc", "iroh", "libp2p"]
 repetitions = 3
 
 [[sites]]

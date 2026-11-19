@@ -1,6 +1,6 @@
 //! The score, the noise floor and `is_better`.
 
-use vinc_sim::suite::grade::{
+use pinc_sim::suite::grade::{
     NoiseError, ScenarioRuns, Terms, is_better, noise_floor, pool, scenario_score, score, total, with_fair,
 };
 

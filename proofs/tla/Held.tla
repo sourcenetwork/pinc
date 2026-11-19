@@ -1,6 +1,6 @@
 -------------------------------- MODULE Held --------------------------------
 (***************************************************************************)
-(* The held ring of a session (vinc-core slot.rs Held): the application    *)
+(* The held ring of a session (pinc-core slot.rs Held): the application    *)
 (* events waiting for the access check. Every interleaving of push and pop *)
 (* at small sizes (HeldOps.tla has the operators; the ring is the event    *)
 (* queue's, QueueOps.tla).                                                 *)
@@ -30,7 +30,7 @@
 (* the event queue does (PushRule and BalanceUnrec fail); Held_refuse,     *)
 (* Held_merge and Held_evict are reachability witnesses: a refusal, a      *)
 (* merge and an eviction happen.                                           *)
-(* Lean counterpart: proofs/lean/Vinc/CoreHeld*.lean.                      *)
+(* Lean counterpart: proofs/lean/Pinc/CoreHeld*.lean.                      *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
 CONSTANTS CAP, PMAX, CL, EVICT_HEAD

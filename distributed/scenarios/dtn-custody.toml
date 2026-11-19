@@ -1,6 +1,6 @@
 name = "dtn-custody"
-about = "Custody with signed acknowledgements across a restart: the laptop's update for an unreachable phone moves into the office node's custody with a signed ack, then the office node is killed before it hands the bundle on and comes back from its persisted store. Custody is never dropped, the restart restores it, and the phone gets the update once when it comes into contact. VINC only: iroh and libp2p have no custody."
-stacks = ["vinc"]
+about = "Custody with signed acknowledgements across a restart: the laptop's update for an unreachable phone moves into the office node's custody with a signed ack, then the office node is killed before it hands the bundle on and comes back from its persisted store. Custody is never dropped, the restart restores it, and the phone gets the update once when it comes into contact. PINC only: iroh and libp2p have no custody."
+stacks = ["pinc"]
 repetitions = 3
 
 [resources]

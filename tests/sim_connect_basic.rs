@@ -10,9 +10,9 @@
 mod connect_sim_common;
 
 use connect_sim_common::*;
-use vinc_connect::client::Notice;
-use vinc_sim::{NatKind, SEC};
-use vinc_tests::Ev;
+use pinc_connect::client::Notice;
+use pinc_sim::{NatKind, SEC};
+use pinc_tests::Ev;
 
 #[test]
 fn a_client_behind_a_nat_boots_to_a_home_relay_an_open_carrier_and_a_published_record() {
@@ -52,7 +52,7 @@ fn dial_through_the_relay() {
     w.sim.command(
         secs(20),
         a,
-        vinc_tests::Cmd::Send {
+        pinc_tests::Cmd::Send {
             session: sa,
             data: b"hello over the relay".to_vec(),
         },
@@ -90,12 +90,12 @@ fn run_once(seed: u64) -> String {
     w.sim.command(
         secs(12),
         a,
-        vinc_tests::Cmd::Send {
+        pinc_tests::Cmd::Send {
             session: sa,
             data: vec![7; 5000],
         },
     );
-    w.sim.command(secs(13), a, vinc_tests::Cmd::Suspend);
+    w.sim.command(secs(13), a, pinc_tests::Cmd::Suspend);
     w.sim.suspend(secs(14), a);
     w.sim.resume(secs(30), a);
     w.run(secs(40));

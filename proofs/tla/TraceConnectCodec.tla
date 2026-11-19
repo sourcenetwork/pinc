@@ -1,6 +1,6 @@
 ---------------------------- MODULE TraceConnectCodec ----------------------------
 (***************************************************************************)
-(* Trace validation of the wire formats of vinc-connect: the carrier       *)
+(* Trace validation of the wire formats of pinc-connect: the carrier       *)
 (* frame, the relay datagram, the signed record, the beacon, the sleep     *)
 (* notice, the ticket (binary and text) and the candidate list.            *)
 (*                                                                         *)
@@ -15,13 +15,13 @@
 (* in ConnectCodec.cfg.                                                    *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds connect_codec.ndjson. *)
+(* variable PINC_TRACE_DIR, the directory that holds connect_codec.ndjson. *)
 (***************************************************************************)
 EXTENDS ConnectCodecOps, Json, IOUtils
 
 VARIABLE c
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/connect_codec.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/connect_codec.ndjson")
 
 Init == c = [t |-> "root"]
 

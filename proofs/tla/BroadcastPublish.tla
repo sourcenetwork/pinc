@@ -1,6 +1,6 @@
 ----------------------------- MODULE BroadcastPublish -----------------------------
 (***************************************************************************)
-(* Publishing in vinc-broadcast publish.rs and frames.rs (on_pack), step   *)
+(* Publishing in pinc-broadcast publish.rs and frames.rs (on_pack), step   *)
 (* for step: send_publish (FANP to the primary and FAN to the others when  *)
 (* every hub is up, else PUB to the primary), the pending entry with its   *)
 (* retry clock, pub_retry (give up when strictly older than GiveUp; else   *)
@@ -40,7 +40,7 @@
 (* config: more than Batch * (GiveUp / Retry + 1) subscribers cannot all   *)
 (* be reached before the publish is given up (248 of the default 256).     *)
 (*                                                                         *)
-(* Lean counterpart: proofs/lean/Vinc/BroadcastPublish.lean.               *)
+(* Lean counterpart: proofs/lean/Pinc/BroadcastPublish.lean.               *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC
 

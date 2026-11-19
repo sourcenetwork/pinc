@@ -1,6 +1,6 @@
 ---------------------------- MODULE TraceMembership --------------------------
 (***************************************************************************)
-(* Trace validation of the membership machine: vinc-membership node.rs,    *)
+(* Trace validation of the membership machine: pinc-membership node.rs,    *)
 (* hub.rs, view.rs, input.rs and timers.rs.                                 *)
 (*                                                                         *)
 (* The Rust test tests/trace_membership.rs (part node) runs the real hub    *)
@@ -29,15 +29,15 @@
 (* model; here a frame is its fields.                                      *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds membership.ndjson.     *)
-(* Lean counterpart: Vinc/TraceMembership.lean.                             *)
+(* variable PINC_TRACE_DIR, the directory that holds membership.ndjson.     *)
+(* Lean counterpart: Pinc/TraceMembership.lean.                             *)
 (***************************************************************************)
 EXTENDS MembershipOps, Json, IOUtils
 
 VARIABLES i, nodes, chk
 vars == <<i, nodes, chk>>
 
-Tr == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/membership.ndjson")
+Tr == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/membership.ndjson")
 Ev == Tr[i]
 
 L(l) == U!FromLimbs(l)

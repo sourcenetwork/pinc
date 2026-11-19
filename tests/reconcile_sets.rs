@@ -14,8 +14,8 @@
 mod common;
 
 use common::{Item, assert_exact, fixed_set, index, mutate, run, run_with, sym_diff, var_set};
-use vinc_reconcile::{Initiator, Limits, Responder};
-use vinc_tests::SplitMix64;
+use pinc_reconcile::{Initiator, Limits, Responder};
+use pinc_tests::SplitMix64;
 
 /// Set sizes of the exactness test: the specification's 10^6.
 const BIG: usize = 1_000_000;

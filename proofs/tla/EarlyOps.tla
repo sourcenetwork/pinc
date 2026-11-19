@@ -1,7 +1,7 @@
 ------------------------------ MODULE EarlyOps ------------------------------
 (***************************************************************************)
 (* The buffer of packets that arrive before their keys, as the real code   *)
-(* works it: vinc-transport conn/recv.rs (on_packet, on_short, hold_early, *)
+(* works it: pinc-transport conn/recv.rs (on_packet, on_short, hold_early, *)
 (* handle_inner), conn/drive.rs (on_hs_event, drain_early), conn/life.rs   *)
 (* (begin_close, release_buffers) and stream/datagram.rs (EarlyData).      *)
 (* Early.tla checks them over every interleaving at small sizes;           *)

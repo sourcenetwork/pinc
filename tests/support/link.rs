@@ -31,19 +31,19 @@
 
 use std::collections::{HashMap, HashSet};
 
-use vinc_crypto::provider::{KEM_CIPHERTEXT_LEN, KEM_ENCAPS_KEY_LEN};
-use vinc_crypto::{Aead, Capabilities, CryptoError, Drbg, IdentityAlg, Keypair, Provider, Secret, Software};
-use vinc_security::{
+use pinc_crypto::provider::{KEM_CIPHERTEXT_LEN, KEM_ENCAPS_KEY_LEN};
+use pinc_crypto::{Aead, Capabilities, CryptoError, Drbg, IdentityAlg, Keypair, Provider, Secret, Software};
+use pinc_security::{
     AlpnList, ClientTickets, Env, KeyHandle, LocalIdentity, PrekeyPolicy, ResponderStores, SoftKeys, SoftPrekeys,
     TicketBatch,
 };
-use vinc_transport::conn::{
+use pinc_transport::conn::{
     ClientParams, CloseReason, Config, Connection, Drop, Event, PathId, PathInfo, Resources, ServerParams, Tables,
     Transmit,
 };
-use vinc_transport::recovery::LossEstimate;
-use vinc_transport::stream::pool::BufferPool;
-use vinc_transport::stream::{self, NoSource, RecvStatus, Streams};
+use pinc_transport::recovery::LossEstimate;
+use pinc_transport::stream::pool::BufferPool;
+use pinc_transport::stream::{self, NoSource, RecvStatus, Streams};
 
 use crate::{Link, Params, SplitMix64};
 
@@ -218,7 +218,7 @@ pub enum Rec {
     Closed(CloseReason),
 }
 
-pub const ALPN: &[u8] = b"vinc/1";
+pub const ALPN: &[u8] = b"pinc/1";
 
 /// A key answer computed but not yet delivered.
 pub enum Deferred {
@@ -272,14 +272,14 @@ impl<'a, const C: usize, const F: usize> Node<'a, C, F> {
                                 now,
                                 drbg: &mut self.drbg,
                             };
-                            let mut sig = [0u8; vinc_crypto::identity::MAX_SIGNATURE_LEN];
+                            let mut sig = [0u8; pinc_crypto::identity::MAX_SIGNATURE_LEN];
                             self.deferred = Some(if self.fail_keys {
                                 Deferred::Failed
                             } else {
                                 match soft.answer(&mut env, &req, &mut sig) {
-                                    vinc_security::KeyResponse::Signature(s) => Deferred::Signature(s.to_vec()),
-                                    vinc_security::KeyResponse::SharedSecret(s) => Deferred::Secret(s),
-                                    vinc_security::KeyResponse::Failed => Deferred::Failed,
+                                    pinc_security::KeyResponse::Signature(s) => Deferred::Signature(s.to_vec()),
+                                    pinc_security::KeyResponse::SharedSecret(s) => Deferred::Secret(s),
+                                    pinc_security::KeyResponse::Failed => Deferred::Failed,
                                 }
                             });
                         }
@@ -376,12 +376,12 @@ impl<'a, const C: usize, const F: usize> Node<'a, C, F> {
     }
 
     /// Deliver the held key answer.
-    pub fn deliver_deferred(&mut self, now: u64) -> Result<(), vinc_security::Failure> {
+    pub fn deliver_deferred(&mut self, now: u64) -> Result<(), pinc_security::Failure> {
         let held = self.deferred.take().unwrap();
         self.with_env(now, |c, env| match held {
-            Deferred::Signature(s) => c.on_key_response(env, vinc_security::KeyResponse::Signature(&s)),
-            Deferred::Secret(s) => c.on_key_response(env, vinc_security::KeyResponse::SharedSecret(s)),
-            Deferred::Failed => c.on_key_response(env, vinc_security::KeyResponse::Failed),
+            Deferred::Signature(s) => c.on_key_response(env, pinc_security::KeyResponse::Signature(&s)),
+            Deferred::Secret(s) => c.on_key_response(env, pinc_security::KeyResponse::SharedSecret(s)),
+            Deferred::Failed => c.on_key_response(env, pinc_security::KeyResponse::Failed),
         })
     }
 
@@ -448,7 +448,7 @@ impl World {
     pub fn client<'a, const C: usize, const F: usize>(
         &self,
         store: &'a mut Store<C, F>,
-        ticket: Option<vinc_security::Ticket>,
+        ticket: Option<pinc_security::Ticket>,
         tickets: ClientTickets<8>,
     ) -> Node<'a, C, F> {
         let prov = Caps(Software, self.hw);

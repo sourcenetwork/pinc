@@ -7,10 +7,10 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use vinc_crypto::IdentityAlg;
-use vinc_tests::*;
-use vinc_transport::conn::{PathId, PathInfo};
-use vinc_transport::packet::{Header, packets};
+use pinc_crypto::IdentityAlg;
+use pinc_tests::*;
+use pinc_transport::conn::{PathId, PathInfo};
+use pinc_transport::packet::{Header, packets};
 
 /// The path the Reply comes back on, which the dialing side does not hold.
 const OTHER: PathId = PathId(9);
@@ -68,7 +68,7 @@ fn coalesced_resume(held: &[u64], seed: u64) -> Vec<(PathId, bool)> {
     let mut tickets = first_session(&mut w);
     let ticket = tickets.take(&w.rp.id.node_id(), ALPN, T0).unwrap();
     let (mut sa, mut sb) = (Store::new(true), Store::new(false));
-    let a = w.client(&mut sa, Some(ticket), vinc_security::ClientTickets::new());
+    let a = w.client(&mut sa, Some(ticket), pinc_security::ClientTickets::new());
     let b = w.server(&mut sb);
     let mut net = Net::new(a, b, Link::new(seed, Params::new(10 * MS)), &mut w.stores);
     let now = net.now;
@@ -102,11 +102,11 @@ fn reply_on_unheld_path(mut w: World, ticket: bool) {
     let mut tickets = if ticket {
         first_session(&mut w)
     } else {
-        vinc_security::ClientTickets::new()
+        pinc_security::ClientTickets::new()
     };
     let ticket = ticket.then(|| tickets.take(&w.rp.id.node_id(), ALPN, T0).unwrap());
     let (mut sa, mut sb) = (Store::new(true), Store::new(false));
-    let a = w.client(&mut sa, ticket, vinc_security::ClientTickets::new());
+    let a = w.client(&mut sa, ticket, pinc_security::ClientTickets::new());
     let b = w.server(&mut sb);
     let mut net = Net::new(a, b, Link::new(71, Params::new(10 * MS)), &mut w.stores);
     let reply = reply_datagrams(&mut net);
@@ -146,7 +146,7 @@ fn a_reply_in_several_datagrams_on_a_path_the_dial_does_not_hold_establishes() {
     big_stack(|| {
         let mut w = World::new(IdentityAlg::Hybrid);
         let (mut sa, mut sb) = (Store::new(true), Store::new(false));
-        let a = w.client(&mut sa, None, vinc_security::ClientTickets::new());
+        let a = w.client(&mut sa, None, pinc_security::ClientTickets::new());
         let b = w.server(&mut sb);
         let mut net = Net::new(a, b, Link::new(72, Params::new(10 * MS)), &mut w.stores);
         let reply = reply_datagrams(&mut net);
@@ -201,7 +201,7 @@ fn a_reply_on_a_new_path_at_a_full_table_takes_the_place_of_an_unvalidated_stand
     big_stack(|| {
         let mut w = World::new(IdentityAlg::Ed25519);
         let (mut sa, mut sb) = (Store::new(true), Store::new(false));
-        let a = w.client(&mut sa, None, vinc_security::ClientTickets::new());
+        let a = w.client(&mut sa, None, pinc_security::ClientTickets::new());
         let b = w.server(&mut sb);
         let mut net = Net::new(a, b, Link::new(74, Params::new(10 * MS)), &mut w.stores);
         let now = net.now;
@@ -240,7 +240,7 @@ fn a_reply_on_a_path_the_dial_gave_up_establishes_and_the_path_is_held_again() {
     big_stack(|| {
         let mut w = World::new(IdentityAlg::Ed25519);
         let (mut sa, mut sb) = (Store::new(true), Store::new(false));
-        let a = w.client(&mut sa, None, vinc_security::ClientTickets::new());
+        let a = w.client(&mut sa, None, pinc_security::ClientTickets::new());
         let b = w.server(&mut sb);
         let mut net = Net::new(a, b, Link::new(75, Params::new(10 * MS)), &mut w.stores);
         let now = net.now;

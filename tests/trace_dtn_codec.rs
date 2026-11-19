@@ -1,6 +1,6 @@
 //! Trace generation for the head and acknowledgement codecs: the real `SignedHead` and `CustodyAck` of every identity
 //! algorithm, encoded, mutated and decoded, recorded as ndjson (`dtn_codec.ndjson`) for the TLA+ trace check
-//! (`TraceDtnCodec.tla`) and the Lean replay (`Vinc/TraceDtnCodec.lean`).
+//! (`TraceDtnCodec.tla`) and the Lean replay (`Pinc/TraceDtnCodec.lean`).
 //!
 //! An `enc` event is a valid encoding (a byte array) that must decode and re-encode to itself. The events after it,
 //! until the next `enc`, are mutations of that encoding (they name it by `base`, the number of `enc` events before it): `mut` replaces one byte (the first 40 bytes, both identity tags, the
@@ -9,7 +9,7 @@
 //! and `trail` appends bytes. Each records whether the real decoder accepted the result; the test asserts here that
 //! truncations and trailing bytes are rejected, that every accepted mutation re-encodes to exactly the mutated bytes
 //! (a byte string has one reading), and that a bad identity tag or a wrong endorsement length is rejected, so it is
-//! meaningful without the proof tools. The trace is written to the directory in `VINC_TRACE_DIR` when it is set;
+//! meaningful without the proof tools. The trace is written to the directory in `PINC_TRACE_DIR` when it is set;
 //! otherwise nothing is written.
 #![allow(
     clippy::unwrap_used,
@@ -30,10 +30,10 @@
 mod dtn_common;
 
 use dtn_common::{ALGS, keypair, make, plan, recipient};
-use vinc_crypto::IdentityAlg;
-use vinc_dtn::custody::CustodyAck;
-use vinc_dtn::head::{BundleId, SignedHead};
-use vinc_dtn::hlc::Hlc;
+use pinc_crypto::IdentityAlg;
+use pinc_dtn::custody::CustodyAck;
+use pinc_dtn::head::{BundleId, SignedHead};
+use pinc_dtn::hlc::Hlc;
 
 fn array(b: &[u8]) -> String {
     let parts: Vec<String> = b.iter().map(ToString::to_string).collect();
@@ -197,7 +197,7 @@ fn codec_trace() {
         }
     }
     assert!(out.len() > 1000);
-    if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
+    if let Ok(dir) = std::env::var("PINC_TRACE_DIR") {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             std::path::Path::new(&dir).join("dtn_codec.ndjson"),

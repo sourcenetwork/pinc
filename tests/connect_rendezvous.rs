@@ -21,11 +21,11 @@ mod connect_common;
 use core::net::SocketAddr;
 
 use connect_common::*;
-use vinc_connect::carrier::{DnsAnswer, Frame};
-use vinc_connect::record::{Record, RecordError};
-use vinc_connect::relay::datagram::{Datagram, MAX_TUNNEL_DATAGRAM};
-use vinc_connect::relay::{Config, RecordOrigin, Reject, Relay, Trace, UdpTarget, rule};
-use vinc_crypto::IdentityAlg;
+use pinc_connect::carrier::{DnsAnswer, Frame};
+use pinc_connect::record::{Record, RecordError};
+use pinc_connect::relay::datagram::{Datagram, MAX_TUNNEL_DATAGRAM};
+use pinc_connect::relay::{Config, RecordOrigin, Reject, Relay, Trace, UdpTarget, rule};
+use pinc_crypto::IdentityAlg;
 
 #[test]
 fn published_records_are_verified_stored_replicated_and_served() {

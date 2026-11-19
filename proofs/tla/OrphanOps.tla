@@ -1,6 +1,6 @@
 ----------------------------- MODULE OrphanOps ------------------------------
 (***************************************************************************)
-(* The operations of vinc-core orphan.rs (Orphans), step for step: the     *)
+(* The operations of pinc-core orphan.rs (Orphans), step for step: the     *)
 (* endpoint's table of handshake fragments that arrived ahead of the       *)
 (* datagram that starts their message. Orphan.tla checks them over every   *)
 (* interleaving at small sizes; TraceOrphan.tla replays the recorded calls *)

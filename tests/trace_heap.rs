@@ -1,6 +1,6 @@
-//! Trace generation for the endpoint's deadline heap: seeded runs of a real `DeadlineHeap` (`vinc-core`, built with
+//! Trace generation for the endpoint's deadline heap: seeded runs of a real `DeadlineHeap` (`pinc-core`, built with
 //! the `trace` feature), recorded as ndjson (`heap.ndjson`) for the TLA+ trace check (`TraceHeap.tla`) and the Lean
-//! replay (`Vinc/TraceHeap.lean`).
+//! replay (`Pinc/TraceHeap.lean`).
 //!
 //! A run fills the heap, changes and removes deadlines at random, and then pops it empty (a peek and a removal of
 //! the id it names, as the timer loop does). The deadlines are few, so that many are equal, and include the edges
@@ -29,8 +29,8 @@
 
 use std::fmt::Write as _;
 
-use vinc_core::DeadlineHeap;
-use vinc_tests::SplitMix64;
+use pinc_core::DeadlineHeap;
+use pinc_tests::SplitMix64;
 
 /// The last deadline of a narrow run: TLC's integers are 32 bits wide.
 const TOP: u64 = 2_000_000_000;
@@ -292,7 +292,7 @@ fn the_deadline_heap_matches_the_models() {
         assert!(s.popped > 0);
     }
     assert!(seen_wide.max_deadline > 0, "no deadline was u64::MAX");
-    if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
+    if let Ok(dir) = std::env::var("PINC_TRACE_DIR") {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(std::path::Path::new(&dir).join("heap.ndjson"), &out).unwrap();
         std::fs::write(std::path::Path::new(&dir).join("heap_wide.ndjson"), &wide).unwrap();

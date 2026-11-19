@@ -2,7 +2,7 @@
 //! binary links is in it, and an image with an older glibc than the host's is recognised.
 #![allow(missing_docs, clippy::unwrap_used)]
 
-use vinc_distributed::backend::containers::{FALLBACK_IMAGE, glibc, image_for, refusal};
+use pinc_distributed::backend::containers::{FALLBACK_IMAGE, glibc, image_for, refusal};
 
 const UBUNTU_2404: &str = r#"PRETTY_NAME="Ubuntu 24.04.3 LTS"
 NAME="Ubuntu"

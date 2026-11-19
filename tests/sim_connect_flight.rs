@@ -15,12 +15,12 @@ mod connect_sim_common;
 use std::net::SocketAddr;
 
 use connect_sim_common::*;
-use vinc_core::{is_relay_addr, relay_parts};
-use vinc_sim::{LanConfig, LinkConfig, MS, SEC, StreamPolicy, Time};
-use vinc_tests::Cmd;
+use pinc_core::{is_relay_addr, relay_parts};
+use pinc_sim::{LanConfig, LinkConfig, MS, SEC, StreamPolicy, Time};
+use pinc_tests::Cmd;
 
 /// A hub (relay) the client dials from inside a LAN that drops UDP, so the direct flight is always lost.
-fn blocked_hub(seed: u64, one_way: Time) -> (World, vinc_sim::NodeId, vinc_sim::NodeId, SocketAddr) {
+fn blocked_hub(seed: u64, one_way: Time) -> (World, pinc_sim::NodeId, pinc_sim::NodeId, SocketAddr) {
     let mut w = World::new(seed);
     let (r, rs) = w.relay(1, relay_ip(10));
     let lan = w.sim.add_lan(LanConfig {
@@ -39,7 +39,7 @@ fn blocked_hub(seed: u64, one_way: Time) -> (World, vinc_sim::NodeId, vinc_sim::
     (w, a, r, rs.udp.unwrap())
 }
 
-fn flights(w: &World, a: vinc_sim::NodeId, from: Time, to: Time) -> Vec<(Time, bool)> {
+fn flights(w: &World, a: pinc_sim::NodeId, from: Time, to: Time) -> Vec<(Time, bool)> {
     w.client(a)
         .tx_log
         .iter()
@@ -61,7 +61,7 @@ fn a_late_start_dial_to_a_hub_flies_direct_first_and_the_relay_copy_joins_at_the
             Cmd::Dial {
                 node: hub,
                 hints: vec![udp],
-                role: vinc_core::Role::Hub,
+                role: pinc_core::Role::Hub,
             },
         );
         w.run(secs(15) + 250 * MS);
@@ -104,7 +104,7 @@ fn a_hub_initial_resent_under_four_seconds_goes_by_the_relay_path_only() {
             Cmd::Dial {
                 node: hub,
                 hints: vec![udp],
-                role: vinc_core::Role::Hub,
+                role: pinc_core::Role::Hub,
             },
         );
         w.run(t0 + secs(30));
@@ -117,7 +117,7 @@ fn a_hub_initial_resent_under_four_seconds_goes_by_the_relay_path_only() {
         assert!(second.1 && second.0 == t0 + 300 * MS, "the resend is relay-only: {f:?}");
         let est = w
             .when(a, |e| {
-                matches!(e, vinc_tests::Ev::Ep(vinc_core::Event::Connected { .. }))
+                matches!(e, pinc_tests::Ev::Ep(pinc_core::Event::Connected { .. }))
             })
             .unwrap();
         assert!(
@@ -131,7 +131,7 @@ fn a_hub_initial_resent_under_four_seconds_goes_by_the_relay_path_only() {
 }
 
 /// A client on a slow link (`one_way` each way) with a working UDP path to a relay, and a peer on a normal link.
-fn slow_world(seed: u64, one_way: Time) -> (World, vinc_sim::NodeId, vinc_sim::NodeId, vinc_sim::NodeId) {
+fn slow_world(seed: u64, one_way: Time) -> (World, pinc_sim::NodeId, pinc_sim::NodeId, pinc_sim::NodeId) {
     let mut w = World::new(seed);
     let (r, rs) = w.relay(1, relay_ip(10));
     let lan = w.sim.add_lan(LanConfig {
@@ -199,13 +199,13 @@ fn a_direct_first_hub_session_that_came_up_at_once_gets_its_relay_path_two_secon
             Cmd::Dial {
                 node: hub,
                 hints: vec![rs.udp.unwrap()],
-                role: vinc_core::Role::Hub,
+                role: pinc_core::Role::Hub,
             },
         );
         w.run(t0 + secs(5));
         let est = w
             .when(a, |e| {
-                matches!(e, vinc_tests::Ev::Ep(vinc_core::Event::Connected { .. }))
+                matches!(e, pinc_tests::Ev::Ep(pinc_core::Event::Connected { .. }))
             })
             .unwrap();
         assert!(
@@ -239,7 +239,7 @@ fn a_dial_to_a_relay_opens_the_carrier_to_that_relay() {
         let up = |w: &World| {
             w.notices(a)
                 .iter()
-                .any(|(_, n)| matches!(n, vinc_connect::client::Notice::CarrierUp(1)))
+                .any(|(_, n)| matches!(n, pinc_connect::client::Notice::CarrierUp(1)))
         };
         assert!(!up(&w), "the carrier to the second relay is not open before the dial");
         let hub = w.relay_node(r1).id();
@@ -249,7 +249,7 @@ fn a_dial_to_a_relay_opens_the_carrier_to_that_relay() {
             Cmd::Dial {
                 node: hub,
                 hints: vec![rs1.udp.unwrap()],
-                role: vinc_core::Role::Hub,
+                role: pinc_core::Role::Hub,
             },
         );
         w.run(secs(8));
@@ -263,15 +263,15 @@ fn a_dial_to_a_relay_opens_the_carrier_to_that_relay() {
 /// Two clients behind NATs; `a` has looked `b` up at 5 s, so it holds a record that lists b's address.
 fn looked_up() -> (
     World,
-    vinc_sim::NodeId,
-    vinc_sim::NodeId,
-    vinc_sim::NodeId,
-    vinc_crypto::NodeId,
+    pinc_sim::NodeId,
+    pinc_sim::NodeId,
+    pinc_sim::NodeId,
+    pinc_crypto::NodeId,
 ) {
     let mut w = World::new(91);
     let (r, rs) = w.relay(1, relay_ip(10));
-    let nat_a = w.nat(vinc_sim::NatKind::FullCone, ext(1), 120 * SEC, 7200 * SEC);
-    let nat_b = w.nat(vinc_sim::NatKind::FullCone, ext(2), 120 * SEC, 7200 * SEC);
+    let nat_a = w.nat(pinc_sim::NatKind::FullCone, ext(1), 120 * SEC, 7200 * SEC);
+    let nat_b = w.nat(pinc_sim::NatKind::FullCone, ext(2), 120 * SEC, 7200 * SEC);
     let a = w.client_behind(&client_spec(0xa1, priv_addr(1), &[rs]), nat_a);
     let b = w.client_behind(&client_spec(0xb1, priv_addr(2), &[rs]), nat_b);
     w.run(secs(5));
@@ -284,7 +284,7 @@ fn looked_up() -> (
 }
 
 /// For each first-flight sized datagram of `a` in `[from, from + span)`, in time order: whether it went through a relay.
-fn dial_flights(w: &World, a: vinc_sim::NodeId, from: Time, span: Time) -> Vec<bool> {
+fn dial_flights(w: &World, a: pinc_sim::NodeId, from: Time, span: Time) -> Vec<bool> {
     w.client(a)
         .tx_log
         .iter()
@@ -358,7 +358,7 @@ fn a_dial_to_a_hub_does_not_fly_through_our_home_relay() {
             Cmd::Dial {
                 node: hub.id,
                 hints: vec![],
-                role: vinc_core::Role::Hub,
+                role: pinc_core::Role::Hub,
             },
         );
         w.run(t0 + secs(2));

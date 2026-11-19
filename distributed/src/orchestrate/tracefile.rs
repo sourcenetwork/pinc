@@ -1,4 +1,4 @@
-//! The node traces a scenario's `[debug] trace = true` asks for: after a measurement every VINC node's trace and
+//! The node traces a scenario's `[debug] trace = true` asks for: after a measurement every PINC node's trace and
 //! packet log is written beside the results as `trace-<stack>-<test>-rep<k>-<node>.json`, and the row says its
 //! timings are not comparable.
 
@@ -12,9 +12,9 @@ use crate::scenario::Stack;
 /// What a traced row says about its timings.
 const NOTE: &str = "node traces were recorded: timings are not comparable";
 
-/// Whether the nodes of `stack` record traces in this run (only VINC's do).
+/// Whether the nodes of `stack` record traces in this run (only PINC's do).
 pub(crate) fn wanted(ctx: &Ctx, stack: Stack) -> bool {
-    ctx.sc.debug.trace && stack == Stack::Vinc
+    ctx.sc.debug.trace && stack == Stack::Pinc
 }
 
 /// Say on `row` that its nodes recorded traces.

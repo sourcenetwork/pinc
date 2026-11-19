@@ -14,9 +14,9 @@ mod node_common;
 use std::net::SocketAddr;
 
 use node_common::{World, big, ip, secs};
-use vinc_core::{Answer, IfaceEvent, IfaceId, Query};
+use pinc_core::{Answer, IfaceEvent, IfaceId, Query};
 
-fn local_routes(w: &World, n: vinc_sim::NodeId) -> Vec<SocketAddr> {
+fn local_routes(w: &World, n: pinc_sim::NodeId) -> Vec<SocketAddr> {
     let node = &w.sim.node(n).node;
     (0..)
         .map_while(|i| node.endpoint().query(Query::SessionAt(i)).stats())
@@ -25,11 +25,11 @@ fn local_routes(w: &World, n: vinc_sim::NodeId) -> Vec<SocketAddr> {
 }
 
 trait Stats {
-    fn stats(self) -> Option<vinc_core::SessionStats>;
+    fn stats(self) -> Option<pinc_core::SessionStats>;
 }
 
 impl Stats for Answer<'_> {
-    fn stats(self) -> Option<vinc_core::SessionStats> {
+    fn stats(self) -> Option<pinc_core::SessionStats> {
         match self {
             Answer::Stats(s) => Some(s),
             _ => None,

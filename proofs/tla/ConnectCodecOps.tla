@@ -1,13 +1,13 @@
 ---------------------------- MODULE ConnectCodecOps ----------------------------
 (***************************************************************************)
-(* The wire formats of vinc-connect as pure operators over byte sequences: *)
+(* The wire formats of pinc-connect as pure operators over byte sequences: *)
 (* the carrier frame (carrier/frame.rs), the relay datagram                *)
 (* (relay/datagram.rs), the signed record (record.rs), the beacon          *)
 (* (local.rs), the sleep notice (relay/sleep.rs), the ticket (ticket.rs)   *)
 (* and the candidate list of a REACH_OUT (client/punch.rs).                *)
 (*                                                                         *)
 (* A format is a type byte followed by fields, read in order with the      *)
-(* reader of vinc-wire: RdU8, RdBytes (Truncated with the shortfall),      *)
+(* reader of pinc-wire: RdU8, RdBytes (Truncated with the shortfall),      *)
 (* RdNode (the tag byte, 32 bytes, then the check of the tag) and RdAddr.  *)
 (* Every refusal is the string the Rust test prints for the error it got:  *)
 (* "trunc:N", "type:T", "trailing", "alias:A", "packet", "body",           *)
@@ -23,7 +23,7 @@
 (*                                                                         *)
 (* The 64-bit lengths of a batch are the words of U64.tla (TLC integers    *)
 (* are 32 bits wide).                                                      *)
-(* Lean counterpart: Vinc/ConnectCodecCore.lean, ConnectFrame*.lean,       *)
+(* Lean counterpart: Pinc/ConnectCodecCore.lean, ConnectFrame*.lean,       *)
 (* ConnectDatagram.lean, ConnectRecord.lean, ConnectSigned.lean,           *)
 (* ConnectTicket.lean.                                                     *)
 (***************************************************************************)
@@ -35,7 +35,7 @@ Er(e) == [ok |-> FALSE, e |-> e]
 RdOk(v, r) == [ok |-> TRUE, v |-> v, r |-> r]
 Pre(p, x) == IF x.ok THEN x ELSE Er(p \o x.e)
 
-(* ---- the reader of vinc-wire ---- *)
+(* ---- the reader of pinc-wire ---- *)
 RdU8(b) == IF b = <<>> THEN Er("trunc:1") ELSE RdOk(b[1], Tail(b))
 RdBytes(n, b) == IF n <= Len(b) THEN RdOk(SubSeq(b, 1, n), SubSeq(b, n + 1, Len(b)))
                  ELSE Er("trunc:" \o ToString(n - Len(b)))
@@ -109,7 +109,7 @@ RECURSIVE BeVal(_)
 BeVal(bs) == IF bs = <<>> THEN U!Zero
              ELSE U!Add(U!Shl(BeVal(SubSeq(bs, 1, Len(bs) - 1)), 8), U!W(bs[Len(bs)]))
 
-(* ---- the varint of vinc-wire as the loop of the code ---- *)
+(* ---- the varint of pinc-wire as the loop of the code ---- *)
 RECURSIVE VarLoop(_, _, _)
 VarLoop(i, v, b) ==
     IF b = <<>> \/ i >= 9 THEN [done |-> FALSE]

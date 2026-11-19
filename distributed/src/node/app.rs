@@ -60,7 +60,7 @@ pub fn main(_args: &[String]) -> i32 {
         }
     };
     let result = match init.stack {
-        Stack::Vinc => super::vinc::run(init),
+        Stack::Pinc => super::pinc::run(init),
         Stack::Iroh => super::iroh_app::run(init),
         Stack::Libp2p => super::libp2p_app::run(init),
     };

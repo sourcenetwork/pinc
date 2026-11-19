@@ -18,7 +18,7 @@
 )]
 
 mod relay_members;
-mod vinc_common;
+mod pinc_common;
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -30,13 +30,13 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use nuclei::Handle;
 use relay_members::{Member, on_big_stack};
-use vinc::relay::{
+use pinc::relay::{
     CarrierFns, Carriers, Clock, Completion, Done, Limits, MemStore, Peer, Relay as RelayHost, Stats, Tag, Udp,
 };
-use vinc::{CarrierKind, Error, ErrorKind, Identity, Relay};
-use vinc_common::{ECHO, SINK, eventually, lo, serve_conn, within};
-use vinc_connect::carrier::session::ALPN;
-use vinc_connect::relay::Quota;
+use pinc::{CarrierKind, Error, ErrorKind, Identity, Relay};
+use pinc_common::{ECHO, SINK, eventually, lo, serve_conn, within};
+use pinc_connect::carrier::session::ALPN;
+use pinc_connect::relay::Quota;
 
 fn failed(_: io::Error) -> Error {
     Error::new(ErrorKind::Unreachable, "the socket failed")
@@ -169,11 +169,11 @@ async fn bind_ports() -> Ports {
 
 /// A relay host run as a local task.
 struct Host {
-    id: vinc_crypto::NodeId,
+    id: pinc_crypto::NodeId,
     addr: SocketAddr,
     stats: Box<dyn Fn() -> Stats>,
     stop: Box<dyn Fn()>,
-    task: Option<nuclei::Task<vinc::Result<()>>>,
+    task: Option<nuclei::Task<pinc::Result<()>>>,
 }
 
 /// The relay's carriers in the completion form on nuclei: a task per operation and a queue the relay reads.
@@ -258,7 +258,7 @@ impl Carriers for Native {
 }
 
 /// Accept a TCP stream and read the byte that says which kind of carrier it is.
-async fn accept_wire(l: &Handle<TcpListener>) -> vinc::Result<(Wire, CarrierKind)> {
+async fn accept_wire(l: &Handle<TcpListener>) -> pinc::Result<(Wire, CarrierKind)> {
     let (tcp, _) = l.accept().await.map_err(failed)?;
     let mut m = [0u8; 1];
     let kind = if tcp.recv(&mut m).await.map_err(failed)? == 1 {
@@ -316,7 +316,7 @@ impl Host {
         }
         let relay = builder
             .store(MemStore::new())
-            .hub(ports.addr, &[vinc_node::HUB_ALPN])
+            .hub(ports.addr, &[pinc_node::HUB_ALPN])
             .build(
                 Udp::new(
                     async move |buf: &mut [u8]| s1.recv_from(buf).await.map_err(failed),
@@ -369,14 +369,14 @@ macro_rules! endpoint {
         let only: bool = $relayed_only;
         let sock = Rc::new(Handle::<UdpSocket>::bind(lo()).await.unwrap());
         let (r, s) = (Rc::clone(&sock), Rc::clone(&sock));
-        let ep = vinc_common::builder()
+        let ep = pinc_common::builder()
             .seed(&[$seed; 32])
             .unwrap()
             .alpn(ECHO)
             .alpn(SINK)
-            .limits(vinc::Limits {
+            .limits(pinc::Limits {
                 connections: 8,
-                ..vinc::Limits::default()
+                ..pinc::Limits::default()
             })
             .relays([relay])
             .local_addr(sock.local_addr().unwrap())
@@ -433,7 +433,7 @@ macro_rules! reach_and_move {
             async move {
                 conn.stats()
                     .await
-                    .is_ok_and(|s| s.route.is_some_and(|(_, r)| !vinc_core::is_relay_addr(&r)))
+                    .is_ok_and(|s| s.route.is_some_and(|(_, r)| !pinc_core::is_relay_addr(&r)))
             }
         })
         .await;
@@ -606,12 +606,12 @@ async fn measure(relayed_only: bool, idle: usize, native: bool) -> Numbers {
         .await;
         let conn = a.connect(b.id(), ECHO).await.unwrap();
         let (mut tx, mut rx) = conn.open_bi().await.unwrap();
-        let direct = |conn: &vinc::Connection<_>| {
+        let direct = |conn: &pinc::Connection<_>| {
             let conn = conn.clone();
             async move {
                 conn.stats()
                     .await
-                    .is_ok_and(|s| s.route.is_some_and(|(_, r)| !vinc_core::is_relay_addr(&r)))
+                    .is_ok_and(|s| s.route.is_some_and(|(_, r)| !pinc_core::is_relay_addr(&r)))
             }
         };
         if relayed_only {

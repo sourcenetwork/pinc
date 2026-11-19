@@ -15,9 +15,9 @@
 mod common;
 
 use common::{Net, SEC, ty};
-use vinc_broadcast::consts::{FHOLD_MAX, ORIGIN_MAX};
-use vinc_broadcast::{HoldWhy, Reject, Trace};
-use vinc_crypto::IdentityAlg;
+use pinc_broadcast::consts::{FHOLD_MAX, ORIGIN_MAX};
+use pinc_broadcast::{HoldWhy, Reject, Trace};
+use pinc_crypto::IdentityAlg;
 
 const T: &[u8] = b"floor";
 
@@ -66,7 +66,7 @@ fn a_restarted_member_does_not_redeliver_what_its_earlier_life_delivered_and_get
 }
 
 /// A replay gives the restarted member every message the hub's log holds since its floor, oldest first, not only
-/// the newest 256 (vinc#510): the log holds up to 2,048 and the member's stream paces what it takes.
+/// the newest 256 (pinc#510): the log holds up to 2,048 and the member's stream paces what it takes.
 #[test]
 fn a_replay_gives_every_message_the_log_holds_since_the_floor() {
     let mut net = world();

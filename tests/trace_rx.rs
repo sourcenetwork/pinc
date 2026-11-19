@@ -1,6 +1,6 @@
-//! Trace generation for the received-packet tracker: seeded random runs of real `ReceivedPackets` (`vinc-transport`,
+//! Trace generation for the received-packet tracker: seeded random runs of real `ReceivedPackets` (`pinc-transport`,
 //! built with the `trace` feature), recorded as ndjson (`rx.ndjson`) for the TLA+ trace check (`TraceRx.tla`) and the
-//! Lean replay (`Vinc/TraceRx.lean`).
+//! Lean replay (`Pinc/TraceRx.lean`).
 //!
 //! A run receives packets (in order, with gaps, old, duplicated, bulk, ack-eliciting or not, and a sparse mode that
 //! fills the range set so the oldest range is forgotten), sets the minimum round trip and the acknowledgement
@@ -27,9 +27,9 @@
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
-use vinc_tests::SplitMix64;
-use vinc_transport::recovery::trace::RxView;
-use vinc_transport::recovery::{MS, ReceivedPackets, RxOutcome, RxPacket, SECOND};
+use pinc_tests::SplitMix64;
+use pinc_transport::recovery::trace::RxView;
+use pinc_transport::recovery::{MS, ReceivedPackets, RxOutcome, RxPacket, SECOND};
 
 fn b(x: bool) -> &'static str {
     if x { "true" } else { "false" }
@@ -394,16 +394,16 @@ fn received_packet_runs_match_the_models() {
         r#""op":"acksent""#,
     ] {
         assert!(
-            vinc_tests::soaking() || out.contains(needle),
+            pinc_tests::soaking() || out.contains(needle),
             "the runs never reach {needle}"
         );
     }
     assert!(wide_out.contains(r#""out":"PacketNumberOutOfRange""#));
     assert!(
-        vinc_tests::soaking() || new > 0 && dup > 0 && forgot > 0 && thin > 0,
+        pinc_tests::soaking() || new > 0 && dup > 0 && forgot > 0 && thin > 0,
         "new {new} dup {dup} forgot {forgot} thin {thin}"
     );
-    if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
+    if let Ok(dir) = std::env::var("PINC_TRACE_DIR") {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(std::path::Path::new(&dir).join("rx.ndjson"), &out).unwrap();
         std::fs::write(std::path::Path::new(&dir).join("rx_wide.ndjson"), &wide_out).unwrap();

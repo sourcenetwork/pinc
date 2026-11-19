@@ -1,7 +1,7 @@
 ------------------------------- MODULE Streams -------------------------------
 (***************************************************************************)
 (* The receive, credit and admission path of the stream layer of           *)
-(* vinc-transport (stream/table.rs, recv.rs, flow.rs, ranges.rs, pool.rs)  *)
+(* pinc-transport (stream/table.rs, recv.rs, flow.rs, ranges.rs, pool.rs)  *)
 (* over every interleaving of the calls the connection makes on it, at     *)
 (* small sizes (StreamsOps.tla has the operators and the scaling).         *)
 (*                                                                         *)
@@ -72,7 +72,7 @@
 (*    the limit that a raise lets send, and Streams_early_ctl_w the rule    *)
 (*    before #432 (control frames not held: PeerNeverRefuses fails on a     *)
 (*    stream reset at once after an early open).                            *)
-(* Lean counterpart: proofs/lean/Vinc/TransportStreams.lean.               *)
+(* Lean counterpart: proofs/lean/Pinc/TransportStreams.lean.               *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
 CONSTANTS CH, RING, RR, N, MAXREM, B, SWC, MSWC, PM, MAXOFF, RETRY, RemIds, LocIds, FIRSTK, RELEASE, PERSTREAM

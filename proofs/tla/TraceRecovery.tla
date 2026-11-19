@@ -1,6 +1,6 @@
 ---------------------------- MODULE TraceRecovery ----------------------------
 (***************************************************************************)
-(* Trace validation of loss recovery: vinc-transport recovery/engine.rs,   *)
+(* Trace validation of loss recovery: pinc-transport recovery/engine.rs,   *)
 (* ack.rs, loss.rs, pto.rs, sent.rs, rtt.rs and tail.rs.                   *)
 (*                                                                         *)
 (* The Rust test tests/trace_recovery.rs drives real engines (built with   *)
@@ -22,7 +22,7 @@
 (* model's saturating arithmetic reaches TOP in the same cases.            *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds recovery.ndjson.      *)
+(* variable PINC_TRACE_DIR, the directory that holds recovery.ndjson.      *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
 
@@ -32,7 +32,7 @@ vars == <<i, rs, tl>>
 
 INSTANCE RecoveryOps
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/recovery.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/recovery.ndjson")
 Ev0 == Trace[i]
 
 SlotOf(s) == [pn |-> s.pn, time |-> s.time, size |-> s.size, path |-> s.path, rep |-> s.rep, probe |-> s.probe,

@@ -56,7 +56,7 @@ export function conditionsView(run) {
     h("div", {}, h("strong", {}, run.backend === "containers" ? "Containers on one machine." : `${run.backend}.`), " ", run.about_backend || ""),
     h("div", {}, `${host.cpu}, ${host.cpus} CPUs, ${host.mem_gib} GiB, kernel ${host.kernel}. MTU ${run.mtu} on every interface.`),
     h("div", {}, `Each node: CPU set ${sets.length > 220 ? `${sets.slice(0, 220)}…` : sets}; ${run.nodes?.[0]?.memory_mib ?? "?"} MiB.${run.shared_cpus ? " Nodes share CPUs." : ""}`),
-    h("div", {}, `Versions: ${versions}. VINC at ${run.git}. ${run.built_for ? `Every stack compiled for ${run.built_for}. ` : ""}${run.repetitions} repetition${run.repetitions === 1 ? "" : "s"}. CPU governor: ${run.governor || "not recorded"}.`),
+    h("div", {}, `Versions: ${versions}. PINC at ${run.git}. ${run.built_for ? `Every stack compiled for ${run.built_for}. ` : ""}${run.repetitions} repetition${run.repetitions === 1 ? "" : "s"}. CPU governor: ${run.governor || "not recorded"}.`),
     run.isolation ? h("div", {}, `Isolation: ${run.isolation}; the orchestrator on CPU ${run.orchestrator_cpus}.`) : null,
     run.quiet ? h("div", {}, `Quiet host: other processes at most ${run.quiet.other_pct}% of a core and steal at most ${run.quiet.steal_pct}% over each measurement; up to ${run.quiet.retries} repeats, then not measured.`) : h("div", { class: "status-bad" }, "This run predates the quiet-host check."),
     run.reduced ? h("div", { class: "chip warn" }, "a reduced run: fewer repetitions than the scenario asks; do not quote it") : null,

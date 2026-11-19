@@ -1,7 +1,7 @@
 ---------------------------- MODULE FacadeStandby ----------------------------
 (***************************************************************************)
 (* The slab of tickets of the facade's waiting futures and the queue of    *)
-(* candidates for the driving role (crates/vinc/src/standby.rs), over      *)
+(* candidates for the driving role (crates/pinc/src/standby.rs), over      *)
 (* every sequence of alloc, arm, notify, baton, notify_all and release, at *)
 (* small sizes, with every ticket ever handed out (stale ones included)    *)
 (* and a forged one (StandbyOps.tla has the operators). At most LIVE       *)
@@ -61,7 +61,7 @@
 (* FacadeStandby_wrap is the same run with the fix, where QueueStrict      *)
 (* holds. FacadeStandby_nogen has one generation: a stale ticket names the *)
 (* slot of a later future (NoStaleHit fails).                              *)
-(* Lean counterpart: proofs/lean/Vinc/FacadeStandby*.lean.                 *)
+(* Lean counterpart: proofs/lean/Pinc/FacadeStandby*.lean.                 *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
 CONSTANTS LIVE, AMAX, W, GENS, OLD,

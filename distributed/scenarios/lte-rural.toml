@@ -1,6 +1,6 @@
 name = "lte-rural"
 about = "Rural LTE, emulated (its delay, jitter, loss and rate, not the radio): 140 ms round trip (70 ms each way), 10 ms jitter each way, no random loss, 0.98 Mbit/s each way; typical is a median of 0.98 Mbit/s and a round trip of 140 ms under load."
-stacks = ["vinc", "iroh", "libp2p"]
+stacks = ["pinc", "iroh", "libp2p"]
 repetitions = 3
 
 [[sites]]

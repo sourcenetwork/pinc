@@ -1,6 +1,6 @@
 ---------------------------- MODULE TraceNodeBackoff ---------------------------
 (***************************************************************************)
-(* Trace validation of the node's table of failed dials: vinc-node io.rs   *)
+(* Trace validation of the node's table of failed dials: pinc-node io.rs   *)
 (* (`backoff`, `deny_back`, `set_failed`) and the window check of the      *)
 (* frame hand-off.                                                         *)
 (*                                                                         *)
@@ -24,7 +24,7 @@
 (* exactly outside the window the model's entry makes.                     *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds nobo.ndjson.          *)
+(* variable PINC_TRACE_DIR, the directory that holds nobo.ndjson.          *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils, Nanos
 CONSTANT MAXT
@@ -32,7 +32,7 @@ VARIABLES i, F, hubs
 vars == <<i, F, hubs>>
 INSTANCE NodeBackoffOps
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/nobo.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/nobo.ndjson")
 Ev0 == Trace[i]
 L(x) == U!FromLimbs(x)
 \* the recorded entry of the peer: [] for none, else [until, wait]

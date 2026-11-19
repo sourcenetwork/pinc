@@ -1,4 +1,4 @@
-//! The `vinc-sim` faults and adversaries: partitions, crash and restart, suspension, interface changes, middleboxes,
+//! The `pinc-sim` faults and adversaries: partitions, crash and restart, suspension, interface changes, middleboxes,
 //! spoofed floods, replays and the on-path observer.
 #![allow(
     clippy::unwrap_used,
@@ -16,8 +16,8 @@
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-use vinc_sim::toy::{Probe, ProbeCmd, ProbeEvent, Toy, ToyCmd, ToyConfig, ToyEvent};
-use vinc_sim::{
+use pinc_sim::toy::{Probe, ProbeCmd, ProbeEvent, Toy, ToyCmd, ToyConfig, ToyEvent};
+use pinc_sim::{
     DropReason, FloodPayload, FloodSpec, IfaceEvent, LinkChange, LinkConfig, MS, NodeId, NodeState, SEC, Sim, SimConfig,
 };
 

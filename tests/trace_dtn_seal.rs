@@ -1,7 +1,7 @@
-//! Trace generation for the one-shot encryption (`vinc-dtn` `seal.rs`, `head.rs`, `bundle.rs`): real runs of
+//! Trace generation for the one-shot encryption (`pinc-dtn` `seal.rs`, `head.rs`, `bundle.rs`): real runs of
 //! `encapsulate`, `decapsulate`, the slice AEAD, `seal_bundle` and the signed head through the public API, recorded
 //! as ndjson (`dtn_seal.ndjson`) for the TLA+ trace check (`TraceDtnSeal.tla`) and the Lean replay
-//! (`Vinc/TraceDtnSeal.lean`).
+//! (`Pinc/TraceDtnSeal.lean`).
 //!
 //! What is recorded is what an observer sees. A public value (a node id, a key pair, an ephemeral public key, a
 //! KEM ciphertext, a bundle id), a seed and an AEAD key are ids (one id per distinct byte string per kind in a
@@ -15,7 +15,7 @@
 //!
 //! The test asserts everything itself (against facts read off the code's own outputs: equal probes iff the
 //! ciphers interoperate), so it is meaningful without the proof tools. The trace is written to the directory in
-//! `VINC_TRACE_DIR` when it is set; otherwise nothing is written.
+//! `PINC_TRACE_DIR` when it is set; otherwise nothing is written.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -38,11 +38,11 @@ mod dtn_common;
 use std::collections::HashMap;
 
 use dtn_common::{Recipient, Sealed, keypair, make, plan, recipient};
-use vinc_crypto::{IdentityAlg, NodeId, Secret, Software};
-use vinc_dtn::error::DtnError;
-use vinc_dtn::head::{BundleId, Envelope, Erasure, HEAD_LEN, Head, SignedHead};
-use vinc_dtn::hlc::Hlc;
-use vinc_dtn::seal::{Cipher, SealSeeds, decapsulate, encapsulate};
+use pinc_crypto::{IdentityAlg, NodeId, Secret, Software};
+use pinc_dtn::error::DtnError;
+use pinc_dtn::head::{BundleId, Envelope, Erasure, HEAD_LEN, Head, SignedHead};
+use pinc_dtn::hlc::Hlc;
+use pinc_dtn::seal::{Cipher, SealSeeds, decapsulate, encapsulate};
 
 /// Dense ids for byte strings, one id per (kind, bytes).
 #[derive(Default)]
@@ -405,7 +405,7 @@ fn trace() {
         at += w;
     }
 
-    if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
+    if let Ok(dir) = std::env::var("PINC_TRACE_DIR") {
         std::fs::create_dir_all(&dir).unwrap();
         let mut text = run.lines.join("\n");
         text.push('\n');

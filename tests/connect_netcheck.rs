@@ -19,8 +19,8 @@ mod connect_common;
 use std::net::SocketAddr;
 
 use connect_common::ed;
-use vinc_connect::client::netcheck::{HOME_TRIES, HomeStep, Netcheck, Observed, classify, is_shared};
-use vinc_connect::record::Reach;
+use pinc_connect::client::netcheck::{HOME_TRIES, HomeStep, Netcheck, Observed, classify, is_shared};
+use pinc_connect::record::Reach;
 
 const S: u64 = 1_000_000_000;
 

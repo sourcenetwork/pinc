@@ -1,6 +1,6 @@
 ------------------------------- MODULE Reach --------------------------------
 (***************************************************************************)
-(* The ring of REACH_OUT bodies (vinc-core reach.rs): every sequence of    *)
+(* The ring of REACH_OUT bodies (pinc-core reach.rs): every sequence of    *)
 (* puts at small sizes (ReachOps.tla has the operators; a get changes      *)
 (* nothing).                                                               *)
 (*                                                                         *)
@@ -38,7 +38,7 @@
 (* B's place). Reach_refresh, Reach_evict, Reach_refuse and Reach_renew    *)
 (* are reachability witnesses: a refresh, an eviction, a refused body and  *)
 (* a refresh of the body put longest ago in a full ring happen.            *)
-(* Lean counterpart: proofs/lean/Vinc/CoreReach*.lean.                     *)
+(* Lean counterpart: proofs/lean/Pinc/CoreReach*.lean.                     *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
 CONSTANTS N, MX, S, LS, PMAX, DUP, NEWEST

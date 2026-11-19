@@ -4,10 +4,10 @@
 //! even open (see the support crate's `forge` module).
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
 
-use vinc_crypto::IdentityAlg;
-use vinc_security::ClientTickets;
-use vinc_tests::*;
-use vinc_transport::conn::{CloseReason, PathId};
+use pinc_crypto::IdentityAlg;
+use pinc_security::ClientTickets;
+use pinc_tests::*;
+use pinc_transport::conn::{CloseReason, PathId};
 
 /// Which check a forged Reply fails at the dialing side.
 #[derive(Debug, Clone, Copy)]

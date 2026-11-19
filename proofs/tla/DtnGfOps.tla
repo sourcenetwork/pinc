@@ -1,6 +1,6 @@
 ----------------------------- MODULE DtnGfOps -----------------------------
 (***************************************************************************)
-(* The arithmetic of GF(2^8) with the polynomial 0x11d, as vinc-dtn's      *)
+(* The arithmetic of GF(2^8) with the polynomial 0x11d, as pinc-dtn's      *)
 (* gf256.rs builds and uses it, and the slice kernels of the same file.    *)
 (*                                                                         *)
 (* The tables are built the way build_tables builds them: x starts at 1    *)
@@ -16,7 +16,7 @@
 (* (the eight-byte word path of the code computes the same bytes; that is  *)
 (* proved in Lean, DtnGfSlice.wordXor_eq, and checked in the trace).       *)
 (*                                                                         *)
-(* Lean counterparts: proofs/lean/Vinc/DtnGf.lean (tables, mulT_eq_pmul),  *)
+(* Lean counterparts: proofs/lean/Pinc/DtnGf.lean (tables, mulT_eq_pmul),  *)
 (* DtnGfField.lean (the field), DtnGfSlice.lean (the kernels).             *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, TLC

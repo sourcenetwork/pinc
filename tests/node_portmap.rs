@@ -13,19 +13,19 @@ use std::collections::VecDeque;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::ops::Range;
 
-use vinc_broadcast::Limits;
-use vinc_connect::client::{Config as ConnCfg, Port};
-use vinc_connect::record::MAX_ADDRS;
-use vinc_core::{
+use pinc_broadcast::Limits;
+use pinc_connect::client::{Config as ConnCfg, Port};
+use pinc_connect::record::MAX_ADDRS;
+use pinc_core::{
     Command, CommandError, Event, Events, IfaceEvent, IfaceId, NodeStats, Reply, SendState, SessionId, SessionStats,
     TraceRecord, Transmit, Value,
 };
-use vinc_crypto::{Drbg, IdentityAlg, Keypair, NodeId};
-use vinc_node::{Config as NodeConfig, Ep, HUB_ALPN, Node};
-use vinc_portmap::{Proto, natpmp, pcp};
-use vinc_security::{Env, KeyHandle, LocalIdentity, PrekeyPolicy, SoftPrekeys};
-use vinc_tests::Caps;
-use vinc_transport::stream::{NoSource, StreamId};
+use pinc_crypto::{Drbg, IdentityAlg, Keypair, NodeId};
+use pinc_node::{Config as NodeConfig, Ep, HUB_ALPN, Node};
+use pinc_portmap::{Proto, natpmp, pcp};
+use pinc_security::{Env, KeyHandle, LocalIdentity, PrekeyPolicy, SoftPrekeys};
+use pinc_tests::Caps;
+use pinc_transport::stream::{NoSource, StreamId};
 
 /// An endpoint that hands out scripted events and accepts every command with an empty reply. It records the sessions
 /// the node closed, and drops every later event of one but its close: a closed session's packets are not read.
@@ -52,13 +52,13 @@ impl Port for Script {
     fn node(&self) -> Option<NodeStats> {
         None
     }
-    fn peer(&self, _node: &NodeId) -> Option<vinc_core::PeerInfo> {
+    fn peer(&self, _node: &NodeId) -> Option<pinc_core::PeerInfo> {
         None
     }
-    fn reach_body(&self, _session: SessionId, _out: &mut [u8; vinc_core::REACH_BODY_MAX]) -> usize {
+    fn reach_body(&self, _session: SessionId, _out: &mut [u8; pinc_core::REACH_BODY_MAX]) -> usize {
         0
     }
-    fn by_conn_id(&self, _cid: &vinc_security::ConnId) -> Option<SessionStats> {
+    fn by_conn_id(&self, _cid: &pinc_security::ConnId) -> Option<SessionStats> {
         None
     }
 }
@@ -136,7 +136,7 @@ fn member() -> Box<Member> {
     let alg = IdentityAlg::Ed25519;
     let kp = Keypair::from_seed(alg, &[0x12; 32]).unwrap();
     let identity = LocalIdentity::from_keypair(&kp, KeyHandle(1)).unwrap();
-    let prov = Caps(vinc_crypto::Software, true);
+    let prov = Caps(pinc_crypto::Software, true);
     let mut drbg = Drbg::new(&[0x22; 32]);
     let mut env = Env {
         provider: &prov,
@@ -160,7 +160,7 @@ fn member() -> Box<Member> {
         version: 1,
         alpn: HUB_ALPN,
         limits: Limits::default(),
-        map_keys: vinc_tests::id_key(0x5eed),
+        map_keys: pinc_tests::id_key(0x5eed),
         wall_ms: 1_700_000_000_000,
         local: local(),
         trace: false,
@@ -461,7 +461,7 @@ fn the_node_exposes_what_the_client_dropped() {
             let mut node = member();
             assert_eq!(
                 node.port_mapping_stats(),
-                vinc_node::PortMapStats::default(),
+                pinc_node::PortMapStats::default(),
                 "nothing before it is on"
             );
             node.start_port_mapping(SEC, Some(gw().ip()), local(), 120);

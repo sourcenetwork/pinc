@@ -13,7 +13,7 @@
 
 use std::process::Command;
 
-use vinc_distributed::results::read_rows;
+use pinc_distributed::results::read_rows;
 
 const SCENARIO: &str = r#"
 name = "e2e"
@@ -54,8 +54,8 @@ streams = 2
 #[test]
 #[ignore = "needs Docker and sudo: run with `just e2e` on the build host"]
 fn a_two_node_scenario_runs_every_stack_and_tears_down() {
-    let bin = env!("CARGO_BIN_EXE_vinc-distributed");
-    let dir = std::env::temp_dir().join(format!("vinc-distributed-e2e-{}", std::process::id()));
+    let bin = env!("CARGO_BIN_EXE_pinc-distributed");
+    let dir = std::env::temp_dir().join(format!("pinc-distributed-e2e-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let file = dir.join("e2e.toml");
     std::fs::write(&file, SCENARIO).unwrap();
@@ -91,7 +91,7 @@ fn a_two_node_scenario_runs_every_stack_and_tears_down() {
         assert!(std::path::Path::new(results).join(name).is_file(), "{name} is missing");
     }
     let left = Command::new("docker")
-        .args(["ps", "-aq", "--filter", "label=vinc.distributed"])
+        .args(["ps", "-aq", "--filter", "label=pinc.distributed"])
         .output()
         .unwrap();
     assert!(left.stdout.is_empty(), "the teardown left containers");
@@ -101,9 +101,9 @@ fn a_two_node_scenario_runs_every_stack_and_tears_down() {
 /// Runs the committed scenario `name` once and returns, for each fetch, the payload size and what the two public nodes
 /// received: a relayed session rides the relay or the hub, whichever the dial went through.
 fn relay_bytes(name: &str) -> Vec<(f64, u64)> {
-    let bin = env!("CARGO_BIN_EXE_vinc-distributed");
+    let bin = env!("CARGO_BIN_EXE_pinc-distributed");
     let file = format!("{}/scenarios/{name}.toml", env!("CARGO_MANIFEST_DIR"));
-    let dir = std::env::temp_dir().join(format!("vinc-distributed-{name}-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("pinc-distributed-{name}-{}", std::process::id()));
     let out = Command::new(bin)
         .args(["run", &file, "--reps", "1", "--results", dir.to_str().unwrap()])
         .args(["--quiet-other", "100000", "--quiet-steal", "100", "--quiet-wait", "60"])

@@ -1,6 +1,6 @@
 ---------------------------- MODULE TraceValuesTime ----------------------------
 (***************************************************************************)
-(* Trace validation of the time rules of the value fetch (vinc-values      *)
+(* Trace validation of the time rules of the value fetch (pinc-values      *)
 (* fetch/recv.rs and fetch/stall.rs).                                      *)
 (*                                                                         *)
 (* The Rust test tests/trace_values_time.rs runs the real Fetch in the     *)
@@ -36,7 +36,7 @@
 (* at the start plus the groups the trace verified.                        *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds values_time.ndjson.   *)
+(* variable PINC_TRACE_DIR, the directory that holds values_time.ndjson.   *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
 
@@ -46,7 +46,7 @@ vars == <<i, m, c>>
 OP == INSTANCE ValuesTimeOps
 U == INSTANCE U64
 
-Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/values_time.ndjson")
+Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/values_time.ndjson")
 
 W(l) == U!FromLimbs(l)
 G(p) == [off |-> p[1], len |-> p[2]]

@@ -5,17 +5,17 @@
 //! jumps back and forward, host floors, record sequences that roll over, observed words below, at and above the
 //! node's own, and the epoch space running out. The `AddressTag` is driven through handovers, several at one
 //! instant, the settle time, and more than 255 moves. Every event carries the host store as the call found it, so the
-//! TLA+ check (`TraceIncarnation.tla`) and the Lean replay (`Vinc.TraceMembershipInc`) apply the model operator to
+//! TLA+ check (`TraceIncarnation.tla`) and the Lean replay (`Pinc.TraceMembershipInc`) apply the model operator to
 //! the same inputs and compare the result and the store afterwards.
 //!
 //! The test also checks the properties of the design itself, against a plain tracker: the words a lineage announces
 //! strictly increase for a persistent store whatever the wall clock does, an epoch never exceeds 48 bits, and a
 //! failure leaves the value and the word unchanged.
 
-use vinc_membership::Local;
-use vinc_membership::incarnation::{AddressTag, Incarnation, IncarnationError, MOVE_SETTLE};
-use vinc_membership::session::StoreError;
-use vinc_tests::SplitMix64;
+use pinc_membership::Local;
+use pinc_membership::incarnation::{AddressTag, Incarnation, IncarnationError, MOVE_SETTLE};
+use pinc_membership::session::StoreError;
+use pinc_tests::SplitMix64;
 
 use crate::common::{TraceWriter, b, limbs, opt_limbs};
 

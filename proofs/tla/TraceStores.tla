@@ -1,7 +1,7 @@
 ------------------------------ MODULE TraceStores ------------------------------
 (***************************************************************************)
 (* Trace validation of the ticket stores and the prekey cache              *)
-(* (vinc-security/src/tickets.rs and cache.rs).                            *)
+(* (pinc-security/src/tickets.rs and cache.rs).                            *)
 (*                                                                         *)
 (* The Rust test tests/trace_stores.rs drives the real ClientTickets,      *)
 (* ServerTickets and PrekeyCache through the public API with seeded        *)
@@ -24,7 +24,7 @@
 (* TLA model checks the content.                                           *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
-(* variable VINC_TRACE_DIR, the directory that holds stores.ndjson.        *)
+(* variable PINC_TRACE_DIR, the directory that holds stores.ndjson.        *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
 
@@ -36,7 +36,7 @@ TK == INSTANCE Tickets WITH Unit <- 1000000000, Attempts <- 8, MaxBatch <- 4, Pe
           MaxClock <- 0, Mode <- "client", TicketSet <- {}, Batches <- {}, Streams <- {}, cl <- 0, sv <- 0
 PC == INSTANCE PrekeyCache WITH N <- 0, Hashes <- {}, Vals <- {}, MaxClock <- 0, c <- 0, L <- 0, out <- 0
 
-Raw == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/stores.ndjson")
+Raw == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/stores.ndjson")
 Trace == SelectSeq(Raw, LAMBDA l : l.t # "idef")
 
 Tk(j) == [full |-> TRUE, peer |-> j.p, alpn |-> j.a, tid |-> j.t, psk |-> j.s, aead |-> j.ae, exp |-> j.x, credit |-> j.cr]

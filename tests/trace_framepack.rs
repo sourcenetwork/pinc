@@ -1,6 +1,6 @@
-//! Trace generation for the VINCER packet builder (`vinc-transport` `conn/send.rs`): the frames real connections
+//! Trace generation for the PINCER packet builder (`pinc-transport` `conn/send.rs`): the frames real connections
 //! put into the packets they seal, and the two byte functions of the builder, recorded as ndjson for the TLA+ trace
-//! check (`TraceFramePack.tla`) and the Lean replay (`Vinc/TraceFramePack.lean`).
+//! check (`TraceFramePack.tla`) and the Lean replay (`Pinc/TraceFramePack.lean`).
 //!
 //! Pairs of real connections run on a simulated link: bulk transfers over several streams at several urgencies
 //! with and without loss and with GSO (packets padded to the full size), datagrams and extension frames between
@@ -45,13 +45,13 @@
 
 use std::collections::BTreeMap;
 
-use vinc_crypto::IdentityAlg;
-use vinc_tests::*;
-use vinc_transport::conn::{CreditRecord, PackKind, PackMode, PackProbe, PackRecord, PathId, PathInfo};
-use vinc_transport::frame::{Frame, FrameIter, MAX_STREAM_END, ext, stream_overhead};
-use vinc_wire::{Reader, Writer, varint};
+use pinc_crypto::IdentityAlg;
+use pinc_tests::*;
+use pinc_transport::conn::{CreditRecord, PackKind, PackMode, PackProbe, PackRecord, PathId, PathInfo};
+use pinc_transport::frame::{Frame, FrameIter, MAX_STREAM_END, ext, stream_overhead};
+use pinc_wire::{Reader, Writer, varint};
 
-vinc_tests::install_counting_allocator!();
+pinc_tests::install_counting_allocator!();
 
 /// Numbers below this fit the TLA+ checker with room for its arithmetic.
 const NARROW: u64 = 1 << 28;
@@ -496,10 +496,10 @@ fn life(out: &mut Out, seed: u64) {
     net.run(net.now + SEC, |_| false);
     // Sleep and wake.
     let now = net.now;
-    net.a.with_env(now, vinc_transport::conn::Connection::sleep);
+    net.a.with_env(now, pinc_transport::conn::Connection::sleep);
     net.run(net.now + 3 * SEC, |_| false);
     let now = net.now;
-    net.a.with_env(now, vinc_transport::conn::Connection::wake);
+    net.a.with_env(now, pinc_transport::conn::Connection::wake);
     net.run(net.now + 5 * SEC, |_| false);
     // A keepalive on an idle connection.
     net.a.conn.set_keepalive(Some(200 * MS));
@@ -536,7 +536,7 @@ fn resume(out: &mut Out, seed: u64) {
     };
     let ticket = tickets.take(&w.rp.id.node_id(), ALPN, T0).unwrap();
     let (mut sa, mut sb) = (Store::new(true), Store::new(false));
-    let a = w.client(&mut sa, Some(ticket), vinc_security::ClientTickets::new());
+    let a = w.client(&mut sa, Some(ticket), pinc_security::ClientTickets::new());
     let b = w.server(&mut sb);
     let mut net = Net::new(a, b, Link::new(seed + 1, Params::new(10 * MS)), &mut w.stores);
     enable(&mut net);
@@ -941,7 +941,7 @@ fn trace_framepack() {
         "trace_framepack: {} events, {} narrow; {:?}",
         out.events, out.narrow_events, out.seen
     );
-    if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
+    if let Ok(dir) = std::env::var("PINC_TRACE_DIR") {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(format!("{dir}/framepack.ndjson"), &out.narrow).unwrap();
         std::fs::write(format!("{dir}/framepack_wide.ndjson"), &out.wide).unwrap();

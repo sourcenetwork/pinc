@@ -11,13 +11,13 @@
 
 use std::collections::BTreeSet;
 
-use vinc_distributed::helper::{gateway_conf, host_ns_allowed, readable};
-use vinc_distributed::metrics::{Iface, NodeUse, Reading, parse_cpu_usec, parse_net_dev, parse_tc};
-use vinc_distributed::plan::{Ns, Plan, Tool, cpu_sets, netem_args, queue_limit};
-use vinc_distributed::quiet::{Monitor, Snapshot, Thresholds, parse_stat_line};
-use vinc_distributed::results::{Cell, Row, Table, civil_date, fmt_cell, fmt_num, markdown, spread, summarize};
-use vinc_distributed::scenario::{
-    Nat, Reading as ReadingMode, Scenario, Shape, Stack, TransportTest, VincEndpoints, Workload,
+use pinc_distributed::helper::{gateway_conf, host_ns_allowed, readable};
+use pinc_distributed::metrics::{Iface, NodeUse, Reading, parse_cpu_usec, parse_net_dev, parse_tc};
+use pinc_distributed::plan::{Ns, Plan, Tool, cpu_sets, netem_args, queue_limit};
+use pinc_distributed::quiet::{Monitor, Snapshot, Thresholds, parse_stat_line};
+use pinc_distributed::results::{Cell, Row, Table, civil_date, fmt_cell, fmt_num, markdown, spread, summarize};
+use pinc_distributed::scenario::{
+    Nat, Reading as ReadingMode, Scenario, Shape, Stack, TransportTest, PincEndpoints, Workload,
 };
 
 fn scenario(name: &str) -> Scenario {
@@ -78,11 +78,11 @@ fn every_example_scenario_validates_and_round_trips() {
 }
 
 #[test]
-fn vinc_endpoints_default_to_one_and_per_core_is_read_validated_and_refused_when_bad() {
-    assert_eq!(scenario("lan").vinc_endpoints, VincEndpoints::One);
+fn pinc_endpoints_default_to_one_and_per_core_is_read_validated_and_refused_when_bad() {
+    assert_eq!(scenario("lan").pinc_endpoints, PincEndpoints::One);
     let sc = scenario("lan-per-core");
-    assert_eq!(sc.vinc_endpoints, VincEndpoints::PerCore);
-    assert!(sc.to_toml().unwrap().contains("vinc_endpoints = \"per-core\""));
+    assert_eq!(sc.pinc_endpoints, PincEndpoints::PerCore);
+    assert!(sc.to_toml().unwrap().contains("pinc_endpoints = \"per-core\""));
     // Every row of the scenario is a row per-core applies to: a test that runs on one endpoint would read as per-core.
     let Workload::Transport(t) = &sc.workload else {
         panic!("lan-per-core is a transport scenario")
@@ -92,7 +92,7 @@ fn vinc_endpoints_default_to_one_and_per_core_is_read_validated_and_refused_when
         "only the many test"
     );
     // The default is not written back, so a file made before the field existed stays as it was.
-    assert!(!scenario("lan").to_toml().unwrap().contains("vinc_endpoints"));
+    assert!(!scenario("lan").to_toml().unwrap().contains("pinc_endpoints"));
     let text = std::fs::read_to_string(format!("{}/scenarios/lan-per-core.toml", env!("CARGO_MANIFEST_DIR"))).unwrap();
     let bad = Scenario::parse(&text.replace("\"per-core\"", "\"two\""));
     assert!(bad.is_err(), "a value that is neither one nor per-core is refused");
@@ -100,13 +100,13 @@ fn vinc_endpoints_default_to_one_and_per_core_is_read_validated_and_refused_when
     let mut sc = scenario("lan-per-core");
     sc.stacks = vec![Stack::Iroh];
     let paths: BTreeSet<String> = sc.validate().into_iter().map(|p| p.path).collect();
-    assert!(paths.contains("vinc_endpoints"), "{paths:?}");
+    assert!(paths.contains("pinc_endpoints"), "{paths:?}");
     let mut sc = scenario("lan-per-core");
     if let Workload::Transport(t) = &mut sc.workload {
         t.tests.retain(|t| !matches!(t, TransportTest::Many { .. }));
     }
     let paths: BTreeSet<String> = sc.validate().into_iter().map(|p| p.path).collect();
-    assert!(paths.contains("vinc_endpoints"), "{paths:?}");
+    assert!(paths.contains("pinc_endpoints"), "{paths:?}");
     // A test that runs on one endpoint cannot stand in a per-core scenario, even beside a many test.
     let mut sc = scenario("lan-per-core");
     if let Workload::Transport(t) = &mut sc.workload {
@@ -118,14 +118,14 @@ fn vinc_endpoints_default_to_one_and_per_core_is_read_validated_and_refused_when
     let problems: Vec<_> = sc
         .validate()
         .into_iter()
-        .filter(|p| p.path == "vinc_endpoints")
+        .filter(|p| p.path == "pinc_endpoints")
         .collect();
     assert_eq!(problems.len(), 1, "{problems:?}");
     assert!(problems[0].message.contains("throughput_1s"), "{problems:?}");
     let mut sc = scenario("pubsub-lan");
-    sc.vinc_endpoints = VincEndpoints::PerCore;
+    sc.pinc_endpoints = PincEndpoints::PerCore;
     let paths: BTreeSet<String> = sc.validate().into_iter().map(|p| p.path).collect();
-    assert!(paths.contains("vinc_endpoints"), "{paths:?}");
+    assert!(paths.contains("pinc_endpoints"), "{paths:?}");
 }
 
 #[test]
@@ -247,7 +247,7 @@ fn validation_reports_every_problem_with_its_path() {
     sc.name = "Bad Name".into();
     sc.links[0].shape.loss_pct = 120.0;
     sc.nodes[1].site = "nowhere".into();
-    sc.stacks.push(Stack::Vinc);
+    sc.stacks.push(Stack::Pinc);
     let paths: BTreeSet<String> = sc.validate().into_iter().map(|p| p.path).collect();
     for want in ["name", "links[0].shape.loss_pct", "nodes[1].site", "stacks"] {
         assert!(paths.contains(want), "no problem reported at {want}: {paths:?}");
@@ -723,16 +723,16 @@ fn spread_is_median_min_max() {
 #[test]
 fn summary_marks_the_best_and_keeps_what_was_not_measured() {
     let mut rows = vec![
-        row("vinc", 0, 900.0),
-        row("vinc", 1, 1100.0),
-        row("vinc", 2, 1000.0),
+        row("pinc", 0, 900.0),
+        row("pinc", 1, 1100.0),
+        row("pinc", 2, 1000.0),
         row("iroh", 0, 1200.0),
     ];
     let mut missing = row("libp2p", 0, 0.0);
     missing.status = "not measured: the library has no resumption with early data".into();
     missing.node.clear();
     rows.push(missing);
-    let stacks: Vec<String> = ["vinc", "iroh", "libp2p"].iter().map(|s| (*s).to_owned()).collect();
+    let stacks: Vec<String> = ["pinc", "iroh", "libp2p"].iter().map(|s| (*s).to_owned()).collect();
     let t = summarize(&rows, &stacks);
     assert_eq!(t.len(), 1);
     let p50 = &t[0].lines[0];
@@ -743,11 +743,11 @@ fn summary_marks_the_best_and_keeps_what_was_not_measured() {
 
 #[test]
 fn discarded_measurements_count_for_nothing_and_are_noted() {
-    let mut busy = row("vinc", 0, 5.0);
+    let mut busy = row("pinc", 0, 5.0);
     busy.status =
         "discarded: the host was busy (other processes 40.0% of a core, steal 0.00%, most: rsync 40.0%)".into();
-    let rows = vec![busy, row("vinc", 0, 900.0), row("iroh", 0, 1000.0)];
-    let stacks = vec!["vinc".to_owned(), "iroh".to_owned()];
+    let rows = vec![busy, row("pinc", 0, 900.0), row("iroh", 0, 1000.0)];
+    let stacks = vec!["pinc".to_owned(), "iroh".to_owned()];
     let t = &summarize(&rows, &stacks)[0];
     assert_eq!(
         fmt_cell(&t.lines[0].cells[0]),
@@ -777,7 +777,7 @@ fn the_quiet_check_counts_only_what_is_not_the_run() {
             (9001, 1, "rsync", 0),
             (9002, 2, "kworker/3:1", 0),
             (9003, me, "docker", 0),
-            (me, 1, "vinc-distributed", 0),
+            (me, 1, "pinc-distributed", 0),
         ],
         0,
         0,
@@ -788,7 +788,7 @@ fn the_quiet_check_counts_only_what_is_not_the_run() {
             (9001, 1, "rsync", 50),
             (9002, 2, "kworker/3:1", 80),
             (9003, me, "docker", 70),
-            (me, 1, "vinc-distributed", 90),
+            (me, 1, "pinc-distributed", 90),
         ],
         1600,
         8,
@@ -802,7 +802,7 @@ fn the_quiet_check_counts_only_what_is_not_the_run() {
     assert!((u.steal_pct - 0.5).abs() < 1e-6);
     assert!(u.top.starts_with("rsync"));
     assert!(!u.clean);
-    let quiet = Snapshot::from_parts(t1, &[(9001, 1, "rsync", 2), (me, 1, "vinc-distributed", 500)], 1600, 0);
+    let quiet = Snapshot::from_parts(t1, &[(9001, 1, "rsync", 2), (me, 1, "pinc-distributed", 500)], 1600, 0);
     assert!(m.usage(&a, &quiet).clean, "2% of a core is under the 3% threshold");
 }
 
@@ -817,8 +817,8 @@ fn proc_stat_lines_parse_with_odd_names() {
 
 #[test]
 fn a_tie_is_not_a_win() {
-    let rows = vec![row("vinc", 0, 5.0), row("iroh", 0, 5.0)];
-    let stacks = vec!["vinc".to_owned(), "iroh".to_owned()];
+    let rows = vec![row("pinc", 0, 5.0), row("iroh", 0, 5.0)];
+    let stacks = vec!["pinc".to_owned(), "iroh".to_owned()];
     assert_eq!(summarize(&rows, &stacks)[0].lines[0].best, None);
 }
 
@@ -855,7 +855,7 @@ fn table_of(test: &str, stacks: &[(&str, Fields, u32)]) -> Table {
     summarize(&rows, &names).remove(0)
 }
 
-fn line<'a>(t: &'a Table, label: &str) -> &'a vinc_distributed::results::Line {
+fn line<'a>(t: &'a Table, label: &str) -> &'a pinc_distributed::results::Line {
     t.lines.iter().find(|l| l.label == label).unwrap()
 }
 
@@ -868,7 +868,7 @@ fn dtn_cost_is_compared_only_among_the_stacks_that_delivered() {
     let t = table_of(
         "dtn_store_forward",
         &[
-            ("vinc", &[("delivered", 1.0)], 200),
+            ("pinc", &[("delivered", 1.0)], 200),
             ("iroh", &[("delivered", 1.0)], 100),
             ("libp2p", &[("delivered", 0.0)], 10),
         ],
@@ -888,7 +888,7 @@ fn dtn_without_a_delivery_share_compares_the_stacks_with_checks() {
     let t = table_of(
         "dtn_ledger",
         &[
-            ("vinc", &[("checks_passed", 3.0)], 200),
+            ("pinc", &[("checks_passed", 3.0)], 200),
             ("iroh", &[("checks_passed", 3.0)], 100),
             ("libp2p", &[], 10),
         ],
@@ -902,7 +902,7 @@ fn dtn_without_a_delivery_share_compares_the_stacks_with_checks() {
 fn pubsub_cost_of_a_stack_that_lost_everything_is_not_compared() {
     let t = table_of(
         "pubsub",
-        &[("vinc", &[("loss_pct", 0.0)], 5), ("iroh", &[("loss_pct", 100.0)], 1)],
+        &[("pinc", &[("loss_pct", 0.0)], 5), ("iroh", &[("loss_pct", 100.0)], 1)],
     );
     let cpu = line(&t, "CPU, all nodes (kernel)");
     assert_eq!(cpu.best, None);
@@ -915,7 +915,7 @@ fn pubsub_latency_of_a_stack_that_lost_messages_is_not_a_win() {
     let t = table_of(
         "pubsub",
         &[
-            ("vinc", &[("loss_pct", 0.0), ("p99_us", 13.8e6)], 1),
+            ("pinc", &[("loss_pct", 0.0), ("p99_us", 13.8e6)], 1),
             ("iroh", &[("loss_pct", 0.0), ("p99_us", 13.8e6)], 1),
             ("libp2p", &[("loss_pct", 12.5), ("p99_us", 1300.0)], 1),
         ],
@@ -931,7 +931,7 @@ fn pubsub_loss_within_a_point_of_the_least_completes() {
     let t = table_of(
         "pubsub",
         &[
-            ("vinc", &[("loss_pct", 12.0), ("p99_us", 900.0)], 1),
+            ("pinc", &[("loss_pct", 12.0), ("p99_us", 900.0)], 1),
             ("iroh", &[("loss_pct", 12.2), ("p99_us", 800.0)], 1),
             ("libp2p", &[("loss_pct", 23.9), ("p99_us", 10.0)], 1),
         ],
@@ -946,7 +946,7 @@ fn sync_and_latency_tables_compare_every_stack() {
         let t = table_of(
             test,
             &[
-                ("vinc", &[("p50_us", 9.0), ("fetch_ms", 9.0)], 3),
+                ("pinc", &[("p50_us", 9.0), ("fetch_ms", 9.0)], 3),
                 ("iroh", &[("p50_us", 5.0), ("fetch_ms", 5.0)], 2),
             ],
         );

@@ -1,6 +1,6 @@
 name = "defra-pushlog-500"
 about = "DefraDB's pushlog fan-out at 500 replicators (the harness holds 512 nodes, 250 a site): one writer pushes 500 updates of 512 bytes at 20 a second to two replica sites across a WAN (20 ms round trip, 100 Mbit/s each way)."
-stacks = ["vinc", "iroh", "libp2p"]
+stacks = ["pinc", "iroh", "libp2p"]
 repetitions = 1
 
 [resources]

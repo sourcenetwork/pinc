@@ -1,6 +1,6 @@
 //! Trace generation for the buffer of packets that arrive before their keys: seeded runs of the real buffer and of
-//! real connections (`vinc-transport`, built with the `trace` feature), recorded as ndjson (`early.ndjson`) for the
-//! TLA+ trace check (`TraceEarly.tla`) and the Lean replay (`Vinc/TraceEarly.lean`).
+//! real connections (`pinc-transport`, built with the `trace` feature), recorded as ndjson (`early.ndjson`) for the
+//! TLA+ trace check (`TraceEarly.tla`) and the Lean replay (`Pinc/TraceEarly.lean`).
 //!
 //! Two kinds of event. `txea` is the buffer itself (`EarlyData`, through `EarlyProbe`): pushes of packets of many
 //! sizes into pools of one to eight chunks, pops and clears, against a naive list of what it should hold (at most 8,
@@ -17,7 +17,7 @@
 //! of keys, refused for a frame only an established session sends, or refused because the connection is over; the
 //! bytes counted on arrival whichever it is, a refusal for a frame changing nothing else and applying none of the
 //! packet, and nothing held once the connection is up or closed), so it is meaningful without the proof tools. The
-//! trace is written to `VINC_TRACE_DIR` when it is set.
+//! trace is written to `PINC_TRACE_DIR` when it is set.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -35,17 +35,17 @@ use std::cell::RefCell;
 use std::fmt::Write as _;
 use std::rc::Rc;
 
-use vinc_crypto::IdentityAlg;
-use vinc_security::{Rekey, TicketBatch, TicketEntry};
-use vinc_tests::*;
-use vinc_transport::conn::{Drop as RxDrop, PathId};
-use vinc_transport::frame::{Frame, write_ack};
-use vinc_transport::packet::{LongHeader, LongType, PN_LEN_BASE};
-use vinc_transport::stream::pool::CHUNK_SIZE;
-use vinc_transport::stream::trace::EarlyProbe;
-use vinc_wire::Writer;
+use pinc_crypto::IdentityAlg;
+use pinc_security::{Rekey, TicketBatch, TicketEntry};
+use pinc_tests::*;
+use pinc_transport::conn::{Drop as RxDrop, PathId};
+use pinc_transport::frame::{Frame, write_ack};
+use pinc_transport::packet::{LongHeader, LongType, PN_LEN_BASE};
+use pinc_transport::stream::pool::CHUNK_SIZE;
+use pinc_transport::stream::trace::EarlyProbe;
+use pinc_wire::Writer;
 
-vinc_tests::install_counting_allocator!();
+pinc_tests::install_counting_allocator!();
 
 // ---- the buffer itself ----
 
@@ -157,11 +157,11 @@ fn buffer_run(rng: &mut SplitMix64, out: &mut String, run: u32) {
 // ---- a real connection ----
 
 struct Ids {
-    a: Option<vinc_security::ConnId>,
-    b: Option<vinc_security::ConnId>,
+    a: Option<pinc_security::ConnId>,
+    b: Option<pinc_security::ConnId>,
 }
 
-fn dgram(rng: &mut SplitMix64, zero: bool, cid: vinc_security::ConnId, other: vinc_security::ConnId) -> Vec<u8> {
+fn dgram(rng: &mut SplitMix64, zero: bool, cid: pinc_security::ConnId, other: pinc_security::ConnId) -> Vec<u8> {
     let dlen = 60 + (rng.next_u64() % 900) as usize;
     if zero {
         let body = dlen - 30;
@@ -203,7 +203,7 @@ struct Snap {
 }
 
 impl Snap {
-    fn of(v: vinc_transport::conn::EarlyView, s: &vinc_transport::conn::Stats) -> Self {
+    fn of(v: pinc_transport::conn::EarlyView, s: &pinc_transport::conn::Stats) -> Self {
         Self {
             ph: v.phase,
             er: v.early_keys,
@@ -269,7 +269,7 @@ fn inject(
     rec: &mut Rec<'_>,
     rng: &mut SplitMix64,
     zero: bool,
-    cid: vinc_security::ConnId,
+    cid: pinc_security::ConnId,
 ) {
     let before = side.snap();
     let d = dgram(rng, zero, cid, cid);
@@ -446,7 +446,7 @@ fn established_only() -> Vec<(&'static str, Vec<u8>)> {
     let rekey = Rekey {
         answer: false,
         share: [1; 32],
-        echo: [0; vinc_security::keyroll::ECHO_LEN],
+        echo: [0; pinc_security::keyroll::ECHO_LEN],
         switch_pn: 0,
     };
     vec![
@@ -468,7 +468,7 @@ fn resumed_run(out: &mut String, run: u32, name: &str, raw: &[u8], refuse: bool)
     let mut tickets = first_session(&mut world);
     let ticket = tickets.take(&world.rp.id.node_id(), ALPN, T0).unwrap();
     let (mut sa, mut sb) = (Store::new(true), Store::new(false));
-    let dialer = world.client(&mut sa, Some(ticket), vinc_security::ClientTickets::new());
+    let dialer = world.client(&mut sa, Some(ticket), pinc_security::ClientTickets::new());
     let resumed = world.server(&mut sb);
     let mut net = Net::new(
         dialer,
@@ -591,7 +591,7 @@ fn early_packets_match_the_models() {
         );
         assert!(out.contains(r#""op":"est""#) && out.contains(r#""op":"close""#));
         assert!(out.contains(r#""kind":"z","fate":"fail","dlen"#) && out.contains(r#""out":"closed""#));
-        if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
+        if let Ok(dir) = std::env::var("PINC_TRACE_DIR") {
             std::fs::create_dir_all(&dir).unwrap();
             std::fs::write(std::path::Path::new(&dir).join("early.ndjson"), &out).unwrap();
         }
