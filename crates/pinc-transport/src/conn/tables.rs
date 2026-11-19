@@ -23,6 +23,10 @@ pub struct Tables<const F: usize> {
 }
 
 impl<const F: usize> Tables<F> {
+    /// The bytes of room the tables reserve on the heap, all of it written: the sent packets and the event queue.
+    #[cfg(feature = "alloc")]
+    pub(crate) const BYTES: usize = SentRing::<F>::BYTES + EventTable::BYTES;
+
     /// Empty tables with a pool of handshake machines of their own.
     pub fn new() -> Self {
         Self::default()
@@ -41,5 +45,22 @@ impl<const F: usize> Tables<F> {
     pub fn clear(&mut self) {
         self.sent.clear();
         self.events.clear();
+    }
+}
+
+#[cfg(all(test, feature = "alloc"))]
+mod tests {
+    use super::*;
+    use crate::conn::Resources;
+    use crate::stream::{NoSource, Streams};
+
+    /// The bytes a slot's resources reserve are those of the stream table, the sent packets and the event queue.
+    #[test]
+    fn the_bytes_a_slot_reserves_are_the_sum_of_its_tables() {
+        let (streams, events) = (Streams::<NoSource, 4, 5>::BYTES, EventTable::BYTES);
+        assert!(events > 0 && streams > 0);
+        assert_eq!(Tables::<6>::BYTES, SentRing::<6>::BYTES + events);
+        assert_eq!(Resources::<NoSource, 4, 5, 6>::BYTES, streams + Tables::<6>::BYTES);
+        const { assert!(Tables::<12>::BYTES > Tables::<6>::BYTES) };
     }
 }

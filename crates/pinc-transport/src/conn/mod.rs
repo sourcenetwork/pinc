@@ -143,6 +143,15 @@ pub struct Resources<'a, S: StreamSource, const N: usize, const C: usize, const 
     pub tables: Tables<F>,
 }
 
+#[cfg(feature = "alloc")]
+impl<S: StreamSource, const N: usize, const C: usize, const F: usize> Resources<'_, S, N, C, F> {
+    /// The bytes a slot's resources reserve on the heap at most, beside the chunks of its pool: the stream table with
+    /// the room of its `N` slots, the table of `F` sent packets and the event queue, all of it written. What a
+    /// handshake in progress holds (a pooled box) and the slot itself are not counted.
+    #[doc(hidden)]
+    pub const BYTES: usize = Streams::<S, N, C>::BYTES + Tables::<F>::BYTES;
+}
+
 /// Where the connection is in its life.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Phase {

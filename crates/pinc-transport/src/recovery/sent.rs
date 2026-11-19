@@ -110,6 +110,10 @@ impl<const N: usize> Default for SentRing<N> {
 }
 
 impl<const N: usize> SentRing<N> {
+    /// The bytes of the room reserved for the `N` packets, all of it written.
+    #[cfg(feature = "alloc")]
+    pub(crate) const BYTES: usize = N * core::mem::size_of::<Slot>();
+
     /// An empty table.
     pub fn new() -> Self {
         const { assert!(N >= 1 && N <= (1 << 31)) };

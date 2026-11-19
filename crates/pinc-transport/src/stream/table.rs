@@ -107,6 +107,12 @@ pub struct Streams<S: StreamSource = NoSource, const N: usize = 100, const C: us
 }
 
 impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
+    /// The bytes a table holds on the heap at most: the table itself and the room reserved for its `N` slots, all of
+    /// them written. The memory of a slot's chunks is the pool's, not counted here.
+    #[doc(hidden)]
+    #[cfg(feature = "alloc")]
+    pub const BYTES: usize = core::mem::size_of::<Self>() + N * core::mem::size_of::<Slot<S, C>>();
+
     /// A table for `config`. The window ceiling is clamped to what the chunk rings and half of the pool's budget can
     /// hold, and the peer-opened stream cap to the table size.
     pub fn new(config: &Config, pool: &BufferPool<'_>) -> Self {

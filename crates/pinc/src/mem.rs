@@ -10,20 +10,29 @@
 //!
 //! # Memory
 //!
-//! Per session, every slot of the shape reserves a connection, a stream table of [`STREAMS`] slots (a slot is a few KiB
-//! with a [`RING`] of 257 entries, and is written only when its stream is first used) and a pool of up to
-//! [`Limits::pool_chunks`] chunks of 16 KiB. The stream table and the table of sent packets are reserved memory the
-//! system commits only as it is used. The pool makes a chunk when the session first needs it and keeps it while the
-//! session is busy; when the session's last stream ends it frees its idle chunks, so a quiet session holds
-//! what it uses, on any allocator. A session that moved 64 KiB and went quiet holds about 96 KiB of the client's
-//! memory, and a client endpoint with no session about 620 KiB (`tests/pinc_client_memory.rs` holds them to 112 and 704
-//! KiB). The shape is rounded up to the next capacity of the ladder, which doubles at each step: ask for what you
-//! need, not for a round number above it.
+//! The endpoint reserves room for every slot of its shape when it is built: the table of slots, one per session the
+//! shape holds, and the tables that look sessions up. The system commits that room only as it is written. A slot's own
+//! memory is made when the slot is first taken, and kept for the sessions that follow in it: a stream table of
+//! [`STREAMS`] entries (an entry is a few KiB with a [`RING`] of 257 chunk entries, written when its stream is first
+//! used), the table of sent packets, the event queue, and a pool of up to [`Limits::pool_chunks`] chunks of 16 KiB. The
+//! pool makes a chunk when the session first needs it and keeps it while the session is busy; when the session's last
+//! stream ends it frees its idle chunks, so a quiet session holds what it uses, on any allocator. A session that moved
+//! 64 KiB and went quiet holds about 96 KiB of the client's memory, and a client endpoint with no session about 620
+//! KiB (`tests/pinc_client_memory.rs` holds them to 112 and 704 KiB). The shape is rounded up to the next capacity of
+//! the ladder, which doubles at each step: ask for what you need, not for a round number above it.
+//!
+//! The most the limits allow an endpoint to come to hold is the number of sessions of the shape, each with a full pool
+//! and every table of its slot written, plus every topic's log full. [`Limits::check`] refuses limits whose most
+//! exceeds half the target's address space, which is as much as one allocation can be; a 64-bit target accepts every
+//! limit in range, a 32-bit one needs fewer sessions or a smaller pool ([`Limits::wasm`]). The measured memory of an
+//! endpoint and of a session without `std` is in the crate's own docs, with the platform it was measured on.
 //!
 //! Invariants: the memory of a session returns to its slot when the session ends; the slot table never grows.
 
-use pinc_core::Endpoint;
+use pinc_core::{Endpoint, Slot};
 use pinc_crypto::Software;
+use pinc_transport::conn::Resources;
+use pinc_transport::stream::pool::CHUNK_SIZE;
 
 use crate::error::{Error, Result};
 
@@ -47,15 +56,22 @@ pub(crate) const CLIENT_TICKETS: usize = 32;
 pub(crate) type Ep<'s, 'a, const K: usize, const D: usize> =
     Endpoint<'s, 'a, Software, crate::Body, STREAMS, RING, FLIGHT, PATHS, K, D, PREKEYS, TICKETS, CLIENT_TICKETS>;
 
+/// The bytes one slot of the shape reserves beside its pool's chunks: the slot, with its connection, and what its
+/// stream table, table of sent packets and event queue reserve when every entry is written. Taken from the real types.
+const SLOT_BYTES: usize = size_of::<Slot<'static, Software, crate::Body, STREAMS, RING, FLIGHT, PATHS>>()
+    + Resources::<'static, crate::Body, STREAMS, RING, FLIGHT>::BYTES;
+
 /// The sizes a driver runs with; each has a default and a hard ceiling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Limits {
-    /// The most sessions at once (at most [`MAX_CONNECTIONS`]). The memory for the next capacity of [`CAPACITIES`](crate::CAPACITIES)
-    /// at or above it is reserved when the engine starts; see the module docs for what that costs.
+    /// The most sessions at once (at most [`MAX_CONNECTIONS`]). The room for the next capacity of
+    /// [`CAPACITIES`](crate::CAPACITIES) at or above it is reserved when the engine starts, and a slot's memory is made
+    /// when a session first takes it; see the module docs for what that costs.
     pub connections: usize,
     /// The 16 KiB chunks one session may hold for its streams and datagrams (8 to 65,535). The default of 1024 is 16 MiB,
-    /// a ceiling: a busy session holds the chunks it came to use and a quiet one (no stream open) only those still in
-    /// use, so thousands of quiet sessions hold little whatever the ceiling. Streams that move data at once are charged
+    /// a ceiling: the pool makes a chunk as a session needs it, a busy session holds the chunks it came to use and a
+    /// quiet one (no stream open) only those still in use, so thousands of quiet sessions hold little whatever the
+    /// ceiling. Streams that move data at once are charged
     /// their whole window, so a path whose bandwidth times round trip is above half the pool needs more.
     pub pool_chunks: usize,
     /// The receive window a stream starts with, in bytes (default 1,310,720, 1.25 MiB). It grows toward twice what the
@@ -96,34 +112,51 @@ pub struct Limits {
     pub topics: usize,
 }
 
-impl Default for Limits {
-    fn default() -> Self {
+impl Limits {
+    /// What every session gets, on any target; a host's preset changes only how many sessions it holds.
+    const BASE: Self = Self {
+        connections: 1024,
+        pool_chunks: 1024,
+        stream_window: 1_310_720,
+        // vertexia: the transport's own default is the reference's 1,310,720 bytes, a figure sized for its test
+        // links; at the facade a session of one stream or many would be held to 8.7 MiB/s on a 150 ms path
+        // whatever its congestion window. This is a deliberate departure from the reference's constant at the
+        // product surface only: the cap stays `min(send_window, max(192 KiB, 1.5 x cwnd))`, and below a congestion
+        // window of 873,813 bytes it is the same. Upgrade path: none needed; a host can set the reference's value.
+        send_window: 16 * 1024 * 1024,
+        streams: 100,
+        accept_streams: 100,
+        accept_sessions: 1024,
+        topic_message: 65_536,
+        topic_log: 4 << 20,
+        topics: 128,
+    };
+
+    /// The limits for a host with a 32-bit address space, a browser first: every session gets what the default gives
+    /// it, and only the number of sessions is lower, 64 (and as many waiting to be accepted). The default of 1024
+    /// sessions cannot be addressed there and [`check`](Self::check) refuses it. The most these limits allow an
+    /// endpoint to hold is about 1.7 GiB (1 GiB of pools, 512 MiB of topic logs and 64 slots of about 2.7 MiB), under
+    /// the 2 GiB such a host can address; a host with less memory lowers `connections` and `pool_chunks` further.
+    #[must_use]
+    pub const fn wasm() -> Self {
         Self {
-            connections: 1024,
-            pool_chunks: 1024,
-            stream_window: 1_310_720,
-            // vertexia: the transport's own default is the reference's 1,310,720 bytes, a figure sized for its test
-            // links; at the facade a session of one stream or many would be held to 8.7 MiB/s on a 150 ms path
-            // whatever its congestion window. This is a deliberate departure from the reference's constant at the
-            // product surface only: the cap stays `min(send_window, max(192 KiB, 1.5 x cwnd))`, and below a congestion
-            // window of 873,813 bytes it is the same. Upgrade path: none needed; a host can set the reference's value.
-            send_window: 16 * 1024 * 1024,
-            streams: 100,
-            accept_streams: 100,
-            accept_sessions: 1024,
-            topic_message: 65_536,
-            topic_log: 4 << 20,
-            topics: 128,
+            connections: 64,
+            accept_sessions: 64,
+            ..Self::BASE
         }
     }
-}
 
-impl Limits {
-    /// Check the limits against the ceilings.
+    /// Check the limits against the ceilings, and against what the target can address.
     ///
     /// # Errors
-    /// [`ErrorKind::Config`](crate::ErrorKind::Config) naming the limit that is out of range.
+    /// [`ErrorKind::Config`](crate::ErrorKind::Config) naming a limit that is out of range, or saying the limits allow
+    /// more memory than this target can address.
     pub fn check(&self) -> Result<()> {
+        self.check_for(size_of::<usize>())
+    }
+
+    /// [`check`](Self::check) for a target whose pointers are `pointer_bytes` wide.
+    fn check_for(&self, pointer_bytes: usize) -> Result<()> {
         let ok = (1..=MAX_CONNECTIONS).contains(&self.connections)
             && (8..=65_535).contains(&self.pool_chunks)
             && (16 * 1024..=16 * 1024 * 1024).contains(&self.stream_window)
@@ -134,17 +167,73 @@ impl Limits {
             && (1..=16 * 1024 * 1024).contains(&self.topic_message)
             && (1..=1 << 30).contains(&self.topic_log)
             && (1..=4096).contains(&self.topics);
-        if ok {
-            Ok(())
-        } else {
-            Err(Error::config("a limit is out of range"))
+        if !ok {
+            return Err(Error::config("a limit is out of range"));
         }
+        if !fits(self, u32::try_from(pointer_bytes).unwrap_or(u32::MAX)) {
+            return Err(Error::config(
+                "the limits allow more memory than this target can address: lower `connections` or `pool_chunks`, \
+                 or start from `Limits::wasm()`",
+            ));
+        }
+        Ok(())
     }
 }
 
+impl Default for Limits {
+    fn default() -> Self {
+        Self::BASE
+    }
+}
+
+/// The most memory the limits allow the endpoint to come to hold, in bytes: every session of the shape with a full pool
+/// and every table of its slot written, and every topic's log full. `None` if the sum does not fit 128 bits.
+fn worst_case(limits: &Limits) -> Option<u128> {
+    let sessions = u128::try_from(crate::node::rung(limits.connections)?).ok()?;
+    let pool = u128::try_from(limits.pool_chunks)
+        .ok()?
+        .checked_mul(CHUNK_SIZE as u128)?;
+    let slot = pool.checked_add(SLOT_BYTES as u128)?;
+    let logs = u128::try_from(limits.topics)
+        .ok()?
+        .checked_mul(u128::try_from(limits.topic_log).ok()?)?;
+    sessions.checked_mul(slot)?.checked_add(logs)
+}
+
+/// Whether the most memory the limits allow is at most half the address space of a target with `pointer_bytes`-wide
+/// pointers, which is the most Rust lets one allocation be. Pure: the arithmetic is checked and in 128 bits, so a
+/// 4-byte target is judged exactly on any host.
+pub(crate) fn fits(limits: &Limits, pointer_bytes: u32) -> bool {
+    let bits = pointer_bytes.saturating_mul(8).saturating_sub(1);
+    let bound = 1u128.checked_shl(bits).map_or(u128::MAX, |b| b - 1);
+    worst_case(limits).is_some_and(|w| w <= bound)
+}
+
 #[cfg(test)]
+#[allow(clippy::unwrap_used, reason = "tests assert")]
 mod tests {
+    use alloc::string::ToString;
+
     use super::*;
+
+    /// Half the address space of a 32-bit target, less one byte: the most one allocation can be there.
+    const BOUND_4: u128 = (1 << 31) - 1;
+
+    /// Every limit at its ceiling (the two that have none at a million).
+    fn largest() -> Limits {
+        Limits {
+            connections: MAX_CONNECTIONS,
+            pool_chunks: 65_535,
+            stream_window: 16 * 1024 * 1024,
+            send_window: 1 << 30,
+            streams: 100,
+            accept_streams: 1 << 20,
+            accept_sessions: 1 << 20,
+            topic_message: 16 * 1024 * 1024,
+            topic_log: 1 << 30,
+            topics: 4096,
+        }
+    }
 
     #[test]
     fn a_pool_of_more_chunks_than_a_stream_ring_can_name_is_refused() {
@@ -166,5 +255,106 @@ mod tests {
         assert!(limits(1 << 30).check().is_ok());
         assert!(limits(0).check().is_err());
         assert!(limits((1 << 30) + 1).check().is_err());
+    }
+
+    #[test]
+    fn with_8_byte_pointers_every_limit_set_in_range_fits() {
+        assert!(fits(&largest(), 8));
+        assert!(largest().check_for(8).is_ok());
+        assert!(fits(&Limits::default(), 8));
+    }
+
+    #[test]
+    fn the_default_limits_do_not_fit_4_byte_pointers_and_say_what_to_do() {
+        assert!(!fits(&Limits::default(), 4));
+        assert!(!fits(&largest(), 4));
+        let e = Limits::default().check_for(4).unwrap_err();
+        assert_eq!(e.kind(), crate::ErrorKind::Config);
+        let said = e.to_string();
+        assert!(said.contains("more memory than this target can address"), "{said}");
+        assert!(said.contains("Limits::wasm()"), "{said}");
+        // A limit out of range keeps its own sentence on any target.
+        let bad = Limits {
+            topics: 0,
+            ..Limits::default()
+        };
+        assert_eq!(bad.check_for(4).unwrap_err().to_string(), "a limit is out of range");
+        assert_eq!(bad.check().unwrap_err().to_string(), "a limit is out of range");
+    }
+
+    #[test]
+    fn the_target_of_the_build_decides_check() {
+        let wide = size_of::<usize>() == 8;
+        assert_eq!(Limits::default().check().is_ok(), wide);
+        assert_eq!(
+            Limits::default().check().is_ok(),
+            Limits::default().check_for(size_of::<usize>()).is_ok()
+        );
+    }
+
+    #[test]
+    fn the_wasm_limits_fit_both_widths_and_keep_what_a_session_gets() {
+        let (w, d) = (Limits::wasm(), Limits::default());
+        assert!(fits(&w, 4) && fits(&w, 8));
+        assert!(w.check_for(4).is_ok() && w.check_for(8).is_ok() && w.check().is_ok());
+        let sessions = Limits {
+            connections: d.connections,
+            accept_sessions: d.accept_sessions,
+            ..w
+        };
+        assert_eq!(sessions, d);
+        assert_eq!((w.connections, w.accept_sessions), (64, 64));
+        let worst = worst_case(&w).unwrap();
+        std::println!("wasm worst case: {worst} B, slot {SLOT_BYTES} B");
+        assert!((1_700 << 20..1_800 << 20).contains(&worst), "{worst}");
+    }
+
+    #[test]
+    fn sixty_four_is_the_largest_capacity_of_the_ladder_that_fits_4_byte_pointers() {
+        let sessions = |connections| Limits {
+            connections,
+            ..Limits::wasm()
+        };
+        assert!(fits(&sessions(64), 4));
+        assert!(!fits(&sessions(65), 4));
+        assert!(!fits(&sessions(128), 4));
+        assert!(fits(&sessions(128), 8));
+    }
+
+    #[test]
+    fn the_bound_for_4_byte_pointers_is_exact() {
+        let base = Limits {
+            topics: 1,
+            topic_log: 0,
+            ..Limits::wasm()
+        };
+        let room = BOUND_4 - worst_case(&base).unwrap();
+        let with = |log: u128| Limits {
+            topic_log: usize::try_from(log).unwrap(),
+            ..base
+        };
+        assert!(fits(&with(room), 4));
+        assert!(!fits(&with(room + 1), 4));
+        assert!(fits(&with(room + 1), 8));
+    }
+
+    #[test]
+    fn the_rung_is_the_smallest_capacity_that_holds_the_sessions() {
+        for (n, k) in [(1, 1), (2, 2), (3, 4), (65, 128), (1024, 1024), (65_536, 65_536)] {
+            assert_eq!(crate::node::rung(n), Some(k), "{n}");
+        }
+        assert_eq!(crate::node::rung(65_537), None);
+        assert!(!fits(
+            &Limits {
+                connections: 65_537,
+                ..Limits::default()
+            },
+            8
+        ));
+    }
+
+    #[test]
+    fn a_pointer_width_of_nothing_fits_nothing() {
+        assert!(!fits(&Limits::wasm(), 0));
     }
 }

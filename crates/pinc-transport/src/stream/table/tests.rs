@@ -285,3 +285,13 @@ fn a_window_follows_the_rate_of_its_own_stream() {
         "stream 4 has drained 16 bytes: it keeps the initial window"
     );
 }
+
+/// The bytes a table reserves are the table and the room of its slots.
+#[cfg(feature = "alloc")]
+#[test]
+fn the_bytes_a_table_reserves_are_its_own_size_and_its_slots() {
+    let own = core::mem::size_of::<Streams<NoSource, 4, 5>>();
+    let slot = core::mem::size_of::<Slot<NoSource, 5>>();
+    assert!(slot > 0);
+    assert_eq!(Streams::<NoSource, 4, 5>::BYTES, own + 4 * slot);
+}

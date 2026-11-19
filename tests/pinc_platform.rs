@@ -25,8 +25,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use nuclei::Handle;
 use pinc::relay::{Carriers as RelayCarriers, Completion, Peer, Relay as RelayHost, Tag};
 use pinc::{
-    CarrierKind, Discovery, Endpoint, Error, ErrorKind, Hosted, LOOKUP_WAIT, NodeAddr, NodeId, Pinc, Platform, Records,
-    Rendezvous,
+    CarrierKind, Discovery, Endpoint, Error, ErrorKind, Hosted, LOOKUP_WAIT, Limits, NodeAddr, NodeId, Pinc, Platform,
+    Records, Rendezvous,
 };
 use pinc_common::{ECHO, lo, poll_drop, serve_conn, within};
 use pinc_connect::record::Record;
@@ -101,11 +101,17 @@ fn failed(_: std::io::Error) -> Error {
 /// An endpoint of `clock` serving the echo protocol, over a loopback UDP socket of nuclei; `first` is what its first
 /// receive returns instead of waiting for a datagram, if it is `Some`. Tasks drive it and serve its sessions.
 async fn on_clock(clock: Clock, first: Option<Error>) -> Endpoint<impl Hosted> {
+    on_clock_with(clock, first, Limits::default()).await
+}
+
+/// As [`on_clock`], with `limits`.
+async fn on_clock_with(clock: Clock, first: Option<Error>, limits: Limits) -> Endpoint<impl Hosted> {
     let sock = Arc::new(Handle::<UdpSocket>::bind(lo()).await.unwrap());
     let (r, s) = (Arc::clone(&sock), Arc::clone(&sock));
     let first = Cell::new(first);
     let origin = clock.origin;
     let ep = Pinc::builder_on(clock)
+        .limits(limits)
         .alpn(ECHO)
         .local_addr(sock.local_addr().unwrap())
         .build(
@@ -146,6 +152,18 @@ async fn an_echo_runs_on_a_platform_with_its_own_instant_and_error() {
     let clock = Clock { origin: Instant::now() };
     let server = on_clock(clock, None).await;
     let client = on_clock(clock, None).await;
+    within(30, async {
+        let c = client.connect(server.addr(), ECHO).await.unwrap();
+        assert_eq!(echo(&c).await, b"ping");
+    })
+    .await;
+}
+
+#[nuclei::test]
+async fn two_endpoints_on_the_limits_of_a_32_bit_host_connect_and_echo() {
+    let clock = Clock { origin: Instant::now() };
+    let server = on_clock_with(clock, None, Limits::wasm()).await;
+    let client = on_clock_with(clock, None, Limits::wasm()).await;
     within(30, async {
         let c = client.connect(server.addr(), ECHO).await.unwrap();
         assert_eq!(echo(&c).await, b"ping");

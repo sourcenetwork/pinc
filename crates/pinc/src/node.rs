@@ -79,6 +79,12 @@ macro_rules! define {
             )+
         }
 
+        /// The capacity of the smallest rung of the ladder that holds `connections` sessions; `None` above the ladder.
+        /// The shape [`AnyEp::new`] builds is the rung this names.
+        pub(crate) fn rung(connections: usize) -> Option<usize> {
+            CAPACITIES.into_iter().find(|&k| connections <= k)
+        }
+
         impl AnyEp {
             /// The endpoint of the smallest rung that holds `connections` sessions, with ten connection id entries per
             /// session and `pool_chunks` chunks for each; `None` above the ladder. It is not generic, so it is compiled
@@ -93,8 +99,8 @@ macro_rules! define {
                 pool_chunks: usize,
             ) -> Option<Self> {
                 let pool = machines();
-                match connections {
-                    $(n if n <= $k => Some(Self::$v({
+                match rung(connections) {
+                    $(Some($k) => Some(Self::$v({
                         let mut ep = Ep::<$k, { $k * 10 }>::new_owned(now, Software, drbg, identity, cfg, pool_chunks);
                         ep.share_machines(&pool);
                         ep

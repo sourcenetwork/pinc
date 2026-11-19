@@ -311,6 +311,10 @@ impl Default for EventTable {
 }
 
 impl EventTable {
+    /// The bytes of the room reserved for the queue, all of it written.
+    #[cfg(feature = "alloc")]
+    pub(crate) const BYTES: usize = QUEUE * core::mem::size_of::<Option<Ev>>();
+
     /// An empty table.
     pub fn new() -> Self {
         Self(Lazy::new())
