@@ -208,3 +208,15 @@ pub struct CcView {
     /// The rate gate's slack for mid-length round trips.
     pub slack: u64,
 }
+
+/// `math::sat` (narrow to u64, saturating), for trace validation.
+#[must_use]
+pub fn sat(v: u128) -> u64 {
+    super::math::sat(v)
+}
+
+/// `math::icbrt` (the floor cube root), for trace validation.
+#[must_use]
+pub fn icbrt(n: u128) -> u64 {
+    super::math::icbrt(n)
+}

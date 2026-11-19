@@ -1296,6 +1296,10 @@ name = "trace_reply_path"
 path = "trace_reply_path.rs"
 
 [[test]]
+name = "trace_path_move"
+path = "trace_path_move.rs"
+
+[[test]]
 name = "trace_core_state"
 path = "trace_core_state.rs"
 
@@ -1382,6 +1386,38 @@ path = "trace_integration_codecs.rs"
 [[test]]
 name = "trace_early"
 path = "trace_early.rs"
+
+[[test]]
+name = "trace_ctl"
+path = "trace_ctl.rs"
+
+[[test]]
+name = "trace_frame_refs"
+path = "trace_frame_refs.rs"
+
+[[test]]
+name = "trace_lazy"
+path = "trace_lazy.rs"
+
+[[test]]
+name = "trace_loss_estimate"
+path = "trace_loss_estimate.rs"
+
+[[test]]
+name = "trace_machines"
+path = "trace_machines.rs"
+
+[[test]]
+name = "trace_packet_kind"
+path = "trace_packet_kind.rs"
+
+[[test]]
+name = "trace_path_held"
+path = "trace_path_held.rs"
+
+[[test]]
+name = "trace_recovery_math"
+path = "trace_recovery_math.rs"
 
 [[test]]
 name = "node_event_queue"
@@ -1536,6 +1572,14 @@ name = "trace_dag_sizes"
 path = "trace_dag_sizes.rs"
 
 [[test]]
+name = "trace_ledger"
+path = "trace_ledger.rs"
+
+[[test]]
+name = "trace_message"
+path = "trace_message.rs"
+
+[[test]]
 name = "trace_portmap_addr"
 path = "trace_portmap_addr.rs"
 
@@ -1558,6 +1602,10 @@ path = "trace_portmap_upnp.rs"
 [[test]]
 name = "trace_sec_ids"
 path = "trace_sec_ids.rs"
+
+[[test]]
+name = "trace_stream_send"
+path = "trace_stream_send.rs"
 
 [[test]]
 name = "trace_table_array"

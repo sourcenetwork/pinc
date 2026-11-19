@@ -296,6 +296,235 @@ fn lost<S: StreamSource, const N: usize, const C: usize>(
     }
 }
 
+/// A real control state, pool and stream table driven by the trace validation (cargo feature `trace`).
+#[cfg(all(feature = "trace", feature = "alloc"))]
+pub(super) mod trace {
+    use alloc::vec::Vec;
+
+    use pinc_security::TicketBatch;
+
+    use super::{Ctl, EXT_BODY_MAX as BODY_MAX, K_EXT, K_READY, K_STREAM_CTL, K_TICKETS, Outcome, apply};
+    use crate::recovery::{Event, FrameRef, FrameRefs};
+    use crate::stream::pool::{BufferPool, Chunk};
+    use crate::stream::{Config, ControlFrame, NoSource, Streams};
+
+    /// Longest extension body a slot holds.
+    pub const EXT_BODY_MAX: usize = BODY_MAX;
+
+    /// The control state after a call.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct CtlView {
+        /// Per table place (24): the key it holds, 0 when empty.
+        pub tab: Vec<u64>,
+        /// Per extension slot (8): `(key, pending)`, `None` when empty.
+        pub ext: Vec<Option<(u64, bool)>>,
+        /// `next_key`.
+        pub nk: u64,
+        /// `next_ext`.
+        pub ne: u64,
+        /// `ready`.
+        pub ready: bool,
+        /// The generation of the ticket batch held (as given to `issue`), 0 when none.
+        pub tk: u64,
+        /// `tickets_pending`.
+        pub tp: bool,
+        /// `pool.used_chunks()`.
+        pub used: usize,
+    }
+
+    /// A real `Ctl` with a pool of `p` chunks and a stream table.
+    pub struct CtlProbe {
+        pool: BufferPool<'static>,
+        streams: Streams<NoSource, 4, 16>,
+        ctl: Ctl,
+        generation: u64,
+        mine: Vec<Chunk>,
+        limit: u64,
+    }
+
+    /// The kind code of a frame reference, by its trace name.
+    fn kind_code(kind: &str) -> Option<u8> {
+        match kind {
+            "sc" => Some(K_STREAM_CTL),
+            "ext" => Some(K_EXT),
+            "tk" => Some(K_TICKETS),
+            "rd" => Some(K_READY),
+            _ => None,
+        }
+    }
+
+    impl CtlProbe {
+        /// `BufferPool::new_boxed(p)`, `Streams::new(&Config::new(false), &pool)`, `Ctl::new()`.
+        #[must_use]
+        pub fn new(p: usize) -> Self {
+            let pool = BufferPool::new_boxed(p);
+            let streams = Streams::new(&Config::new(false), &pool);
+            Self {
+                pool,
+                streams,
+                ctl: Ctl::new(),
+                generation: 0,
+                mine: Vec::new(),
+                limit: 0,
+            }
+        }
+
+        /// `ctl.track(ControlFrame::MaxStreams { limit })` with `limit` a counter from 1: the key, or `None` when full.
+        pub fn track(&mut self) -> Option<u64> {
+            self.limit += 1;
+            self.ctl.track(ControlFrame::MaxStreams { limit: self.limit })
+        }
+
+        /// `ctl.hold_ext(&mut pool, 0x40, &body)` with a body of `len` bytes (any `len`, also above `EXT_BODY_MAX`).
+        pub fn hold(&mut self, len: usize) -> bool {
+            let body = alloc::vec![0u8; len];
+            self.ctl.hold_ext(&mut self.pool, 0x40, &body)
+        }
+
+        /// As `conn/send.rs` puts a held frame in a packet: when slot `slot` holds a pending frame, clear `pending` and
+        /// return its key (the id of the frame reference); else `None` and nothing changes.
+        pub fn send_ext(&mut self, slot: usize) -> Option<u64> {
+            let s = self.ctl.ext.get_mut(slot)?.as_mut()?;
+            if !s.pending {
+                return None;
+            }
+            s.pending = false;
+            Some(s.key)
+        }
+
+        /// `Ctl::free_ext(&mut ctl.ext[slot], &mut pool)` (as `conn/api.rs` gives a held frame up).
+        pub fn shed(&mut self, slot: usize) {
+            if let Some(s) = self.ctl.ext.get_mut(slot) {
+                Ctl::free_ext(s, &mut self.pool);
+            }
+        }
+
+        /// `pool.alloc_chunk()` by another user of the pool, kept in `mine`; whether it got one.
+        pub fn take(&mut self) -> bool {
+            self.pool.alloc_chunk().map(|c| self.mine.push(c)).is_ok()
+        }
+
+        /// `pool.free_chunk` of the last chunk in `mine`; false (nothing done) when `mine` is empty.
+        pub fn give(&mut self) -> bool {
+            self.mine.pop().map(|c| self.pool.free_chunk(c)).is_some()
+        }
+
+        /// As `conn/drive.rs` takes a ticket batch: `ctl.tickets = Some(TicketBatch::new())`,
+        /// `ctl.tickets_pending = true`, and the probe keeps `g` as the generation of the batch held.
+        pub fn issue(&mut self, g: u64) {
+            self.ctl.tickets = Some(TicketBatch::new());
+            self.ctl.tickets_pending = true;
+            self.generation = g;
+        }
+
+        /// As `conn/send.rs` puts the batch in a packet: when `tickets_pending` and a batch is held, clear
+        /// `tickets_pending` and return the generation held; else `None`.
+        pub fn send_tickets(&mut self) -> Option<u64> {
+            if self.ctl.tickets_pending && self.ctl.tickets.is_some() {
+                self.ctl.tickets_pending = false;
+                return Some(self.generation);
+            }
+            None
+        }
+
+        /// As `conn/drive.rs`: `ctl.ready = true`.
+        pub fn send_ready(&mut self) {
+            self.ctl.ready = true;
+        }
+
+        /// As `conn/send.rs` builds READY: when `ready`, clear it and return true; else false.
+        pub fn build_ready(&mut self) -> bool {
+            core::mem::take(&mut self.ctl.ready)
+        }
+
+        /// `apply` of an `Event::Acked` with one `FrameRef::Control { kind, id }`, then the glue of `conn/recv.rs`
+        /// (`tickets_acked` clears `tickets_pending`); when `ctl.tickets` is then `None`, the generation kept becomes
+        /// 0. `kind` is `"sc"`, `"ext"`, `"tk"` or `"rd"`. Returns whether the stream layer was handed the frame: for
+        /// `"sc"`, whether `id` was in the table before the call; false for the others (and for any other kind, which
+        /// changes nothing).
+        pub fn ack(&mut self, kind: &str, id: u64) -> bool {
+            self.report(kind, id, |frames| Event::Acked {
+                pn: 0,
+                size: 0,
+                frames,
+                mtu_probe: false,
+                repair: false,
+                path: 0,
+            })
+        }
+
+        /// The same with `Event::LateAcked { pn: 0, frames }`.
+        pub fn late_ack(&mut self, kind: &str, id: u64) -> bool {
+            self.report(kind, id, |frames| Event::LateAcked { pn: 0, frames })
+        }
+
+        /// The same with `Event::Lost { pn: 0, size: 0, frames, requeue: true, mtu_probe: false }` (no glue).
+        pub fn lose(&mut self, kind: &str, id: u64) -> bool {
+            self.report(kind, id, |frames| Event::Lost {
+                pn: 0,
+                size: 0,
+                frames,
+                requeue: true,
+                mtu_probe: false,
+            })
+        }
+
+        /// `apply` of the event `make` builds for one control reference, with the glue of the connection.
+        fn report(&mut self, kind: &str, id: u64, make: impl for<'f> FnOnce(&'f FrameRefs) -> Event<'f>) -> bool {
+            let Some(code) = kind_code(kind) else {
+                return false;
+            };
+            let handed = code == K_STREAM_CTL && self.ctl.table.iter().flatten().any(|(k, _)| *k == id);
+            let mut frames = FrameRefs::new();
+            let _ = frames.push(FrameRef::Control { kind: code, id });
+            let mut out = Outcome::default();
+            apply(
+                &make(&frames),
+                &mut self.streams,
+                &mut self.pool,
+                &mut self.ctl,
+                &mut out,
+            );
+            if out.tickets_acked {
+                self.ctl.tickets_pending = false;
+            }
+            if self.ctl.tickets.is_none() {
+                self.generation = 0;
+            }
+            handed
+        }
+
+        /// The state after a call.
+        #[must_use]
+        pub fn view(&self) -> CtlView {
+            CtlView {
+                tab: self.ctl.table.iter().map(|s| s.map_or(0, |(k, _)| k)).collect(),
+                ext: self
+                    .ctl
+                    .ext
+                    .iter()
+                    .map(|s| s.as_ref().map(|s| (s.key, s.pending)))
+                    .collect(),
+                nk: self.ctl.next_key,
+                ne: self.ctl.next_ext,
+                ready: self.ctl.ready,
+                tk: if self.ctl.tickets.is_some() { self.generation } else { 0 },
+                tp: self.ctl.tickets_pending,
+                used: self.pool.used_chunks(),
+            }
+        }
+    }
+
+    impl Drop for CtlProbe {
+        fn drop(&mut self) {
+            self.ctl.release_ext(&mut self.pool);
+            for c in self.mine.drain(..) {
+                self.pool.free_chunk(c);
+            }
+        }
+    }
+}
+
 #[cfg(all(test, feature = "alloc"))]
 #[allow(clippy::unwrap_used, reason = "tests assert")]
 mod tests {

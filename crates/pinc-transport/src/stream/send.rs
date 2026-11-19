@@ -116,6 +116,49 @@ impl<S: StreamSource, const C: usize> Send<S, C> {
         (fin_done, reset, code)
     }
 
+    /// The whole state of the half, for trace validation; `ext` is the chunks other users of `pool` hold.
+    #[cfg(feature = "trace")]
+    pub(super) fn trace_half(&self, pool: &BufferPool<'_>, ext: u64) -> super::trace::SendHalfView {
+        let (fin_done, reset, reset_code) = self.trace_state();
+        let reset_final = match self.reset {
+            Reset::Pending { final_size, .. } | Reset::Sent { final_size, .. } => Some(final_size),
+            Reset::None | Reset::Acked => None,
+        };
+        super::trace::SendHalfView {
+            open: self.open,
+            is_source: self.is_source,
+            has_source: self.source.is_some(),
+            written: self.written,
+            sent_max: self.sent_max,
+            limit: self.limit,
+            lost: self.lost.to_vec(),
+            acked: self.acked.to_vec(),
+            acked_prefix: self.acked_prefix,
+            final_size: self.final_size,
+            fin: match self.fin {
+                Fin::None => 0,
+                Fin::Pending => 1,
+                Fin::Sent => 2,
+                Fin::Acked => 3,
+            },
+            reset,
+            reset_code,
+            reset_final,
+            cap_cut: self.cap_cut,
+            held: self.ring.numbers(self.acked_prefix / CHUNK_SIZE as u64),
+            buffered: self.buffered(),
+            wants: self.wants(),
+            flushed: self.flushed(),
+            done: self.is_done(),
+            can_stop: self.can_stop(),
+            control_pending: self.control_pending(),
+            view: self.view(),
+            fin_done,
+            available: pool.available_chunks() as u64,
+            ext,
+        }
+    }
+
     /// Nothing more will be sent or retransmitted.
     pub(super) fn is_done(&self) -> bool {
         !self.open

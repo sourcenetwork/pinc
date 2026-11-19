@@ -72,6 +72,8 @@ mod mtu;
 mod params;
 mod path;
 mod path_held;
+#[cfg(feature = "trace")]
+mod path_trace;
 mod reasm;
 mod recv;
 mod send;
@@ -90,8 +92,12 @@ pub use config::{
     ClientParams, Config, DEFAULT_SEND_WINDOW, HEADERS_V4, HEADERS_V6, IDLE_TIMEOUT, JUMBO_MTU, MIN_MTU, PROBE_MTU,
     PathId, PathInfo, ServerParams, Stats, interface_payload,
 };
+#[cfg(all(feature = "trace", feature = "alloc"))]
+pub use ctl::trace::{CtlProbe, CtlView, EXT_BODY_MAX};
 #[cfg(feature = "trace")]
 pub use drive::EarlyView;
+#[cfg(all(feature = "trace", feature = "alloc"))]
+pub use event::trace::{EvQueueProbe, EvTuple, EvView};
 pub use event::{CloseReason, Drop, Event, EventTable, code};
 pub use handshake::{Machines, RESPONDER_HOLD, connect_limit, handshake_end, handshake_limit};
 pub use held::{Held, Shared};
@@ -102,6 +108,8 @@ pub use keys::trace::{KeyEvent, KeysView, Slot};
 pub use mtu::trace::{MtuProbe, MtuView};
 pub use params::{CreditRecord, credit_for_streams, peer_limits};
 pub use path::{PathError, RJ_THIN_GAP};
+#[cfg(feature = "trace")]
+pub use path_trace::{PathsView, SlotView};
 #[cfg(feature = "trace")]
 pub use reasm::trace::{FragmentView, ReasmProbe, ReasmView};
 pub use send::Transmit;

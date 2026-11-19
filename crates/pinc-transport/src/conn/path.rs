@@ -89,7 +89,7 @@ const QUIET_RX: u64 = 75 * SECOND;
 /// A round trip at least this long is a slow path.
 const SLOW_RTT: u64 = 250 * MS;
 /// Outstanding challenges kept per path with their send times.
-const CHALLENGES: usize = 4;
+pub(crate) const CHALLENGES: usize = 4;
 /// Data larger than this is more than a control message.
 pub(crate) const CTRL_SMALL: usize = 72;
 
@@ -128,7 +128,7 @@ pub(crate) struct Path {
     pub(crate) challenge: Option<[u8; 8]>,
     /// The newest challenges (the outstanding one and those it replaced); the oldest entry is overwritten.
     pub(crate) sent: [Option<[u8; 8]>; CHALLENGES],
-    sent_next: usize,
+    pub(crate) sent_next: usize,
     /// When the outstanding migration challenge was sent.
     pub(crate) challenge_at: u64,
     /// The challenge is waiting for a packet.
@@ -392,7 +392,7 @@ conn_impl! {
 
     /// Whether the session counts as thin for its path rules: the host declared the node thin, or the session has no
     /// round trip yet, or the node's, its minimum or half its smoothed round trip reaches 250 ms.
-    fn thin_session(&self) -> bool {
+    pub(crate) fn thin_session(&self) -> bool {
         self.cfg.thin || self.rec.is_thin()
     }
 

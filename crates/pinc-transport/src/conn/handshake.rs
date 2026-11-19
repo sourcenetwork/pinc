@@ -302,6 +302,10 @@ impl Drop for Handshake {
     }
 }
 
+#[cfg(all(feature = "trace", feature = "alloc"))]
+#[path = "handshake_trace.rs"]
+mod trace;
+
 /// An owned copy of a key request, so it can be shown as an event after the machine's borrow ended.
 #[allow(clippy::large_enum_variant, reason = "held inline so nothing allocates")]
 pub(crate) enum OwnedRequest {

@@ -141,6 +141,91 @@ impl<T: Blank, const N: usize> Lazy<T, N> {
     }
 }
 
+/// A lazy table of plain numbers, driven by the trace validation (cargo feature `trace`).
+#[cfg(all(feature = "trace", feature = "alloc"))]
+pub(crate) mod trace {
+    use alloc::vec::Vec;
+
+    use super::{Blank, Lazy};
+
+    /// An entry: a number, 0 when blank.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct Val(pub u32);
+
+    impl Blank for Val {
+        const BLANK: Self = Self(0);
+    }
+
+    /// A `Lazy<Val, N>` and the room it reserved when made.
+    #[derive(Debug)]
+    pub struct LazyProbe<const N: usize> {
+        t: Lazy<Val, N>,
+        cap: usize,
+        ptr: *const Val,
+    }
+
+    impl<const N: usize> LazyProbe<N> {
+        /// A new table; remembers `written.capacity()` and `written.as_ptr()`.
+        #[must_use]
+        pub fn new() -> Self {
+            let t = Lazy::new();
+            let cap = t.written.capacity();
+            let ptr = t.written.as_ptr();
+            Self { t, cap, ptr }
+        }
+
+        /// `get(i)`, the entry's number.
+        #[must_use]
+        pub fn get(&self, i: usize) -> Option<u32> {
+            self.t.get(i).map(|v| v.0)
+        }
+
+        /// `get_mut(i)` and, when it returned an entry, `v` written to it; whether it returned one.
+        pub fn set(&mut self, i: usize, v: u32) -> bool {
+            self.t.get_mut(i).map(|e| *e = Val(v)).is_some()
+        }
+
+        /// `written_mut(i)` and, when it returned an entry, `v` written to it.
+        pub fn wset(&mut self, i: usize, v: u32) -> bool {
+            self.t.written_mut(i).map(|e| *e = Val(v)).is_some()
+        }
+
+        /// `prefix_mut(k)` and, when it returned a slice, `v` written to every entry of it.
+        pub fn pset(&mut self, k: usize, v: u32) -> bool {
+            self.t.prefix_mut(k).map(|s| s.fill(Val(v))).is_some()
+        }
+
+        /// `clear()`.
+        pub fn clear(&mut self) {
+            self.t.clear();
+        }
+
+        /// `written()`, as numbers.
+        #[must_use]
+        pub fn written(&self) -> Vec<u32> {
+            self.t.written().iter().map(|v| v.0).collect()
+        }
+
+        /// `iter()`, as numbers: all N entries.
+        #[must_use]
+        pub fn all(&self) -> Vec<u32> {
+            self.t.iter().map(|v| v.0).collect()
+        }
+
+        /// Whether `written` still has the capacity and the address it had when made.
+        #[must_use]
+        pub fn room_kept(&self) -> bool {
+            self.t.written.capacity() == self.cap && self.t.written.as_ptr() == self.ptr
+        }
+    }
+
+    impl<const N: usize> Default for LazyProbe<N> {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, reason = "tests assert")]
 mod tests {

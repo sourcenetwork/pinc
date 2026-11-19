@@ -413,3 +413,127 @@ impl EvQueue {
         ev
     }
 }
+
+/// A real event queue driven by the trace validation (cargo feature `trace`).
+#[cfg(all(feature = "trace", feature = "alloc"))]
+pub(super) mod trace {
+    use alloc::vec::Vec;
+
+    use super::{CloseReason, Ev, EvQueue, EventTable, PathId, QUEUE};
+
+    /// An event as the trace writes it: kind, stream or path id (0 for none), what else it carries (0 for nothing).
+    pub type EvTuple = (&'static str, u64, u64);
+
+    /// The queue after a call.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct EvView {
+        /// The place of the oldest event.
+        pub head: usize,
+        /// The events queued.
+        pub len: usize,
+        /// Unrecoverable events dropped.
+        pub lost: u64,
+        /// The length of the written prefix of the room.
+        pub wlen: usize,
+        /// The queued events, oldest first, encoded; `None` for an empty place.
+        pub window: Vec<Option<EvTuple>>,
+    }
+
+    /// A real event queue (`EvQueue::new(EventTable::new())`).
+    #[derive(Debug)]
+    pub struct EvQueueProbe {
+        q: EvQueue,
+    }
+
+    fn decode(kind: &str, key: u64, payload: u64) -> Option<Ev> {
+        Some(match kind {
+            "rd" => Ev::Readable(key),
+            "wr" => Ev::Writable(key),
+            "or" => Ev::OpenReady,
+            "dg" => Ev::Datagram,
+            "ex" => Ev::Extension,
+            "op" => Ev::Opened(key),
+            "rs" => Ev::Reset(key, payload),
+            "st" => Ev::Stopped(key, payload),
+            "pv" => Ev::PathValidated(PathId(key)),
+            "pf" => Ev::PathFailed(PathId(key)),
+            "kr" => Ev::KeyRequest,
+            "cn" => Ev::Connected(payload != 0),
+            "tk" => Ev::Tickets,
+            "ry" => Ev::Ready,
+            "as" => Ev::PeerAsleep,
+            "aw" => Ev::PeerAwake,
+            "wu" => Ev::WakeUnanswered,
+            "cl" => Ev::Closed(CloseReason::Unanswered),
+            "xu" => Ev::ExtensionUndeliverable(key, usize::try_from(payload).unwrap_or(usize::MAX)),
+            _ => return None,
+        })
+    }
+
+    fn encode(ev: Ev) -> EvTuple {
+        match ev {
+            Ev::Readable(k) => ("rd", k, 0),
+            Ev::Writable(k) => ("wr", k, 0),
+            Ev::OpenReady => ("or", 0, 0),
+            Ev::Datagram => ("dg", 0, 0),
+            Ev::Extension => ("ex", 0, 0),
+            Ev::Opened(k) => ("op", k, 0),
+            Ev::Reset(k, e) => ("rs", k, e),
+            Ev::Stopped(k, e) => ("st", k, e),
+            Ev::PathValidated(p) => ("pv", p.0, 0),
+            Ev::PathFailed(p) => ("pf", p.0, 0),
+            Ev::KeyRequest => ("kr", 0, 0),
+            Ev::Connected(c) => ("cn", 0, u64::from(c)),
+            Ev::Tickets => ("tk", 0, 0),
+            Ev::Ready => ("ry", 0, 0),
+            Ev::PeerAsleep => ("as", 0, 0),
+            Ev::PeerAwake => ("aw", 0, 0),
+            Ev::WakeUnanswered => ("wu", 0, 0),
+            Ev::Closed(_) => ("cl", 0, 0),
+            Ev::ExtensionUndeliverable(t, l) => ("xu", t, u64::try_from(l).unwrap_or(u64::MAX)),
+        }
+    }
+
+    impl EvQueueProbe {
+        /// The queue's places (`QUEUE`).
+        pub const CAP: usize = QUEUE;
+
+        /// A new queue over a new table.
+        #[must_use]
+        pub fn new() -> Self {
+            Self {
+                q: EvQueue::new(EventTable::new()),
+            }
+        }
+
+        /// `push` of the event `(kind, key, payload)` decodes to; false (and nothing pushed) for an unknown kind.
+        pub fn push(&mut self, kind: &str, key: u64, payload: u64) -> bool {
+            decode(kind, key, payload).map(|ev| self.q.push(ev)).is_some()
+        }
+
+        /// `pop`, encoded.
+        pub fn pop(&mut self) -> Option<EvTuple> {
+            self.q.pop().map(encode)
+        }
+
+        /// The head, length, lost count, written prefix and the queued events.
+        #[must_use]
+        pub fn view(&self) -> EvView {
+            EvView {
+                head: self.q.head,
+                len: self.q.len,
+                lost: self.q.lost,
+                wlen: self.q.items.written().len(),
+                window: (0..self.q.len)
+                    .map(|i| self.q.items.get(self.q.slot(i)).copied().flatten().map(encode))
+                    .collect(),
+            }
+        }
+    }
+
+    impl Default for EvQueueProbe {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+}

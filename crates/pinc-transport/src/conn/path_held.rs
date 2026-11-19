@@ -39,3 +39,12 @@ conn_impl! {
         self.paths.held > 0
     }
 }
+
+#[cfg(feature = "trace")]
+conn_impl! {
+    /// The count of held paths and every path slot as `(id, held)`, for trace validation.
+    pub fn trace_held_paths(&self) -> (usize, alloc::vec::Vec<Option<(u64, bool)>>) {
+        let slots = self.paths.slots.iter().map(|s| s.as_ref().map(|p| (p.id.0, p.held))).collect();
+        (self.paths.held, slots)
+    }
+}

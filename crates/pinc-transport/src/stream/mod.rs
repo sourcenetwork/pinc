@@ -46,6 +46,8 @@ pub mod pool;
 mod ranges;
 #[cfg(feature = "trace")]
 pub mod trace;
+#[cfg(all(feature = "trace", feature = "alloc"))]
+pub use lazy::trace::{LazyProbe, Val};
 
 use core::fmt;
 
