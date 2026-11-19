@@ -1368,6 +1368,10 @@ name = "trace_connect_ws"
 path = "trace_connect_ws.rs"
 
 [[test]]
+name = "trace_connect_node"
+path = "trace_connect_node.rs"
+
+[[test]]
 name = "trace_ext_in"
 path = "trace_ext_in.rs"
 
@@ -1566,6 +1570,34 @@ path = "mbt_portmap_fallback.rs"
 [[test]]
 name = "mbt_soft_prekeys"
 path = "mbt_soft_prekeys.rs"
+
+[[test]]
+name = "trace_connect_carriers"
+path = "trace_connect_carriers.rs"
+
+[[test]]
+name = "trace_connect_drive"
+path = "trace_connect_drive.rs"
+
+[[test]]
+name = "trace_connect_duty"
+path = "trace_connect_duty.rs"
+
+[[test]]
+name = "trace_connect_flight"
+path = "trace_connect_flight.rs"
+
+[[test]]
+name = "trace_connect_mapped"
+path = "trace_connect_mapped.rs"
+
+[[test]]
+name = "trace_connect_queue"
+path = "trace_connect_queue.rs"
+
+[[test]]
+name = "trace_connect_sleep"
+path = "trace_connect_sleep.rs"
 
 [[test]]
 name = "trace_dag_block"

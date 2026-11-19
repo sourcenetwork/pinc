@@ -29,6 +29,13 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
         self.update_class(now);
     }
 
+    /// The mapped addresses held, as `set_mapped` last set them (a probe for the tests).
+    #[cfg(feature = "trace")]
+    #[doc(hidden)]
+    pub fn mapped_held(&self) -> [Option<SocketAddr>; 2] {
+        self.mapped
+    }
+
     /// The mapped addresses a relay vouches for, given the reflexive addresses `refl`.
     fn live_of(&self, refl: &[SocketAddr]) -> [Option<SocketAddr>; 2] {
         self.mapped.map(|m| m.filter(|m| netcheck::mapped_seen(refl, m)))

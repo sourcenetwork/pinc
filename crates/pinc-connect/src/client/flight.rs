@@ -391,3 +391,63 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
         );
     }
 }
+
+/// What one call of `candidates_for` read and built, for the trace test.
+#[cfg(feature = "trace")]
+#[derive(Debug, Clone, Copy)]
+pub struct FlightProbe {
+    /// The addresses of the local beacon heard from the node, or `None` when none was heard.
+    pub beacon: Option<[Option<SocketAddr>; crate::local::MAX_ADDRS]>,
+    /// The addresses of the record found for the node, or `None` when none was found.
+    pub record: Option<[Option<SocketAddr>; crate::record::MAX_ADDRS]>,
+    /// `fresh_at` is `None`, or the record is fresh at it.
+    pub fresh: bool,
+    /// `relay_of(node)`.
+    pub peer_relay: Option<usize>,
+    /// `relay_of` of the found record's home, whether or not the record is fresh.
+    pub home_relay: Option<usize>,
+    /// `home()`.
+    pub home: Option<usize>,
+    /// The candidates `candidates_for` wrote, `out[..n]`.
+    pub out: [Cand; 16],
+    /// How many it wrote.
+    pub n: usize,
+}
+
+#[cfg(feature = "trace")]
+impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> {
+    /// Call `candidates_for` and report the tables it read, for the trace test.
+    pub fn trace_candidates(
+        &mut self,
+        node: &NodeId,
+        hints: &[SocketAddr],
+        fresh_at: Option<u64>,
+        fwd: bool,
+    ) -> FlightProbe {
+        let beacon = self.beacons.iter().flatten().find(|b| b.node == *node).map(|b| b.addrs);
+        let found = self.found(node);
+        let record = found.map(|f| {
+            let mut addrs = [None; crate::record::MAX_ADDRS];
+            for (d, a) in addrs.iter_mut().zip(f.addrs()) {
+                *d = Some(a);
+            }
+            addrs
+        });
+        let fresh = fresh_at.is_none_or(|t| self.found_fresh(t, node).is_some());
+        let peer_relay = self.relay_of(node);
+        let home_relay = found.and_then(|f| self.relay_of(&f.home));
+        let home = self.home();
+        let mut out = [Cand::Relay(0); 16];
+        let n = self.candidates_for(node, hints, fresh_at, fwd, &mut out);
+        FlightProbe {
+            beacon,
+            record,
+            fresh,
+            peer_relay,
+            home_relay,
+            home,
+            out,
+            n,
+        }
+    }
+}
