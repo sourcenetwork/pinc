@@ -228,14 +228,6 @@ Seeds ==
             gp \in {<<2, 1>>, <<2, 2>>, <<4, 3>>}})
     \cup {[f |-> "real", g |-> g, bits |-> bits] : g \in {1024, 2048}, bits \in {32, 64}}
     \cup {[f |-> "gib", bits |-> bits] : bits \in {32, 64}}
-\* the quick profile (proofs/tla/quick): every small value of up to 2 groups + 1 byte (not 3) with groups of 2 bytes,
-\* up to 1 group + 1 byte with groups of 4, groups of 1 KiB (not 2 KiB) on both usizes, every GiB case
-SeedsQuick ==
-    (UNION {{[f |-> "small", g |-> gp[1], p |-> gp[2], len |-> len] : len \in 0..(gp[3] * gp[1] + 1)} :
-            gp \in {<<2, 1, 2>>, <<2, 2, 2>>, <<4, 3, 1>>}})
-    \cup {[f |-> "real", g |-> 1024, bits |-> bits] : bits \in {32, 64}}
-    \cup {[f |-> "gib", bits |-> bits] : bits \in {32, 64}}
-
 (* the configurations of a seed: the value, the requested groups and the tampered item (-1 for none) *)
 Tampers(c0) == {c0} \cup {[c0 EXCEPT !.tam = t] : t \in 0..(Len(Items(c0)) - 1)}
 Ranges(nn) == {r \in (0..nn) \X (0..nn) : r[1] <= r[2]}
@@ -324,4 +316,19 @@ Inv ==
                   /\ vs.stack = <<>> /\ vs.failed = "none"
                   /\ Len(vs.released) = U!Val(U!Sub(cfg.last, cfg.first))
                   /\ \A i \in 1..Len(vs.released) : vs.released[i] = U!Mul64(U!Add(cfg.first, U!W(i - 1)), cfg.lay.g)
+(* The quick profile of VerifierBytes (quick/VerifierBytes.cfg substitutes Seeds <- SeedsQuick and CfgsOf <-
+   CfgsOfQuick): small values of up to one group and one byte (not three groups), 1 KiB groups (not 2 KiB) on both
+   usizes and every GiB case; a real or GiB seed is one genuine stream of one group and one byte, groups 0..2, with no
+   tampered item and no other length or range (the small seeds keep every range and every tampered item) *)
+SeedsQuick ==
+    (UNION {{[f |-> "small", g |-> gp[1], p |-> gp[2], len |-> len] : len \in 0..(gp[1] + 1)} :
+            gp \in {<<2, 1>>, <<2, 2>>, <<4, 3>>}})
+    \cup {[f |-> "real", g |-> 1024, bits |-> bits] : bits \in {32, 64}}
+    \cup {[f |-> "gib", bits |-> bits] : bits \in {32, 64}}
+CfgsOfQuick(sd) ==
+    CASE sd.f = "small" ->
+            LET nn == (sd.len + sd.g - 1) \div sd.g
+            IN UNION {Tampers(MkCfg(U!W(sd.len), U!W(sd.g), sd.p, 64, r[1], r[2], -1)) : r \in Ranges(nn)}
+      [] sd.f = "real" -> {MkCfg(U!W(sd.g + 1), U!W(sd.g), 64, sd.bits, 0, 2, -1)}
+      [] sd.f = "gib" -> {MkCfg(U!Add(U!Pw(30), U!One), U!Pw(30), 64, sd.bits, 0, 2, -1)}
 =============================================================================

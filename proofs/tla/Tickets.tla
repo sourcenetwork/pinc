@@ -175,6 +175,9 @@ BatchesDef == UNION {{<<>>} \cup {<<a>> : a \in {t \in TicketSetDef : t.peer = p
                       \cup {<<a, b>> : a, b \in {t \in TicketSetDef : t.peer = p /\ t.alpn = l}} : p \in Peers, l \in Alpns}
 
 StreamsDef == {s \in UNION {[1..n -> Ids] : n \in 0..(MaxBatch * Attempts)} : TRUE}
+\* the quick profile (quick/Tickets_server.cfg substitutes it for Streams): one draw fewer than a full batch with every
+\* retry, enough for a batch whose second ticket fails after a retry
+StreamsDefQuick == {s \in UNION {[1..n -> Ids] : n \in 0..(MaxBatch * Attempts - 1)} : TRUE}
 
 Init == cl = EmptyStore(NC) /\ sv = EmptyStore(NS)
 

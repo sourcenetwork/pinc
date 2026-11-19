@@ -499,4 +499,10 @@ ResendWithinBudget ==
                 \/ /\ m.ty = "Init" /\ m.dc = rst[s].dc /\ m.sc = rst[s].sc
                    /\ rst[s].reply.len <= 3 * m.len /\ r.st.spent <= LB
 
+(* The quick profiles (proofs/tla/quick names each as its CONSTRAINT): behaviours of a few steps, deep enough that a
+   handshake completes (checked with a witness when they were chosen) *)
+Handshake_storesQuickBound == TLCGet("level") <= 8
+Handshake_stores_xbrokenQuickBound == TLCGet("level") <= 8
+Handshake_pskleakQuickBound == TLCGet("level") <= 6
+
 =============================================================================

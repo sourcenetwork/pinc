@@ -72,12 +72,15 @@ U == INSTANCE U64
 (* the clocks of the checked worlds, in seconds *)
 TS(l) == {OP!Secs(k) : k \in l}
 TimesHold == TS({0, 1, 2, 3})
+TimesHoldQuick == TS({0, 3})  \* the quick profile (proofs/tla/quick/ValuesTime_hold.cfg): no time, and past HOLD_MAX
 TimesStall == TS({0, 1, 3, 9, 17, 33, 100})
+TimesStallQuick == TS({0, 1, 9, 17})  \* the quick profile (proofs/tla/quick/ValuesTime_stall.cfg): a redial due by 9 s (the deadline), and late
 TimesWait == TS({0, 2, 4, 8, 12, 16, 24, 40, 70})
 TimesLive == TS({0, 1, 5, 10, 60, 75, 120})
 TimesDl == TS({0, 2, 3, 5, 9, 12})
 TimesSeq == TS({0, 2, 8, 16, 40, 70})
 TimesLow == TS({0, 1, 41, 100})
+TimesWbufQuick == TS({0})  \* the quick profile (proofs/tla/quick/ValuesTime_wbufreal.cfg): the buffered release needs no time
 TimesMax == TS({0, 1}) \cup {OP!SSub(U!Max64, OP!Secs(1)), U!Max64}
 Sec(k) == OP!Secs(k)
 Sec1 == OP!Secs(1)

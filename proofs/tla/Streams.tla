@@ -120,6 +120,10 @@ Calls == FrameOp \/ ResetOp \/ ConsumeOp \/ PendingOp \/ LostMsdOp \/ FinishOp \
          \/ MaxStreamsOp \/ LostMstsOp
          \/ (STOPS /\ (LostResetOp \/ AckedResetOp \/ AppResetOp \/ LostStopOp \/ AckedStopOp \/ StopReqOp \/ OnStopOp))
 Next == (Calls /\ UNCHANGED elo) \/ OpenOp \/ EstablishOp
+\* The quick profile's Next (proofs/tla/quick, Next <- NextQuick): Next without its stuttering steps. [][NextQuick]_vars
+\* is the same formula as [][Next]_vars (a step that changes nothing satisfies both), so the same behaviours are checked,
+\* but TLC no longer generates the many calls that leave the table as it was and checks the step properties on each.
+NextQuick == ((Calls /\ UNCHANGED elo) \/ OpenOp \/ EstablishOp) /\ vars' # vars
 Spec == Init /\ [][Next]_vars
 \* The bound of the EARLY configs (a CONSTRAINT): while early opens are on, a close frees the slots and keeps the
 \* counters, so opens past the limit go on without end; the configs stop at one round of the slots and one more.
@@ -306,4 +310,8 @@ CodeKept == [][\A i \in 1..N : (SameInc(i) /\ T.slots[i].scode # -1 /\ T'.slots[
 ReleaseWhenFlushed == [][\A i \in 1..N : (SameInc(i) /\ T.slots[i].cnt /\ ~T'.slots[i].cnt)
                             => (RecvDone(T'.slots[i]) /\ Flushed(T'.slots[i]))]_vars
 ReleaseIsFinal == [][\A i \in 1..N : (SameInc(i) /\ ~T.slots[i].cnt) => ~T'.slots[i].cnt]_vars
+\* The quick profile's bounds (a CONSTRAINT of proofs/tla/quick configs): behaviours of a few calls.
+LOCAL QuickTLC == INSTANCE TLC
+Streams_capQuickBound == QuickTLC!TLCGet("level") <= 5
+Streams_earlyQuickBound == QuickTLC!TLCGet("level") <= 5
 =============================================================================

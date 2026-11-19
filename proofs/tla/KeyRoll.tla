@@ -458,4 +458,9 @@ DialerWins ==
 StaleAnswerNoKey ==
     [][ev'.t = "deliver" /\ ev'.proc /\ ev'.sel # "next" /\ ev'.p.pl # NONE /\ ev'.p.pl.ans /\ nd[ev'.n].roll.st = "idle"
        => (nd'[ev'.n].sk = nd[ev'.n].sk /\ nd'[ev'.n].chg = nd[ev'.n].chg)]_vars
+(* The quick profiles of KeyRoll_collide and KeyRoll_forge (their quick configs name these as the CONSTRAINT):
+   behaviours of at most 8 levels, where both nodes request at once, a forged packet is delivered and a roll completes *)
+LOCAL QuickTLC == INSTANCE TLC
+KeyRoll_collideQuickBound == QuickTLC!TLCGet("level") <= 8
+KeyRoll_forgeQuickBound == QuickTLC!TLCGet("level") <= 8
 =============================================================================
