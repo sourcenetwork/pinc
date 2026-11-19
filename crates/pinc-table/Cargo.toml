@@ -12,6 +12,8 @@ publish.workspace = true
 [features]
 default = []
 alloc = []
+# Test-only observation of internal state for trace validation. Costs nothing when off.
+trace = []
 
 [lints]
 workspace = true

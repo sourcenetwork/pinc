@@ -19,6 +19,8 @@ pinc-transport = { workspace = true }
 [features]
 # Keep the relays' buffers on the heap, built one relay at a time, so the layer can be built on a small stack.
 alloc = []
+# Test-only observation of internal state for trace validation. Costs nothing when off.
+trace = []
 
 [lints]
 workspace = true

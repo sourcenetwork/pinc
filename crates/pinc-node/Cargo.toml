@@ -12,7 +12,7 @@ publish.workspace = true
 [features]
 default = []
 # Record every decision of the node, and forward the endpoint's records, as versioned trace records.
-trace = ["pinc-core/trace"]
+trace = ["pinc-core/trace", "pinc-connect/trace"]
 
 [dependencies]
 pinc-wire = { workspace = true }

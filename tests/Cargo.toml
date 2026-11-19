@@ -18,31 +18,32 @@ hwenc = ["pinc-keystore/hwenc"]
 
 [dependencies]
 pinc-wire = { workspace = true }
-pinc-dag = { workspace = true, features = ["alloc"] }
+pinc-dag = { workspace = true, features = ["alloc", "trace"] }
 pinc-crypto = { workspace = true, features = ["trace"] }
 pinc-security = { workspace = true }
 pinc-keystore = { workspace = true, features = ["std"] }
 pinc-transport = { workspace = true, features = ["alloc", "trace", "inject"] }
 pinc-membership = { workspace = true, features = ["alloc"] }
 pinc-sim = { workspace = true, features = ["reference", "suite"] }
-pinc-connect = { workspace = true }
-pinc-portmap = { workspace = true }
+pinc-connect = { workspace = true, features = ["trace"] }
+pinc-portmap = { workspace = true, features = ["trace"] }
 pinc-reconcile = { workspace = true, features = ["alloc"] }
 pinc-dtn = { workspace = true }
 pinc-values = { workspace = true }
 pinc-core = { workspace = true, features = ["alloc", "trace", "inject"] }
-pinc-broadcast = { workspace = true, features = ["alloc"] }
+pinc-broadcast = { workspace = true, features = ["alloc", "trace"] }
 rapidhash = { workspace = true }
 pinc = { workspace = true, features = ["trace"] }
 nuclei = { workspace = true }
 tokio = { workspace = true }
 smol = { workspace = true }
 pinc-node = { workspace = true, features = ["trace"] }
-pinc-table = { workspace = true, features = ["alloc"] }
+pinc-table = { workspace = true, features = ["alloc", "trace"] }
 
 [dev-dependencies]
 proptest = { workspace = true }
 blake3 = { workspace = true, features = ["std"] }
+sha2 = { workspace = true }
 ml-kem = { workspace = true }
 ml-dsa = { workspace = true }
 ed25519-dalek = { workspace = true }

@@ -14,6 +14,8 @@ default = []
 # The topic machine (it keeps bounded tables and the hub log on the heap). The wire format, the signing and the host
 # interface need no allocator.
 alloc = []
+# Test-only observation of internal state for trace validation. Costs nothing when off.
+trace = ["alloc"]
 
 [dependencies]
 pinc-wire = { workspace = true }

@@ -1153,6 +1153,7 @@ dependencies = [
  "pinc-wire",
  "proptest",
  "rapidhash",
+ "sha2",
  "smol",
  "tokio",
  "tpm2-protocol",

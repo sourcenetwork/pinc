@@ -13,6 +13,8 @@ publish.workspace = true
 default = []
 alloc = []
 std = ["alloc", "blake3/std"]
+# Test-only observation of internal state for trace validation. Costs nothing when off.
+trace = []
 
 [dependencies]
 pinc-wire = { workspace = true }
