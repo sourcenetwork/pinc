@@ -266,6 +266,12 @@ ep_impl! {
             conn.is_some_and(|c| c.has_path(id)).then_some(*key)
         })
     }
+
+    /// How many address pairs the path table holds.
+    #[cfg(feature = "trace")]
+    pub const fn trace_path_count(&self) -> usize {
+        self.paths.len()
+    }
 }
 
 const _: () = assert!(MAX_IFACES >= 1);

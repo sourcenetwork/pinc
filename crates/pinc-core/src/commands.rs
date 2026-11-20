@@ -1,8 +1,10 @@
 //! Commands and queries: how the application drives and reads the endpoint.
 //!
 //! [`Endpoint::command`] applies a [`Command`] and returns the [`Reply`]: the command's value and the events it caused
-//! at once (up to eight; any more wait in the queue for [`Endpoint::poll_event`]). A command that fails changes
-//! nothing and its error says why. [`Endpoint::query`] reads state and changes nothing.
+//! at once (up to eight; any more wait in the queue for [`Endpoint::poll_event`]). A command that fails changes no
+//! session and queues no event, and its error says why. It may leave two traces: an address the endpoint learned a
+//! path id for, and, for a dial whose connection could not be built, the resumption ticket it took.
+//! [`Endpoint::query`] reads state and changes nothing.
 //!
 //! A dial first looks for an established session with the peer: if there is one, the new protocol opens as a
 //! sub-session with no round trip. Otherwise it starts a handshake with the best ticket held for the peer and the
@@ -433,14 +435,13 @@ ep_impl! {
         let prekey = self.prekey.clone().ok_or(CommandError::NoPrekey)?;
         let first = addrs.iter().copied().find(|a| self.route_for(a).is_some()).ok_or(CommandError::NoRoute)?;
         let local = self.route_for(&first).ok_or(CommandError::NoRoute)?;
-        let pid = self.path_id(local, first);
         let (i, mem) = self.alloc_slot(true, now).ok_or(CommandError::Full)?;
+        let pid = self.path_id(local, first);
         let ticket = self.tickets.take(&node, alpn, now);
         let resume = ticket.is_some();
         let short_until = self.short_until();
         let peer_has_prekey = now < short_until && self.ekk.get(&node) == Some(prekey.hash());
-        self.t_first.get_or_insert(now);
-        let late = self.t_first.is_some_and(|t| t.saturating_sub(self.started) > LATE_START);
+        let late = self.t_first.unwrap_or(now).saturating_sub(self.started) > LATE_START;
         let mut extra: [Option<(pinc_transport::conn::PathId, PathInfo)>; NP] = [None; NP];
         for (d, a) in extra.iter_mut().zip(addrs.iter().filter(|a| **a != first)) {
             *d = self.route_for(a).map(|l| (self.path_id(l, *a), path_info(a, self.cfg.conn.interface_mtu)));
@@ -464,6 +465,7 @@ ep_impl! {
                 return Err(CommandError::Failure(e));
             }
         };
+        self.t_first.get_or_insert(now);
         conn.set_short_until(short_until);
         for a in addrs {
             self.ledger.open(*a);

@@ -700,3 +700,21 @@ fn a_dial_refused_for_a_full_table_keeps_the_ticket_for_the_next_dial() {
         assert!(net.run(now + 5 * SEC_NS, |n| n.nodes[a].ep.tickets().len() == tickets));
     });
 }
+
+#[test]
+fn a_dial_refused_for_a_full_table_learns_no_path() {
+    big_stack(|| {
+        let mut net = CoreNet::new(10 * MS_NS);
+        let (a, c) = (net.add(1), net.add(3));
+        net.fill_table(a);
+        let paths = net.nodes[a].ep.trace_path_count();
+        let (peer, to, now) = (net.nodes[c].node, net.nodes[c].addr, net.now);
+        let full = net.nodes[a].connect(now, peer, ALPN_A, to, Role::Other);
+        assert_eq!(full.err(), Some(CommandError::Full));
+        assert_eq!(
+            net.nodes[a].ep.trace_path_count(),
+            paths,
+            "the refused dial learned a path"
+        );
+    });
+}
