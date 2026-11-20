@@ -46,6 +46,17 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `BroadcastNode_two` | MaxNow 5 -> 1, TTL 2 -> 1, AcpCap 2 -> 1 (HeldMax 2 and FholdMax 2 kept) |
 | `BroadcastPending` | MaxCalls 5 -> 4 |
 | `BroadcastPending_drop` | MaxCalls 5 -> 4 |
+| `BroadcastPublish` | MaxNow 9 -> 8 |
+| `BroadcastPublish_batch1` | MaxNow 9 -> 8 |
+| `BroadcastPublish_ceiling` | MaxNow 9 -> 8 |
+| `BroadcastPublish_evict` | MaxNow 9 -> 8 |
+| `BroadcastPublish_evictLost` | MaxNow 9 -> 8 |
+| `BroadcastPublish_nohub` | MaxNow 9 -> 8 |
+| `BroadcastPublish_nohub_batch1` | MaxNow 9 -> 8 |
+| `BroadcastPublish_reach` | MaxNow 9 -> 8 |
+| `BroadcastPublish_rival` | MaxNow 9 -> 8 |
+| `BroadcastPublish_rivalById` | MaxNow 9 -> 8 |
+| `BroadcastPublish_taken` | MaxNow 9 -> 8 |
 | `BroadcastPush` | N 4 -> 3, LogCap 3 -> 2 (the log still evicts) |
 | `BroadcastPush_away` | N 4 -> 2, LogCap 2 -> 1 (the log still evicts) |
 | `BroadcastPush_n6` | Subs {s1, s2} -> {s1}, LogCap 3 -> 2 (N = 6 kept; the log still evicts) |
