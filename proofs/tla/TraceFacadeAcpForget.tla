@@ -27,6 +27,10 @@
 (*   expire {peer}  lapse {peer}  clear  (the clock moved past ACP_TTL, or *)
 (*                                     the probes trace_expire and         *)
 (*                                     trace_lapse)                        *)
+(* The clock past ACP_TTL runs out both answers of a peer at once, and no  *)
+(* probe sees between them: an expire line whose probe shows the           *)
+(* remembered allow gone as well is the model's Lapse, a step with no line *)
+(* of its own, then the line's Expire.                                      *)
 (* and on every event but init the probed state: revoked, cache {peer},   *)
 (* known {peer}. The sessions and dials A holds (`sess`, `out`) are not    *)
 (* probed; they follow from the events.                                    *)
@@ -76,6 +80,10 @@ Init == /\ M!Init
         /\ Trace[1].op = "init" /\ hook = Hook(Trace[1])
         /\ i = 2
 Next == \/ i <= Len(Trace) /\ Step /\ i' = i + 1
+        \* The clock ran both answers out at once: the remembered allow lapses first, then the line's Expire
+        \/ /\ i <= Len(Trace) /\ Ev.op = "expire"
+           /\ known[Ev.peer] # {} /\ Len(Ev.known[Ev.peer]) = 0
+           /\ M!Lapse(Ev.peer) /\ UNCHANGED <<hook, i>>
         \* Finished: the trace was read to its end (a mismatch deadlocks before it)
         \/ i > Len(Trace) /\ UNCHANGED <<mvars, i>>
 TraceSpec == Init /\ [][Next]_<<mvars, i>>
