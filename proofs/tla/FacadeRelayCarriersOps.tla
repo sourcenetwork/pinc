@@ -4,7 +4,8 @@
 (* crates/pinc/src/relay/part.rs Part::poll (an accept, completions, the   *)
 (* reads and writes to start, the streams to close), Part::end, and the    *)
 (* parts of relay/state.rs it calls (want_accept, complete, add_conn,      *)
-(* place, tag, slot_of, on_read, on_write, on_open, dying, finish,         *)
+(* place, tag, slot_of, on_read, on_write, on_open, dying, pop_reap,      *)
+(* finish,                                                                 *)
 (* begin_shutdown, abort_all, on_timeout, send_frame) and relay/conn.rs    *)
 (* (push, take_read, take_write, wrote). FacadeRelayCarriers.tla checks    *)
 (* them over every interleaving at small sizes; TraceFacadeRelayCarriers   *)
@@ -26,7 +27,10 @@
 (*                                                                         *)
 (* The host's operations out are a set of [k, id, slot, h]: an accept is   *)
 (* [k "acc", id 0, slot 0, h 0] (Tag::new(0)); a read or write carries the *)
-(* tag of its conn (id << 16 | slot).                                      *)
+(* tag of its conn (id << 16 | slot). The core's reap list rp (state.rs   *)
+(* reap) holds [k, id] for each conn marked dying, in the order marked;    *)
+(* a poll finishes them last marked first (pop_reap), which sets the order *)
+(* of the free slots and so the slot of the next conn.                     *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
 
@@ -47,7 +51,7 @@ Cnt0 == [opened |-> 0, closed |-> 0, full |-> 0, hsfull |-> 0, proto |-> 0, slow
 \* without a close (drop), and ghosts (late completions ignored, refusals counted as a full handshake table that was not)
 Sys0(now) == [c |-> [cs |-> <<>>, free |-> <<>>, next |-> 0, hs |-> 0, cur |-> [n \in NODES |-> 0], nsid |-> 0,
                      by |-> [n \in NODES |-> 0], acc |-> FALSE, pause |-> 0, stop |-> FALSE, chk |-> now + CHK,
-                     pinged |-> FALSE, cnt |-> Cnt0],
+                     pinged |-> FALSE, cnt |-> Cnt0, rp |-> <<>>],
               o |-> {}, ends |-> <<>>, drop |-> {}, late |-> FALSE, mis |-> FALSE]
 
 Front(q) == SubSeq(q, 1, Len(q) - 1)
@@ -65,10 +69,10 @@ Count(m, f) == [m EXCEPT !.c.cnt[f] = @ + 1]
 Close(m, h, late) ==
     [m EXCEPT !.ends[h] = @ + 1, !.o = IF late THEN @ ELSE {x \in @ : x.h # h}]
 
-\* state.rs dying: once per conn, counted by reason
+\* state.rs dying: once per conn, counted by reason, and pushed on the reap list
 Dying(m, k, why) ==
     IF k \notin Slots(m) \/ ~m.c.cs[k].on \/ m.c.cs[k].dy # "" THEN m
-    ELSE LET m1 == [m EXCEPT !.c.cs[k].dy = why]
+    ELSE LET m1 == [m EXCEPT !.c.cs[k].dy = why, !.c.rp = Append(@, [k |-> k, id |-> m.c.cs[k].id])]
          IN CASE why = "proto" -> Count(m1, "proto")
               [] why = "slow" -> Count(m1, "slow")
               [] why \in {"idle", "hstime"} -> Count(m1, "tout")
@@ -181,11 +185,15 @@ Finish(m, k, late) ==
                         !.c.cur = IF n # 0 /\ @[n] = x.sid THEN [@ EXCEPT ![n] = 0] ELSE @]
     IN m1
 
-RECURSIVE ReapFrom(_, _, _)
-ReapFrom(m, k, late) ==
-    IF k > Len(m.c.cs) THEN m
-    ELSE ReapFrom(IF m.c.cs[k].on /\ m.c.cs[k].dy # "" THEN Close(Finish(m, k, late), m.c.cs[k].h, late) ELSE m,
-                  k + 1, late)
+\* part.rs poll, the reaps: pop_reap takes the reap list from its end and skips an entry whose slot no longer holds
+\* that conn; each conn it gives is finished and its stream closed
+RECURSIVE Reap(_, _)
+Reap(m, late) ==
+    IF m.c.rp = <<>> THEN m
+    ELSE LET e == Last(m.c.rp)
+             m0 == [m EXCEPT !.c.rp = Front(@)]
+         IN Reap(IF e.k \in Slots(m0) /\ m0.c.cs[e.k].on /\ m0.c.cs[e.k].id = e.id
+                 THEN Close(Finish(m0, e.k, late), m0.c.cs[e.k].h, late) ELSE m0, late)
 
 \* part.rs poll: the accept, at most one completion (done: [op, x, n, kind, reply, slow, to, tslow]; done.op.k =
 \* "none" when the host had none), the submits, the reaps
@@ -197,7 +205,7 @@ Poll(m, now, done, late) ==
         m2 == IF done.op.k = "none" THEN m1
               ELSE Complete(m1, done.op, done.x, done.n, done.kind, done.reply, done.slow, done.to,
                            done.tslow, now, late)
-    IN ReapFrom(SubmitFrom(m2, 1), 1, late)
+    IN Reap(SubmitFrom(m2, 1), late)
 
 \* state.rs on_timeout: the machine's first timer pings every member (slow per conn by the map), then once per
 \* CHECK_NS the scan for handshakes past their deadline and silent conns
@@ -224,11 +232,13 @@ RECURSIVE DieFrom(_, _, _)
 DieFrom(m, k, why) == IF k > Len(m.c.cs) THEN m ELSE DieFrom(Dying(m, k, why), k + 1, why)
 Stop(m) == DieFrom([m EXCEPT !.c.stop = TRUE], 1, "shutdown")
 
-\* Part::end: abort_all finishes every conn and drops its stream (no close); stopping and accept_out are cleared (fix
-\* R2: the next run asks for its accept again); Carriers::ended abandons every operation out
+\* Part::end: abort_all finishes every conn in slot order and drops its stream (no close); stopping and accept_out are
+\* cleared (fix R2: the next run asks for its accept again); Carriers::ended abandons every operation out. The reap
+\* list keeps the entries begin_shutdown pushed, each naming a conn just finished: conn ids only grow (place), so
+\* pop_reap skips every one of them, and the model drops them here
 RECURSIVE DropFrom(_, _)
 DropFrom(m, k) ==
     IF k > Len(m.c.cs) THEN m
     ELSE DropFrom(IF m.c.cs[k].on THEN [Finish(m, k, FALSE) EXCEPT !.drop = @ \cup {m.c.cs[k].h}] ELSE m, k + 1)
-End(m) == [DropFrom(Stop(m), 1) EXCEPT !.c.stop = FALSE, !.c.acc = FALSE, !.o = {}]
+End(m) == [DropFrom(Stop(m), 1) EXCEPT !.c.stop = FALSE, !.c.acc = FALSE, !.o = {}, !.c.rp = <<>>]
 =============================================================================
