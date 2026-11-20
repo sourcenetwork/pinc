@@ -90,6 +90,11 @@ struct Run<'a> {
     /// A gateway restart the client has not noted an epoch since.
     unheard: bool,
     moved: bool,
+    /// A request the test saw go out has no answer yet: a round is in flight.
+    round: bool,
+    /// An announce (the nonce is not checked, so a spoofed one counts) reached the client while a round (an ask or a renewal) was in flight: it is kept for after
+    /// the round.
+    kept_announce: bool,
     last_renew: i64,
     last_exp: i64,
     events: u32,
@@ -121,6 +126,8 @@ impl<'a> Run<'a> {
             expect_release: false,
             unheard: false,
             moved: false,
+            round: false,
+            kept_announce: false,
             last_renew: 0,
             last_exp: 0,
             events: 0,
@@ -244,6 +251,7 @@ impl<'a> Run<'a> {
                             self.rec("out");
                         }
                         Some(_) => {
+                            self.round = true;
                             self.req.insert("map");
                             self.rec("send");
                             if self.pm.probe().tries == 1 {
@@ -368,9 +376,14 @@ impl<'a> Run<'a> {
                     i64::try_from(self.tick).unwrap(),
                     "a lease did not start at its request"
                 );
-                self.moved = before.announce_next.is_some();
+                self.round = false;
+                self.moved = std::mem::take(&mut self.kept_announce);
             }
-            "refuse" => self.moved = true,
+            "refuse" => {
+                self.moved = true;
+                self.round = false;
+                self.kept_announce = false;
+            }
             _ => {
                 if m.1 == 0 && before.held.is_some() {
                     assert!(
@@ -379,6 +392,7 @@ impl<'a> Run<'a> {
                     );
                 }
                 self.moved |= before.held.is_some();
+                self.kept_announce |= self.round && before.step == "pcp";
             }
         }
         self.rec("deliver");
