@@ -15,7 +15,7 @@
 use core::fmt;
 use core::marker::PhantomData;
 
-use crate::error::Error;
+use crate::error::{Error, Refused};
 use crate::storage::{Storage, fit, rd32, rec, rec_mut, wr32};
 
 /// The bytes a slot costs beside its own: its place on the free stack, its generation and its written length.
@@ -145,13 +145,16 @@ impl<K> Pool<K> {
     ///
     /// # Errors
     ///
-    /// The [`Error`] names what was refused; the table is unchanged.
-    pub fn new(mut mem: Storage, slots: usize, slot_size: usize) -> Result<Self, Error> {
+    /// The [`Refused`] names what was refused in `error` and hands the block back in `storage`, untouched.
+    pub fn new(mem: Storage, slots: usize, slot_size: usize) -> Result<Self, Refused> {
         // The written length is a u32, so a slot is at most u32::MAX bytes.
         if u32::try_from(slots).is_err() || u32::try_from(slot_size).is_err() {
-            return Err(Error::Capacity);
+            return Err(Refused {
+                error: Error::Capacity,
+                storage: mem,
+            });
         }
-        fit(&mem, Self::bytes(slots, slot_size))?;
+        let mut mem = fit(mem, Self::bytes(slots, slot_size))?;
         let b = mem.as_mut_slice();
         for i in 0..slots {
             // The stack pops from the top, so slot 0 is handed out first.

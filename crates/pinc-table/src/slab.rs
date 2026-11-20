@@ -12,7 +12,7 @@
 
 use core::cmp::Ordering;
 
-use crate::error::Error;
+use crate::error::{Error, Refused};
 use crate::storage::{Storage, fit, rd_w, rec, rec_mut, wr_w};
 
 /// A keyed table of fixed-size records that walks in key order. See the module comment.
@@ -45,12 +45,15 @@ impl SortedSlab {
     ///
     /// # Errors
     ///
-    /// The [`Error`] names what was refused; the table is unchanged.
-    pub fn new(mem: Storage, capacity: usize, key_len: usize, val_len: usize) -> Result<Self, Error> {
+    /// The [`Refused`] names what was refused in `error` and hands the block back in `storage`, untouched.
+    pub fn new(mem: Storage, capacity: usize, key_len: usize, val_len: usize) -> Result<Self, Refused> {
         if u32::try_from(capacity).is_err() || key_len.checked_add(val_len).is_none() {
-            return Err(Error::Capacity);
+            return Err(Refused {
+                error: Error::Capacity,
+                storage: mem,
+            });
         }
-        fit(&mem, Self::bytes(capacity, key_len, val_len))?;
+        let mem = fit(mem, Self::bytes(capacity, key_len, val_len))?;
         Ok(Self {
             mem,
             cap: capacity,

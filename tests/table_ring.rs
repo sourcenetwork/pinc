@@ -75,7 +75,10 @@ fn empty_full_and_wrong_sizes() {
     assert_eq!(r.get(1), Some(&[3u8; 4][..]));
     r.clear();
     assert!(r.is_empty());
-    assert_eq!(Ring::new(mem(7, true), 2, 4).unwrap_err(), Error::Storage { need: 8 });
+    assert_eq!(
+        Ring::new(mem(7, true), 2, 4).unwrap_err().error,
+        Error::Storage { need: 8 }
+    );
     for owned in [true, false] {
         let mut z = Ring::new(mem(0, owned), 0, 4).unwrap();
         assert_eq!(z.push(&[0; 4]), Err(Error::Full));
@@ -84,7 +87,10 @@ fn empty_full_and_wrong_sizes() {
         assert_eq!(z.iter().count(), 0);
     }
     // A size that saturates is a capacity, not a size to ask for.
-    assert_eq!(Ring::new(mem(0, true), usize::MAX, 2).unwrap_err(), Error::Capacity);
+    assert_eq!(
+        Ring::new(mem(0, true), usize::MAX, 2).unwrap_err().error,
+        Error::Capacity
+    );
 }
 
 #[test]
@@ -115,4 +121,14 @@ proptest! {
     ) {
         run(&ops, cap, spare, owned);
     }
+}
+
+#[test]
+fn a_refused_block_comes_back_in_the_error() {
+    let refused = Ring::new(mem(7, false), 2, 4).unwrap_err();
+    assert_eq!(refused.error, Error::Storage { need: 8 });
+    assert_eq!(refused.storage.len(), 7);
+    let mut r = Ring::new(refused.storage, 1, 4).unwrap();
+    r.push(&[9; 4]).unwrap();
+    assert_eq!(r.pop(), Some(&[9u8; 4][..]));
 }

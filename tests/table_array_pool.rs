@@ -99,10 +99,16 @@ fn the_order_follows_the_keys_and_keeps_ties_in_position() {
         a.iter().map(|(p, _)| p).collect::<Vec<_>>(),
         want.iter().copied().filter(|&p| p != 2).collect::<Vec<_>>()
     );
-    assert_eq!(Array::new(mem(3, true), 1, 1).unwrap_err(), Error::Storage { need: 4 });
-    assert_eq!(Array::new(mem(0, true), 70_000, 0).unwrap_err(), Error::Capacity);
+    assert_eq!(
+        Array::new(mem(3, true), 1, 1).unwrap_err().error,
+        Error::Storage { need: 4 }
+    );
+    assert_eq!(Array::new(mem(0, true), 70_000, 0).unwrap_err().error, Error::Capacity);
     // A size that saturates is a capacity, not a size to ask for.
-    assert_eq!(Array::new(mem(0, true), 100, usize::MAX).unwrap_err(), Error::Capacity);
+    assert_eq!(
+        Array::new(mem(0, true), 100, usize::MAX).unwrap_err().error,
+        Error::Capacity
+    );
 }
 
 #[test]
@@ -162,7 +168,7 @@ fn the_largest_array_the_order_can_number() {
     assert_eq!(a.set(65_534, &[]), Ok(false));
     assert_eq!(a.get(65_534), Some(&[][..]));
     assert_eq!(a.iter().map(|(p, _)| p).collect::<Vec<_>>(), vec![65_534]);
-    assert_eq!(Array::new(mem(0, true), 65_536, 0).unwrap_err(), Error::Capacity);
+    assert_eq!(Array::new(mem(0, true), 65_536, 0).unwrap_err().error, Error::Capacity);
 }
 
 proptest! {
@@ -285,7 +291,7 @@ fn a_given_back_handle_never_reads_the_next_owners_bytes() {
     );
     assert!(p.take().is_none());
     assert_eq!(
-        Pool::<()>::new(mem(15, true), 1, 4).unwrap_err(),
+        Pool::<()>::new(mem(15, true), 1, 4).unwrap_err().error,
         Error::Storage { need: 16 }
     );
 }
@@ -334,9 +340,18 @@ fn a_handle_round_trips_as_bytes_and_a_forged_one_is_refused() {
 fn a_pool_refuses_a_size_it_cannot_number() {
     let max = usize::try_from(u32::MAX).unwrap();
     // The size saturates: a capacity, not a size to ask for.
-    assert_eq!(Pool::<()>::new(mem(0, true), max, max).unwrap_err(), Error::Capacity);
-    assert_eq!(Pool::<()>::new(mem(0, true), 1, max + 1).unwrap_err(), Error::Capacity);
-    assert_eq!(Pool::<()>::new(mem(0, true), max + 1, 0).unwrap_err(), Error::Capacity);
+    assert_eq!(
+        Pool::<()>::new(mem(0, true), max, max).unwrap_err().error,
+        Error::Capacity
+    );
+    assert_eq!(
+        Pool::<()>::new(mem(0, true), 1, max + 1).unwrap_err().error,
+        Error::Capacity
+    );
+    assert_eq!(
+        Pool::<()>::new(mem(0, true), max + 1, 0).unwrap_err().error,
+        Error::Capacity
+    );
 }
 
 #[test]

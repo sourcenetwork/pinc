@@ -16,7 +16,7 @@ mod slab;
 mod storage;
 
 pub use array::Array;
-pub use error::Error;
+pub use error::{Error, Refused};
 pub use pool::{Pool, Slot};
 pub use ring::Ring;
 pub use slab::SortedSlab;
@@ -69,8 +69,8 @@ mod tests {
     #[test]
     fn a_record_size_past_usize_max_is_refused_at_capacity_zero() {
         let new = |k, v| SortedSlab::new(Storage::zeroed(0).unwrap(), 0, k, v);
-        assert_eq!(new(usize::MAX, 1).unwrap_err(), Error::Capacity);
-        assert_eq!(new(1, usize::MAX).unwrap_err(), Error::Capacity);
+        assert_eq!(new(usize::MAX, 1).unwrap_err().error, Error::Capacity);
+        assert_eq!(new(1, usize::MAX).unwrap_err().error, Error::Capacity);
         assert_eq!(new(usize::MAX, 0).unwrap().retain(|_, _| true), 0);
     }
 
@@ -80,7 +80,7 @@ mod tests {
         assert_eq!(Ring::bytes(n, 2), usize::MAX / 2 + 1);
         assert_eq!(Storage::zeroed(Ring::bytes(n, 2)).unwrap_err(), Error::Capacity);
         assert_eq!(
-            Ring::new(Storage::zeroed(0).unwrap(), n, 2).unwrap_err(),
+            Ring::new(Storage::zeroed(0).unwrap(), n, 2).unwrap_err().error,
             Error::Capacity
         );
     }

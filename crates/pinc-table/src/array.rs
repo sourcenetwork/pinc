@@ -3,7 +3,7 @@
 //! walk the present places in that order. Invariants: a place is present exactly when it was set and not removed;
 //! the order is always a permutation of `0..places`, the identity until set.
 
-use crate::error::Error;
+use crate::error::{Error, Refused};
 use crate::storage::{Storage, fit, rd16, rec, rec_mut, wr16};
 
 /// A fixed array of optional records with a stored walk order. See the module comment.
@@ -27,12 +27,15 @@ impl Array {
     ///
     /// # Errors
     ///
-    /// The [`Error`] names what was refused; the table is unchanged.
-    pub fn new(mut mem: Storage, places: usize, record: usize) -> Result<Self, Error> {
+    /// The [`Refused`] names what was refused in `error` and hands the block back in `storage`, untouched.
+    pub fn new(mem: Storage, places: usize, record: usize) -> Result<Self, Refused> {
         if u16::try_from(places).is_err() {
-            return Err(Error::Capacity);
+            return Err(Refused {
+                error: Error::Capacity,
+                storage: mem,
+            });
         }
-        fit(&mem, Self::bytes(places, record))?;
+        let mut mem = fit(mem, Self::bytes(places, record))?;
         let b = mem.as_mut_slice();
         for i in 0..places {
             wr16(b, i, u16::try_from(i).unwrap_or(0));

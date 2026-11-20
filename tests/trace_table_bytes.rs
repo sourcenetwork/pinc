@@ -82,11 +82,18 @@ mod at64 {
     fn make(c: Case, mem: Storage) -> Result<bool, Error> {
         let (n, r, k, v) = (c.n as usize, c.r as usize, c.k as usize, c.v as usize);
         match c.kind {
-            0 => Array::new(mem, n, r).map(|t| t.places() == n && t.len() == 0 && t.is_empty()),
-            1 => Ring::new(mem, n, r).map(|t| t.capacity() == n && t.len() == 0 && t.is_empty()),
+            0 => Array::new(mem, n, r)
+                .map(|t| t.places() == n && t.len() == 0 && t.is_empty())
+                .map_err(|r| r.error),
+            1 => Ring::new(mem, n, r)
+                .map(|t| t.capacity() == n && t.len() == 0 && t.is_empty())
+                .map_err(|r| r.error),
             2 => Pool::<()>::new(mem, n, r)
-                .map(|t| t.capacity() == n && t.free() == n && t.taken() == 0 && t.slot_size() == r),
-            _ => SortedSlab::new(mem, n, k, v).map(|t| t.capacity() == n && t.len() == 0 && t.is_empty()),
+                .map(|t| t.capacity() == n && t.free() == n && t.taken() == 0 && t.slot_size() == r)
+                .map_err(|r| r.error),
+            _ => SortedSlab::new(mem, n, k, v)
+                .map(|t| t.capacity() == n && t.len() == 0 && t.is_empty())
+                .map_err(|r| r.error),
         }
     }
 

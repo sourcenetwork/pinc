@@ -7,7 +7,7 @@ use core::fmt;
 #[cfg(feature = "alloc")]
 use alloc::boxed::Box;
 
-use crate::error::Error;
+use crate::error::{Error, Refused};
 
 /// One block of bytes, either borrowed for the whole program or owned. Its `Debug` prints the length only, so a
 /// table in a log line or a panic message never prints a block.
@@ -86,15 +86,21 @@ fn no_block_holds(len: usize) -> bool {
     isize::try_from(len).is_err()
 }
 
-/// Checks that `mem` holds `need` bytes. A `need` above `isize::MAX`, a saturated one included, is a capacity no
-/// block can satisfy, not a size.
-pub(crate) fn fit(mem: &Storage, need: usize) -> Result<(), Error> {
+/// Checks that `mem` holds `need` bytes and gives it back, or refuses with it. A `need` above `isize::MAX`, a
+/// saturated one included, is a capacity no block can satisfy, not a size.
+pub(crate) fn fit(mem: Storage, need: usize) -> Result<Storage, Refused> {
     if no_block_holds(need) {
-        Err(Error::Capacity)
+        Err(Refused {
+            error: Error::Capacity,
+            storage: mem,
+        })
     } else if mem.len() < need {
-        Err(Error::Storage { need })
+        Err(Refused {
+            error: Error::Storage { need },
+            storage: mem,
+        })
     } else {
-        Ok(())
+        Ok(mem)
     }
 }
 

@@ -2,6 +2,8 @@
 
 use core::fmt;
 
+use crate::storage::Storage;
+
 /// Why a table refused an operation. The table is unchanged after any of them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {
@@ -38,3 +40,21 @@ impl fmt::Display for Error {
 }
 
 impl core::error::Error for Error {}
+
+/// A constructor's refusal: the [`Error`] and the block it was given, handed back so a block that cannot be had
+/// again (a `'static` one) can make a smaller table. Its `Debug` prints the block's length only.
+#[derive(Debug)]
+pub struct Refused {
+    /// What was refused.
+    pub error: Error,
+    /// The block the constructor was given, untouched.
+    pub storage: Storage,
+}
+
+impl fmt::Display for Refused {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.error, f)
+    }
+}
+
+impl core::error::Error for Refused {}

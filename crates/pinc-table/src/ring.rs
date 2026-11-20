@@ -2,7 +2,7 @@
 //! `len <= capacity`; the oldest record is at `head`, the next push goes to `(head + len) % capacity`; records pop
 //! in the order they were pushed.
 
-use crate::error::Error;
+use crate::error::{Error, Refused};
 use crate::storage::{Storage, fit, rec, rec_mut};
 
 /// A bounded FIFO of fixed-size records. See the module comment.
@@ -25,9 +25,9 @@ impl Ring {
     ///
     /// # Errors
     ///
-    /// The [`Error`] names what was refused; the table is unchanged.
-    pub fn new(mem: Storage, capacity: usize, record: usize) -> Result<Self, Error> {
-        fit(&mem, Self::bytes(capacity, record))?;
+    /// The [`Refused`] names what was refused in `error` and hands the block back in `storage`, untouched.
+    pub fn new(mem: Storage, capacity: usize, record: usize) -> Result<Self, Refused> {
+        let mem = fit(mem, Self::bytes(capacity, record))?;
         Ok(Self {
             mem,
             cap: capacity,

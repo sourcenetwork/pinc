@@ -293,26 +293,26 @@ fn capacity_zero_holds_nothing() {
 fn refuses_a_small_block_and_too_many_records() {
     let wide = SortedSlab::bytes(WIDE, 8, 4);
     assert_eq!(
-        SortedSlab::new(mem(wide - 1, true), WIDE, 8, 4).unwrap_err(),
+        SortedSlab::new(mem(wide - 1, true), WIDE, 8, 4).unwrap_err().error,
         Error::Storage { need: wide }
     );
     let max = usize::try_from(u32::MAX).unwrap();
     assert_eq!(
-        SortedSlab::new(mem(0, true), max + 1, 0, 0).unwrap_err(),
+        SortedSlab::new(mem(0, true), max + 1, 0, 0).unwrap_err().error,
         Error::Capacity
     );
     let need = SortedSlab::bytes(8, 8, 4);
     assert_eq!(
-        SortedSlab::new(mem(need - 1, true), 8, 8, 4).unwrap_err(),
+        SortedSlab::new(mem(need - 1, true), 8, 8, 4).unwrap_err().error,
         Error::Storage { need }
     );
     assert_eq!(
-        SortedSlab::new(mem(0, true), usize::MAX, 8, 4).unwrap_err(),
+        SortedSlab::new(mem(0, true), usize::MAX, 8, 4).unwrap_err().error,
         Error::Capacity
     );
     // A size that saturates is a capacity, not a size to ask for.
     assert_eq!(
-        SortedSlab::new(mem(0, true), 100, usize::MAX, 4).unwrap_err(),
+        SortedSlab::new(mem(0, true), 100, usize::MAX, 4).unwrap_err().error,
         Error::Capacity
     );
 }
