@@ -13,10 +13,14 @@
 #[path = "broadcast_common.rs"]
 mod common;
 
-use common::{Net, SEC, ty};
-use pinc_broadcast::consts::{DEFAULT_MAX_BODY, LOG_CAP};
-use pinc_broadcast::{Reject, Trace};
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use common::{Ev, Net, SEC, ty};
+use pinc_broadcast::consts::{DEFAULT_MAX_BODY, LOG_CAP, SUB_WAIT_MAX, TABLE_MAX};
+use pinc_broadcast::{Reject, SubRefusal, Trace};
 use pinc_crypto::IdentityAlg;
+use pinc_membership::NodeId;
 
 const T: &[u8] = b"log";
 
@@ -269,4 +273,123 @@ fn the_same_at_the_defaults_with_two_followers() {
     for n in 0..65 {
         assert!(net.told_about(2, &topic(100 + n)), "member 2 told about {}", 100 + n);
     }
+}
+
+/// A node id no network node has: the `n`th of the nodes a test hands a hub frames from. It is not in the host's
+/// `reach`, so a hub's sends to it fail cheaply.
+fn fake(n: usize) -> NodeId {
+    let mut id = [0xFF; 32];
+    id[30..].copy_from_slice(&(n as u16).to_be_bytes());
+    id
+}
+
+/// A SUB for `topic` from `from` handed to hub 0 as a frame.
+fn sub_from(net: &mut Net, from: &NodeId, topic: &[u8]) {
+    let now = net.now;
+    let n = &mut net.nodes[0];
+    n.t.frame(&mut n.h, now, from, ty::SUB, topic, &[0u8; 8]);
+}
+
+/// A SUBS frame of kind 3 (the hub-full notice) in `bytes`.
+fn is_notice(bytes: &[u8]) -> bool {
+    let tl = usize::from(bytes[5]);
+    bytes[4] == ty::SUBS && bytes.get(6 + tl) == Some(&3)
+}
+
+fn notices_to(net: &Net, to: &NodeId) -> usize {
+    net.nodes[0].h.out.iter().filter(|o| o.to == *to && is_notice(&o.bytes)).count()
+}
+
+/// A hub whose topic has `TABLE_MAX` subscribers answers a new member's SUB with the notice and counts it; a
+/// subscriber it holds is not refused, and a place freed by an unsubscribe is taken.
+#[test]
+fn a_hub_at_the_subscriber_cap_answers_a_new_member_with_the_notice() {
+    let mut net = Net::new(IdentityAlg::Ed25519, 1, 1, SEC);
+    for n in 0..TABLE_MAX {
+        sub_from(&mut net, &fake(n), T);
+    }
+    assert_eq!(net.nodes[0].t.subscriber_count(T), TABLE_MAX);
+    let newcomer = fake(TABLE_MAX);
+    // The two nodes whose frames are looked at are reachable, so the host records what is sent to them.
+    net.nodes[0].h.reach.insert(newcomer);
+    net.nodes[0].h.reach.insert(fake(0));
+    net.nodes[0].h.out.clear();
+    sub_from(&mut net, &newcomer, T);
+    assert_eq!(notices_to(&net, &newcomer), 1);
+    assert_eq!(net.nodes[0].t.subscriber_count(T), TABLE_MAX);
+    assert_eq!(net.nodes[0].t.reject_stats().sub_refused(SubRefusal::Subscribers), 1);
+    assert_eq!(net.nodes[0].t.reject_stats().sub_refused(SubRefusal::Topics), 0);
+    net.nodes[0].h.out.clear();
+    sub_from(&mut net, &fake(0), T);
+    assert_eq!(notices_to(&net, &fake(0)), 0, "a subscriber the hub holds is not refused");
+    assert_eq!(net.nodes[0].t.reject_stats().sub_refused(SubRefusal::Subscribers), 1);
+    let now = net.now;
+    let n = &mut net.nodes[0];
+    n.t.frame(&mut n.h, now, &fake(0), ty::UNSUB, T, &[]);
+    n.h.out.clear();
+    sub_from(&mut net, &newcomer, T);
+    assert_eq!(notices_to(&net, &newcomer), 0, "the freed place is taken");
+    assert_eq!(net.nodes[0].t.subscriber_count(T), TABLE_MAX);
+}
+
+/// A member the hub refused is told once, asks again at 2, 4, 8, 16, 32 and 64 s and then every 64 s, one notice
+/// answering each ask, and ends in `Subscribed` once the hub has room; a topic it leaves is asked about no more.
+#[test]
+fn a_refused_join_asks_again_on_a_bounded_backoff_and_ends_in_joined() {
+    const U: &[u8] = b"other";
+    let mut net = Net::new(IdentityAlg::Ed25519, 1, 1, SEC);
+    for n in 0..TABLE_MAX {
+        sub_from(&mut net, &fake(n), T);
+        sub_from(&mut net, &fake(n), U);
+    }
+    assert!(net.id(1) < fake(0), "the cut list names the member");
+    let seen = Rc::new(RefCell::new(Vec::<(usize, usize, Vec<u8>, u8)>::new()));
+    let s = Rc::clone(&seen);
+    net.filter = Some(Box::new(move |from, to, bytes| {
+        // Every frame, so the entries pair with the network's own log one to one.
+        let tl = bytes.get(5).map_or(0, |t| usize::from(*t));
+        let topic = bytes.get(6..6 + tl).unwrap_or_default().to_vec();
+        let kind = bytes.get(4).copied().unwrap_or(0);
+        s.borrow_mut().push((from, to, topic, kind));
+        true
+    }));
+    let base = net.log.len();
+    let t0 = net.now;
+    net.subscribe(1, T);
+    net.subscribe(1, U);
+    net.run_until(t0 + 10 * SEC);
+    net.unsubscribe(1, U);
+    net.run_until(t0 + 200 * SEC);
+    assert_eq!(net.events(1).iter().filter(|e| matches!(e, Ev::HubFull { .. })).count(), 2, "one per topic");
+    assert!(net.subscribed(1).is_empty());
+    let (log, seen_now) = (&net.log[base..], seen.borrow().clone());
+    assert_eq!(log.len(), seen_now.len());
+    let mut times = Vec::new();
+    let (mut asks_u, mut notices_t, mut notices_u) = (0, 0, 0);
+    for (l, f) in log.iter().zip(&seen_now) {
+        match (f.0, f.2.as_slice(), f.3) {
+            (1, t, ty::SUB) if t == T => times.push(l.0),
+            (1, t, ty::SUB) if t == U => asks_u += 1,
+            (0, t, ty::SUBS) if t == T => notices_t += 1,
+            (0, t, ty::SUBS) if t == U => notices_u += 1,
+            _ => {}
+        }
+    }
+    let want: Vec<u64> = [0, 2, 6, 14, 30, 62, 126, 190].iter().map(|s| t0 + s * SEC).collect();
+    let secs = |v: &[u64]| v.iter().map(|t| (t - t0) / 1_000_000).collect::<Vec<_>>();
+    assert_eq!(secs(&times), secs(&want));
+    assert!(times.windows(3).all(|w| w[1] - w[0] <= w[2] - w[1]), "gaps never shrink");
+    assert!(times.windows(2).all(|w| w[1] - w[0] <= SUB_WAIT_MAX), "gaps stay within the cap");
+    assert_eq!(notices_t, times.len(), "a notice for each ask");
+    assert_eq!(asks_u, 3, "U asked at 0, 2 and 6 s and not after the unsubscribe");
+    assert_eq!(notices_u, 3);
+    // Room frees up: the next ask is taken.
+    let now = net.now;
+    let n = &mut net.nodes[0];
+    n.t.frame(&mut n.h, now, &fake(0), ty::UNSUB, T, &[]);
+    net.run_until(now + SUB_WAIT_MAX + SEC);
+    assert_eq!(net.subscribed(1), [T.to_vec()]);
+    let asked = net.count_between(1, 0, ty::SUB);
+    net.run_until(net.now + 200 * SEC);
+    assert_eq!(net.count_between(1, 0, ty::SUB), asked, "no ask once the hub holds it");
 }

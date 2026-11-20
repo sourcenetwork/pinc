@@ -28,6 +28,10 @@
 //! holds. A subscriber that subscribes for the first time asks from now and is not told. A live subscriber's
 //! periodic check is not judged: it was pushed everything since it became live, or is behind and told from there.
 //!
+//! A SUB a hub cannot hold (its topic table is full, or the topic has `TABLE_MAX` subscribers) is answered with the
+//! hub-full notice (`subs.rs`), never dropped untold. The member then asks again on a backoff of its own timer
+//! ([`Topics::sub_wait_retry`]) until the hub takes the subscription.
+//!
 //! Invariants: a HAVE and a GET carry at most [`HAVE_MAX`] ids; a GET names only ids the node lacks; a replay sends
 //! every message the log holds since the floor, oldest first, and never a member's own back to it; a message asked
 //! for by a subscriber whose stream is full is owed from the log, never dropped; a live subscriber that asked for a
@@ -41,12 +45,12 @@ use crate::behind::Behind;
 use crate::consts::{
     AE_FROM, AE_TO, GAP_EVERY, GAP_LIVE, GAP_SPAN, HAVE_MAX, HUB_AE, LOG_CAP, RESUB_BACK_MS, TABLE_MAX,
 };
-use crate::event::{Trace, topic_tag};
+use crate::event::{SubRefusal, Trace, topic_tag};
 use crate::host::{Host, Lane};
 use crate::log::HubLog;
 use crate::node::{Refused, Topic, Topics, TraceQueue};
 use crate::reach::{offers, reaches};
-use crate::subs::{Ver, read_ver, ver_bytes};
+use crate::subs::{HUB_FULL, Ver, read_ver, ver_bytes};
 use crate::wire::{self, Head, get_u64, ty};
 
 /// SUB flag: replay the logged messages instead of offering their ids.
@@ -161,6 +165,7 @@ impl Topics {
             return;
         }
         st.confirmed = false;
+        st.end_wait();
         st.hints.clear();
         if let Some(p) = self.primary.filter(|p| *p != self.me)
             && wire::build(&mut self.scratch, ty::UNSUB, topic, &[]).is_ok()
@@ -171,9 +176,10 @@ impl Topics {
 
     /// Ask `hub` again for every subscribed topic from `since_ms`.
     fn resub_all<H: Host>(&mut self, h: &mut H, hub: &NodeId, since_ms: u64) {
-        let topics = core::mem::take(&mut self.topics);
-        for (k, st) in &topics {
+        let mut topics = core::mem::take(&mut self.topics);
+        for (k, st) in &mut topics {
             if st.sub {
+                st.end_wait();
                 self.send_sub(h, hub, k, since_ms, false, st.held(hub));
             }
         }
@@ -205,11 +211,12 @@ impl Topics {
             self.send_adj(h, Some(new));
         }
         let since = self.since_ms();
-        let topics = core::mem::take(&mut self.topics);
-        for (k, st) in &topics {
+        let mut topics = core::mem::take(&mut self.topics);
+        for (k, st) in &mut topics {
             if !st.sub {
                 continue;
             }
+            st.end_wait();
             if let Some(o) = old.filter(|o| **o != self.me && h.hub_up(o))
                 && wire::build(&mut self.scratch, ty::UNSUB, k, &[]).is_ok()
             {
@@ -259,6 +266,28 @@ impl Topics {
         if asked && wall.saturating_sub(GAP_SPAN / 1_000_000) <= self.last_gap_wall {
             self.last_gap_wall = wall;
         }
+    }
+
+    /// A member whose hub could not hold a subscription asks again for every topic whose wait is due. With the hub
+    /// down nothing is sent: the next session's [`Topics::resubscribe`] asks and starts the wait over.
+    pub(crate) fn sub_wait_retry<H: Host>(&mut self, h: &mut H, now: Nanos) {
+        if self.is_hub || !self.topics.values().any(|st| st.wait_at.is_some_and(|t| t <= now)) {
+            return;
+        }
+        let up = self.primary.filter(|p| *p != self.me && h.hub_up(p));
+        let wall = h.wall_ms();
+        let mut topics = core::mem::take(&mut self.topics);
+        for (k, st) in &mut topics {
+            if st.wait_at.is_some_and(|t| t <= now) {
+                st.wait_at = None;
+                if st.sub
+                    && let Some(p) = up
+                {
+                    self.send_sub(h, &p, k, wall, false, st.held(&p));
+                }
+            }
+        }
+        self.topics = topics;
     }
 
     /// Hub-to-hub HAVE: tell the other hubs the ids logged in `[-30 s, -1 s]`.
@@ -335,16 +364,17 @@ impl Topics {
             .then(|| rest.get(9..).and_then(read_ver).map(|(v, _)| v))
             .flatten();
         if !self.ensure_topic(topic) {
+            self.refuse_sub(h, from, topic, SubRefusal::Topics);
             return;
         }
         let Some(st) = self.topics.get_mut(topic) else {
             return;
         };
-        let changed = if st.subs.contains_key(from) || st.subs.len() < TABLE_MAX {
-            st.subs.insert(*from, true) != Some(true)
-        } else {
-            false
-        };
+        if !st.subs.contains_key(from) && st.subs.len() >= TABLE_MAX {
+            self.refuse_sub(h, from, topic, SubRefusal::Subscribers);
+            return;
+        }
+        let changed = st.subs.insert(*from, true) != Some(true);
         // The member becomes a live subscriber, or a new life of it replays from its floor, and asks from a time the
         // hub cannot serve in full: the log dropped a message logged since then, or the time lies after a message the
         // hub owed a subscriber whose session ended and before the hub forgot that place, so the answer does not
@@ -412,6 +442,19 @@ impl Topics {
         if changed || fresh.is_some() {
             self.announce_topic(h, topic, changed, fresh);
         }
+    }
+
+    /// Tell `from` the hub cannot hold its subscription to `topic`: one frame of the reused scratch, nothing allocated.
+    fn refuse_sub<H: Host>(&mut self, h: &mut H, from: &NodeId, topic: &[u8], why: SubRefusal) {
+        self.rejects.note_sub_refused(why);
+        if wire::build(&mut self.scratch, ty::SUBS, topic, &[&[HUB_FULL]]).is_ok() {
+            h.send(from, Lane::Reply, &self.scratch);
+        }
+        self.trace(|| Trace::SubRefused {
+            member: *from,
+            topic: topic_tag(topic),
+            why,
+        });
     }
 
     /// An UNSUB at a hub.

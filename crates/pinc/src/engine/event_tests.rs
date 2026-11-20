@@ -240,3 +240,29 @@ fn trace_events() {
     }
     write_trace("facade_events.ndjson", &text);
 }
+
+/// A hub-full notice is told for a topic this endpoint joined, and for no other.
+#[test]
+fn a_hub_full_notice_is_told_for_a_joined_topic_only() {
+    let mut c = core();
+    let topic = b"full".to_vec();
+    c.on_node_event(
+        1,
+        NodeEvent::HubFull {
+            hub: [1; 32],
+            topic: topic.clone(),
+        },
+    );
+    assert!(c.events.is_empty());
+    c.topics.insert(topic.clone(), Vec::new());
+    c.on_node_event(
+        1,
+        NodeEvent::HubFull {
+            hub: [1; 32],
+            topic: topic.clone(),
+        },
+    );
+    let hub = c.node.full_id(&[1; 32]);
+    assert_eq!(c.events.pop_front(), Some(Event::HubFull { topic, hub }));
+    assert!(c.events.is_empty());
+}

@@ -92,12 +92,15 @@ reject_positions! {
     10 => NotAllowed,
 }
 
-/// How many messages each [`Reject`] reason turned away, and how many long walks the id tables made. Counted whether or
-/// not tracing is on ([`Topics::reject_stats`](crate::Topics::reject_stats)).
+/// How many messages each [`Reject`] reason turned away, how many long walks the id tables made, and how many
+/// subscriptions a hub could not hold ([`RejectStats::sub_refused`]) and how many such notices a member heard. Counted
+/// whether or not tracing is on ([`Topics::reject_stats`](crate::Topics::reject_stats)).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct RejectStats {
     counts: [u64; Reject::ALL.len()],
     long_walks: u64,
+    sub_refused: [u64; 2],
+    hub_full_seen: u64,
 }
 
 impl RejectStats {
@@ -115,6 +118,28 @@ impl RejectStats {
     /// is rare, so a count that grows says a sender knows the key.
     pub const fn long_walks(&self) -> u64 {
         self.long_walks
+    }
+
+    /// How many subscriptions a hub could not hold, for `why`.
+    pub fn sub_refused(&self, why: SubRefusal) -> u64 {
+        self.sub_refused.get(why as usize).copied().unwrap_or(0)
+    }
+
+    /// How many hub-full notices a member heard.
+    pub const fn hub_full_seen(&self) -> u64 {
+        self.hub_full_seen
+    }
+
+    #[cfg(feature = "alloc")]
+    pub(crate) fn note_sub_refused(&mut self, why: SubRefusal) {
+        if let Some(n) = self.sub_refused.get_mut(why as usize) {
+            *n = n.saturating_add(1);
+        }
+    }
+
+    #[cfg(feature = "alloc")]
+    pub(crate) const fn note_hub_full_seen(&mut self) {
+        self.hub_full_seen = self.hub_full_seen.saturating_add(1);
     }
 
     #[cfg(feature = "alloc")]
@@ -150,6 +175,17 @@ pub enum SubsDrop {
     Old,
     /// The topic table is full.
     TopicsFull,
+    /// A hub-full notice at a hub, from a node that is not this member's primary, or for a topic it does not subscribe to.
+    NotAsked,
+}
+
+/// Why a hub could not hold a subscription.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubRefusal {
+    /// Its topic table is full.
+    Topics,
+    /// The topic has `TABLE_MAX` subscribers.
+    Subscribers,
 }
 
 /// Why a message waits.
@@ -311,6 +347,22 @@ pub enum Trace {
     },
     /// A member heard that its subscription was restored.
     RestoredSeen {
+        /// The hub.
+        hub: NodeId,
+        /// The topic.
+        topic: Tag,
+    },
+    /// A hub could not hold a member's subscription and told it.
+    SubRefused {
+        /// The member.
+        member: NodeId,
+        /// The topic.
+        topic: Tag,
+        /// Why.
+        why: SubRefusal,
+    },
+    /// A member heard that its hub cannot hold its subscription.
+    HubFullSeen {
         /// The hub.
         hub: NodeId,
         /// The topic.

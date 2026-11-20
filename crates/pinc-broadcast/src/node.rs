@@ -34,7 +34,8 @@ pub struct Limits {
     pub max_body: usize,
     /// The bytes of message data (heads and bodies) one topic log holds on a hub.
     pub log_bytes: usize,
-    /// The most topics the node tracks.
+    /// The most topics the node tracks at once. On a hub it covers its own topics and every member's together: past it
+    /// a member's join is answered with `Event::HubFull` at the member, which asks again until the hub has room.
     pub max_topics: usize,
     /// The most subscribers the node learns or announces per topic.
     pub max_subscribers: usize,
@@ -177,6 +178,11 @@ pub(crate) struct Topic {
     pub(crate) sub: bool,
     /// Member: a hub's subscriber set listed this node since it last subscribed.
     pub(crate) confirmed: bool,
+    /// Member: the hub could not hold this subscription; when to ask again, `None` while an ask is out or nothing
+    /// waits.
+    pub(crate) wait_at: Option<Nanos>,
+    /// Member: how many notices this wait met, 0 when none; at most 6.
+    pub(crate) wait_step: u8,
     /// Hub: subscribed members; the flag is false while a member's subscriptions are held.
     pub(crate) subs: BTreeMap<NodeId, bool>,
     /// Hub: the subscribers the other hubs reported.
@@ -223,6 +229,8 @@ impl Topic {
         Self {
             sub: false,
             confirmed: false,
+            wait_at: None,
+            wait_step: 0,
             subs: BTreeMap::new(),
             rsubs: BTreeMap::new(),
             pubs: BTreeSet::new(),
@@ -241,6 +249,12 @@ impl Topic {
             requested: BTreeSet::new(),
             refused: false,
         }
+    }
+
+    /// The wait for room at the hub is over: the hub took the subscription, or this node asks anew.
+    pub(crate) fn end_wait(&mut self) {
+        self.wait_at = None;
+        self.wait_step = 0;
     }
 
     /// The hub owed a subscriber something of this topic logged at `from_ms` or later (0: something the log no

@@ -58,6 +58,14 @@ pub const TABLE_MAX: usize = 4096;
 pub const ORIGIN_MAX: usize = 128;
 /// A subscribing member asks for the log back to this long before its last received message (milliseconds).
 pub const RESUB_BACK_MS: u64 = 15_000;
+/// A member whose hub could not hold its subscription asks again this long after the first notice; room freed by an
+/// unsubscribe is caught within seconds.
+// vertexia: fixed backoff and TABLE_MAX; settings with #686.
+pub const SUB_WAIT_FIRST: Nanos = 2 * S;
+/// Each further notice doubles the wait up to this, about [`GAP_LIVE`]: a waiting topic costs a hub at most a SUB and a
+/// notice a minute.
+pub const SUB_WAIT_MAX: Nanos = 64 * S;
+const _: () = assert!(SUB_WAIT_FIRST <= SUB_WAIT_MAX);
 /// A message older than this before the node started is not new (milliseconds).
 pub const OLD_SLACK_MS: u64 = 2_000;
 

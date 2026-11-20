@@ -101,6 +101,15 @@ pub enum Event<'a> {
         /// The topic.
         topic: &'a [u8],
     },
+    /// Member: the hub cannot hold this node's subscription to the topic now: it holds as many topics, or as many
+    /// subscribers of the topic, as it can. The node stays subscribed and asks again, after 2 s and then up to every
+    /// 64 s, until `Subscribed`. Once per wait.
+    HubFull {
+        /// The hub.
+        hub: &'a NodeId,
+        /// The topic.
+        topic: &'a [u8],
+    },
     /// A message was sent straight to a subscriber because no hub is reachable.
     Fallback {
         /// The topic.

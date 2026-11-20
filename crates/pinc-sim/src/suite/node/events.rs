@@ -170,6 +170,7 @@ impl Core {
                 | NEv::GapRepaired { .. }
                 | NEv::Fallback { .. }
                 | NEv::Restored { .. }
+                | NEv::HubFull { .. }
                 | NEv::Subscribed { .. }
                 | NEv::ReachRefused { .. }
                 | NEv::ReachClosed

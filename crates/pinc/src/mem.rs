@@ -119,7 +119,8 @@ pub struct Limits {
     /// a burst larger than the log loses its oldest messages for a subscriber that could not keep up. The memory is
     /// taken as a topic's log fills.
     pub topic_log: usize,
-    /// The most topics the endpoint tracks at once.
+    /// The most topics the endpoint tracks at once. On a hub it covers its own topics and every member's together: past
+    /// it a member's join is answered with `Event::HubFull` at the member, which asks again until the hub has room.
     pub topics: usize,
 }
 

@@ -1,11 +1,13 @@
-//! Trace generation for a hub's subscription table: the real `Topics` machines of a hub, three members that
-//! subscribe to two topics and a publisher, driven through the broadcast harness with the probe of the `trace` feature
+//! Trace generation for a hub's subscription table: the real `Topics` machines of a hub whose topic table holds two
+//! topics, three members that subscribe to them, a fourth member that joins a third topic the hub has no room for, and
+//! a publisher, driven through the broadcast harness with the probe of the `trace` feature
 //! of `pinc-broadcast` that reads a member's subscription at the hub (live, held or none). The actions are the model's:
 //! a member subscribes and unsubscribes (`sub`, `unsub`), membership holds a member's subscriptions while its session
 //! is down, gives them back (`restore`, the hub tells the member which topics are live again) or drops them for good
 //! (`release`), and the publisher pushes (`push`, the hub hands the message to every live subscription). Every event is
 //! a line of `bcast/subs.ndjson` for the TLA+ trace check (`TraceBroadcastSubs.tla`): the action and the whole table
-//! after it; a restore also carries the topics the hub told, a push the members it reached.
+//! after it (three topics, four members); a restore also carries the topics the hub told, a push the members it
+//! reached, and a `notice` the join the hub could not hold and answered with the hub-full notice.
 //!
 //! The scripted run makes each case the model names; a seeded run of 300 actions follows on the same hub. The test
 //! asserts the facts it relies on itself: a held subscription gets no push, a push reaches exactly the live ones, a
@@ -25,13 +27,17 @@ mod common;
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
-use common::{Net, SEC, ty};
+use common::{Ev, Net, SEC, ty};
 use pinc_crypto::IdentityAlg;
 use pinc_tests::SplitMix64;
 
-/// The topic named `t` (1 or 2) in the model.
+/// The topic named `t` (1 to 3) in the model.
 fn topic(t: u8) -> &'static [u8] {
-    if t == 1 { b"t1" } else { b"t2" }
+    match t {
+        1 => b"t1",
+        2 => b"t2",
+        _ => b"t3",
+    }
 }
 
 fn nums(v: &[usize]) -> String {
@@ -53,7 +59,7 @@ impl World {
 
     fn event(&mut self, op: &str, keys: &str) {
         let row = |t: u8| {
-            let cells: Vec<String> = (1..=3)
+            let cells: Vec<String> = (1..=4)
                 .map(|m| match self.state(t, m) {
                     None => "\"none\"".to_owned(),
                     Some(true) => "\"live\"".to_owned(),
@@ -62,7 +68,7 @@ impl World {
                 .collect();
             format!("[{}]", cells.join(","))
         };
-        let subs = format!("[{},{}]", row(1), row(2));
+        let subs = format!("[{},{},{}]", row(1), row(2), row(3));
         let _ = writeln!(self.out, r#"{{"t":"subs","op":"{op}"{keys},"subs":{subs}}}"#);
     }
 
@@ -76,6 +82,20 @@ impl World {
         assert!(self.mine.remove(&(m, t)), "member {m} does not hold topic {t}");
         self.net.unsubscribe(m, topic(t));
         self.event("unsub", &format!(r#","m":{m},"topic":{t}"#));
+    }
+
+    /// Member `m` joins topic `t`, which the hub has no room for: the hub holds nothing and tells the member.
+    fn notice(&mut self, m: usize, t: u8) {
+        assert!(self.mine.insert((m, t)), "member {m} already holds topic {t}");
+        let before = self.net.events(m).len();
+        self.net.subscribe(m, topic(t));
+        assert_eq!(self.state(t, m), None, "the hub took a subscription it had no room for");
+        let told = self.net.events(m)[before..]
+            .iter()
+            .filter(|e| matches!(e, Ev::HubFull { topic: x, .. } if x == topic(t)))
+            .count();
+        assert_eq!(told, 1, "the member was not told the hub is full");
+        self.event("notice", &format!(r#","m":{m},"topic":{t}"#));
     }
 
     fn hold(&mut self, m: usize) {
@@ -127,7 +147,7 @@ impl World {
         let live: Vec<usize> = (1..=3).filter(|m| self.state(t, *m) == Some(true)).collect();
         let held: Vec<usize> = (1..=3).filter(|m| self.state(t, *m) == Some(false)).collect();
         let before = self.net.log.len();
-        self.net.publish(4, topic(t), b"p");
+        self.net.publish(5, topic(t), b"p");
         let pushed: BTreeSet<usize> = self.net.log[before..]
             .iter()
             .filter(|(_, from, to, fty, _)| *from == 0 && (1..=3).contains(to) && *fty == ty::MSG)
@@ -173,6 +193,8 @@ fn scripted(w: &mut World) {
     w.sub(1, 2);
     w.push(1);
     w.push(2);
+    w.notice(4, 3);
+    w.unsub(4, 3);
 }
 
 fn seeded(w: &mut World) {
@@ -206,10 +228,23 @@ fn seeded(w: &mut World) {
     }
 }
 
+/// A hub whose table holds two topics, members 1 to 4 and the publisher (node 5), all attached to the hub.
+fn net() -> Net {
+    let limits = pinc_broadcast::Limits {
+        max_topics: 2,
+        ..pinc_broadcast::Limits::default()
+    };
+    let mut net = Net::with_limits(&[IdentityAlg::Ed25519; 6], 1, SEC, limits);
+    for i in 1..=5 {
+        net.attach(i);
+    }
+    net
+}
+
 #[test]
 fn subs_trace() {
     let mut w = World {
-        net: Net::new(IdentityAlg::Ed25519, 1, 4, SEC),
+        net: net(),
         mine: BTreeSet::new(),
         out: String::new(),
     };

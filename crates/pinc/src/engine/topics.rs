@@ -69,6 +69,12 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
                     self.push_event(Event::Joined { topic, hub });
                 }
             }
+            NodeEvent::HubFull { hub, topic } => {
+                if self.topics.contains_key(&topic) {
+                    let hub = self.node.full_id(&hub);
+                    self.push_event(Event::HubFull { topic, hub });
+                }
+            }
             NodeEvent::Restored { hub, topic } => {
                 if self.topics.contains_key(&topic) {
                     let hub = self.node.full_id(&hub);

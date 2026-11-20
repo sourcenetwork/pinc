@@ -223,6 +223,10 @@ impl<E: Ep, St: Store> BcHost for Bc<'_, E, St> {
                 hub: *hub,
                 topic: topic.to_vec(),
             },
+            BcEvent::HubFull { hub, topic } => NodeEvent::HubFull {
+                hub: *hub,
+                topic: topic.to_vec(),
+            },
             BcEvent::Restored { hub, topic } => NodeEvent::Restored {
                 hub: *hub,
                 topic: topic.to_vec(),

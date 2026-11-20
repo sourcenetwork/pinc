@@ -69,6 +69,10 @@ pub enum Ev {
         hub: NodeId,
         topic: Vec<u8>,
     },
+    HubFull {
+        hub: NodeId,
+        topic: Vec<u8>,
+    },
     Acp {
         id: u32,
         origin: NodeId,
@@ -190,6 +194,10 @@ impl Host for NodeHost {
                 topic: topic.to_vec(),
             },
             Event::Subscribed { hub, topic } => Ev::Subscribed {
+                hub: *hub,
+                topic: topic.to_vec(),
+            },
+            Event::HubFull { hub, topic } => Ev::HubFull {
                 hub: *hub,
                 topic: topic.to_vec(),
             },
@@ -551,6 +559,7 @@ impl Net {
             | Ev::Fallback { topic: t, .. }
             | Ev::Restored { topic: t, .. }
             | Ev::Subscribed { topic: t, .. }
+            | Ev::HubFull { topic: t, .. }
             | Ev::Acp { topic: t, .. } => t == topic,
             _ => false,
         })

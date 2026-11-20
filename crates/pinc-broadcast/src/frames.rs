@@ -25,7 +25,7 @@ impl Topics {
             ty::UNSUB => self.on_unsub(h, from, topic),
             ty::HAVE => self.on_have(h, now, from, topic, rest),
             ty::GET => self.on_get(h, from, topic, rest),
-            ty::SUBS => self.on_subs(h, from, topic, rest),
+            ty::SUBS => self.on_subs(h, now, from, topic, rest),
             ty::RESTORED => self.on_restored(h, from, topic),
             ty::ADJ => self.on_adj(h, now, from, rest),
             _ => {}

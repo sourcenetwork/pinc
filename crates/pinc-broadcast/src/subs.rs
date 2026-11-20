@@ -17,7 +17,9 @@
 //! are sent the hub's local set whole, when it changes. Deltas keep the bytes a change costs a recipient independent
 //! of the number of subscribers: the whole list on every change made the join of `n` subscribers cost `n` lists of up
 //! to `max_subscribers` nodes on every session. A SUBS frame that changes nothing is traced with why
-//! ([`Trace::SubsDropped`]).
+//! ([`Trace::SubsDropped`]). A hub that cannot hold a member's SUB (its topic table is full, or the topic has
+//! `TABLE_MAX` subscribers) answers it with a SUBS frame of kind [`HUB_FULL`], which the member turns into one
+//! [`Event::HubFull`] and answers by asking again on a backoff (`gap.rs`).
 //!
 //! Invariants: a list holds at most `max_subscribers` nodes in id order, so two hubs with the same tables send the
 //! same bytes; `told` is the list built from the tables after every change, and `(incarnation, told_seq)` its
@@ -31,9 +33,9 @@
 
 use alloc::collections::BTreeSet;
 use alloc::vec::Vec;
-use pinc_membership::NodeId;
+use pinc_membership::{Nanos, NodeId};
 
-use crate::consts::TABLE_MAX;
+use crate::consts::{SUB_WAIT_FIRST, SUB_WAIT_MAX, TABLE_MAX};
 use crate::event::{SubsDrop, Trace, topic_tag};
 use crate::host::{Event, Host, Lane};
 use crate::node::{Topic, Topics};
@@ -49,6 +51,16 @@ pub(crate) const FULL: u8 = 0;
 pub(crate) const DELTA: u8 = 1;
 /// A SUBS frame from a member: send me the whole list.
 pub(crate) const ASK: u8 = 2;
+/// A SUBS frame from a hub: it cannot hold this member's subscription (its topic table is full, or the topic has
+/// `TABLE_MAX` subscribers); empty.
+pub(crate) const HUB_FULL: u8 = 3;
+
+/// How long a member waits before asking again, after its `step`th notice of one wait: 2 s, doubling to 64 s.
+fn sub_wait(step: u8) -> Nanos {
+    SUB_WAIT_FIRST
+        .saturating_mul(1 << (step.max(1) - 1).min(5))
+        .min(SUB_WAIT_MAX)
+}
 
 /// A list's version: the hub's incarnation and the number of the change.
 pub(crate) type Ver = (u64, u32);
@@ -424,8 +436,8 @@ impl Topics {
     /// remembers which hub sent it and its version; it applies a delta only from that hub and only on the version it
     /// holds. A delta on any other base means the member missed a change: it applies nothing, waits for a whole list
     /// (deltas meanwhile are ignored) and asks the hub for one.
-    pub(crate) fn on_subs<H: Host>(&mut self, h: &mut H, from: &NodeId, topic: &[u8], rest: &[u8]) {
-        if let Some(why) = self.take_subs(h, from, topic, rest) {
+    pub(crate) fn on_subs<H: Host>(&mut self, h: &mut H, now: Nanos, from: &NodeId, topic: &[u8], rest: &[u8]) {
+        if let Some(why) = self.take_subs(h, now, from, topic, rest) {
             self.trace(|| Trace::SubsDropped {
                 from: *from,
                 topic: topic_tag(topic),
@@ -436,7 +448,14 @@ impl Topics {
 
     /// [`Topics::on_subs`] but the trace: why the frame changed nothing, if it did not. Every field the sender
     /// controls is checked before any state changes; an off-base change still asks for the whole list.
-    fn take_subs<H: Host>(&mut self, h: &mut H, from: &NodeId, topic: &[u8], rest: &[u8]) -> Option<SubsDrop> {
+    fn take_subs<H: Host>(
+        &mut self,
+        h: &mut H,
+        now: Nanos,
+        from: &NodeId,
+        topic: &[u8],
+        rest: &[u8],
+    ) -> Option<SubsDrop> {
         let Some((kind, rest)) = rest.split_first() else {
             return Some(SubsDrop::Malformed);
         };
@@ -448,6 +467,9 @@ impl Topics {
             st.stale.insert(*from);
             flush_stale(h, &mut self.scratch, &mut self.owed, topic, st, Some(from), self.inc);
             return None;
+        }
+        if *kind == HUB_FULL {
+            return self.on_hub_full(h, now, from, topic);
         }
         if !self.is_boot(from) {
             return Some(SubsDrop::NotHub);
@@ -532,6 +554,34 @@ impl Topics {
         }
     }
 
+    /// A hub-full notice: the member's primary cannot hold its subscription. The first notice of a wait raises
+    /// [`Event::HubFull`]; each notice moves the next ask out along the backoff, unless an ask is not out (the
+    /// schedule stands). The hub does not hold the subscription now, so the next list that names this node raises
+    /// `Subscribed` again.
+    fn on_hub_full<H: Host>(&mut self, h: &mut H, now: Nanos, from: &NodeId, topic: &[u8]) -> Option<SubsDrop> {
+        let primary = self.primary;
+        let asked = !self.is_hub && primary == Some(*from) && self.topics.get(topic).is_some_and(|st| st.sub);
+        let Some(st) = self.topics.get_mut(topic).filter(|_| asked) else {
+            return Some(SubsDrop::NotAsked);
+        };
+        let first = st.wait_step == 0;
+        let scheduled = st.wait_at.is_some();
+        if !scheduled {
+            st.wait_step = st.wait_step.saturating_add(1).min(6);
+            st.wait_at = Some(now.saturating_add(sub_wait(st.wait_step)));
+            st.confirmed = false;
+        }
+        self.rejects.note_hub_full_seen();
+        self.trace(|| Trace::HubFullSeen {
+            hub: *from,
+            topic: topic_tag(topic),
+        });
+        if first {
+            h.event(Event::HubFull { hub: from, topic });
+        }
+        None
+    }
+
     /// A RESTORED frame: the hub made this member's held subscription live again.
     pub(crate) fn on_restored<H: Host>(&mut self, h: &mut H, from: &NodeId, topic: &[u8]) {
         if self.is_boot(from) && !self.is_hub {
@@ -561,6 +611,7 @@ fn ask<H: Host>(h: &mut H, scratch: &mut Vec<u8>, hub: &NodeId, topic: &[u8]) {
 fn confirm<H: Host>(h: &mut H, st: &mut Topic, from: &NodeId, topic: &[u8], me: &NodeId) {
     if st.sub && !st.confirmed && st.peers.contains(me) {
         st.confirmed = true;
+        st.end_wait();
         h.event(Event::Subscribed { hub: from, topic });
     }
 }

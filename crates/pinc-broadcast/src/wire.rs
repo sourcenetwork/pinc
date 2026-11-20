@@ -40,7 +40,8 @@ pub mod ty {
     pub const MEMBER_PUSH: u8 = 17;
     /// The subscribers of a topic, replicated by the hubs, `version` being the hub's incarnation (8 bytes) and the
     /// list's number (4): `0 | version | count | ids` (the whole list), `1 | version | count | added ids | count |
-    /// removed ids` (the change from the version before), or `2` from a member (send me the whole list).
+    /// removed ids` (the change from the version before), `2` from a member (send me the whole list), or `3` from a hub (it
+    /// cannot hold this member's subscription).
     pub const SUBS: u8 = 18;
     /// A hub tells a member its held subscriptions of a topic are live again.
     pub const RESTORED: u8 = 19;

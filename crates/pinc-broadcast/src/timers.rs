@@ -1,5 +1,5 @@
 //! Timers: publish retries, the expiry of the dedupe sets and the logs, the hub-to-hub id exchange, the periodic gap
-//! check, the end of the floor gathering, and telling a hub whose own publish found no room to publish again.
+//! check, a member's new ask of a hub that could not hold its subscription, the end of the floor gathering, and telling a hub whose own publish found no room to publish again.
 //!
 //! The host asks [`Topics::poll_timeout`] for the next deadline and calls [`Topics::on_timer`] when it passes (or
 //! sooner; every call is safe at any time). Deadlines are exact: a retry is due [`PUB_RETRY`] after the previous
@@ -34,6 +34,9 @@ impl Topics {
             if !self.is_hub && st.sub {
                 soon(self.next_gap);
             }
+            if let Some(t) = st.wait_at {
+                soon(t);
+            }
         }
         if self.gather.gathering() {
             soon(self.born.saturating_add(FLOOR_WAIT).saturating_add(1));
@@ -53,6 +56,7 @@ impl Topics {
         self.sweep(now);
         self.hub_ae(h, now);
         self.gap_ae(h, now);
+        self.sub_wait_retry(h, now);
         if self.gather.gathering() {
             self.floor_check(h, now);
         }

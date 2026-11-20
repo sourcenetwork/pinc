@@ -86,6 +86,14 @@ pub enum NodeEvent {
         /// The topic.
         topic: Vec<u8>,
     },
+    /// A hub cannot hold this node's subscription to a topic now; the node asks again until it can
+    /// (`pinc_broadcast::Event::HubFull`).
+    HubFull {
+        /// The hub.
+        hub: NodeId,
+        /// The topic.
+        topic: Vec<u8>,
+    },
     /// A hub told this node that messages of a topic may be missing: its held subscription is live again, the log
     /// dropped messages it was owed or asked for, or it subscribed again from a time the log no longer reaches back
     /// to (`pinc_broadcast::Event::Restored`).

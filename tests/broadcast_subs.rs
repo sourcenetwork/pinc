@@ -614,3 +614,47 @@ fn a_removal_past_the_cut_of_a_member_with_a_lower_limit_asks_for_nothing() {
     );
     assert_eq!(net.nodes[member].t.known_subscribers(T), held.as_slice());
 }
+
+/// A hub-full notice is taken only from the member's primary, for a topic the member subscribes to: from another hub, a
+/// member, or for a topic not subscribed, it changes nothing, raises no event and makes no ask.
+#[test]
+fn a_forged_hub_full_notice_changes_nothing() {
+    let mut net = Net::new(IdentityAlg::Ed25519, 2, 2, SEC);
+    net.subscribe(2, T);
+    net.run_until(2 * SEC);
+    let full = |net: &Net, i: usize| {
+        net.events(i)
+            .iter()
+            .filter(|e| matches!(e, common::Ev::HubFull { .. }))
+            .count()
+    };
+    assert_eq!(inject(&mut net, 1, 2, &[3]), [SubsDrop::NotAsked]);
+    assert_eq!(inject(&mut net, 3, 2, &[3]), [SubsDrop::NotAsked]);
+    assert_eq!(inject(&mut net, 0, 3, &[3]), [SubsDrop::NotAsked]);
+    let asks = net.count_between(2, 0, ty::SUB);
+    net.advance(10 * SEC);
+    assert_eq!((full(&net, 2), full(&net, 3)), (0, 0));
+    assert_eq!(
+        net.count_between(2, 0, ty::SUB),
+        asks,
+        "no ask followed a forged notice"
+    );
+    assert_eq!(inject(&mut net, 0, 2, &[3]), []);
+    assert_eq!(full(&net, 2), 1);
+}
+
+/// A SUBS kind this build does not know is dropped as malformed and harms nothing: the path an older library takes
+/// for the hub-full notice.
+#[test]
+fn an_unknown_subs_kind_is_dropped_and_harms_nothing() {
+    let mut net = Net::new(IdentityAlg::Ed25519, 1, 2, SEC);
+    net.subscribe(1, T);
+    net.run_until(2 * SEC);
+    let before = net.events(1).len();
+    assert_eq!(inject(&mut net, 0, 1, &[4]), [SubsDrop::Malformed]);
+    assert_eq!(inject(&mut net, 0, 1, &[4, 1, 2, 3]), [SubsDrop::Malformed]);
+    assert_eq!(net.events(1).len(), before);
+    net.publish(2, T, b"still");
+    net.advance(SEC);
+    assert!(net.bodies(1).contains(&b"still".to_vec()));
+}
