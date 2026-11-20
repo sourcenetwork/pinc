@@ -11,3 +11,7 @@ par run_tlc keystore_template KeystoreTemplate KeystoreTemplate
 par witness_tlc keystore_template_nofixed KeystoreTemplate KeystoreTemplate_nofixed Fixed
 par run_tlc keystore_refresh KeystoreRefresh KeystoreRefresh
 par witness_tlc keystore_refresh_mix KeystoreRefresh KeystoreRefresh_mix NeverReseeded
+par run_tlc keystore_slots KeystoreSlots KeystoreSlots
+par run_tlc keystore_slots_persist KeystoreSlots KeystoreSlots_persist
+par witness_tlc keystore_slots_w_unload KeystoreSlots KeystoreSlots_w_unload NeverUnloaded
+par witness_tlc keystore_slots_w_full KeystoreSlots KeystoreSlots_w_full NeverFull
