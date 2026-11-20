@@ -63,9 +63,10 @@ These items are still open; they are listed so nothing is hidden:
   not modelled). The
   known limitation of the model is the low-severity behaviour of a full table: a newly failing or shed peer has no
   entry and is redialed at every duty pass.
-- `pinc` address text (`addr.rs`): not modelled. `NodeAddr::parse (a.ticket ())` is not `a` for every relay string
-  `with_relay` accepts (a URL with a comma, one without `://`, an empty one), and `node_from_str` accepts a leading
-  `+` in a byte of the id; the models wait for the code or its documented invariant to be settled (an open issue).
+- `pinc` address text (`addr.rs`): `FacadeAddr.tla` checks the round trip of the ticket for every value built
+  through the API (`with_relay` refuses an empty URL, one without `://` and one with a comma; `node_from_str` takes
+  lowercase hex only); a node address made as a struct literal with relays `with_relay` refuses is outside it (the
+  witness `FacadeAddr_raw`).
 - `pinc-reconcile`: the refinement of the byte-level handlers to the abstract part system is proved for the split,
   the leaf rule, every part arm on an honest part and the frame, keep and round bounds, not end to end: that
   `answer` with its rollback, `turn`, the frames and the handlers carry exactly the honest parts of the abstract
@@ -128,15 +129,9 @@ These items are still open; they are listed so nothing is hidden:
   packets that were in flight (`detectLoop_lost_inflight`), and the acknowledgement loop to report an `acked` event
   only for a slot that was in flight in the ring the call found, with its number, size and frames, a `late` event
   only for a ghost of that ring, and no other event (`ackRing_events`, `ackRange1_events`, `ackRanges_events`).
-- Of the stream table, the send half (credit against the peer's window, the retransmission queue, source-backed
-  streams), urgency order and datagrams are not modelled; the send half appears only as the pool chunks it holds and
-  the state that frees a slot, plus its reset and the stop request. So a resend that never copies a released chunk's
-  slot is tested, not modelled: a lost range is cut to start after the acknowledged prefix (`Send::clip` in the
-  resend path), the tail repair cuts each frame it sends again the same way (`Streams::resend_from` in `fill_repair`),
-  and `Send::copy_out` refuses a chunk whose slot was released (`DataUnavailable`, the range queued again), checked by
-  `tests/transport_stream_ring.rs`, `tests/transport_ring_conn.rs` and `transport_stream_send`'s
-  `a_resend_starts_after_the_acknowledged_prefix`. The packet builder model takes the frames of a tail repair as the
-  stream layer gives them, cut so; the stream-table and packet-builder traces run the code with the cut.
+- Of the stream table, the send half (send credit, the retransmission queue with its cut to the acknowledged
+  prefix, the final size, source-backed streams) is modelled by `StreamSend.tla`: see its rows under
+  [Properties](properties.md), transport. Urgency order and datagrams are not modelled.
 - The stream-table TLC configs are kept to about a minute each on the check host, which cut them to: `Streams`
   (offsets up to 3 of a 8-byte cap, was 6 of 12), `Streams_caps` (two slots, ids 0, 4 and 8, frames at offsets up to 2,
   was 3, a clock that does not advance), `Streams_ext` (offsets up to 2 of a 6-byte cap, was 4 of 12, other users of

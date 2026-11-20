@@ -202,7 +202,7 @@ doctest:
 proofs:
     scripts/proofs.sh
 
-# The same with every model over its full bounds (the ones docs/PROOFS.md states). Hours of processor time.
+# The same with every model over its full bounds (the ones docs/proofs/properties.md states). Hours of processor time.
 proofs-deep:
     scripts/proofs.sh deep
 

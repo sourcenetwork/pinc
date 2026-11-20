@@ -5,7 +5,7 @@ By `scripts/proofs.sh` (the `== proofs` step of `scripts/gate.sh`):
   rejects `sorry`, `admit`, `axiom` and `native_decide` in the sources, and the build fails if any declaration of the
   package depends on an axiom beyond `propext`, `Classical.choice` and `Quot.sound` (`#audit_package`, plus a
   printed `#audit_axioms` line for every main theorem).
-- **TLC** model checks every TLA+ config in `proofs/tla` over the bounds in the table. TLC integers are 32 bits wide,
+- **TLC** model checks every TLA+ config in `proofs/tla` over the bounds of its profile (below). TLC integers are 32 bits wide,
   so the specifications of the machine-integer code (`Varint`, `Layout`, `Encoder`, `BuilderBytes`, `VerifierBytes`)
   write every `u64` and `usize` as a word of five 16-bit limbs (`U64.tla`). Each operation of the Rust code has an
   operator with the semantics of the code: a plain `+`, `-`, `*`, `<<`, `>>`, `/` or `%` that overflows, underflows,
@@ -16,7 +16,7 @@ By `scripts/proofs.sh` (the `== proofs` step of `scripts/gate.sh`):
   root has one successor per seed, so all workers generate and check cases at once; the byte-level specifications
   (`BuilderBytes`, `VerifierBytes`) are machines that feed pieces, so TLC explores every split.
 - **The link between the two languages.** Each specification names, in its header, the Lean theorems it
-  corresponds to, and the table below gives the specification and the theorem side by side. The boundary sets are the
+  corresponds to, and the [property table](properties.md) gives the specification and the theorem side by side. The boundary sets are the
   same on both sides: for every `j` in `0..64` the values `2^j - 1`, `2^j` and `2^j + 1`, the byte classes, the
   addends of `encoded_len`, the group buffer sizes, the shapes of the paths in a tree of `2^54` groups and the
   completed-group counts of the builder. `proofs/lean/Pinc/Link.lean` evaluates the Lean models of the code on
@@ -151,7 +151,13 @@ By `scripts/proofs.sh` (the `== proofs` step of `scripts/gate.sh`):
   seed of the first mismatch (with `-k n` it also runs the TLC trace checks every `n` iterations); a trace test's
   assertions that its fixed seeds reach every branch are skipped under a moved seed. `scripts/trace-cov.sh` (`just
   trace-cov`) measures what the trace tests alone run of the library crates, and lists the uncovered lines (with
-  `BRANCH=1`, branches) of the items named in the tables below.
+  `BRANCH=1`, branches) of the items named in the tables of [Properties](properties.md).
+
+Profiles: `just proofs` runs the quick profile, the default: a model with a file under `proofs/tla/quick/` is checked
+over the smaller bounds of that file (the same specification and properties; [the quick profile](quick.md) lists every
+such file and what its bounds no longer reach), one worker per check and one check per processor. `just proofs-deep`
+(`scripts/proofs.sh deep`) checks every model over the bounds [Properties](properties.md) states, with every processor
+for each of three checks at a time; it takes hours of processor time and is not part of the gate.
 
 Tools: Lean 4 and Lake, TLC on `PATH` as `tlc`, Java, and for the trace check and the model-based tests a TLC of the
 same era as the [CommunityModules](https://github.com/tlaplus/CommunityModules) jar (the gate prints the download

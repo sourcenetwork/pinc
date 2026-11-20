@@ -12,7 +12,7 @@ record, amplification budget and padding, ticket stores), `pinc-membership`, `pi
 items under [Being closed](proofs/closing.md). A model that is known to state an older rule than the code is listed in
 [#601](https://github.com/sourcenetwork/pinc/issues/601) until it is corrected: a green check of such a model says
 nothing about the rule that changed.
-Run everything with `just proofs`.
+Run everything with `just proofs` (the quick profile) or `just proofs-deep` (the full bounds).
 
 ## Parts
 
@@ -20,5 +20,7 @@ Run everything with `just proofs`.
   validation and the model-based tests, and the tools they need.
 - [Properties](proofs/properties.md): one row per property, with the Rust item, the TLA+ model and its bounds, the
   Lean theorem, the assumptions and the trace validation.
+- [The quick profile](proofs/quick.md): the smaller bounds `just proofs` checks, model by model, and what each
+  no longer reaches; `just proofs-deep` checks the full bounds.
 - [Assumptions](proofs/assumptions.md): what is taken on trust.
 - [Being closed](proofs/closing.md): what is still open.
