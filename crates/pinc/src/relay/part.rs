@@ -131,8 +131,12 @@ impl<C: Carriers, K: KeyStore, St: Store, A: Access> Part<C, K, St, A> {
         self.restored
     }
 
-    /// Put what the store kept back: the records and the packets held for sleeping members.
+    /// Put what the store kept back: the records and the packets held for sleeping members. It does nothing once it
+    /// ran ([`Part::restored`]), so a host that loads and restores at the start of every run holds no packet twice.
     pub fn restore(&mut self, now: u64, kept: &Kept) {
+        if self.restored {
+            return;
+        }
         self.restored = true;
         self.core.restore(now, kept);
     }
@@ -522,6 +526,33 @@ mod tests {
         );
         p.handle_timeout(T0 + SEC * 3 / 2);
         assert!(p.next_store_write().is_some(), "the retry did not come");
+    }
+
+    /// A second load and restore, as a host that drives the part itself makes at the start of every run, holds each
+    /// packet once.
+    #[test]
+    fn a_second_restore_holds_every_packet_once() {
+        let (mut p, _) = part(Flaky::default());
+        let member = NodeId {
+            alg: IdentityAlg::Ed25519,
+            bytes: [9; 32],
+        };
+        let mut blob = vec![IdentityAlg::Ed25519.tag()];
+        blob.extend_from_slice(&[4; 32]);
+        blob.push(7);
+        blob.extend_from_slice(&T0.to_be_bytes());
+        blob.extend_from_slice(&4u16.to_be_bytes());
+        blob.extend_from_slice(b"held");
+        let kept = Kept {
+            records: Vec::new(),
+            mailboxes: vec![(member, blob)],
+        };
+        for _ in 0..2 {
+            let loaded = done(p.load()).unwrap();
+            assert_eq!(loaded, Kept::default());
+            p.restore(T0, &kept);
+        }
+        assert_eq!(p.core.sm.mailbox_pending(&member).0, 1, "the packet is held twice");
     }
 
     #[test]
