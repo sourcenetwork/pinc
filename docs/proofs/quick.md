@@ -71,9 +71,19 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `BroadcastPush_notell` | LogCap 2 -> 1 |
 | `BroadcastPush_repair` | N 3 -> 2, LogCap 3 -> 2 (as in the deep config, the log never evicts) |
 | `BroadcastReach` | N 3 -> 2, TableBytes 12 -> 6 (still no table can overflow) |
+| `BroadcastReach_bytes` | TableBytes 5 -> 4 |
+| `BroadcastReach_evict` | MaxExpire 2 -> 1 |
 | `BroadcastReach_expire` | N 3 -> 2, TableBytes 12 -> 6 (still no table can overflow), MaxExpire 2 -> 1 |
+| `BroadcastReach_forget` | MaxExpire 2 -> 1 |
+| `BroadcastReach_full` | TableBytes 2 -> 1 |
 | `BroadcastReach_hubs3` | bounded by constraint: runs of at most 8 steps (BroadcastReach_hubs3QuickBound); every constant kept |
 | `BroadcastReach_liar` | N 3 -> 2, Liars {3} -> {2}, TableBytes 12 -> 6 (still no table can overflow) |
+| `BroadcastReach_onesided` | TableBytes 12 -> 10 |
+| `BroadcastReach_perevent` | TableBytes 6 -> 5 |
+| `BroadcastReach_reopen` | TableBytes 2 -> 1 |
+| `BroadcastReach_reopened` | TableBytes 4 -> 3 |
+| `BroadcastReach_repair` | TableBytes 6 -> 5 |
+| `BroadcastReach_silent` | TableBytes 2 -> 1 |
 | `BroadcastReach_table` | MaxExpire 2 -> 1; bounded by constraint: runs of at most 8 steps (BroadcastReach_tableQuickBound); TableBytes 7 as deep (a record is refused while two members hold an edge) |
 | `BroadcastRepair` | MaxTime 45 -> 30, Mids {1, 2, 3} -> {1, 2}, LogCap 2 -> 1 (two messages over a log of one: a push still evicts) |
 | `BroadcastRepair_ae` | MaxTime 45 -> 36 (the frame logged at 30 and the GAP_AE at 35 that covers it) |
