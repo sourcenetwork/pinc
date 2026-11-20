@@ -298,7 +298,39 @@ Locate(T, id) ==
             IN [t |-> T2, i |-> FindSlot(T2, id), err |-> "ok"]
 
 (* ---- on_data (recv.rs) ---- *)
+(* recv.rs discard: a stream given up whose end is known drops every byte held and counts as read to its end, as a
+   reset does but without one *)
+Discard(r) == IF r.fin # -1 /\ r.rst = -1
+              THEN [r EXCEPT !.read = r.fin, !.contig = r.fin, !.held = {}, !.rs = <<>>, !.obs = TRUE]
+              ELSE r
+
 OnData(T, r, off, len, fin, diff) ==
+    LET e == off + len
+        lo == Max(off, r.read)
+        first == lo \div CH
+        last == (e - 1) \div CH
+        missing == {k \in first..last : k \notin r.held}
+        ins == InsertR(r.rs, lo, e)
+        stored == [r EXCEPT !.held = r.held \cup (first..last), !.rs = ins.rs, !.contig = First0(ins.rs)]
+        store == IF lo >= e THEN [r |-> r, err |-> "ok"]
+                 ELSE IF last - r.read \div CH >= RING THEN [r |-> r, err |-> "FlowControl"]
+                 ELSE IF lo < r.hi /\ diff /\ Overlaps(r.rs, lo, e) THEN [r |-> r, err |-> "Conflict"]
+                 ELSE IF Cardinality(missing) > AvailC(T) THEN [r |-> r, err |-> "Exhausted"]
+                 ELSE IF ~ins.ok THEN [r |-> r, err |-> "Fragmented"]
+                 ELSE [r |-> stored, err |-> "ok"]
+        done0 == [store.r EXCEPT !.hi = Max(@, e), !.fin = IF fin THEN e ELSE @]
+        \* the end arriving on a stream asked to stop discards it (c0706819): nothing else would end it
+        done == IF fin /\ r.stop # 0 THEN Discard(done0) ELSE done0
+    IN IF e > MAXOFF THEN [r |-> r, err |-> "FlowControl"]
+       ELSE IF r.fin # -1 /\ (e > r.fin \/ (fin /\ e # r.fin)) THEN [r |-> r, err |-> "FinalSize"]
+       ELSE IF r.fin = -1 /\ fin /\ e < r.hi THEN [r |-> r, err |-> "FinalSize"]
+       ELSE IF e > r.limit THEN [r |-> r, err |-> "FlowControl"]
+       ELSE IF r.rst = -1 /\ store.err # "ok" THEN [r |-> r, err |-> store.err]
+       ELSE IF r.rst = -1 THEN [r |-> done, err |-> "ok"]
+       ELSE [r |-> [r EXCEPT !.hi = Max(@, e), !.fin = IF fin THEN e ELSE @], err |-> "ok"]
+
+\* the rule before c0706819 (the witness Streams_stop_w.cfg): the end arriving on a stream asked to stop is kept
+OnDataOld(T, r, off, len, fin, diff) ==
     LET e == off + len
         lo == Max(off, r.read)
         first == lo \div CH
@@ -450,9 +482,21 @@ AppReset(T, id, code, ext2) ==
         change == SendOpen(r) /\ r.srst = 0 /\ ~r.sdone
         T1 == IF change THEN [SetSlot(T, i, [r EXCEPT !.srst = 1, !.scode = code]) EXCEPT !.ext = ext2] ELSE T
     IN IF i = 0 THEN T ELSE Settle(T1, i)
-(* Streams::stop_sending: ask the peer to stop sending on a stream we receive on; queued once, nothing if the sender
-   already ended the stream *)
+(* Streams::stop_sending (table/giving_up.rs) and recv.rs request_stop: ask the peer to stop sending on a stream we
+   receive on, queued once; nothing if the sender reset the stream. A stream whose end already arrived is not asked: it
+   is discarded and settled, so it leaves the table once its send half is done and its place in the peer's limit is
+   given back (c0706819) *)
 StopReq(T, id, code) ==
+    LET i == FindSlot(T, id)
+        r == IF i = 0 THEN NewSlot ELSE T.slots[i]
+    IN IF i = 0 THEN [t |-> T, err |-> "UnknownStream"]
+       ELSE IF ~r.open THEN [t |-> T, err |-> "StreamState"]
+       ELSE IF r.rst # -1 THEN [t |-> T, err |-> "ok"]
+       ELSE IF r.fin # -1 THEN [t |-> Settle(SetSlot(T, i, Discard(r)), i), err |-> "ok"]
+       ELSE IF r.stop = 0 THEN [t |-> SetSlot(T, i, [r EXCEPT !.stop = 1, !.qcode = code]), err |-> "ok"]
+       ELSE [t |-> T, err |-> "ok"]
+\* the rule before c0706819 (the witness Streams_stop_w.cfg): a stream whose end arrived is left as it is
+StopReqOld(T, id, code) ==
     LET i == FindSlot(T, id)
         r == IF i = 0 THEN NewSlot ELSE T.slots[i]
     IN IF i = 0 THEN [t |-> T, err |-> "UnknownStream"]

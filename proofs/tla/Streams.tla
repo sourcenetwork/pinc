@@ -205,6 +205,31 @@ StopEndsWithCode == \A id \in Ids, c \in 0..1, e2 \in 0..T.ext : LET R == OnStop
     R.fresh => (FindSlot(R.t, id) # 0 /\ R.t.slots[FindSlot(R.t, id)].scode = c)
 \* a queued stop or reset carries a code
 CodesSet == \A i \in Live : (T.slots[i].stop \in {1, 2} => T.slots[i].qcode # -1) /\ (T.slots[i].srst \in {1, 2} => T.slots[i].scode # -1)
+\* a stream given up (stop_sending) after its end arrived, and one asked to stop whose end then arrives, is discarded
+\* (c0706819): it holds no bytes and counts as read to its end, so its receive half is done
+StoppedEndDiscarded == \A i \in Live : LET r == T.slots[i] IN
+    (r.open /\ r.stop # 0 /\ r.fin # -1 /\ r.rst = -1) => r.held = {} /\ r.rs = <<>> /\ r.read = r.fin /\ RecvDone(r)
+GiveUp(id) == LET i == FindSlot(T, id) IN i # 0 /\ T.slots[i].open /\ T.slots[i].rst = -1 /\ T.slots[i].fin # -1
+\* the stop request on such a stream: no bytes held, read to its end; the slot leaves at once exactly when the send half
+\* is done; the peer's limit gets back one place exactly when a counted peer stream is freed or released
+GiveUpDiscards == \A id \in Ids : GiveUp(id) =>
+    LET i == FindSlot(T, id)
+        R == StopReq(T, id, 7).t
+        j == FindSlot(R, id)
+        back == ~IsLocal(id) /\ T.slots[i].cnt /\ (j = 0 \/ ~R.slots[j].cnt)
+    IN /\ (j = 0) = SendDone(T.slots[i])
+       /\ j # 0 => /\ R.slots[j].held = {} /\ R.slots[j].rs = <<>> /\ R.slots[j].read = R.slots[j].fin
+                   /\ RecvDone(R.slots[j])
+       /\ R.rl = T.rl - (IF back THEN 1 ELSE 0)
+\* a stream done on both halves is not left in the table
+DoneFreed == \A i \in Live : ~(RecvDone(T.slots[i]) /\ SendDone(T.slots[i]))
+\* witness (Streams_stop_w.cfg, the rule before c0706819, must violate it): a stream whose end arrived with a hole and
+\* that is given up keeps its place: it is never read to its end, so it stays until the connection closes
+GiveUpHoleDiscards == \A id \in Ids :
+    (GiveUp(id) /\ T.slots[FindSlot(T, id)].contig < T.slots[FindSlot(T, id)].fin) =>
+        LET R == StopReq(T, id, 7).t
+            j == FindSlot(R, id)
+        IN j = 0 \/ RecvDone(R.slots[j])
 \* a window due to move was moved or deferred (credit follows consumption)
 NoMissedGrant == \A i \in Live : T.slots[i].open => (Due(T.slots[i]) = -1 \/ T.slots[i].defer)
 GrantFits(i) == LET r == T.slots[i]
