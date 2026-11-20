@@ -110,16 +110,17 @@ CheckRuns(bs, total, sl) ==
             ELSE LET n == U!Val(U!Sub(b, a))
                  IN IF Len(bs) - 16 < n THEN TRUE ELSE CheckRuns(Drop(bs, 16 + n), total, sl)
 
-\* take_runs: the runs taken and the torn tail left (rest), or ok FALSE
+\* take_runs: the runs taken and the torn tail left (rest), or ok FALSE; with fix N5 it reads each header with the
+\* parser check_runs uses (`next_run`): a header off the slices refuses even when its data is cut
 RECURSIVE TakeFrom(_, _, _, _)
 TakeFrom(bs, total, sl, acc) ==
     IF Len(bs) < 16 THEN [ok |-> TRUE, runs |-> acc, rest |-> bs]
     ELSE LET a == FromBe8(SubSeq(bs, 1, 8))
              b == FromBe8(SubSeq(bs, 9, 16))
-         IN IF Le(b, a) \/ Lt(total, b) THEN [ok |-> FALSE, runs |-> <<>>, rest |-> <<>>]
+         IN IF Le(b, a) \/ Lt(total, b) \/ ~Aligned(a, sl) \/ ~Aligned(b, sl)
+            THEN [ok |-> FALSE, runs |-> <<>>, rest |-> <<>>]
             ELSE LET n == U!Val(U!Sub(b, a))
                  IN IF Len(bs) - 16 < n THEN [ok |-> TRUE, runs |-> acc, rest |-> bs]
-                    ELSE IF ~Aligned(a, sl) \/ ~Aligned(b, sl) THEN [ok |-> FALSE, runs |-> <<>>, rest |-> <<>>]
                     ELSE TakeFrom(Drop(bs, 16 + n), total, sl,
                                   Append(acc, [a |-> a, b |-> b, data |-> SubSeq(bs, 17, 16 + n)]))
 TakeRuns(bs, total, sl) == TakeFrom(bs, total, sl, <<>>)

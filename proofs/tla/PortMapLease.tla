@@ -12,8 +12,9 @@
 (* handle_timeout), drops it when an answer to its request shows the       *)
 (* gateway restarted (lease::restarted, PortMap::note_epoch, whatever the  *)
 (* answer says), and stops (PortMap::stop: the mapping is dropped at once  *)
-(* and a release is sent). An announce answers no request and carries no   *)
-(* nonce, so anyone on the link can send one: it only brings the renewal   *)
+(* and a release is sent, for it or for the round's request in flight).    *)
+(* An announce answers no request and carries no nonce, so anyone on the  *)
+(* link can send one: it only brings the renewal                           *)
 (* of a held mapping forward (PortMap::announce, bring_forward), at least  *)
 (* Floor apart, and the renewal's answer decides. The gateway grants or    *)
 (* refuses each request, forgets a mapping when its own clock passes the   *)
@@ -305,13 +306,14 @@ ClientAnnounce ==
                    /\ UNCHANGED <<pub, renewing, cstep, tries, started, prevAt, prevSrv, heardBoot, dropBad>>
     /\ UNCHANGED <<now, gw, req, cexp, grantBoot, renewTried, lapseUntried>>
 
-\* PortMap::stop: the held mapping is dropped at once (unless StopDrop is off) and a release is sent for it.
+\* PortMap::stop: the held mapping is dropped at once (unless StopDrop is off) and a release is sent for it, or, with
+\* none held, for the request of a round in flight, which may have made one (PortMap::in_flight, Step::Pcp).
 ClientStop ==
     /\ cstep /= "stopped"
     /\ cstep' = "stopped" /\ renewing' = FALSE /\ tries' = 0
     /\ pub' = (pub /\ ~StopDrop)
-    \* the release (lifetime 0) goes out only for a mapping that was held
-    /\ req' = IF pub THEN req \cup {"release"} ELSE req
+    \* the release (lifetime 0) goes out for a mapping that was held or a round that was asking
+    /\ req' = IF pub \/ cstep = "ask" THEN req \cup {"release"} ELSE req
     /\ UNCHANGED <<now, gw, resp, started, renewAt, cexp, prevAt, prevSrv, gh, an>>
 
 (* ------------------------------ the gateway ------------------------------ *)

@@ -3,8 +3,9 @@
 (* How long a responder holds a half-open handshake once it has answered   *)
 (* (pinc#387).                                                             *)
 (* Code: crates/pinc-transport/src/conn/handshake.rs (RESPONDER_HOLD,      *)
-(* Timing::connect_timeout, Handshake::step: the hold is set when the      *)
-(* responder's flight first goes out), crates/pinc-core/src/slot.rs        *)
+(* handshake_limit, Timing::connect_deadline, Handshake::step: the hold   *)
+(* is set when the responder's flight first goes out),                     *)
+(* crates/pinc-core/src/slot.rs                                            *)
 (* (Slot::half_open_life) and timers.rs (settle_core, run_timer: the       *)
 (* endpoint's own half-open sweep follows the same life).                  *)
 (*                                                                         *)
@@ -66,7 +67,7 @@ Never == MaxT + 1
 \* The responder has answered by now: its flight went out (a reject is no flight; without RejectFree it counts as one).
 Answered == answerAt <= t \/ (~RejectFree /\ rejectAt <= t)
 
-\* The responder's limit (Timing::connect_timeout, Slot::half_open_life): the base until it answered, then the hold
+\* The responder's limit (handshake_limit, Slot::half_open_life): the base until it answered, then the hold
 \* counted from creation (armed stays 0); without Held, the base throughout.
 Limit == IF Answered /\ Held THEN armed + Hold ELSE Base
 

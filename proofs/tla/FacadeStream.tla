@@ -14,8 +14,8 @@
 (* chunk and then again on every read; nothing written after the FIN; a     *)
 (* dropped SendStream ends its stream; a dropped or stopped RecvStream      *)
 (* holds nothing; after a reset the writer sees the reset; datagrams in     *)
-(* arrival order, each once, a full queue dropping only its oldest, the     *)
-(* reason only once the datagrams that arrived before are read; and a      *)
+(* arrival order, each once, a full queue dropping only its oldest, after  *)
+(* the end the reason, the datagrams still queued dropped with it; and a   *)
 (* refused or waiting call changes nothing.                                 *)
 (***************************************************************************)
 EXTENDS FacadeStreamOps, TLC
@@ -79,9 +79,9 @@ WriteAfterFinish == (last.op = "write" /\ s.hfin) => last.o.r = 2
 FinishIdem == [][(s.hfin /\ ~s.hreset /\ last'.op = "finish") => (last'.o = Ok(0) /\ s'.tfin = s.tfin)]_vars
 \* a SendStream dropped on a live session ends its stream: FIN, reset, or stopped by the peer
 DropEnds == s.dropS /\ s.dropLive => s.tfin \/ s.treset \/ s.pstop
-\* documented: after reset(code) the writer and finish see the reset (findings at DOC = FALSE)
+\* documented: after reset(code) the writer and finish see the reset (holds with fix F2 at either DOC)
 ResetSeen == (last.op \in {"write", "finish"} /\ s.hreset) => last.o = Err(STOPPED, RC)
-\* documented: a dropped or stopped RecvStream holds nothing the peer sent (finding at DOC = FALSE, DFULL)
+\* documented: a dropped or stopped RecvStream holds nothing the peer sent (holds with fix F1 at either DOC)
 NoHeld == ((s.dropR \/ s.hstop) /\ s.live) => s.rpos = s.pw \/ s.preset
 \* documented: no stop entry outlives the SendStream (finding at DOC = FALSE)
 FailClean == s.dropS => ~s.failed
@@ -93,8 +93,8 @@ DgramKept ==
     /\ Len(s.dgot) + Len(s.dq) + Cardinality(s.ddrop) = s.dn
 DropOldest == \A x \in s.ddrop, y \in Range(s.dq) : x < y
 DgramBound == Len(s.dq) <= DQ
-\* documented: the reason only once the datagrams that arrived before are read (finding at DOC = FALSE)
-LateDgram == (last.op = "rdg" /\ last.o.r = 2 /\ last.o.k \in {PEERCLOSED, LOCALCLOSED}) => s.dq = <<>>
+\* documented: once the connection ended a read returns the reason; the datagrams still queued are dropped with it
+LateDgram == (last.op = "rdg" /\ ~s.live) => last.o = Gone(s)
 
 \* a refused or waiting call changes nothing but the handle's own cached end
 Facts(t) == <<t.live, t.tw, t.tfin, t.treset, t.failed, t.fcode, t.rpos, t.got, t.dq, t.dgot, t.ddrop, t.dsent>>

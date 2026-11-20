@@ -9,7 +9,8 @@
 (* (RecomputeOne of Membership.tla, the operator the trace check validates) *)
 (* with no quiet window. ViewAgree: afterwards they list exactly the same   *)
 (* members. ViewIsUnion: the members they list are those some hub copy      *)
-(* lists.                                                                   *)
+(* lists. The two starting views are taken once per unordered pair (Ord):  *)
+(* 81 x 45 initial states, not 81 x 81.                                    *)
 (*                                                                         *)
 (* Lean counterpart: Pinc/MembershipConvAll.lean (recomputeAll_view_agree). *)
 (***************************************************************************)
@@ -43,7 +44,10 @@ Fold(S) ==
     IN F(S, 1)
 
 Cells2 == [{3, 4} -> Cells]
-Init == c1 \in Cells2 /\ c2 \in Cells2 /\ v1 \in Cells2 /\ v2 \in Cells2 /\ done = FALSE
+\* a number per starting view, to take each unordered pair of views once: ViewAgree is symmetric in v1 and v2, and
+\* v1 still takes every view (v2 may be the last one), so ViewIsUnion loses nothing
+Ord(f) == 3 * f[3] + f[4]
+Init == c1 \in Cells2 /\ c2 \in Cells2 /\ v1 \in Cells2 /\ v2 \in Cells2 /\ Ord(v1) <= Ord(v2) /\ done = FALSE
 \* the quick profile (proofs/tla/quick): the second view starts empty. Agreement is equality of the member sets, so
 \* every first view agreeing with the empty one is every pair agreeing; ViewIsUnion still takes every first view
 InitQuick == c1 \in Cells2 /\ c2 \in Cells2 /\ v1 \in Cells2 /\ v2 = [m \in {3, 4} |-> 0] /\ done = FALSE

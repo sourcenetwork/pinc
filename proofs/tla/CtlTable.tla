@@ -31,12 +31,12 @@
 (*    acknowledged, is pending or in flight; READY, once asked for, is set *)
 (*    or in flight until one is acknowledged.                              *)
 (* DOC = TRUE: an acknowledgement of tickets clears only the batch it      *)
-(* carried, as `issue_tickets` documents ("send them to the peer"); DOC =  *)
-(* FALSE is the code, whose tickets frame carries id 0 so any              *)
-(* acknowledgement clears the batch held. CtlTable_tickets runs the code   *)
-(* and must violate TicketsOwed (a finding). CtlTable_full and             *)
-(* CtlTable_extfull are reachability witnesses: the table and the          *)
-(* extension slots fill.                                                   *)
+(* carried, and a loss makes only that batch pending again, as             *)
+(* `issue_tickets` documents ("send them to the peer") and as the code     *)
+(* does with fix T1 (the tickets frame carries its generation). DOC =      *)
+(* FALSE is the code before T1 (id 0: any acknowledgement clears the batch *)
+(* held); no config runs it any more. CtlTable_full and CtlTable_extfull   *)
+(* are reachability witnesses: the table and the extension slots fill.     *)
 (***************************************************************************)
 EXTENDS Integers, FiniteSets
 CONSTANTS PARTS, DOC, T, E, P, KMAX, NEMAX, GMAX, SMAX
@@ -102,7 +102,7 @@ AckA == \E r \in fl : r.st = "out" /\ AckOf(r) /\ Did("ack", TRUE)
 LateAckA == \E r \in fl : r.st = "lost" /\ AckOf(r) /\ Did("late_ack", TRUE)
 LoseA == \E r \in fl :
     /\ r.st = "out"
-    /\ LET l == Lost(c, r.k, r.id)
+    /\ LET l == Lost(c, r.k, r.id, r.g, DOC)
        IN /\ c' = l.c /\ fl' = (fl \ {r}) \cup {[r EXCEPT !.st = "lost"]}
           /\ fate' = IF r.k = "sc" THEN Handed(fate, r.id, l.layer) ELSE fate
     /\ UNCHANGED <<pu, oth, sent, tg, tacked, rdy>> /\ Did("lose", TRUE)

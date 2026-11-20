@@ -17,9 +17,10 @@
 (*    frame's off time, air * 1000 / duty (rounded down, as the code       *)
 (*    divides: the share is kept to within 1 ns per frame);                *)
 (*  - RefusedUnchanged: a refused frame changes nothing.                   *)
-(* Witness ConnectRadio_sat (TOP = T: the clock reaches u64::MAX) violates *)
-(* FitAndShare: at the maximum the off time saturates away and frames are  *)
-(* admitted back to back (a finding, see the report).                      *)
+(* ConnectRadio_sat (TOP = T: the clock reaches u64::MAX) checks          *)
+(* FitAndShare at the clock's end: an off time past it leaves no next      *)
+(* admission (C1; before it the off time saturated away and frames were    *)
+(* admitted back to back).                                                 *)
 (***************************************************************************)
 EXTENDS Integers, ConnectDutyOps
 

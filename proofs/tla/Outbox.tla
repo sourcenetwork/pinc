@@ -32,11 +32,13 @@
 (* Outbox.cfg takes {0}: no caller of build can make it fail (every        *)
 (* message fits MAX_MESSAGE_LEN, MessageCodec.tla Fits, and the fields     *)
 (* that would overflow a length prefix cannot be built by the machines).   *)
-(* Outbox_torn.cfg takes {1} and TLC finds Agrees violated: a refused      *)
-(* build overwrites the head of the kept message while its length and     *)
-(* send flag stay, so a later poll or resend would hand out torn bytes.    *)
-(* The machines make that unreachable (BadPayload is fatal, settle calls   *)
-(* fail, which clears send, and a failed machine never calls resend).      *)
+(* Outbox_torn.cfg takes {1}: a refused build overwrites the head of the   *)
+(* kept message, and with fix S6 it clears the message and the send flag,  *)
+(* so nothing torn is kept or sent again (the contract: a refused build    *)
+(* leaves no message). Before S6 the length and send flag stayed over the  *)
+(* torn head and TLC found Agrees violated; the machines made that         *)
+(* unreachable (BadPayload is fatal, settle calls fail, which clears send, *)
+(* and a failed machine never calls resend).                               *)
 (* Outbox_full.cfg is a reachability witness: every kind queued at once.   *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
@@ -62,7 +64,7 @@ Next ==
           /\ q' = Replace(q, <<2, Msg(k), ml>>)
           /\ kept' = [d |-> Msg(k), ml |-> ml]
           /\ UNCHANGED pend
-    \/ \E w \in FAILW : ob' = Refuse(ob, w) /\ UNCHANGED <<q, pend, kept>>
+    \/ \E w \in FAILW : ob' = Refuse(ob, w) /\ q' = Drop(q, 2) /\ kept' = NoKept /\ UNCHANGED pend
     \/ ob' = Clear(ob) /\ q' = Drop(q, 2) /\ kept' = NoKept /\ UNCHANGED pend
     \/ /\ ob' = Resend(ob)
        /\ q' = IF kept # NoKept THEN Replace(q, <<2, kept.d, kept.ml>>) ELSE q

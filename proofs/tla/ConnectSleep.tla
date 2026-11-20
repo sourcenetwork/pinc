@@ -30,11 +30,12 @@
 (*  NoticeTwice         each relay owed a notice gets it twice over UDP,  *)
 (*                      and no other relay gets one                        *)
 (*  CloseOnlySuspended  a resume cancels the close of a suspension         *)
-(* Witnesses (TLC must violate): ConnectSleep_w_close (NoCloseAfterNotice: *)
-(* a close for suspension after a notice was sent); the findings          *)
-(* ConnectSleep_twice (CloseAfterNotices with a second suspend),           *)
-(* ConnectSleep_w_behind (NotBehindRecord) and ConnectSleep_w_wall         *)
-(* (NoWallNoSign).                                                          *)
+(* Witness (TLC must violate): ConnectSleep_w_close (NoCloseAfterNotice: a *)
+(* close for suspension after a notice was sent). Checks of the fixes      *)
+(* (passing once they land): ConnectSleep_twice (CloseAfterNotices with a  *)
+(* second suspend, K7), ConnectSleep_w_wall (NoWallNoSign, K8) and         *)
+(* ConnectSleep_w_behind (NotBehindRecord, the rule restated by K9, with   *)
+(* PriorityOrder).                                                         *)
 (***************************************************************************)
 EXTENDS ConnectSleepOps, TLC
 
@@ -125,8 +126,11 @@ RecordRetry == ~badRetry
 NoticeTwice == \A x \in Relays : sent[x] \in {0, 2} /\ (sent[x] > 0 => x \in owed /\ x \in Udp)
 CloseOnlySuspended == ~badSusp
 
-\* the documented claims the code does not keep (findings), and a reachability witness
-NotBehindRecord == ~(s.sleep # {} /\ s.job.k = "record")
+\* the documented claims of the findings K7, K8 and K9 (kept by the code once they land), and a reachability witness
+\* signing.rs, restated (K9): "a suspending node's notices wait for at most the one signature already asked for": a
+\* record job seen with notices owed is the one outstanding before the step (a record job started while notices are
+\* owed is PriorityOrder's case)
+NotBehindRecord == [][(s'.sleep # {} /\ s'.job.k = "record") => s.job = s'.job]_vars
 NoWallNoSign == ~badWall
 NoCloseAfterNotice == ~reach
 

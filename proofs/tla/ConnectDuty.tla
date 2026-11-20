@@ -24,11 +24,13 @@
 (*    apart;                                                               *)
 (*  - QuietWithMailbox (step): no release after the burst while a mailbox  *)
 (*    serves the node;                                                     *)
-(*  - Rearm (step): after a release the deadline is later than now.        *)
+(*  - Rearm (step): after a release the deadline is later than now, or     *)
+(*    there is none (Never: the next one is past the clock's end).         *)
 (* Witnesses: ConnectDuty_w_burst violates BurstNotFull (a burst of 5 is   *)
 (* reached, so the bound is tight); ConnectDuty_sat (TOP = T: the clock    *)
-(* reaches u64::MAX) violates Rearm: at the maximum the next deadline      *)
-(* saturates to now and every poll releases (a finding, see the report).   *)
+(* reaches u64::MAX) checks Rearm at the clock's end: a release there      *)
+(* leaves no deadline, so it is the last (C1; before it the deadline       *)
+(* saturated to now and every poll released).                              *)
 (***************************************************************************)
 EXTENDS Integers, ConnectDutyOps
 
@@ -72,7 +74,7 @@ BurstBound == nb <= BU(UNIT) \div BG(UNIT)
 BurstGap == [][(Released /\ lr >= 0) => c' - lr >= BG(UNIT)]_vars
 SteadyGap == [][(Released /\ ~ev'.burst /\ ls >= 0) => c' - ls >= ST(UNIT)]_vars
 QuietWithMailbox == [][(Released /\ ~ev'.burst) => ~d.mb]_vars
-Rearm == [][Released => d'.nx > c']_vars
+Rearm == [][Released => d'.nx = Never \/ d'.nx > c']_vars
 
 \* the reachability witness: a full burst
 BurstNotFull == nb < BU(UNIT) \div BG(UNIT)

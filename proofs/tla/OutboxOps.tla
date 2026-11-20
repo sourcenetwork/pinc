@@ -34,8 +34,9 @@ Data(o) == SubSeq(o.buf, 1, o.len)
 
 \* build: the closure writes the message, then len, min_len and send are set
 Build(o, k, ml) == [o EXCEPT !.buf = Fill(@, k, k), !.len = k, !.minl = ml, !.send = TRUE]
-\* build whose closure fails after writing w bytes: only the bytes written change
-Refuse(o, w) == [o EXCEPT !.buf = Fill(@, w, TORN)]
+\* build whose closure fails after writing w bytes: the bytes written change, and (fix S6) the message and the send
+\* flag are cleared, so torn bytes are never kept or handed out
+Refuse(o, w) == [o EXCEPT !.buf = Fill(@, w, TORN), !.len = 0, !.send = FALSE]
 \* clear_message
 Clear(o) == [o EXCEPT !.len = 0, !.send = FALSE]
 \* resend

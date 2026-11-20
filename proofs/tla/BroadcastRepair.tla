@@ -16,7 +16,10 @@
 (* dead session swallows a frame), has P hand its message to a hub on any  *)
 (* reachable instant within the retry span, and lets time pass only to the *)
 (* next GAP_AE or HAVE deadline. Frames are delivered at once or lost.     *)
-(* The hub log holds LogCap messages for Window. RxHubOnly: only the hub   *)
+(* The hub log holds LogCap messages for Window; a message is stored as    *)
+(* msg.rs hub_store does (the oldest evicted for room, the storing hub's   *)
+(* time), and a hub exchange's fetch may be refused (LogFull: nothing      *)
+(* stored, offered again next round). RxHubOnly: only the hub              *)
 (* path moves the receipt the resubscribe asks back from (the code after   *)
 (* its fix); FALSE is the code before it, whose witness is the _rx config. *)
 (*                                                                         *)
@@ -74,6 +77,12 @@ Evict(h, hlh) == IF Cardinality({m \in Mids : hlh[m] # NoT}) < LogCap THEN hlh
                  ELSE LET old == CHOOSE x \in Mids : hlh[x] # NoT /\ \A y \in Mids : hlh[y] # NoT => hlh[x] < hlh[y] \/ (hlh[x] = hlh[y] /\ x <= y)
                       IN Evict(h, [hlh EXCEPT ![old] = NoT])
 Stores(hlv, h, m) == [hlv EXCEPT ![h] = [Evict(h, hlv[h]) EXCEPT ![m] = now]]
+\* msg.rs hub_store for each fetched id in turn (lowest id first): room is made (eviction), then the entry is logged
+\* with the storing hub's own time
+RECURSIVE StoreAll(_, _, _)
+StoreAll(hlv, h, S) == IF S = {} THEN hlv
+                       ELSE LET m == CHOOSE x \in S : \A y \in S : x <= y
+                            IN StoreAll(Stores(hlv, h, m), h, S \ {m})
 
 \* S offers a message it lacks: delivered once; only the hub path moves the receipt
 Offer(dl, lr, nw, m, hubPath) ==
@@ -133,18 +142,20 @@ GapAe == /\ now >= nextGap /\ nextGap' = now + GapEvery
                  /\ skipped' = IF lnk["S1"] THEN [m \in Mids |-> skipped[m] \/ (hl[1][m] # NoT /\ dlv[m] = NoT)] ELSE skipped
          /\ UNCHANGED <<now, lnk, hl, hseen, nextAe, pubd, cont, nf>>
 
-\* gap.rs hub_ae: HAVE of the window to the other hub, which fetches what it lacks (GET, MSG; not mirrored again)
-HubAe == \E h \in Hubs :
+\* gap.rs hub_ae: HAVE of the window to the other hub, which fetches what it lacks (GET, MSG; not mirrored again).
+\* The fetching hub stores each message through msg.rs hub_store: eviction to make room, the entry stamped with its
+\* own time; `refuse` is hub_store's LogFull (room_to_store or the push refused): nothing is stored, hseen is
+\* unchanged, so the window is offered again at the next round.
+HubAe == \E h \in Hubs, refuse \in BOOLEAN :
     /\ now >= nextAe[h]
     /\ nextAe' = [nextAe EXCEPT ![h] = nextAe[h] + ((Sub(now, nextAe[h]) \div AeEvery) + 1) * AeEvery]
     /\ LET o == 3 - h
            need == {m \in WindowIds(h) : m \notin hseen[o]}
-           doit == lnk["H"] /\ need # {}
-           hlN == IF doit THEN [hl EXCEPT ![o] = [m \in Mids |-> IF m \in need THEN hl[h][m] ELSE hl[o][m]]] ELSE hl
-           hl3 == IF doit THEN [hlN EXCEPT ![o] = Evict(o, hlN[o])] ELSE hlN
+           doit == lnk["H"] /\ need # {} /\ ~refuse
+           hl3 == IF doit THEN StoreAll(hl, o, need) ELSE hl
            pushes == doit /\ o = 1 /\ lnk["S1"]
            got == [m \in Mids |-> IF pushes /\ m \in need /\ dlv[m] = NoT THEN now ELSE dlv[m]]
-       IN /\ hl' = hlN /\ hseen' = [hseen EXCEPT ![o] = IF doit THEN @ \union need ELSE @]
+       IN /\ hl' = hl3 /\ hseen' = [hseen EXCEPT ![o] = IF doit THEN @ \union need ELSE @]
           /\ dlv' = got
           /\ lastRx' = IF pushes /\ \E m \in need : dlv[m] = NoT THEN now ELSE lastRx
           /\ newest' = IF pushes /\ \E m \in need : dlv[m] = NoT THEN now ELSE newest

@@ -32,8 +32,10 @@
 (*              MAX_TEXT_LEN (136) long, encode_text fits exactly when the *)
 (*              buffer holds it, parse_text inverts it, every accepted     *)
 (*              text is the text of its bytes (one text per CID), and the  *)
-(*              missing prefix, a character outside the alphabet, nonzero  *)
-(*              padding and a text longer than any CID are refused (TextOK *)
+(*              missing prefix, a character outside the alphabet, a text   *)
+(*              whose length no CID has (5 or more bits left over: not a   *)
+(*              whole number of bytes), nonzero padding and a text longer  *)
+(*              than any CID are refused, each with its own reason (TextOK *)
 (*              checks every short text);                                  *)
 (*   PairOK     cmp_text is the order of the texts, antisymmetric, and 0   *)
 (*              exactly for equal CIDs;                                    *)
@@ -170,7 +172,8 @@ EncodeText(bs, cap) ==
 RECURSIVE DecFrom(_, _, _, _, _)
 DecFrom(ds, i, acc, bits, out) ==
     IF i > Len(ds)
-    THEN IF bits >= 5 \/ acc # 0 THEN TErr("padding bits are not zero") ELSE [err |-> "ok", bytes |-> out]
+    THEN IF bits >= 5 THEN TErr("the text is not a whole number of bytes")
+         ELSE IF acc # 0 THEN TErr("padding bits are not zero") ELSE [err |-> "ok", bytes |-> out]
     ELSE LET ch == ds[i] IN
          IF ~((ch >= 97 /\ ch <= 122) \/ (ch >= 50 /\ ch <= 55))
          THEN TErr("character outside the base32 lower alphabet")

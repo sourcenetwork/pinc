@@ -99,10 +99,10 @@ SignResponse(W, now, ok, rj, bj, K) ==
                                    !.s.pub = IF j.k = "record" THEN SatAdd(now, K.retry, K) ELSE @]
          IN MaybeClose(StartJobs(W2, now, rj, bj, K), now, K)
 
-(* tick: the wall clock is kept once given; the suspension's close; publish asks for the record when pw (its due
+(* tick: the wall clock is the one given now, none without one (fix K8); the suspension's close; publish asks for the record when pw (its due
    time came, no record is wanted, the class is known and the home carrier is open: PubDue and the caller) *)
 TickStep(W, now, w, pw, rj, bj, K) ==
-    LET W1 == CloseForSuspend([W EXCEPT !.s.wall = @ \/ w], now, K)
+    LET W1 == CloseForSuspend([W EXCEPT !.s.wall = w], now, K)
         W2 == IF pw THEN [W1 EXCEPT !.s.record = TRUE, !.s.pub = K.tmax] ELSE W1
     IN StartJobs(W2, now, rj, bj, K)
 
@@ -113,10 +113,11 @@ DriveStep(W, now, w, pw, rj, bj, rj2, bj2, bc, K) ==
     LET W1 == TickStep(W, now, w, pw, rj, bj, K)
     IN StartJobs(IF bc THEN [W1 EXCEPT !.s.beacon = TRUE] ELSE W1, now, rj2, bj2, K)
 
-(* suspend: a notice is owed to every relay with a UDP address and an open link *)
+(* suspend: a notice is owed to every relay with a UDP address and an open link; a close armed by an earlier
+   suspend is dropped (fix K7), so the carriers close only after these notices *)
 SuspendStep(W, now, rj, bj, K) ==
     LET owed == {x \in K.udp \cap DOMAIN W.s.lk : W.s.lk[x] = "open"}
-        W1 == [W EXCEPT !.s.wall = TRUE, !.s.sleep = owed, !.s.susp = TRUE]
+        W1 == [W EXCEPT !.s.wall = TRUE, !.s.sleep = owed, !.s.susp = TRUE, !.s.closeAt = K.never]
     IN MaybeClose(StartJobs(W1, now, rj, bj, K), now, K)
 
 (* resume: the suspension is cancelled, an outstanding sleep job dropped; the mapped addresses refreshed may want a

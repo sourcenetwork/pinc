@@ -22,20 +22,20 @@
 (*                                                                         *)
 (* Each event must be the step of BroadcastReach.tla it names with that    *)
 (* table, a hand-over must be one the model allows and a missed one one it *)
-(* forbids, and the model's invariants hold on every state. The code       *)
-(* charges a tombstone 256 bytes (8 units) where the model charges        *)
-(* RecBase: the test makes no record decision while a tombstone is held    *)
-(* (at most three members are held, at most three peers each, so a held   *)
-(* member's record always fits and only a newcomer is refused), and the   *)
-(* sweep ends the run. Not driven: liars, lost frames, the refresh, the   *)
-(* drop of a tombstone, mirrors between hubs (BroadcastReach_*.cfg).      *)
+(* forbids, and the model's invariants hold on every state. A tombstone  *)
+(* is charged 256 bytes (8 units: RecBase less SigUnits, the signature),  *)
+(* as the code charges it. At most three members are held, at most three  *)
+(* peers each, so a held member's record always fits and only a newcomer  *)
+(* is refused, and the sweep ends the run. Not driven: liars, lost frames, *)
+(* the refresh, the drop of a tombstone, an older record over a tombstone, *)
+(* mirrors between hubs (BroadcastReach_*.cfg).                            *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and PINC_TRACE_DIR, the *)
 (* directory that holds bcast/reach.ndjson.                                *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
 
-CONSTANTS N, HubCount, Liars, MaxChanges, MaxLoss, MaxExpire, MaxLeave, TableBytes, RecBase,
+CONSTANTS N, HubCount, Liars, MaxChanges, MaxLoss, MaxExpire, MaxLeave, TableBytes, RecBase, SigUnits,
           Mutual, Rebuild, Tomb, ScopedRepair, Closed, EvictAny, Batch, Told, Waits, Charge
 
 VARIABLES i, sess, changes, cur, tab, lab, net, lost, expired, subd, bad, closed, refd, left, logged, phase, sent, said,

@@ -28,7 +28,8 @@ For the model of `ConnectOwn.lean`, over unbounded naturals and any `MAX_ADDRS` 
   (`run_job_fixed`) and only the answer to the signature hands it on (`run_sent_fixed`, `signed_sent`), so a reflexive
   address learnt after the job started waits for the next one (`later_address_waits`). The record is asked for by a
   class or home change, an opened carrier (`changed_then_publish`), new hints (`want_rises`), or 1800 s after the last
-  record handed to the carrier (`republish_not_before`, `republish_at`).
+  record handed to the carrier when nothing armed it meanwhile (`republish_not_before`, `republish_at`). A change made
+  while a job is out is kept by its answer (`change_kept`) and asked for once due (`change_published_after`).
 -/
 
 namespace Pinc.ConnectOwn
@@ -525,19 +526,19 @@ theorem later_address_waits (cf : Cf) (s : St) (now now' : Nat) (home cls : Opti
 
 /-- A record is asked for 1800 s after the last one handed to the carrier, not before. -/
 theorem republish_not_before (s : St) (j : Rec) (now now' : Nat) (c : Bool) (h : s.job = some j)
-    (hl : now + repub < uMax) (hn : now' < now + repub) :
+    (hd : s.np = 0 ∨ s.np = uMax) (hl : now + repub < uMax) (hn : now' < now + repub) :
     publish (signed s now true true) now' c = signed s now true true := by
   have e : (signed s now true true).np = now + repub := by
-    simp [signed, h, sadd, Nat.min_eq_left (Nat.le_of_lt hl)]
+    simp [signed, h, afterSent_disarmed now hd, sadd, Nat.min_eq_left (Nat.le_of_lt hl)]
   unfold publish
   rw [if_pos]
   rw [e]; right; right; left; exact hn
 
 theorem republish_at (s : St) (j : Rec) (now now' : Nat) (h : s.job = some j) (hwant : s.want = false)
-    (hl : now + repub < uMax) (hn : now + repub ≤ now') :
+    (hd : s.np = 0 ∨ s.np = uMax) (hl : now + repub < uMax) (hn : now + repub ≤ now') :
     (publish (signed s now true true) now' true).want = true := by
   have e : (signed s now true true).np = now + repub := by
-    simp [signed, h, sadd, Nat.min_eq_left (Nat.le_of_lt hl)]
+    simp [signed, h, afterSent_disarmed now hd, sadd, Nat.min_eq_left (Nat.le_of_lt hl)]
   have e2 : (signed s now true true).want = false := by simp [signed, h, hwant]
   have e3 : (signed s now true true).job = none := by simp [signed, h]
   unfold publish
@@ -547,6 +548,25 @@ theorem republish_at (s : St) (j : Rec) (now now' : Nat) (h : s.job = some j) (h
     have : repub > 0 := by decide
     simp only [not_or]
     refine ⟨by omega, by omega, by omega, by simp, by simp⟩
+
+/-- A change made while the record job is out is kept by the answer that hands the record on (K10). -/
+theorem change_kept (s : St) (j : Rec) (now now' : Nat) (h : s.job = some j) (h0 : now ≠ 0) (hm : now ≠ uMax) :
+    (signed (changed s now) now' true true).np = now := by
+  simp [signed, changed, h, afterSent_kept now' h0 hm]
+
+/-- So that change is asked for as soon as it is due after the answer, not 1800 s later. -/
+theorem change_published_after (s : St) (j : Rec) (now now' now'' : Nat) (h : s.job = some j)
+    (hw : s.want = false) (h0 : now ≠ 0) (hm : now ≠ uMax) (hn : now ≤ now'') :
+    (publish (signed (changed s now) now' true true) now'' true).want = true := by
+  have e := change_kept s j now now' h h0 hm
+  have e2 : (signed (changed s now) now' true true).want = false := by simp [signed, changed, h, hw]
+  have e3 : (signed (changed s now) now' true true).job = none := by simp [signed, changed, h]
+  unfold publish
+  rw [if_neg]
+  · rw [if_pos rfl]
+  · rw [e, e2, e3]
+    simp only [not_or]
+    refine ⟨h0, hm, by omega, by simp, by simp⟩
 
 /-- A class or home change, or an opened carrier, sets the next publish to now: it is asked for at once. -/
 theorem changed_then_publish (s : St) (now now' : Nat) (h0 : now ≠ 0) (hm : now ≠ uMax) (hn : now ≤ now')

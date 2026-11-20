@@ -15,7 +15,8 @@
 (* (the first delay is at least twice the remembered round trip).          *)
 (*                                                                         *)
 (* What can happen. A dial sends its first flight and resends it after    *)
-(* First, 2 First, 4 First ... ticks (the code's doubling). A resumed      *)
+(* First, 2 First, 4 First ... ticks (the code's doubling), up to Cap     *)
+(* (CapThin on a thin node). A resumed                                     *)
 (* dial falls back to a full handshake at its third send, which restarts   *)
 (* the schedule. A peer that answers with a reject (it lost our ticket)    *)
 (* restarts the schedule too, with a fresh full flight. A held dial sends  *)
@@ -98,6 +99,8 @@ CONSTANTS
     Flights,      \* the unanswered flights after which an optimistic dial ends (the code's EARLY_FLIGHTS, 4)
     Promise,      \* the most ticks an optimistic dial to a silent peer is promised to last
     Limit,        \* the ticks any handshake waits before it gives up (the 30 s), twice that on a thin node
+    Cap,          \* the longest resend delay, in ticks (CAP, 16 s, 32 first delays: also the shift limit's 2^5)
+    CapThin,      \* the longest resend delay on a thin node, in ticks (CAP_THIN, 8 s)
     MaxNow,       \* the last tick explored
     MaxInc,       \* the most incarnations of the peer explored
     Early,        \* the early end is built (FALSE: the code before #76)
@@ -112,6 +115,8 @@ CONSTANTS
 
 \* Assumption: the round trip is shorter than the first resend delay, as the code makes it (2 x the remembered RTT).
 ASSUME Rtt < First
+\* Assumption: no cap is below the first delay (the code's caps are 16 s and 8 s, the first delay 500 ms).
+ASSUME First <= CapThin /\ CapThin <= Cap
 
 VARIABLES
     now,      \* the current tick, from 1
@@ -131,6 +136,13 @@ vars == <<now, alive, inc, ticket, cached, held, d, steady, floor, limits>>
 RECURSIVE Pow2(_)
 \* 1 for k = 0, else twice the power one lower.
 Pow2(k) == IF k = 0 THEN 1 ELSE 2 * Pow2(k - 1)
+
+\* The smaller of two numbers.
+Min(a, b) == IF a <= b THEN a ELSE b
+
+\* The longest resend delay of a dial on a thin node, or any other (handshake.rs cap(), with round trips below the
+\* caps: a node round trip four times CAP or a peak twice CAP_THIN is not modelled).
+CapOf(thin) == IF thin THEN CapThin ELSE Cap
 
 \* How long a handshake on a thin node, or any other, waits before it gives up.
 LimitOf(thin) == IF thin THEN 2 * Limit ELSE Limit
@@ -280,7 +292,7 @@ Fire ==
        ELSE /\ \E lose \in BOOLEAN :                                        \* the resend may be lost
                 LET fb == d.resume /\ d.sends + 1 = 3 IN                    \* the resume's fallback send
                 d' = Send([d EXCEPT !.sends = IF fb THEN 1 ELSE @ + 1,      \* a fallback restarts the count
-                                    !.next = now + (IF fb THEN First ELSE First * Pow2(d.sends)),  \* doubles
+                                    !.next = now + (IF fb THEN First ELSE Min(First * Pow2(d.sends), CapOf(d.thin))),  \* doubles, to the cap
                                     !.resume = IF fb THEN FALSE ELSE @], lose)  \* now full after a fallback
             /\ UNCHANGED <<floor>>
     /\ UNCHANGED <<now, alive, inc, ticket, cached, held, steady, limits>>

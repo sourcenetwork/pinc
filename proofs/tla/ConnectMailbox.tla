@@ -34,7 +34,7 @@
 (***************************************************************************)
 EXTENDS ConnectMailboxOps
 
-CONSTANTS H, B, N, MaxPkt, Age, Rearm, Nodes, Srcs, Times, MaxSeq, Max, OldRule, Bug, WithDrain
+CONSTANTS H, B, N, MaxPkt, Age, Rearm, Nodes, Srcs, Times, MaxSeq, OldRule, Bug, WithDrain
 c == [H |-> H, B |-> B, N |-> N, MaxPkt |-> MaxPkt, Age |-> Age, Rearm |-> Rearm]
 
 VARIABLES mb, sl, clock, lastOut, lastPush, lastWake, popped, lastDrain

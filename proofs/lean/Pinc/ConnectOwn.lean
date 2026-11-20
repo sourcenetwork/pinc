@@ -155,14 +155,25 @@ def start (cf : Cf) (s : St) (now : Nat) (home cls : Option Nat) : St :=
         | none => { s with want := false, np := sadd now retry }
       else s
 
+/-- The next publish once a record was handed to the carrier: the republish 1800 s on when nothing armed it while
+the job was out (`np` is `0` or `uMax`, the code's `None`), else the deadline a change or a retry wrote then, which
+wins (`complete`, the code fix K10 on top of K1's `Option`). -/
+def afterSent (np now : Nat) : Nat := if np = 0 ∨ np = uMax then sadd now repub else np
+
+theorem afterSent_disarmed {np : Nat} (now : Nat) (h : np = 0 ∨ np = uMax) : afterSent np now = sadd now repub := by
+  unfold afterSent; exact if_pos h
+
+theorem afterSent_kept {np : Nat} (now : Nat) (h0 : np ≠ 0) (hm : np ≠ uMax) : afterSent np now = np := by
+  unfold afterSent; exact if_neg (fun h => h.elim h0 hm)
+
 /-- `sign_response` for the record job: `ok` is a signature of the right length that `finish` accepted, `sent` that
-`frame_to` put the record on the home carrier. -/
+`frame_to` put the record on the home carrier. A change made while the job was out is kept (`afterSent`). -/
 def signed (s : St) (now : Nat) (ok sent : Bool) : St :=
   match s.job with
   | none => s
   | some j =>
     if ok then
-      if sent then { s with job := none, sent := some j, np := sadd now repub }
+      if sent then { s with job := none, sent := some j, np := afterSent s.np now }
       else { s with job := none, np := now }
     else { s with job := none, np := sadd now retry }
 

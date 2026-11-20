@@ -83,6 +83,6 @@ Pop(q, cap) ==
              q |-> [q EXCEPT !.w = t.w, !.head = IF q.len = 1 THEN 0 ELSE (q.head + 1) % cap,
                              !.len = q.len - 1]]
 
-\* `queue_fits(streams, paths)` with FIXED_EVENTS = 16
-QueueFits(s, p, cap) == 3 * s + 2 * p + 16 <= cap
+\* `queue_fits(streams, paths)` with FIXED_EVENTS = 8 + EXT_SLOTS + EXT_QUEUED = 32 (fix T3; 16 before it)
+QueueFits(s, p, cap) == 3 * s + 2 * p + 32 <= cap
 =============================================================================

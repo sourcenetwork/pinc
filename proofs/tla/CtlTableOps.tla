@@ -71,7 +71,8 @@ BuildReady(c) == IF c.ready THEN [ok |-> TRUE, c |-> [c EXCEPT !.ready = FALSE]]
 
 \* `acked(kind, id)` for a reference of batch g, then the recv.rs glue (`tickets_acked` clears `tickets_pending`).
 \* layer: what the stream layer is handed ("acked" or "none"). With doc, an acknowledgement of tickets clears only the
-\* batch it carried (the doc of `issue_tickets`: the tickets are sent to the peer); without, the code: any.
+\* batch it carried (the doc of `issue_tickets`, and the code with fix T1: `tickets_acked(gen)`); without, the code
+\* before T1: any.
 Acked(c, used, k, id, g, doc) ==
     CASE k = "sc" -> LET t == Take(c, id) IN [c |-> t.c, used |-> used, layer |-> IF t.ok THEN "acked" ELSE "none"]
       [] k = "ext" -> LET j == FirstKeyExt(c, id)
@@ -81,12 +82,15 @@ Acked(c, used, k, id, g, doc) ==
                      ELSE [c |-> [c EXCEPT !.tk = 0, !.tp = FALSE], used |-> used, layer |-> "none"]
       [] OTHER -> [c |-> c, used |-> used, layer |-> "none"]
 
-\* `lost(kind, id)` of a packet to be requeued; layer: "lost" when the stream layer is handed its frame back
-Lost(c, k, id) ==
+\* `lost(kind, id)` of a packet to be requeued; layer: "lost" when the stream layer is handed its frame back. For
+\* tickets of batch g: with doc (the code with fix T1, `tickets_lost(gen)`) only the batch held is pending again, a
+\* newer one is left as it is; without, the code before T1: whatever is held.
+Lost(c, k, id, g, doc) ==
     CASE k = "sc" -> LET t == Take(c, id) IN [c |-> t.c, layer |-> IF t.ok THEN "lost" ELSE "none"]
       [] k = "ext" -> LET j == FirstKeyExt(c, id)
                       IN [c |-> IF j < 0 THEN c ELSE [c EXCEPT !.ext[j].pend = TRUE], layer |-> "none"]
-      [] k = "tk" -> [c |-> [c EXCEPT !.tp = (c.tk # 0)], layer |-> "none"]
+      [] k = "tk" -> IF doc /\ c.tk # g THEN [c |-> c, layer |-> "none"]
+                     ELSE [c |-> [c EXCEPT !.tp = (c.tk # 0)], layer |-> "none"]
       [] k = "rd" -> [c |-> [c EXCEPT !.ready = TRUE], layer |-> "none"]
       [] OTHER -> [c |-> c, layer |-> "none"]
 =============================================================================

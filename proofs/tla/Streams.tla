@@ -98,7 +98,13 @@ ConsumeOp == \E id \in Ids, n \in 0..HOR, d \in 0..DT, srtt \in SRTTS :
     /\ clock + d <= HOR
     /\ T' = Consume(T, id, n, clock + d, srtt).t /\ clock' = clock + d
 PendingOp == T' = Pending(T).t /\ UNCHANGED clock
-LostMsdOp == \E id \in Ids, mx \in 0..HOR : T' = CtlLostMsd(T, id, mx) /\ UNCHANGED clock
+\* a MAX_STREAM_DATA frame is lost: the one with the slot's limit (sent again) or an older one (nothing to do); the
+\* max is read from the slot, since a fixed range (0..HOR) sat below every limit in some configs (SW 4 > HOR 3 in
+\* Streams.cfg), where the loss changed nothing
+LostMsdOp == \E id \in Ids, latest \in BOOLEAN :
+    LET i == FindSlot(T, id)
+        lim == IF i = 0 THEN 0 ELSE T.slots[i].limit
+    IN T' = CtlLostMsd(T, id, IF latest THEN lim ELSE lim - 1) /\ UNCHANGED clock
 LostResetOp == \E id \in Ids : T' = CtlLostReset(T, id) /\ UNCHANGED clock
 AckedResetOp == \E id \in Ids : T' = CtlAckedReset(T, id) /\ UNCHANGED clock
 OpenOp == /\ T' = OpenLocal(T) /\ UNCHANGED clock
@@ -267,6 +273,9 @@ NeedCovered == \A i \in Live : T.slots[i].open =>
 Blocked(i) == LET r == T.slots[i] IN
     r.id # -1 /\ r.open /\ r.fin = -1 /\ r.rst = -1 /\ r.read = r.limit /\ r.limit < MAXOFF
 Progress == \A i \in 1..N : [](Blocked(i) => <>~Blocked(i))
+\* a witness, not a promise: Streams_live_blocked.cfg must find it violated, which shows Blocked is reachable where
+\* Progress is checked (a reader at its limit with the pool's other users holding chunks)
+NeverBlocked == \A i \in 1..N : ~Blocked(i)
 
 (* ---- transition properties ---- *)
 SameInc(i) == T.slots[i].id # -1 /\ T'.slots[i].id = T.slots[i].id

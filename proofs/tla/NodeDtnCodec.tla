@@ -47,8 +47,10 @@
 (*    announcing a body over BODY_MAX is a protocol break (also a frame    *)
 (*    whose body passes u32::MAX, whose length saturates).                 *)
 (* NodeDtnCodec_agree.cfg checks Agree, that the check and the read accept *)
-(* the same runs; they do not for a torn last run whose whole header is    *)
-(* not on a slice (a finding: the record is dropped instead of cut).       *)
+(* the same runs: with fix N5 both read a header with one parser, and a    *)
+(* torn last run whose whole header is not on a slice refuses the record   *)
+(* in both. Before N5 the read left such a run out while the check refused *)
+(* it (the finding).                                                       *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC, Nanos
 CONSTANTS Part, HEADS, TOTAL, SLICE
@@ -118,9 +120,10 @@ FirstBad(rs) == IF \E j \in 1..Len(rs) : ~(Fit(rs[j]) /\ OnSlice(rs[j]))
                 ELSE 0
 \* the expected results, from the structure of the case: a tail of 16 bytes or more holds the whole header of r2
 TailHdr(x) == x.cut >= 16
+\* (fix N5: a torn last run whose whole header is off the slices refuses the record, as the check does)
 ExpectTake(x) ==
     IF FirstBad(x.rs) # 0 THEN FALSE
-    ELSE x.cut = 0 \/ ~TailHdr(x) \/ Fit(x.r2)
+    ELSE x.cut = 0 \/ ~TailHdr(x) \/ (Fit(x.r2) /\ OnSlice(x.r2))
 ExpectCheck(x) ==
     IF FirstBad(x.rs) # 0 THEN FALSE
     ELSE x.cut = 0 \/ ~TailHdr(x) \/ (Fit(x.r2) /\ OnSlice(x.r2))
@@ -202,7 +205,7 @@ CutWhole == c.t = "runs" =>
     LET bs == RunsOf(c)
         tk == TakeRuns(bs, TOTAL, SLICE)
     IN tk.ok => TakeRuns(SubSeq(bs, 1, Len(bs) - Len(tk.rest)), TOTAL, SLICE) = [tk EXCEPT !.rest = <<>>]
-\* the finding: check_runs refuses a torn last run off the slices that take_runs would leave out
+\* check_runs and take_runs accept the same runs (before fix N5 take_runs left out a torn last run off the slices)
 Agree == c.t = "runs" => CheckRuns(RunsOf(c), TOTAL, SLICE) = TakeRuns(RunsOf(c), TOTAL, SLICE).ok
 
 FrameOK == c.t = "frame" /\ Le(c.body, BM) /\ Le(U!Add(W(5), c.body), c.len) =>

@@ -10,12 +10,10 @@
 (* probe SettleRecord). A u64 is four 16-bit limbs; an absent time is [].  *)
 (* For each record, in order:                                              *)
 (*  - PlanOK: the plan is Plan of KeepaliveOps.tla on the inputs read;     *)
-(*  - AppliedOK: when the plan changed, the interval handed to the         *)
+(*  - AppliedOK: at every settle (fix C4) the interval handed to the       *)
 (*    connection is the plan's ping less the last send (none in a pulse or *)
-(*    without a ping); and in every record the interval the connection     *)
-(*    holds (the last one handed to it for this session, none before the   *)
-(*    first) is that one, so the PING falls at the plan's ping (Applied    *)
-(*    and PulseOff of Settle.tla);                                         *)
+(*    without a ping), so the PING falls at the plan's ping (Applied and   *)
+(*    PulseOff of Settle.tla); the probe records it in every record.       *)
 (*  - DeadlineOK: the deadline set in the heap is the earliest of the      *)
 (*    connection's own timer, the review moment, the ping in a pulse when  *)
 (*    it is later than now, the earliest standby ping, the access recheck  *)
@@ -47,8 +45,7 @@ Holds(sid) == IF sid \in DOMAIN applied THEN applied[sid] ELSE None
 PlanOK(ev, p) == p.ping = Op(ev.ping) /\ p.review = Op(ev.review)
 
 AppliedOK(ev, p) ==
-    LET held == IF ev.changed THEN Op(ev.interval) ELSE Holds(ev.sid)
-    IN held = Interval(ev, p)
+    Op(ev.interval) = Interval(ev, p)  \* fix C4: the interval is handed over at every settle
 
 DeadlineOK(ev, p) ==
     LET later == IF ev.pulse /\ p.ping.some /\ N!Lt(Lm(ev.now), p.ping.v) THEN p.ping ELSE None
@@ -67,10 +64,8 @@ Step == /\ i <= Len(Trace)
         /\ Trace[i].t = "settle"
         /\ EventOK(Trace[i])
         /\ i' = i + 1
-        /\ applied' = IF Trace[i].changed
-                      THEN [s \in DOMAIN applied \cup {Trace[i].sid} |->
-                               IF s = Trace[i].sid THEN Op(Trace[i].interval) ELSE applied[s]]
-                      ELSE applied
+        /\ applied' = [s \in DOMAIN applied \cup {Trace[i].sid} |->
+                          IF s = Trace[i].sid THEN Op(Trace[i].interval) ELSE applied[s]]
 Finished == i > Len(Trace) /\ UNCHANGED vars
 Next == Step \/ Finished
 TraceSpec == Init /\ [][Next]_vars

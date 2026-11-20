@@ -240,4 +240,6 @@ import Pinc.ConnectOwnThm
 #audit_axioms Pinc.ConnectOwn.republish_not_before
 #audit_axioms Pinc.ConnectOwn.republish_at
 #audit_axioms Pinc.ConnectOwn.changed_then_publish
+#audit_axioms Pinc.ConnectOwn.change_kept
+#audit_axioms Pinc.ConnectOwn.change_published_after
 #audit_axioms Pinc.ConnectOwn.want_rises

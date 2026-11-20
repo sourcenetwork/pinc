@@ -12,6 +12,8 @@
 (*    the window too);                                                     *)
 (*  - Fire: the node's timer at or after redial_at: redial_at is cleared   *)
 (*    and the contacts are looked at;                                      *)
+(*    a look that skips a peer still in its window lowers redial_at to    *)
+(*    that peer's end (`dial_layer`, fix N2: ArmSkipped);                  *)
 (*  - Look: the contacts are looked at for another reason (a bundle, a     *)
 (*    session, the host's contact rule);                                   *)
 (*  - Member: a membership event about the peer: its entry goes, and the   *)
@@ -39,10 +41,10 @@
 (*    waits out a backoff (layer.rs `dial_layer`) and redial_at is when a  *)
 (*    failed dial may be made again (dtn.rs): every peer still owed a      *)
 (*    redial has the node's redial time at or before the end of its wait. *)
-(*    The code keeps one redial time and clears it when it fires; a peer   *)
-(*    whose wait ends later is skipped by the look and no redial time is   *)
-(*    set for it, so TLC is expected to report this invariant violated    *)
-(*    (a finding; see the register notes).                                 *)
+(*    The code keeps one redial time and clears it when it fires; with    *)
+(*    fix N2 a peer whose wait ends later is skipped by the look and its   *)
+(*    end becomes the redial time, so the invariant holds. Before N2 the   *)
+(*    skip set nothing and TLC reported it violated (the finding).         *)
 (* Witnesses: NodeDtnBackoff_w_full (a full table refuses an entry),       *)
 (* NodeDtnBackoff_w_cap (a wait reaches 60 s), NodeDtnBackoff_w_sat (an    *)
 (* entry's end saturates at u64::MAX).                                     *)
@@ -80,16 +82,17 @@ Fail(now, p) ==
                            THEN {} ELSE {"fail"})
 
 Fire(now) == /\ RedialDue(redial, now)
-             /\ redial' = None
+             /\ redial' = ArmSkipped(None, F, now)
              /\ owed' = Looked(F, now)
              /\ UNCHANGED <<F, refused, bad>>
 
-Look(now) == owed' = Looked(F, now) /\ UNCHANGED <<F, redial, refused, bad>>
+Look(now) == owed' = Looked(F, now) /\ redial' = ArmSkipped(redial, F, now) /\ UNCHANGED <<F, refused, bad>>
 
 Member(now, p) == LET G == Forget(F, p)
                   IN /\ F' = G
                      /\ owed' = [Looked(G, now) EXCEPT ![p] = FALSE]
-                     /\ UNCHANGED <<redial, refused, bad>>
+                     /\ redial' = ArmSkipped(redial, G, now)
+                     /\ UNCHANGED <<refused, bad>>
 
 Reset(p) == /\ F' = Forget(F, p) /\ owed' = [owed EXCEPT ![p] = FALSE]
             /\ UNCHANGED <<clock, redial, refused, bad>>

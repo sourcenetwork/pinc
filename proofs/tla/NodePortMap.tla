@@ -26,9 +26,11 @@
 (*   stop before any nonce starts nothing later), Counted (each release    *)
 (*   replaced is counted once), RetrySat (a failed draw is tried again     *)
 (*   NR later, saturating at the clock's maximum TMAX).                    *)
-(* Findings: ReplacesOldest (the documentation: a full queue "replaces the *)
-(* oldest release"; the code replaces slot 1, which a reap and a later     *)
-(* start can refill with the newest), config NodePortMap_woldest.          *)
+(* ReplacesOldest (the documentation: a full queue "replaces the oldest    *)
+(* release") holds with fix N4: reap compacts the queue in order and a     *)
+(* full queue replaces slot 1, the oldest (config NodePortMap_woldest).    *)
+(* Before N4 a reap and a later start could refill slot 1 with the newest, *)
+(* and TLC found it violated.                                              *)
 (* Witnesses: NeverOverflow, NeverSaturated.                               *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
@@ -47,8 +49,11 @@ Apply(p, h) == IF ~p.on THEN [p |-> p, conn |-> conn] ELSE [p |-> [p EXCEPT !.gi
 \* PortMap::stop of a client in phase x: a held mapping is released; one still asking may have nothing to release
 StopTo(x) == CASE x = "map" -> {"rel"} [] x = "run" -> {"rel", "done"} [] OTHER -> {x}
 Stopped(x) == x \in {"done", "lost"}
-\* Pm::reap: a retiring client whose release is done leaves its slot
-Reap(p, h) == [p EXCEPT !.ret = [k \in 1..R |-> IF p.ret[k] # 0 /\ Stopped(h[p.ret[k]]) THEN 0 ELSE p.ret[k]]]
+\* Pm::reap with fix N4: a retiring client whose release is done leaves its slot, and the queue is compacted in
+\* place in order (slot 1 the oldest, the empty slots last)
+Reap(p, h) ==
+    LET live == SelectSeq([k \in 1..R |-> p.ret[k]], LAMBDA c : c # 0 /\ ~Stopped(h[c]))
+    IN [p EXCEPT !.ret = [k \in 1..R |-> IF k <= Len(live) THEN live[k] ELSE 0]]
 \* pm_seed: draw a nonce; a client starts, or the failure is counted and the draw is due NR later
 Seed(p, h, t, ok) ==
     IF ~p.on \/ p.cur # 0 \/ p.halted THEN [p |-> p, h |-> h, ids |-> ids]
@@ -59,8 +64,9 @@ Seed(p, h, t, ok) ==
 Init == pm = Off /\ ph = [c \in Ids |-> "none"] /\ conn = 0 /\ now = 0 /\ ids = 0 /\ sent = 0 /\ wrongv = FALSE
         /\ sat = FALSE
 
-\* start_port_mapping: the old client is stopped; unless that ends it, it takes the first empty slot, or slot 1 of a
-\* full queue, whose client is replaced unsent and counted; then a new Pm, the draw, and pm_apply
+\* start_port_mapping: the old client is stopped; unless that ends it, it takes the first empty slot, or (fix N4) a
+\* full queue rotates left by one and the oldest, now last, is replaced unsent and counted; then a new Pm, the draw,
+\* and pm_apply
 Start(ok) ==
     \E x \in IF pm.cur # 0 THEN StopTo(ph[pm.cur]) ELSE {"none"} :
       LET c == pm.cur
@@ -71,7 +77,10 @@ Start(ok) ==
           full == keep /\ free = {}
           victim == pm.ret[1]
           h2 == IF full THEN [h1 EXCEPT ![victim] = "lost"] ELSE h1
-          q == [on |-> TRUE, cur |-> 0, ret |-> IF keep THEN [pm.ret EXCEPT ![slot] = c] ELSE pm.ret,
+          q == [on |-> TRUE, cur |-> 0,
+                ret |-> IF ~keep THEN pm.ret
+                        ELSE IF full THEN [k \in 1..R |-> IF k < R THEN pm.ret[k + 1] ELSE c]
+                        ELSE [pm.ret EXCEPT ![slot] = c],
                 ovf |-> IF full THEN pm.ovf + 1 ELSE pm.ovf, halted |-> FALSE, retry |-> now, nf |-> 0,
                 given |-> pm.given]
           s == Seed(q, h2, now, ok)

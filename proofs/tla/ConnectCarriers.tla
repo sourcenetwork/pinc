@@ -41,10 +41,11 @@
 (*                    order" (carrier_open): no packet routed after the   *)
 (*                    carrier opened leaves before one held when it opened *)
 (* Witnesses (TLC must violate): ConnectCarriers_w_open (NoFallbackOpen: a *)
-(* carrier opens after a failed dial of the other kind); _w_slow          *)
-(* (HeldFirst on a very slow node: a documented finding). _slow checks the *)
-(* other properties on a very slow node and on a slot with no stream      *)
-(* address.                                                                 *)
+(* carrier opens after a failed dial of the other kind). _w_slow checks   *)
+(* HeldFirst on a very slow node (with fix K4 a packet sent while the      *)
+(* drain is due is held behind the others; before it, TLC found HeldFirst  *)
+(* violated there). _slow checks every property on a very slow node and on *)
+(* a slot with no stream address.                                          *)
 (***************************************************************************)
 EXTENDS ConnectCarriersOps, TLC
 

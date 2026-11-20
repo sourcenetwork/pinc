@@ -30,6 +30,11 @@ DtnFailed(F, now, p) ==
 Sooner(r, at) == IF r = None THEN <<at>> ELSE <<Min(r[1], at)>>
 
 RedialDue(r, now) == r # None /\ Le(r[1], now)
+\* layer.rs `dial_layer` with the N2 fix: a delay-tolerant dial skipped because the peer is still in its window
+\* lowers the redial time to that peer's end (`redial_by`, the same two lines as `layer_failed`)
+ArmSkipped(r, G, now) ==
+    LET S == {G[p][1] : p \in {q \in DOMAIN G : Window(G, now, q)}}
+    IN IF S = {} THEN r ELSE Sooner(r, CHOOSE m \in S : \A y \in S : Le(m, y))
 
 Forget(F, p) == [F EXCEPT ![p] = None]
 =============================================================================

@@ -22,8 +22,8 @@
 (* round trip (-1 before a sample), hi the last challenge token drawn     *)
 (* (tokens are 1, 2, ... in drawing order: the random draw never repeats,  *)
 (* an ideal primitive); ghosts mv (what moved the active path in this      *)
-(* step) and dg (a choice moved off a usable direct path for a cost gain   *)
-(* of GAIN or less).                                                       *)
+(* step) and dg (a choice moved off a usable direct path for a round-trip *)
+(* gain of GAIN or less, the documented rule restated by T11).            *)
 (*                                                                         *)
 (* Time is not a number here: what the code reads of it is an input of the *)
 (* step (hd, a probe due, the floor of a re-join, a challenge recent       *)
@@ -57,6 +57,8 @@ Best(t) ==
     IN IF U = {} THEN 0
        ELSE CHOOSE x \in U : \A y \in U : Cost(t[x]) < Cost(t[y]) \/ (Cost(t[x]) = Cost(t[y]) /\ x <= y)
 Relays(t) == {x \in 1..NP : t[x].id # 0 /\ t[x].k = "r"}
+\* the relayed paths relay_fallback may take: validated and not gone (fix T6)
+Fallbacks(t) == {x \in Relays(t) : t[x].v /\ ~t[x].gone}
 
 \* switch_active: the path left takes the smoothed round trip if there is a sample; m is the ghost of why
 Switch(c, i, m) ==
@@ -68,19 +70,22 @@ Follow(c, i) == IF i = c.act \/ c.t[i].id = 0 THEN c ELSE [c EXCEPT !.act = i, !
 ForgetGone(c) == [c EXCEPT !.t = [x \in 1..NP |-> IF x # c.act /\ c.t[x].id # 0 /\ c.t[x].gone THEN None ELSE c.t[x]]]
 
 \* choose_path: to the best path at once from no path, a gone one or a relayed one, else when its round trip (not its
-\* cost) is lower by more than GAIN; dg records a move off a usable direct path whose cost gain is GAIN or less
+\* cost) is lower by more than GAIN; dg records a move off a usable direct path whose round-trip gain is GAIN or less
 Choose(c) ==
     LET b == Best(c.t)
         cur == c.t[c.act]
     IN IF b = 0 THEN c
        ELSE IF cur.id = 0 \/ cur.gone \/ cur.k = "r" \/ c.t[b].r + GAIN < cur.r
             THEN LET d == ForgetGone(Switch(c, b, "choose"))
-                 IN IF b # c.act /\ Usable(cur) /\ ~cur.gone /\ cur.k = "d" /\ Cost(cur) - Cost(c.t[b]) <= GAIN
+                 IN IF b # c.act /\ Usable(cur) /\ ~cur.gone /\ cur.k = "d" /\ cur.r - c.t[b].r <= GAIN
                     THEN [d EXCEPT !.dg = TRUE] ELSE d
             ELSE c
 
-\* relay_fallback: to the relayed path of the highest slot (any, validated or not, gone or not)
-Fallback(c) == IF Relays(c.t) = {} THEN c ELSE Switch(c, Last(Relays(c.t)), "fallback")
+\* active_open_to_move (fix T4): the active path is left for any better path at once: none, gone or relayed
+OpenToMove(c) == c.t[c.act].id = 0 \/ c.t[c.act].gone \/ c.t[c.act].k = "r"
+
+\* relay_fallback: to the validated relayed path of the highest slot that is not gone (fix T6)
+Fallback(c) == IF Fallbacks(c.t) = {} THEN c ELSE Switch(c, Last(Fallbacks(c.t)), "fallback")
 
 \* push_challenge, set_challenge, queue_challenge, start_punch, is_challenge
 Push(p, tok) == [p EXCEPT !.ch = tok, !.sent[p.nx] = tok, !.nx = (p.nx % CH) + 1, !.ps = @ \cup {tok}]
@@ -95,9 +100,10 @@ Clear(p, r) ==
     [p EXCEPT !.sent = [x \in 1..CH |-> 0], !.ch = 0, !.sc = FALSE, !.v = TRUE, !.pr = FALSE, !.rj = FALSE,
               !.r = r, !.ps = {}]
 
-\* on_path_response: an answer to any challenge in the table validates the slot it arrived on, then choose_path
+\* on_path_response: an answer to any challenge in the table validates the slot it arrived on, then choose_path; a
+\* gone path is never validated again (fix T6)
 OnResp(c, i, tok, r) ==
-    IF c.t[i].id = 0 \/ ~IsChal(c.t[i], tok) THEN c ELSE Choose([c EXCEPT !.t[i] = Clear(@, r)])
+    IF c.t[i].id = 0 \/ c.t[i].gone \/ ~IsChal(c.t[i], tok) THEN c ELSE Choose([c EXCEPT !.t[i] = Clear(@, r)])
 
 \* a packet that opened on slot i: last_rx = now
 Heard(c, i) == IF i = 0 THEN c ELSE [c EXCEPT !.t[i].hd = "fresh"]
@@ -111,15 +117,25 @@ Learn(c, id) ==
        ELSE IF s = 0 THEN [c |-> c, i |-> 0]
        ELSE [c |-> [c EXCEPT !.t[s] = New(id, "d", FALSE, "fresh")], i |-> s]
 
-\* add_path: a held path takes the new kind and stays as it is (validated or not); a new one takes a slot, never
-\* heard (last_rx 0), a relayed one validated, a direct one punched (its challenge drawn, not yet queued)
+\* take_info (fix T7): a held path takes the kind the endpoint names; a relayed one neither validated nor gone is
+\* validated, as every relayed path is (nothing for a slot no longer held)
+TakeInfo(c, f, k, six) ==
+    LET d == [c EXCEPT !.t[f].k = k, !.t[f].six = six]
+    IN IF c.t[f].id = 0 THEN c
+       ELSE IF k = "r" /\ ~d.t[f].v /\ ~d.t[f].gone THEN [d EXCEPT !.t[f].v = TRUE] ELSE d
+\* the new-path part of add_path in slot s: never heard (last_rx 0), a relayed one validated, a direct one punched
+\* (its challenge drawn, not yet queued)
+Fresh(c, s, id, k, six, rn) ==
+    LET d == [c EXCEPT !.t[s] = New(id, k, six, "never")] IN IF k = "d" THEN StartPunch(d, s, rn) ELSE d
+\* add_path: a held path takes the info (TakeInfo); a held gone path starts over as a new one (fix T6); a new one
+\* takes a slot (Fresh); then choose_path when the active path is gone (fix T4)
 AddPath(c, id, k, six, rn) ==
     LET f == PO!Find(c.t, id)
         s == PO!Slot(c.t, c.act)
-    IN IF f # 0 THEN [c |-> [c EXCEPT !.t[f].k = k, !.t[f].six = six], r |-> "ok"]
+        Mv(d) == IF d.t[d.act].id = 0 \/ d.t[d.act].gone THEN Choose(d) ELSE d
+    IN IF f # 0 THEN [c |-> Mv(IF c.t[f].gone THEN Fresh(c, f, id, k, six, rn) ELSE TakeInfo(c, f, k, six)), r |-> "ok"]
        ELSE IF s = 0 THEN [c |-> c, r |-> "toomany"]
-       ELSE LET d == [c EXCEPT !.t[s] = New(id, k, six, "never")]
-            IN [c |-> IF k = "d" THEN StartPunch(d, s, rn) ELSE d, r |-> "ok"]
+       ELSE [c |-> Mv(Fresh(c, s, id, k, six, rn)), r |-> "ok"]
 
 \* rebind_path: the slot keeps all it knows under the new id
 Rebind(c, old, new) ==
@@ -149,13 +165,13 @@ SetActive(c, id) ==
        ELSE [c |-> Switch(c, f, "set"), r |-> "ok"]
 
 \* set_path_info (the interface size is not modelled: the test keeps it fixed): only when the info differs; choose_path
-\* if the active path is now a relayed one; then a relayed path neither validated nor gone is validated
+\* if the active path is open to a move (OpenToMove, fix T4); then take_info (TakeInfo, fix T7)
 SetInfo(c, id, k, six) ==
     LET f == PO!Find(c.t, id)
     IN IF f = 0 \/ (c.t[f].k = k /\ c.t[f].six = six) THEN c
        ELSE LET d == [c EXCEPT !.t[f].k = k, !.t[f].six = six]
-                e == IF d.t[d.act].id = 0 \/ d.t[d.act].k = "r" THEN Choose(d) ELSE d
-            IN IF e.t[f].id # 0 /\ e.t[f].k = "r" /\ ~e.t[f].v /\ ~e.t[f].gone THEN [e EXCEPT !.t[f].v = TRUE] ELSE e
+                e == IF OpenToMove(d) THEN Choose(d) ELSE d
+            IN TakeInfo(e, f, k, six)
 
 \* A packet with a PATH_CHALLENGE on path id (process_payload, on_frame, challenge_back). cb: the node is not declared
 \* thin and the session moved application data within 20 s.
@@ -179,16 +195,17 @@ Data(c, id, hi, wake, fresh, rn) ==
         a == d.t[d.act]
         q == IF p.k = "d" /\ ~p.v /\ ~(fresh /\ p.ch # 0) THEN QueueChal(d, l.i, rn) ELSE d
     IN IF l.i = 0 THEN c
-       ELSE IF ~hi \/ l.i = d.act THEN d
+       ELSE IF ~hi \/ l.i = d.act \/ p.gone THEN d                                  \* fix T6: a gone path is not followed
        ELSE IF a.id = 0 \/ a.k = "r" \/ p.k = "d" \/ wake THEN Follow(q, l.i) ELSE q
 
 \* time passes: a heard path goes silent for more than 15 s
 Silence(c, x) == [c EXCEPT !.t[x].hd = "stale"]
 
-\* path_returned: only a path held, rejoining and not validated; validated with the given round trip, heard now
+\* path_returned: only a path held, not gone (fix T6), rejoining and not validated; validated with the given round
+\* trip, heard now
 Returned(c, id, r) ==
     LET f == PO!Find(c.t, id)
-    IN IF f = 0 \/ ~c.t[f].rj \/ c.t[f].v THEN [c |-> c, ok |-> FALSE]
+    IN IF f = 0 \/ c.t[f].gone \/ ~c.t[f].rj \/ c.t[f].v THEN [c |-> c, ok |-> FALSE]
        ELSE [c |-> Choose([c EXCEPT !.t[f] = [Clear(@, r) EXCEPT !.hd = "fresh"]]), ok |-> TRUE]
 
 \* probe
@@ -204,7 +221,7 @@ PunchKnown(c, rn) == PunchFrom(c, 1, rn)
 
 \* on_path_timers, first half: idle_out for each validated direct path heard once and silent for more than 15 s, in
 \* slot order (a thin session with no probe left re-challenges it, rejoining with one probe), the active one falling
-\* back to a relayed path; then choose_path if the active path is a relayed one (or none)
+\* back to a relayed path; then choose_path if the active path is open to a move (none, gone or relayed: fix T4)
 IdleDue(p) == p.id # 0 /\ p.v /\ p.k = "d" /\ p.hd = "stale"
 IdleOut(c, x, thin, rn) ==
     LET d == [c EXCEPT !.t[x].v = FALSE]
@@ -217,7 +234,7 @@ IdleFrom(c, x, thin, rn) ==
     IF x > NP THEN c ELSE IdleFrom(IF IdleDue(c.t[x]) THEN IdleOut(c, x, thin, rn) ELSE c, x + 1, thin, rn)
 Timers(c, thin, rn) ==
     LET d == IdleFrom(c, 1, thin, rn)
-    IN IF d.t[d.act].id = 0 \/ d.t[d.act].k = "r" THEN Choose(d) ELSE d
+    IN IF OpenToMove(d) THEN Choose(d) ELSE d
 
 \* on_path_timers, second half: fire_probe for each unvalidated path with a probe left that is due (F), in slot order.
 \* A thin session's re-join waiting for its floor (W) sends nothing; otherwise the challenge is queued and a probe
@@ -232,14 +249,14 @@ FireFrom(c, x, F, W, L, thin) ==
     IF x > NP THEN c
     ELSE FireFrom(IF x \in F /\ FireDue(c.t[x]) THEN Fire(c, x, x \in W, x \in L, thin) ELSE c, x + 1, F, W, L, thin)
 
-\* fail_over (three probe timeouts in a row or more): only an active direct path that is validated; it is no longer
-\* validated, a re-join is set up unless one is running (a challenge drawn, not yet queued), and the connection falls
-\* back to the relayed path of the highest slot
+\* fail_over (three probe timeouts in a row or more): only an active direct path; a validated one is no longer
+\* validated and a re-join is set up unless one is running (a challenge drawn, not yet queued); validated or not
+\* (fix T5), the connection falls back to a relayed path (Fallback)
 FailOver(c, rn) ==
     LET p == c.t[c.act]
         d == [c EXCEPT !.t[c.act].v = FALSE]
         e == IF p.rj /\ p.pr THEN d ELSE SetChal([d EXCEPT !.t[c.act].pr = TRUE, !.t[c.act].rj = TRUE], c.act, rn)
-    IN IF p.id = 0 \/ p.k # "d" \/ ~p.v THEN c ELSE Fallback(e)
+    IN IF p.id = 0 \/ p.k # "d" THEN c ELSE Fallback(IF p.v THEN e ELSE c)
 
 \* fill_path in a packet that is sealed: the queued challenge leaves on slot x
 Send(c, x) == [c EXCEPT !.t[x].o = @ \cup {c.t[x].ch}, !.t[x].sc = FALSE]

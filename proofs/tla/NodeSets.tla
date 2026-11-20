@@ -66,11 +66,12 @@
 (*    leaving node;                                                        *)
 (*  - OpenAtSat: a round that waits for credit retries at now + OPEN_RETRY *)
 (*    saturating at the clock's maximum.                                   *)
-(* Findings (configs on which TLC finds a violation of the documented     *)
-(* property, see the report): NodeSets_way (RoundHasWay: "a round ends     *)
-(* with exactly one event" fails when its dial's session comes up into a  *)
-(* full layer table), NodeSets_cancel (CancelledDoc: a round of a revoked  *)
-(* peer ends Exhausted, never Cancelled).                                  *)
+(* Documented properties the code meets with fix N1 (layer_lost):         *)
+(* NodeSets_way (RoundHasWay: "a round ends with exactly one event"; a    *)
+(* shed dial into a full layer table is a failed dial, retried),          *)
+(* NodeSets_cancel (CancelledDoc: a round of a revoked peer or a leaving  *)
+(* node ends Cancelled). Before N1, TLC found both violated (the          *)
+(* findings).                                                             *)
 (* Witnesses: NodeSets_busy, NodeSets_exhausted, NodeSets_respfull,        *)
 (* NodeSets_sat.                                                           *)
 (***************************************************************************)
@@ -156,11 +157,20 @@ SetsDown(s, sid) == DownEach([s EXCEPT !.resps = {x \in @ : x.s # sid}], {r.id :
 \* layer_failed for the reconcile layer
 LayerFailed(s, p) == SetsFailed([s EXCEPT !.lconn = @ \ {p}], p)
 
+RECURSIVE CancelEach(_, _)
+CancelEach(s, ids) == IF ids = {} THEN s ELSE LET id == Min(ids) IN CancelEach(End(s, id, "cancelled"), ids \ {id})
+\* layer_lost (fix N1): a dial of ours ends with no session; refused for good (cancel: the peer revoked or the node
+\* leaving) every round of the peer ends Cancelled, otherwise it is layer_failed (retry, backoff)
+LayerLost(s, p, cancel) ==
+    IF cancel THEN CancelEach([s EXCEPT !.lconn = @ \ {p}], {r.id : r \in {x \in s.rounds : x.peer = p}})
+    ELSE LayerFailed(s, p)
+
 \* dial_layer: nothing with a session we dialed or a dial in flight; refused (reported to the layer) for a revoked
 \* peer or a leaving node, or when the endpoint has no room for a session; a dial out is recorded while lconn has room
 DialLayer(s, p) ==
     IF HasOut(s, p) \/ p \in s.lconn THEN s
-    ELSE IF s.leaving \/ p \in s.revoked \/ FreeSid(s) = 0 THEN LayerFailed(s, p)
+    ELSE IF s.leaving \/ p \in s.revoked THEN LayerLost(s, p, TRUE)
+    ELSE IF FreeSid(s) = 0 THEN LayerFailed(s, p)
     ELSE [s EXCEPT !.eps = @ \cup {[sid |-> FreeSid(s), peer |-> p, out |-> TRUE, up |-> FALSE, closing |-> FALSE]},
                    !.lconn = IF Cardinality(@) < LCONN THEN @ \cup {p} ELSE @]
 
@@ -168,11 +178,14 @@ DialLayer(s, p) ==
 RECURSIVE Settle(_)
 Settle(s) == IF s.ldials = {} THEN s ELSE LET p == Min(s.ldials) IN Settle(DialLayer([s EXCEPT !.ldials = @ \ {p}], p))
 
-\* layer_up: shed (Close) for a revoked peer or a leaving node, a full table, or a second session we dialed
+\* layer_up: shed (Close) for a revoked peer or a leaving node, a full table, or a second session we dialed; with
+\* fix N1 a shed dial of ours (not the duplicate) is layer_lost: cancelled when revoked or leaving, else failed
 LayerUp(s, sid, p, inc) ==
     LET s0 == [s EXCEPT !.lconn = @ \ {p}]
-    IN IF p \in s.revoked \/ s.leaving \/ Cardinality(s.lsess) >= LCAP \/ (~inc /\ HasOut(s, p))
-       THEN Close(s0, sid)
+        gone == p \in s.revoked \/ s.leaving
+    IN IF gone \/ Cardinality(s.lsess) >= LCAP
+       THEN IF inc THEN Close(s0, sid) ELSE LayerLost(Close(s0, sid), p, gone)
+       ELSE IF ~inc /\ HasOut(s, p) THEN Close(s0, sid)
        ELSE SetsUp([s0 EXCEPT !.lsess = @ \cup {[sid |-> sid, peer |-> p, inc |-> inc]},
                               !.lout = IF inc THEN @ ELSE @ \cup {[peer |-> p, sid |-> sid]}], p)
 

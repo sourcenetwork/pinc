@@ -4,8 +4,8 @@ import Pinc.KeyRollSysAct
 # Three findings about the old code, as concrete traces of the fixed model
 
 Each trace is a trace of `Pinc.KeyRollSys` that the model checker found a violation on in the code as first read
-(`KeyRoll_gate.cfg`, `KeyRoll_stale.cfg`, `KeyRoll_orphan.cfg`, which now pass); every step is checked by
-evaluation. The same steps, run against the fixed code, end differently:
+(`KeyRoll_gate.cfg`, `KeyRoll_stale.cfg`, and the orphan case now checked by `KeyRoll_two.cfg`, which now pass);
+every step is checked by evaluation. The same steps, run against the fixed code, end differently:
 
 * F1 (`duplicate_answered_again`): a repeated request is delivered while the answerer's next key is staged. The old
   `Keys::on_request` refused it before the duplicate check of `Roll::on_request`, so the lost answer was never sent

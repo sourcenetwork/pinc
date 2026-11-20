@@ -41,18 +41,22 @@
 (*  FollowRule       a data packet moves the active path exactly by        *)
 (*                   follow_peer's rule (FollowsPeer is the doc's);        *)
 (*  ChooseValid      choose_path moves only onto a usable path;            *)
-(*  FallbackRule     fail_over on a validated active direct path leaves it *)
-(*                   unvalidated and rejoining with probes, on the         *)
-(*                   relayed path of the highest slot if there is one;     *)
-(*                   otherwise it changes nothing (the code's rule;        *)
-(*                   DocFallback is the doc's);                            *)
+(*  FallbackRule     fail_over on an active direct path, validated or not  *)
+(*                   (fix T5), moves to the validated relayed path, not    *)
+(*                   gone, of the highest slot if there is one, a          *)
+(*                   validated one left unvalidated and rejoining with     *)
+(*                   probes; otherwise it changes nothing (the code's      *)
+(*                   rule; DocFallback is the doc's);                      *)
 (*  LostRule         after path_lost no gone path is held but the active  *)
 (*                   one, and the lost path, if still held, is that one,   *)
 (*                   gone and unvalidated.                                 *)
-(* The doc's claims the code does not meet (witness configs, TLC must     *)
-(* violate them): DocValid, RelayValid, FollowsPeer, DocFallback,          *)
-(* GoneLeft, GoneNeverBack, DocGain. Reach witnesses: NoReplacedAnswer,    *)
-(* NoWrap, NoFallback.                                                     *)
+(* The doc's claim the code does not meet (witness config, TLC must        *)
+(* violate it): DocValid (T9, a doc fix). RelayValid, DocFallback,         *)
+(* GoneLeft and GoneNeverBack hold with fixes T7, T5, T4 and T6            *)
+(* (PathMove_relay, _stuck, _lost, _gone; before them TLC found each       *)
+(* violated). FollowsPeer and DocGain state the docs restated by T8 and    *)
+(* T11 and hold (PathMove_follow, PathMove_gain). Reach witnesses:         *)
+(* NoReplacedAnswer, NoWrap, NoFallback.                                   *)
 (***************************************************************************)
 EXTENDS PathMoveOps, TLC
 
@@ -68,7 +72,7 @@ C0 == [t |-> [x \in 1..NP |-> IF x = 1 THEN [New(1, "d", FALSE, "fresh") EXCEPT 
 
 \* the ghost of the last step: the call, the slot it acted on, what the properties read of the state before it
 E0 == [op |-> "init", id |-> 0, s |-> 0, tok |-> 0, ok |-> FALSE, rep |-> FALSE, rc |-> FALSE, nvd |-> {},
-       hi |-> FALSE, fol |-> FALSE, pact |-> 0, pd |-> FALSE, pk |-> "none", hr |-> FALSE]
+       hi |-> FALSE, fol |-> FALSE, pact |-> 0, pd |-> FALSE, pk |-> "none", hr |-> FALSE, wake |-> FALSE]
 
 Init == c = C0 /\ wire = {} /\ ev = E0
 
@@ -133,9 +137,11 @@ DataAct ==
     /\ \E id \in Ids, hi \in BOOLEAN, wake \in BOOLEAN, fresh \in BOOLEAN, rn \in BOOLEAN :
          LET l == Learn(Pre, id)
              fol == hi /\ l.i # 0 /\ l.i # c.act
+                    /\ ~l.c.t[l.i].gone
                     /\ (l.c.t[c.act].id = 0 \/ l.c.t[c.act].k = "r" \/ l.c.t[l.i].k = "d" \/ wake)
          IN Do(Data(Pre, id, hi, wake, fresh, rn),
-               [E0 EXCEPT !.op = "data", !.id = id, !.s = l.i, !.hi = hi, !.fol = fol, !.pact = c.act])
+               [E0 EXCEPT !.op = "data", !.id = id, !.s = l.i, !.hi = hi, !.fol = fol, !.pact = c.act,
+                         !.wake = wake])
     /\ UNCHANGED wire
 \* handle_timeout without fail_over: idle-out and the relay escape, then the probes that are due
 TimerAct ==
@@ -153,7 +159,7 @@ FailAct ==
             [E0 EXCEPT !.op = "failover", !.pact = c.act,
                        !.pd = (c.t[c.act].id # 0 /\ c.t[c.act].k = "d" /\ c.t[c.act].v),
                        !.pk = IF c.t[c.act].id = 0 THEN "none" ELSE c.t[c.act].k,
-                       !.hr = (Relays(c.t) # {})])
+                       !.hr = (Fallbacks(c.t) # {})])
     /\ UNCHANGED wire
 ReturnedAct == /\ "returned" \in OPS
                /\ \E id \in Ids, r \in RTTS : Do(Returned(Pre, id, r).c, [E0 EXCEPT !.op = "returned", !.id = id])
@@ -194,31 +200,37 @@ FollowRule == ev.op = "data" => c.act = (IF ev.fol THEN ev.s ELSE ev.pact)
 ChooseValid == c.mv = "choose" => Usable(c.t[c.act])
 FallbackRule ==
     ev.op = "failover" =>
-        IF ev.pd
-        THEN (~c.t[ev.pact].v /\ c.t[ev.pact].rj /\ c.t[ev.pact].pr
-              /\ c.act = (IF ev.hr THEN Last(Relays(c.t)) ELSE ev.pact))
+        IF ev.pk = "d"
+        THEN /\ ev.pd => (~c.t[ev.pact].v /\ c.t[ev.pact].rj /\ c.t[ev.pact].pr)
+             /\ c.act = (IF ev.hr THEN Last(Fallbacks(c.t)) ELSE ev.pact)
         ELSE c.act = ev.pact
 LostRule ==
     ev.op = "lost" /\ ev.s # 0 =>
         /\ \A x \in 1..NP : (x # c.act /\ c.t[x].id # 0) => ~c.t[x].gone
         /\ c.t[ev.s].id = ev.id => (ev.s = c.act /\ c.t[ev.s].gone /\ ~c.t[ev.s].v)
 
-\* The doc's claims (path.rs). Each is violated by the code in its witness config.
+\* The doc's claims (path.rs). DocValid is violated by the code in its witness config; RelayValid, DocFallback,
+\* GoneLeft and GoneNeverBack hold with fixes T4 to T7.
 \* module doc, invariants: "a direct path is validated only by an answer to a challenge sent to it"
 DocValid == \A x \in ev.nvd : ev.op = "resp" /\ x = ev.s /\ ev.ok
 \* module doc: "A relay path is valid from the moment the connection tracks it"
 RelayValid == \A x \in 1..NP : (c.t[x].id # 0 /\ c.t[x].k = "r" /\ ~c.t[x].gone) => c.t[x].v
-\* module doc: "the highest-numbered packet that carries STREAM, DATAGRAM or WAKE data moves the active path to the
-\* path it came from"
-FollowsPeer == (ev.op = "data" /\ ev.hi /\ ev.s # 0) => c.t[c.act].id = ev.id
+\* module doc (restated by T8): "the highest-numbered packet that carries STREAM, DATAGRAM or WAKE data moves the
+\* active path to the path it came from, except that only a packet carrying WAKE moves it from a direct path onto a
+\* relay path" (a data step changes no path's kind, so the kinds after it are the kinds before)
+FollowsPeer == (ev.op = "data" /\ ev.hi /\ ev.s # 0
+                /\ ~(c.t[ev.pact].id # 0 /\ c.t[ev.pact].k = "d" /\ c.t[ev.s].k = "r" /\ ~ev.wake))
+               => c.t[c.act].id = ev.id
 \* module doc and fail_over: "After three probe timeouts in a row on a direct path ... the connection falls back to a
 \* relay path if it has one"
+\* (hr: a relayed path validated and not gone is held; a gone one can never be used, Path::gone)
 DocFallback == (ev.op = "failover" /\ ev.pk = "d" /\ ev.hr) => c.t[c.act].k = "r"
 \* path_lost: "the connection leaves it for the best validated path at once, or as soon as one validates"
 GoneLeft == c.t[c.act].gone => Best(c.t) = 0
 \* Path::gone: "nothing can use it again"
 GoneNeverBack == ~c.t[c.act].lf
-\* module doc: "from a relay the connection moves at once, otherwise only for a gain above 5 ms" (of the cost)
+\* module doc (restated by T11): "from a relay the connection moves at once, otherwise only when the cheaper path's
+\* round trip is more than 5 ms shorter" (dg: a move off a usable direct path for a round-trip gain of GAIN or less)
 DocGain == ~c.dg
 
 \* Reach witnesses: an answer to a replaced challenge validates a path; a table that dropped a challenge drawn since it

@@ -83,8 +83,8 @@ PushDrop(q, pl, d, k, qn, c, cs, p) ==
        ELSE LET o == Pop(r.q, r.pl, c) IN PushDrop(o.q, o.pl, d, k + 1, qn, c, cs, p)
 
 \* `send_datagram(pool, data, max_size)` and its counter `send_dropped` (cnt). With doc, the counter follows its doc:
-\* the datagrams dropped to make room and the one refused by an empty pool; without, the code: only the drops of a
-\* push that succeeded.
+\* the datagrams dropped to make room and the one refused by an empty pool (the code with fix T2); without, the code
+\* before T2: only the drops of a push that succeeded.
 Send(q, pl, cnt, d, maxsz, qn, c, cs, p, doc) ==
     IF d.len > maxsz THEN [res |-> "toolarge", q |-> q, pl |-> pl, cnt |-> cnt, k |-> 0]
     ELSE LET r == PushDrop(q, pl, d, 0, qn, c, cs, p)
@@ -94,8 +94,8 @@ Send(q, pl, cnt, d, maxsz, qn, c, cs, p, doc) ==
                        [] r.res = "toolarge" -> cnt
                        [] OTHER -> IF doc THEN cnt + r.k + 1 ELSE cnt]
 
-\* `on_datagram_frame(pool, data)` and `recv_dropped` (cnt). With doc: the drops and the datagram not stored; without,
-\* the code: the drops of a push that succeeded, else 1.
+\* `on_datagram_frame(pool, data)` and `recv_dropped` (cnt). With doc (the code with fix T2): the drops and the
+\* datagram not stored; without, the code before T2: the drops of a push that succeeded, else 1.
 Recv(q, pl, cnt, d, qn, c, cs, p, doc) ==
     LET r == PushDrop(q, pl, d, 0, qn, c, cs, p)
     IN [res |-> r.res, q |-> r.q, pl |-> r.pl, k |-> r.k,

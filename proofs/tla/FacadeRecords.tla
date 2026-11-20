@@ -29,7 +29,9 @@
 (* record (whichever the map yields first: any) to take a new node when it *)
 (* is full. A forgotten node's next lookup takes whatever verifies, so a    *)
 (* replay older than what was once believed is believed again: NoRollback  *)
-(* holds only while no node is forgotten, and FacadeRecords_evict.cfg      *)
+(* holds only while no node is forgotten (HeldNoRollback: a held record   *)
+(* never goes back, checked with forgetting in FacadeRecords_bounded.cfg), *)
+(* and FacadeRecords_evict.cfg                                             *)
 (* (KMAX 1) shows NoReplayBelieved failing (finding a).                    *)
 (*                                                                         *)
 (* RELAYS: the endpoint knows relays (a node that carries the relay role, *)
@@ -136,6 +138,10 @@ AnswerGenuine == answer.rec.seq > 0 => answer.rec.signer = answer.node /\ answer
                                        /\ answer.rec.seq <= published[answer.node]
 \* The known table holds at most KMAX nodes.
 Bounded == Cardinality(Held(known)) <= KMAX
+\* While a node's record is held it is never replaced by an older one: what is held only rises or is forgotten (a full
+\* table forgets one node; its next lookup takes what the store holds, NoReplayBelieved's finding). This is the
+\* documented rule of records.rs: no rollback for a node whose record is held.
+HeldNoRollback == [][\A n \in Nodes : known[n].seq > 0 => known'[n].seq = 0 \/ known'[n].seq >= known[n].seq]_vars
 \* What the endpoint believes about a node is never older than something it believed before (unlike NoRollback, a
 \* node forgotten by a full table is allowed to hold nothing).
 NoReplayBelieved == \A n \in Nodes : known[n].seq > 0 => known[n].seq >= peak[n]

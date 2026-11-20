@@ -31,9 +31,11 @@
 (* Configs: Settle.cfg, every role, side and path kind but a quiet dialing *)
 (* session on a direct path, no quiet period; Settle_watch.cfg (a quiet    *)
 (* dialing session on a direct path) and Settle_held.cfg (a quiet period)  *)
-(* are findings: the plan's ping stays the same while the last send moves, *)
-(* so the stored interval is not applied again and the connection's PING   *)
-(* falls later than the plan; TLC must find Applied violated there.        *)
+(* check Applied where the plan's ping stays the same while the last send  *)
+(* moves: with the fix of core.md (settle hands the interval over every    *)
+(* time) the connection's PING falls at the plan. Before it the stored     *)
+(* interval was not applied again and TLC found Applied violated there     *)
+(* (the findings).                                                         *)
 (***************************************************************************)
 EXTENDS Integers, FiniteSets
 CONSTANTS TIMES, ROLES, DIALERS, DIRECTS, WATCH, QU
@@ -56,7 +58,7 @@ Settled(t, tx1, rx1, app1, fl1, pl1, plan0) ==
     LET p == Plan(In(t, tx1, rx1, app1, fl1))
     IN /\ now' = t /\ tx' = tx1 /\ rx' = rx1 /\ app' = app1 /\ flight' = fl1 /\ pulse' = pl1
        /\ plan' = p
-       /\ applied' = IF p = plan0 THEN applied ELSE Interval(p, tx1, pl1)
+       /\ applied' = Interval(p, tx1, pl1)  \* fix C4: handed over every settle, whether the plan changed or not
        /\ UNCHANGED kind
 
 Init == /\ kind \in Kinds

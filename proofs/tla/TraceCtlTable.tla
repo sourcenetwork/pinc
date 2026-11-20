@@ -17,9 +17,11 @@
 (* recorded by the generation the test issued it with).                    *)
 (*                                                                         *)
 (* DOC = TRUE replays the documented rule for tickets (an acknowledgement  *)
-(* clears only the batch it carried); the replay then stops at the first   *)
-(* acknowledgement of an older batch while a newer one is held (a finding, *)
-(* see CtlTable.tla). DOC = FALSE replays the code as it is.               *)
+(* or a loss acts only on the batch it carried), which the code keeps with *)
+(* fix T1; before T1 the replay stopped at the first acknowledgement of an *)
+(* older batch while a newer one was held (the finding). DOC = FALSE       *)
+(* replays the code before T1. A loss of tickets is recorded with the id   *)
+(* of its reference, the generation after T1.                              *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds ctl.ndjson.           *)
@@ -60,7 +62,8 @@ BuildReadyEv == LET r == BuildReady(c)
 AckEv == LET a == Acked(c, pu, Ev0.k, Ev0.id, Ev0.g, DOC)
          IN /\ Ev0.op \in {"ack", "late_ack"} /\ c' = a.c /\ pu' = a.used /\ UNCHANGED p
             /\ (Ev0.k = "sc" => (a.layer = "acked") = Ev0.handed)
-LoseEv == LET l == Lost(c, Ev0.k, Ev0.id)
+\* a tickets reference's id is its batch's generation (fix T1), so a loss of tickets names its batch by id
+LoseEv == LET l == Lost(c, Ev0.k, Ev0.id, IF Ev0.k = "tk" THEN Ev0.id ELSE 0, DOC)
           IN /\ Ev0.op = "lose" /\ c' = l.c /\ UNCHANGED <<pu, p>>
              /\ (Ev0.k = "sc" => (l.layer = "lost") = Ev0.handed)
 

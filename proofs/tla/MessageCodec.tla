@@ -38,14 +38,16 @@
 (*   Cross      each message type is refused by the parser of every other; *)
 (*   Classes    each malformed class is refused with its own reason;       *)
 (*   OutOfRange the code's answer to fields outside the documented ranges: *)
-(*              an ALPN of 0, 33 or 255 bytes, a sealed field of 15 or     *)
-(*              5385 bytes and a key of the wrong length are written and   *)
-(*              refused by the parser, an ALPN of 256 bytes and a sealed   *)
-(*              field of 65536 bytes are VarintOverflow.                   *)
+(*              an ALPN of 0, 33, 255 or 256 bytes is refused by the       *)
+(*              writer with the parser's own error ("alpn length", fix     *)
+(*              S4), a sealed field of 15 or 5385 bytes and a key of the   *)
+(*              wrong length are written and refused by the parser, a      *)
+(*              sealed field of 65536 bytes is VarintOverflow.             *)
 (* MessageCodec_alpn.cfg checks WriteRefusesBadAlpn, the doc of            *)
-(* Initial::write ("a length error for a field out of range"), and TLC     *)
-(* finds it violated: the code writes an ALPN of 0 or 33 to 255 bytes.     *)
-(* The machines cannot produce one (their ALPN is an Alpn, 1 to 32 bytes). *)
+(* Initial::write ("a length error for a field out of range"), which the   *)
+(* code keeps with fix S4; before it the code wrote an ALPN of 0 or 33 to  *)
+(* 255 bytes and TLC found it violated. The machines cannot produce one    *)
+(* (their ALPN is an Alpn, 1 to 32 bytes).                                 *)
 (* Not modelled: Initial::prekey_hash (a hash, an ideal primitive) and     *)
 (* CreditRecord::decode and encode (a bijection on 6 bytes, Credit.tla).   *)
 (***************************************************************************)
@@ -68,12 +70,15 @@ Be16(n) == <<n \div 256, n % 256>>
 Least(S) == CHOOSE i \in S : \A j \in S : i <= j
 
 (* ---- writing: the pieces each write appends, in the order of the code ---- *)
-Pc(b) == [ok |-> TRUE, b |-> b]
-Ovf == [ok |-> FALSE, b |-> <<>>]
+Pc(b) == [ok |-> TRUE, b |-> b, why |-> ""]
+Ovf == [ok |-> FALSE, b |-> <<>>, why |-> "overflow"]
 U8(v) == Pc(<<v>>)
 \* u8::try_from(len) then put_u8, and u16::try_from(len) then put_u16
 Len8(s) == IF Len(s) <= 255 THEN U8(Len(s)) ELSE Ovf
 Len16(s) == IF Len(s) <= 65535 THEN Pc(Be16(Len(s))) ELSE Ovf
+\* write_alpn with fix S4: the length the parser accepts (alpn_len_ok, 1 to MaxAlpn), else the parser's own error
+AlpnLen(s) == IF Len(s) >= 1 /\ Len(s) <= MaxAlpn THEN U8(Len(s)) ELSE [ok |-> FALSE, b |-> <<>>, why |-> "alpn length"]
+AlpnRefused == [res |-> "unexpected", what |-> "alpn length"]
 
 RECURSIVE TicketPieces(_)
 TicketPieces(ts) == IF ts = <<>> THEN <<>> ELSE <<Pc(Head(ts).tid), Pc(Head(ts).life)>> \o TicketPieces(Tail(ts))
@@ -81,12 +86,12 @@ TicketPieces(ts) == IF ts = <<>> THEN <<>> ELSE <<Pc(Head(ts).tid), Pc(Head(ts).
 Pieces(m) ==
     CASE m.k = "initial" ->
             <<U8(IF m.full THEN 1 ELSE 2), U8(m.ver), Len8(m.dcid), Pc(m.dcid), Len8(m.scid), Pc(m.scid),
-              Len8(m.alpn), Pc(m.alpn), U8(m.offer), Pc(m.e), Pc(m.pre), Pc(m.cr)>>
+              AlpnLen(m.alpn), Pc(m.alpn), U8(m.offer), Pc(m.e), Pc(m.pre), Pc(m.cr)>>
       [] m.k = "reject" -> <<U8(m.ty), Pc(m.echo)>>
       [] m.k = "reply" -> <<U8(4), Len8(m.scid), Pc(m.scid), U8(m.aead), Pc(m.e), Pc(m.ct), Len16(m.sealed), Pc(m.sealed)>>
       [] m.k = "finish" -> <<U8(5), Len16(m.sealed), Pc(m.sealed)>>
       [] m.k = "hello" ->
-            <<U8(6), U8(m.ver), Len8(m.dcid), Pc(m.dcid), Len8(m.scid), Pc(m.scid), Len8(m.alpn), Pc(m.alpn),
+            <<U8(6), U8(m.ver), Len8(m.dcid), Pc(m.dcid), Len8(m.scid), Pc(m.scid), AlpnLen(m.alpn), Pc(m.alpn),
               U8(m.aead), Pc(m.tid), Pc(m.e), Pc(m.binder), Pc(m.cr)>>
       [] m.k = "rreply" ->
             <<U8(7), Len8(m.scid), Pc(m.scid), Pc(m.e), U8(Len(m.tickets))>> \o TicketPieces(m.tickets)
@@ -99,7 +104,7 @@ RECURSIVE Fold(_, _, _)
 Fold(ps, cap, acc) ==
     IF ps = <<>> THEN [res |-> "ok", bytes |-> acc]
     ELSE LET pc == Head(ps)
-         IN IF ~pc.ok THEN [res |-> "overflow"]
+         IN IF ~pc.ok THEN (IF pc.why = "overflow" THEN [res |-> "overflow"] ELSE [res |-> "unexpected", what |-> pc.why])
             ELSE IF Len(pc.b) > cap - Len(acc) THEN [res |-> "small", needed |-> Len(pc.b) - (cap - Len(acc))]
             ELSE Fold(Tail(ps), cap, acc \o pc.b)
 EncodeCap(m, cap) == Fold(Pieces(m), cap, <<>>)
@@ -352,11 +357,8 @@ Classes ==
 
 \* what the code does with fields outside the documented ranges (constant: checked once per state, cheap)
 OutOfRange ==
-    /\ \A a \in WrittenAlpns :
-          /\ EncodeCap(BadInitial(a), Big).res = "ok" /\ ParseInitial(Enc(BadInitial(a))) = Un("alpn length")
-          /\ EncodeCap(BadHello(a), Big).res = "ok" /\ ParseHello(Enc(BadHello(a))) = Un("alpn length")
-    /\ EncodeCap(BadInitial(A256), Big) = [res |-> "overflow"]
-    /\ EncodeCap(BadHello(A256), Big) = [res |-> "overflow"]
+    /\ \A a \in WrittenAlpns \cup {A256} :
+          EncodeCap(BadInitial(a), Big) = AlpnRefused /\ EncodeCap(BadHello(a), Big) = AlpnRefused
     /\ \A n \in {TagLen - 1, MaxSealed + 1} :
           LET f == [k |-> "finish", sealed |-> Pat(n, 3)]
           IN EncodeCap(f, Big).res = "ok" /\ ParseFinish(Enc(f)) = Un("sealed length")

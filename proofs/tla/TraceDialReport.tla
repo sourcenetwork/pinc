@@ -7,7 +7,7 @@
 (* early end comes after 4 unheard flights (EARLY_FLIGHTS) at 15 ticks     *)
 (* (7.5 s), the handshake gives up past 60 ticks (CONNECT_TIMEOUT 30 s,    *)
 (* the deadline one nanosecond past it fires at the next tick), and the    *)
-(* doubling stays below CAP (16 s) within those 60 ticks.                  *)
+(* doubling stays below Cap (32 ticks, CAP 16 s) within those 60 ticks.   *)
 (*                                                                         *)
 (* The test `tests/trace_dial_report.rs` (file dial_report.ndjson) runs A  *)
 (* and a peer P in the shared world tests/facade_world.rs. It writes what  *)
@@ -39,9 +39,9 @@
 (* model with nothing due (Quiet): no timer, answer, Limit or sub-session  *)
 (* answer left to happen. A line the model cannot take deadlocks.          *)
 (*                                                                         *)
-(* Not traced: a thin node (the model's doubling has no cap; the code caps *)
-(* a thin node's delay at CAP_THIN, 8 s, so its 7th send comes at 23.5 s,  *)
-(* the model's at 31.5 s), the host's hold of resends (Hold), the first    *)
+(* Not traced: a thin node (the model caps its delay at CapThin, 16 ticks, *)
+(* CAP_THIN 8 s, as the code does; the test never makes a thin node), the  *)
+(* host's hold of resends (Hold), the first                                *)
 (* fix and the planted bugs (all off), a second dial at once (over).       *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
@@ -52,7 +52,8 @@ EXTENDS Integers, Sequences, TLC, Json, IOUtils
 VARIABLES now, alive, inc, ticket, cached, held, d, steady, floor, limits, i, cut
 mvars == <<now, alive, inc, ticket, cached, held, d, steady, floor, limits>>
 
-M == INSTANCE DialReport WITH First <- 1, Rtt <- 0, Flights <- 4, Promise <- 15, Limit <- 60, MaxNow <- 100000,
+M == INSTANCE DialReport WITH First <- 1, Rtt <- 0, Flights <- 4, Promise <- 15, Limit <- 60, Cap <- 32, CapThin <- 16,
+                              MaxNow <- 100000,
                               MaxInc <- 64, Early <- TRUE, FixedBound <- 0, CountHeld <- FALSE,
                               HeardResets <- TRUE, EarlyOnThin <- FALSE, FloorEarly <- FALSE,
                               AnswerAtReport <- FALSE, AnswerEvent <- TRUE, AnswerAtKeys <- FALSE

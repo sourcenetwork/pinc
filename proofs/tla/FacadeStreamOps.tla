@@ -20,22 +20,17 @@
 (* the local close.                                                        *)
 (*                                                                         *)
 (* DOC = TRUE is the documented behaviour; DOC = FALSE the code as written  *)
-(* where the two differ (the findings, each named at its branch):          *)
-(*  - write and finish after reset(code): documented "the error that ended *)
-(*    the stream", the code returns Stopped(0) and Ok;                      *)
-(*  - dropping or stopping a RecvStream when the session already tracks    *)
-(*    TRACKED (128) discarded streams (DFULL): documented "discards what    *)
-(*    the peer still sends", the code keeps the bytes unread;              *)
-(*  - a stop-sending that arrives after the SendStream was dropped:         *)
-(*    documented "a table holds an entry only while its stream lives", the *)
-(*    code records an entry no handle removes;                              *)
-(*  - recv_datagram after the connection ended: documented "the reason ...  *)
-(*    once the datagrams that arrived before are read", the code returns    *)
-(*    the reason at once.                                                   *)
+(* where the two differ: a stop-sending that arrives after the SendStream   *)
+(* was dropped (documented "a table holds an entry only while its stream    *)
+(* lives", the code records it; F6, open). The other findings are fixed in  *)
+(* the code and the model follows it: write and finish after reset(code)    *)
+(* answer the reset (F2), a dropped or stopped RecvStream is always         *)
+(* discarded (F1: the list is bounded by the stream slots), and a datagram  *)
+(* read after the end answers the end (F4).                                 *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
 
-CONSTANTS DOC, DFULL, DQ, RC, SC, PR, PC, PCC, LC
+CONSTANTS DOC, DQ, RC, SC, PR, PC, PCC, LC
 
 STOPPED == 1
 RESET == 2
@@ -74,8 +69,8 @@ Res(t, o) == [s |-> t, o |-> o]
 
 \* SendStream::write then Core::write: the handle's own refusal, the stopped stream, the session, the room
 Write(s) ==
-    IF s.hfin
-    THEN Res(s, IF DOC /\ s.hreset THEN Err(STOPPED, RC) ELSE Err(STOPPED, 0))   \* finding: Stopped(0) after reset
+    IF s.hreset THEN Res(s, Err(STOPPED, RC))                                     \* fix F2: the reset is the error
+    ELSE IF s.hfin THEN Res(s, Err(STOPPED, 0))
     ELSE IF s.live /\ s.failed THEN Res(s, Err(STOPPED, s.fcode))
     ELSE IF ~s.live THEN Res(s, Gone(s))
     ELSE IF s.room THEN Res([s EXCEPT !.tw = @ + 1], Ok(s.tw + 1))
@@ -83,24 +78,24 @@ Write(s) ==
 
 \* SendStream::finish: idempotent once finished; Core::finish checks the failure, then the session
 Finish(s) ==
-    IF s.hfin
-    THEN Res(s, IF DOC /\ s.hreset THEN Err(STOPPED, RC) ELSE Ok(0))              \* finding: Ok after reset
+    IF s.hreset THEN Res(s, Err(STOPPED, RC))                                     \* fix F2: the reset is the error
+    ELSE IF s.hfin THEN Res(s, Ok(0))
     ELSE IF s.live /\ s.failed THEN Res(s, Err(STOPPED, s.fcode))
     ELSE IF ~s.live THEN Res(s, Gone(s))
     ELSE Res([s EXCEPT !.hfin = TRUE, !.tfin = TRUE], Ok(0))
 
-\* SendStream::reset: `finished` first; Core::reset sends the reset and records Stopped(code) (send_failed does
-\* nothing on a session no longer in the table)
+\* SendStream::reset with fix F2: the handle records the reset only once Core::reset ran (it sends the reset and
+\* records Stopped(code); send_failed does nothing on a session no longer in the table); `finished` is not set
 Reset(s) ==
-    Res([s EXCEPT !.hfin = TRUE, !.hreset = TRUE,
+    Res([s EXCEPT !.hreset = TRUE,
                   !.treset = s.live \/ s.treset,
                   !.failed = s.live \/ s.failed,
                   !.fcode = IF s.live THEN RC ELSE s.fcode], Ok(0))
 
-\* Drop for SendStream, Core::drop_send: finish unless finished or failed, then forget the failure
+\* Drop for SendStream, Core::drop_send: finish unless finished, reset (fix F2) or failed, then forget the failure
 DropSend(s) ==
     Res([s EXCEPT !.dropS = TRUE, !.dropLive = s.live,
-                  !.tfin = s.tfin \/ (~s.hfin /\ ~s.failed /\ s.live),
+                  !.tfin = s.tfin \/ (~s.hfin /\ ~s.hreset /\ ~s.failed /\ s.live),
                   !.failed = FALSE], Ok(0))
 
 \* StreamStopped -> send_failed(Stopped(code)); documented: not for a stream whose handle is gone
@@ -126,12 +121,9 @@ Read(s) ==
     ELSE IF s.pfin THEN Res([s EXCEPT !.hend = "fin"], EndR)
     ELSE Res(s, WaitR)
 
-\* Core::drop_recv: listed in Sess::discard (only below TRACKED in the code), then discard_if_dropped consumes
-\* what is held until the stream ends
-DropRecvCore(s) ==
-    IF DOC \/ ~DFULL
-    THEN [s EXCEPT !.rpos = s.pw, !.disc = ~(s.pfin \/ s.preset)]
-    ELSE s                                                                        \* finding: nothing discarded
+\* Core::drop_recv: listed in Sess::discard (bounded by the session's stream slots with fix F1, so the list is never
+\* full), then discard_if_dropped consumes what is held until the stream ends
+DropRecvCore(s) == [s EXCEPT !.rpos = s.pw, !.disc = ~(s.pfin \/ s.preset)]
 
 \* RecvStream::stop: `stopped` first; Core::stop_recv sends stop-sending, then drop_recv
 Stop(s) ==
@@ -165,13 +157,13 @@ PeerDgram(s) ==
               !.dq = IF Len(s.dq) >= DQ THEN Append(Tail(s.dq), s.dn + 1) ELSE Append(s.dq, s.dn + 1),
               !.ddrop = IF Len(s.dq) >= DQ THEN @ \cup {Head(s.dq)} ELSE @]
 
-\* Connection::recv_datagram, Core::read_datagram: oldest first; TooLarge leaves it queued
+\* Connection::recv_datagram, Core::read_datagram: oldest first; TooLarge leaves it queued; once the connection ended
+\* the reason, the datagrams still queued going with it (documented so, the code and DOC agree)
 RecvDgram(s, fit) ==
-    IF ~DOC /\ ~s.live THEN Res(s, Gone(s))                                       \* finding: reason first
+    IF ~s.live THEN Res(s, Gone(s))
     ELSE IF s.dq # <<>>
     THEN IF fit THEN Res([s EXCEPT !.dq = Tail(@), !.dgot = Append(@, Head(s.dq))], Ok(Head(s.dq)))
          ELSE Res(s, Err(TOOLARGE, 0))
-    ELSE IF ~s.live THEN Res(s, Gone(s))
     ELSE Res(s, WaitR)
 
 \* Connection::send_datagram, Core::send_datagram: the session, then the transport's size check

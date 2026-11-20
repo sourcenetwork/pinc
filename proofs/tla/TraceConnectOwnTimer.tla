@@ -35,11 +35,12 @@
 (*                                                                         *)
 (* Checked (AllOK): the first before is the new node's state, each before  *)
 (* is the previous after, and each after is one outcome of the call.       *)
-(* Witness (TraceConnectOwnTimer_change.cfg, NoLostChange must fail on the *)
-(* trace's fixed prefix): a change made while a record job is outstanding  *)
-(* (next_publish set to now from u64::MAX) is overwritten by the answer,   *)
-(* which arms the republish 1800 s on; the record that went out was built *)
-(* before the change. The Lean model does the same (signed, line 165).     *)
+(* Also checked (TraceConnectOwnTimer_change.cfg, NoLostChange): a change *)
+(* made while a record job is outstanding (next_publish set to now from    *)
+(* u64::MAX) is kept by the answer, which arms the republish 1800 s on     *)
+(* only when nothing armed it meanwhile (Signed; the Lean afterSent). The  *)
+(* code did overwrite it, so the change waited 1800 s; the code fix is K10,*)
+(* and before it both checks fail on the trace.                            *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds                       *)
@@ -66,7 +67,8 @@ Start(s, now) ==
     ELSE {[s EXCEPT !.want = FALSE, !.job = TRUE], [s EXCEPT !.want = FALSE, !.np = now + RETRY]}
 Signed(s, now, ok, sent) ==
     IF ~s.job THEN s
-    ELSE IF ok /\ sent THEN [s EXCEPT !.job = FALSE, !.np = now + REPUB]
+    \* a change or a retry written while the job was out (np off 0 and MAX) is kept
+    ELSE IF ok /\ sent THEN [s EXCEPT !.job = FALSE, !.np = IF s.np \in {0, MAX} THEN now + REPUB ELSE s.np]
     ELSE IF ok THEN [s EXCEPT !.job = FALSE, !.np = now]
     ELSE [s EXCEPT !.job = FALSE, !.np = now + RETRY]
 StartAll(ss, now) == UNION {Start(s, now) : s \in ss}
@@ -75,7 +77,7 @@ Results(e) ==
     LET s == P(e.before)
         n == e.now
     IN CASE e.op = "tick" ->
-              LET s0 == [s EXCEPT !.wall = @ \/ e.w]
+              LET s0 == [s EXCEPT !.wall = e.w]  \* the wall clock of this tick, none without one (fix K8)
               IN StartAll({Publish(c, n, e.after.can) : c \in {s0, Changed(s0, n)}}, n)
          [] e.op = "sign" -> Start(Signed(s, n, e.ok, e.sent), n)
          [] e.op = "hints" -> {[s EXCEPT !.want = TRUE]}

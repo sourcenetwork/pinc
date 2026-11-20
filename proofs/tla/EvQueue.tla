@@ -29,11 +29,12 @@
 (*    unrecoverable events the callers can raise (the premise of           *)
 (*    `queue_fits`), nothing is lost.                                      *)
 (* XU is the most undeliverable-extension events (xu, never matched as a   *)
-(* repeat) the callers raise while unread: FIXED_EVENTS counts one per     *)
-(* extension slot. EvQueue_over gives the callers one more than QUEUE      *)
-(* counts, which conn/send.rs `hold_queued_extension` does (one event per  *)
-(* frame of the extension send queue whose size no longer fits, besides    *)
-(* the 8 of `shed_extensions`): TLC must find a lost event (a finding).    *)
+(* repeat) the callers raise while unread: with fix T3 FIXED_EVENTS counts *)
+(* one per extension slot and one per frame of the extension send queue (8 *)
+(* + 16), which conn/send.rs `hold_queued_extension` raises besides the 8  *)
+(* of `shed_extensions`. EvQueue_over gives the callers two such events    *)
+(* with a queue that counts both: nothing is lost. Before T3 the queue     *)
+(* counted one (QUEUE 3) and TLC found a lost event (the finding).         *)
 (* The ASSUME checks the sizes event.rs states for the two builds.         *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
@@ -44,9 +45,9 @@ vars == <<q, aq, alost, owed>>
 
 INSTANCE EvQueueOps
 
-\* event.rs: "sized for a session of 200 stream slots" with `alloc` (640 places), "a session of up to 77 slots" in
-\* 256 places without it; both with the 4 paths of a connection
-ASSUME QueueFits(200, 4, 640) /\ QueueFits(77, 4, 256) /\ ~QueueFits(78, 4, 256)
+\* event.rs: "sized for a session of 200 stream slots" with `alloc` (640 places), "a session of up to 72 slots" in
+\* 256 places without it (77 before fix T3); both with the 4 paths of a connection
+ASSUME QueueFits(200, 4, 640) /\ QueueFits(72, 4, 256) /\ ~QueueFits(73, 4, 256)
 
 Events == {<<k, IF k \in KeyedK THEN s ELSE 0, 0>> : k \in KINDS, s \in KEYS}
 XuIn(sq) == Cardinality({j \in 1..Len(sq) : sq[j][1] = "xu"})

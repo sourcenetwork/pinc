@@ -118,13 +118,14 @@ SpecCid(s, j) ==
        ELSE IF g.mj = 2 /\ g.n > g.hd /\ s[j + g.hd + 1] = 0 THEN [kind |-> "ok", end |-> j + g.n]
        ELSE [kind |-> "noncanon"]
 
-(* one value at offset i inside `open` open arrays and maps: [kind |-> "ok", end] or the first error *)
+(* one value at offset i inside `open` open arrays, maps and tags: [kind |-> "ok", end] or the first error; a tag
+   wraps one item and takes a frame as a container does (decode.rs, the documented rule) *)
 RECURSIVE SpecValue(_, _, _, _), SpecArr(_, _, _, _, _), SpecMap(_, _, _, _, _, _)
 SpecValue(s, i, open, md) ==
     LET f == SpecFirst(Rest(s, i))
         j == i + f.n
     IN IF f.kind # "ok" THEN f
-       ELSE IF f.mj = 6 THEN SpecCid(s, j)
+       ELSE IF f.mj = 6 THEN (IF open >= md THEN [kind |-> "depth"] ELSE SpecCid(s, j))
        ELSE IF f.mj \notin {4, 5} \/ f.a = U!Zero THEN [kind |-> "ok", end |-> j]
        ELSE IF f.mj = 5 /\ ~U!Lt(f.a, U!Pw(63)) THEN [kind |-> "truncated", needed |-> UsizeMax]
        ELSE IF open >= md THEN [kind |-> "depth"]

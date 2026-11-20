@@ -15,6 +15,11 @@
 (* addition is the plain one. Comparisons and differences of times are     *)
 (* the same in t as in nanoseconds. The radio counts in nanoseconds        *)
 (* (unit 1), and maxu stands for u64::MAX in its products.                 *)
+(*                                                                         *)
+(* Deadlines follow the clock rule of the decided fix (pinc-transport      *)
+(* `deadline_after`, a checked add): a deadline past the clock's last      *)
+(* instant is Never (the code's None), which never fires; top itself is a  *)
+(* valid deadline. Products and differences still saturate.                *)
 (***************************************************************************)
 EXTENDS Integers
 
@@ -22,7 +27,10 @@ BG(u) == u          \* BURST_GAP
 BU(u) == 5 * u      \* BURST
 ST(u) == 60 * u     \* STEADY_GAP
 
-SatAdd(top, a, b) == IF top >= 0 /\ a + b > top THEN top ELSE a + b
+\* a deadline that is not there (Option::None): below every time, so it is tested before any compare
+Never == -1
+\* deadline_after(a, b) = a.checked_add(b): Never past the clock's last instant
+ChkAdd(top, a, b) == IF top >= 0 /\ a + b > top THEN Never ELSE a + b
 SatSub(a, b) == IF a < b THEN 0 ELSE a - b
 SatMul(maxu, a, b) == IF a * b > maxu THEN maxu ELSE a * b
 
@@ -35,12 +43,13 @@ DutyMailbox(d, v) == [d EXCEPT !.mb = v]
 
 (* Duty::poll: r the answer, burst whether `now` was in the burst *)
 DutyPoll(u, top, d, now) ==
-    IF now < d.nx THEN [d |-> d, r |-> FALSE, burst |-> FALSE]
+    IF d.nx = Never \/ now < d.nx THEN [d |-> d, r |-> FALSE, burst |-> FALSE]
     ELSE LET inb == SatSub(now, d.b) < BU(u)
-         IN IF ~inb /\ d.mb THEN [d |-> [d EXCEPT !.nx = SatAdd(top, now, ST(u))], r |-> FALSE, burst |-> FALSE]
-            ELSE LET after == SatAdd(top, now, BG(u))
+         IN IF ~inb /\ d.mb THEN [d |-> [d EXCEPT !.nx = ChkAdd(top, now, ST(u))], r |-> FALSE, burst |-> FALSE]
+            ELSE LET after == ChkAdd(top, now, BG(u))
                  IN [d |-> [d EXCEPT !.sent = d.sent + 1,
-                                     !.nx = IF SatSub(after, d.b) < BU(u) THEN after ELSE SatAdd(top, now, ST(u))],
+                                     !.nx = IF after # Never /\ SatSub(after, d.b) < BU(u) THEN after
+                                             ELSE ChkAdd(top, now, ST(u))],
                      r |-> TRUE, burst |-> inb]
 
 (* Radio::new: ready_at 0, below every time of the run *)
@@ -48,8 +57,8 @@ RadioNew(mtu, nspb, duty) == [mtu |-> mtu, nspb |-> nspb, duty |-> duty, ready |
 
 (* Radio::admit: r the answer; off the off time it charged and exact the off time without saturation *)
 RadioAdmit(top, maxu, rd, now, len) ==
-    IF len > rd.mtu \/ now < rd.ready \/ rd.duty = 0 THEN [rd |-> rd, r |-> FALSE, exact |-> 0]
+    IF len > rd.mtu \/ rd.ready = Never \/ now < rd.ready \/ rd.duty = 0 THEN [rd |-> rd, r |-> FALSE, exact |-> 0]
     ELSE LET air == SatMul(maxu, len, rd.nspb)
              off == SatMul(maxu, air, 1000) \div rd.duty
-         IN [rd |-> [rd EXCEPT !.ready = SatAdd(top, now, off)], r |-> TRUE, exact |-> (len * rd.nspb * 1000) \div rd.duty]
+         IN [rd |-> [rd EXCEPT !.ready = ChkAdd(top, now, off)], r |-> TRUE, exact |-> (len * rd.nspb * 1000) \div rd.duty]
 =============================================================================

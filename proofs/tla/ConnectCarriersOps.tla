@@ -108,11 +108,11 @@ Hold(c, p, cap) ==
 
 Sealed(c, ps) == [k \in 1..Len(ps) |-> [p |-> ps[k], g |-> c.gen]]
 
-(* send_packet: before_send may reset an open link (bs), an open link takes the packet, otherwise it is held and the
-   link may dial (wd) *)
+(* send_packet: before_send may reset an open link (bs), an open link takes the packet unless a drain is due (fix
+   K4: then it is held behind the others), otherwise it is held and the link may dial (wd) *)
 SendPacket(W, p, bs, wd, cf) ==
     LET W1 == IF bs /\ W.c.link = "open" THEN ActClose([W EXCEPT !.c.link = "down"]) ELSE W IN
-    IF W1.c.link = "open" THEN [W1 EXCEPT !.c.out = Append(@, [p |-> p, g |-> W1.c.gen])]
+    IF W1.c.link = "open" /\ ~W1.c.due THEN [W1 EXCEPT !.c.out = Append(@, [p |-> p, g |-> W1.c.gen])]
     ELSE LET W2 == [W1 EXCEPT !.c = Hold(@, p, cf.cap)] IN
          IF wd /\ W2.c.link = "down" THEN LinkDial(W2, cf) ELSE W2
 

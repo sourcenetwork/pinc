@@ -20,6 +20,10 @@
 (* every step: with no Pm before and after, nothing is sent (NoPmNothing); *)
 (* the overflow count grows by at most one, and only on a start that finds *)
 (* the queue full; a halted Pm starts no client until a start (HaltedStays). *)
+(* The file holds several runs, each from the line "init" of a new node:  *)
+(* there the step rules give way to NewRun (no Pm, nothing sent, no       *)
+(* overflow), since a run that ended with overflows would otherwise break *)
+(* the overflow rule at the next run's first line.                        *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and PINC_TRACE_DIR, the *)
 (* directory that holds node_portmap.ndjson.                               *)
@@ -40,9 +44,13 @@ StepOK(c, a, b) ==
     /\ b.ovf = a.ovf + 1 => c = "start" /\ a.ret = RETIRING /\ b.ret = RETIRING
     /\ a.halted /\ b.halted /\ c # "start" => ~b.cli
 
+\* the line "init" starts a run on a new node: no Pm, nothing sent, no overflow counted; the counters of the run before
+\* do not carry over, so the step rules do not apply across it
+NewRun(b) == ~b.on /\ b.sent = 0 /\ b.ovf = 0
+
 Init == i = 1 /\ v = V0
 Step == /\ i <= Len(Trace) /\ Ev0.t = "pm"
-        /\ StepOK(Ev0.call, v, Ev0.v)
+        /\ IF Ev0.call = "init" THEN NewRun(Ev0.v) ELSE StepOK(Ev0.call, v, Ev0.v)
         /\ v' = Ev0.v /\ i' = i + 1
 Finished == i > Len(Trace) /\ UNCHANGED vars
 TraceSpec == Init /\ [][Step \/ Finished]_vars
