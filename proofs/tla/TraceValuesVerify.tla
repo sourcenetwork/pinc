@@ -100,10 +100,11 @@ Begin ==
           /\ i' = k + 1
 
 (* the RangeVerifier half of a call of feed: TraceRangeVerifier.tla *)
+\* TLC evaluates a LET value again at each of its uses in a step: each \E over a one-value set in the steps below
+\* takes a call of the model once
 RPart(ev) ==
-    LET pl == VB!Plan(Lay, VsOf(stack, failed, filled), U!W(ev.ilen))
-        nlm == NL(stack, failed, filled)
-        fast == pl.kind = "item" /\ pl.fast
+    \E pl \in {VB!Plan(Lay, VsOf(stack, failed, filled), U!W(ev.ilen))} : \E nlm \in {NL(stack, failed, filled)} :
+    LET fast == pl.kind = "item" /\ pl.fast
     IN /\ ev.pos = pos
        /\ pos' = IF ev.consumed >= 0 THEN pos + ev.consumed ELSE pos
        /\ ev.istart = IF ev.out \in {"parent", "release", "reject"} THEN pos - filled ELSE -1
@@ -155,8 +156,8 @@ RPart(ev) ==
 
 (* the observables of the GroupVerifier in the state after the call, read from the primed variables *)
 GObsAfter(ev) ==
-    LET gw == GW(gst', gfail', pairN', groupN')
-    IN /\ ev.gnl = GV!GNextLen(Lay, gw)
+    \E gw \in {GW(gst', gfail', pairN', groupN')} :
+       /\ ev.gnl = GV!GNextLen(Lay, gw)
        /\ ev.gb = GV!GBoundary(gw)
        /\ ev.gi = GV!GNextItem(Lay, gw)
        /\ ev.gcmp = (gfail' = "none" /\ gst' = <<>>)
@@ -164,9 +165,8 @@ GObsAfter(ev) ==
 
 (* the GroupVerifier half of a call of feed *)
 GPart(ev) ==
-    LET gw == GW(gst, gfail, pairN, groupN)
-        pl == GV!GPlan(Lay, gw, U!W(ev.ilen))
-    IN /\ ev.gnl0 = GV!GNextLen(Lay, gw)
+    \E gw \in {GW(gst, gfail, pairN, groupN)} : \E pl \in {GV!GPlan(Lay, gw, U!W(ev.ilen))} :
+       /\ ev.gnl0 = GV!GNextLen(Lay, gw)
        /\ ev.gb0 = GV!GBoundary(gw)
        /\ ev.gi0 = GV!GNextItem(Lay, gw)
        /\ IF pl.kind = "sticky"
@@ -186,8 +186,6 @@ GPart(ev) ==
           THEN LET node == Head(gst)
                    rest == Tail(gst)
                    mid == node.lo + RV!Left(node.hi - node.lo)
-                   ex == GV!GExpand(rest, [cv |-> ev.item.r, lo |-> mid, hi |-> node.hi],
-                                    [cv |-> ev.item.l, lo |-> node.lo, hi |-> mid], mid < last, first < mid)
                IN /\ pairN' = 0 /\ groupN' = 0
                   /\ IF pl.leaf
                      THEN IF ev.hout = node.cv
@@ -199,7 +197,10 @@ GPart(ev) ==
                                /\ gfail' = "group" /\ gerrk' = "group" /\ UNCHANGED <<gst, grel>>
                      ELSE IF ev.hout = node.cv
                           THEN /\ ev.off = -1 /\ ev.glen = -1 /\ UNCHANGED grel
-                               /\ IF ex.ok
+                               /\ \E ex \in {GV!GExpand(rest, [cv |-> ev.item.r, lo |-> mid, hi |-> node.hi],
+                                                       [cv |-> ev.item.l, lo |-> node.lo, hi |-> mid],
+                                                       mid < last, first < mid)} :
+                                  IF ex.ok
                                   THEN /\ ev.err = "none" /\ ev.consumed = U!Val(pl.take)
                                        /\ gst' = ex.st /\ gfail' = gfail /\ gerrk' = gerrk
                                   ELSE /\ ev.err = "stack" /\ ev.consumed = -1
@@ -232,9 +233,9 @@ RFeedEv ==
    the group (offset and length of next_item) and pops it, as the RangeVerifier did when fed the group *)
 SkipEv ==
     /\ i >= 1 /\ i <= Len(Trace)
-    /\ LET ev == Trace[i]
-           gw == GW(gst, gfail, pairN, groupN)
-           it == GV!GNextItem(Lay, gw)
+    /\ Trace[i].t = "gvskip"
+    /\ \E gw \in {GW(gst, gfail, pairN, groupN)} : \E it \in {GV!GNextItem(Lay, gw)} :
+       LET ev == Trace[i]
            accept == gfail = "none" /\ GV!GBoundary(gw) /\ Len(it) = 3
        IN /\ ev.t = "gvskip"
           /\ ev.item0 = it /\ ev.bound0 = GV!GBoundary(gw) /\ ev.nl0 = GV!GNextLen(Lay, gw)
@@ -248,8 +249,8 @@ SkipEv ==
                   /\ Tail(gst) = stack /\ (gfail = "none") = ~failed
                   /\ [k \in 1..Len(grel') |-> grel'[k][1]] = [k \in 1..Len(released) |-> released[k][1]]
              ELSE UNCHANGED gcore
-          /\ LET gw1 == GW(gst', gfail', pairN', groupN')
-             IN /\ ev.nl1 = GV!GNextLen(Lay, gw1) /\ ev.bound1 = GV!GBoundary(gw1) /\ ev.item1 = GV!GNextItem(Lay, gw1)
+          /\ \E gw1 \in {GW(gst', gfail', pairN', groupN')} :
+                /\ ev.nl1 = GV!GNextLen(Lay, gw1) /\ ev.bound1 = GV!GBoundary(gw1) /\ ev.item1 = GV!GNextItem(Lay, gw1)
                 /\ ev.cmp1 = (gfail' = "none" /\ gst' = <<>>) /\ ev.fail1 = gfail'
           /\ UNCHANGED <<core, len, G, filled, oracle, errk, pos>>
           /\ i' = i + 1
