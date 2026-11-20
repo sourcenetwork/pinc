@@ -11,10 +11,12 @@
 //! A node that lost its link and was suspended before the link came back is in doubt too: its sessions close at once
 //! with `Redial` on resume.
 //!
-//! After any resume or link return no keepalive is sent for 10 s unless something is in flight.
+//! After any resume, link return or address change no keepalive is sent for 10 s unless something is in flight.
 //!
-//! Invariants: an interface id names one local address while it lives; every event applies to the sessions whose
-//! active path leaves from the interface, except a suspension, which applies to all.
+//! Invariants: an interface id names one local address while it lives; a link event applies to the sessions,
+//! established or in their handshake, whose active path leaves from the interface; an address change moves every path
+//! that leaves from the old address and wakes the sessions whose active path did; a suspension applies to every
+//! established session.
 
 use core::net::SocketAddr;
 
@@ -69,7 +71,8 @@ ep_impl! {
                 self.link(now, local, true);
             }
             IfaceEvent::Up => {
-                // While suspended the link coming back changes nothing yet: the resume is the return.
+                // While suspended a link coming back lets its sessions send what they owe (the SLEEP that could not
+                // leave); `dark` stays set, so the resume closes them for a redial.
                 self.dark &= self.suspended;
                 self.quiet_until = now.saturating_add(RESUME_QUIET);
                 self.link(now, local, false);
