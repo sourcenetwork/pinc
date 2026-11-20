@@ -14,7 +14,8 @@
     clippy::indexing_slicing,
     clippy::too_many_lines,
     clippy::type_complexity,
-    clippy::large_futures
+    clippy::large_futures,
+    clippy::unused_async_trait_impl
 )]
 
 #[macro_use]
@@ -28,7 +29,10 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use pinc::relay::{CarrierFns, MemStore, Peer, Relay as RelayHost};
-use pinc::{CarrierKind, Endpoint, Error, ErrorKind, Event, Hosted, Relay};
+use pinc::{
+    CarrierKind, Discovery, Endpoint, Error, ErrorKind, Event, Hosted, NoDiscovery, NodeId, PeerRecord, Records, Relay,
+    Rendezvous,
+};
 use pinc_common::{ECHO, eventually, serve_conn, within};
 use pinc_connect::relay::rule::HUB_TUNNEL_FRESH_NS;
 use smol::channel::{Receiver, Sender, unbounded};
@@ -143,23 +147,25 @@ fn member(
     relay: Relay,
     to_relay: Sender<(Pipe, CarrierKind)>,
 ) -> Endpoint<impl Hosted> {
-    member_with(net, at, seed, relay, to_relay, Rc::new(Cell::new(true)))
+    member_with(net, at, seed, relay, to_relay, Rc::new(Cell::new(true)), NoDiscovery)
 }
 
-/// As [`member`]; while `carrier_up` is false the member cannot open a carrier.
-fn member_with(
+/// As [`member`]; while `carrier_up` is false the member cannot open a carrier, and it finds records by `discovery`.
+fn member_with<D: Discovery + 'static>(
     net: Rc<Net>,
     at: SocketAddr,
     seed: u8,
     relay: Relay,
     to_relay: Sender<(Pipe, CarrierKind)>,
     carrier_up: Rc<Cell<bool>>,
-) -> Endpoint<impl Hosted> {
+    discovery: D,
+) -> Endpoint<impl Hosted, D> {
     let rx = net.attach(at);
     let n = net;
     pinc_common::builder()
         .seed(&[seed; 32])
         .unwrap()
+        .discovery(discovery)
         .alpn(ECHO)
         .relays([relay])
         .local_addr(at)
@@ -271,14 +277,14 @@ struct Rig<R: Hosted, A: Hosted, B: Hosted> {
     relay_run: RefCell<Option<nuclei::Task<()>>>,
 }
 
-fn run_task<H: Hosted + 'static>(ep: &Endpoint<H>) -> nuclei::Task<()> {
+fn run_task<H: Hosted + 'static, D: Discovery + 'static>(ep: &Endpoint<H, D>) -> nuclei::Task<()> {
     let ep = ep.clone();
     nuclei::spawn_local(async move {
         let _ = ep.run().await;
     })
 }
 
-fn drive<H: Hosted + 'static>(ep: &Endpoint<H>) {
+fn drive<H: Hosted + 'static, D: Discovery + 'static>(ep: &Endpoint<H, D>) {
     run_task(ep).detach();
 }
 
@@ -307,6 +313,7 @@ fn rig_with(apart: bool, store: MemStore) -> Rig<impl Hosted + 'static, impl Hos
         known,
         to_relay,
         Rc::clone(&b_carrier_up),
+        NoDiscovery,
     );
     let relay_run = RefCell::new(Some(run_task(&relay)));
     drive(&a);
@@ -602,6 +609,86 @@ async fn a_second_run_of_the_relay_endpoint_holds_a_packet_once() {
             (held, 0, 0),
             "the held packets were not each handed over exactly once: {s:?}"
         );
+    })
+    .await;
+}
+
+/// A rendezvous that holds the one record it is given and checks nothing.
+#[derive(Clone, Default)]
+struct Held(Rc<RefCell<Option<Vec<u8>>>>);
+
+impl Rendezvous for Held {
+    async fn publish(&self, record: &[u8]) -> pinc::Result<()> {
+        *self.0.borrow_mut() = Some(record.to_vec());
+        Ok(())
+    }
+
+    async fn fetch(&self, _node: &NodeId) -> Option<Vec<u8>> {
+        self.0.borrow().clone()
+    }
+}
+
+/// The record of `node` that `a` looks up until its hints are `hints`.
+async fn lookup_hints<H: Hosted + 'static>(a: &Endpoint<H, Records<Held>>, node: NodeId, hints: u8) -> PeerRecord {
+    let got = Rc::new(RefCell::new(None));
+    eventually(60, "the lookup answers the record with the hints", || {
+        let (a, got) = (a.clone(), Rc::clone(&got));
+        async move {
+            let Ok(Some(r)) = a.lookup(&node).await else {
+                return false;
+            };
+            let hit = r.hints == [hints; 38];
+            if hit {
+                *got.borrow_mut() = Some(r);
+            }
+            hit
+        }
+    })
+    .await;
+    got.take().unwrap()
+}
+
+#[nuclei::test]
+async fn a_record_a_relay_answered_is_not_replaced_by_an_older_one_from_the_store() {
+    let net = Net::new();
+    let (to_relay, accepted) = unbounded();
+    let relay = relay_endpoint(Rc::clone(&net), addr(RELAY_ADDR), accepted, MemStore::new());
+    let known = Relay::new(relay.id())
+        .with_udp(addr(RELAY_ADDR))
+        .with_tcp(addr(RELAY_ADDR));
+    let store = Held::default();
+    let a = member_with(
+        Rc::clone(&net),
+        addr(A_ADDR),
+        1,
+        known,
+        to_relay.clone(),
+        Rc::new(Cell::new(true)),
+        Records::new(store.clone()),
+    );
+    let b = member(net, addr(B_ADDR), 2, known, to_relay);
+    let _relay_run = run_task(&relay);
+    drive(&a);
+    drive(&b);
+    within(120, async {
+        // An earlier record of B's identity, signed before the hints change.
+        let old = pinc_common::bind_idle(
+            pinc_common::builder()
+                .seed(&[2; 32])
+                .unwrap()
+                .discovery(Records::new(Held::default()))
+                .alpn(ECHO),
+        )
+        .await;
+        old.set_hints(&[1; 38]).unwrap();
+        let older = old.signed_record().await.unwrap();
+        nuclei::time::sleep(Duration::from_millis(50)).await;
+        b.set_hints(&[2; 38]).unwrap();
+        let first = lookup_hints(&a, b.id(), 2).await;
+        // The store now holds the older record; the relay's answer that A kept is newer.
+        *store.0.borrow_mut() = Some(older);
+        let second = a.lookup(&b.id()).await.unwrap().unwrap();
+        assert_eq!((second.seq, second.hints), (first.seq, first.hints));
     })
     .await;
 }
