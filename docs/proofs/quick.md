@@ -465,6 +465,7 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `PortMapLease_refusal` | MaxT 7 -> 6 |
 | `PortMapLease_stalefloor` | MaxT 7 -> 6 |
 | `PrekeyCache` | MaxClock 6 -> 4 (the cache fills, a get refreshes the older entry, the next insert evicts the least recently used) |
+| `PrekeyCache_n0` | MaxClock 4 -> 3 |
 | `PrekeyCache_n3` | MaxClock 6 -> 3 (the cache fills; the invariants insert into the full cache) |
 | `Queue` | PMAX 7 -> 4 |
 | `Queue_wrap` | PMAX 8 -> 5, CL {1, 2, 3, 5} -> {1} (four pushes of one class and four pops wrap the head of the ring of CAP 4) |
