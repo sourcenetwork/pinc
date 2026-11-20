@@ -346,10 +346,12 @@ ep_impl! {
             }
             return;
         }
-        // The addresses the lapse dials: the session's own first, then the dial's, none twice.
+        // The addresses the lapse dials: the caller's first stays first (the connectivity client reselects against
+        // it), then the session's own direct one, then the caller's others, none twice; the session's own is first
+        // when the caller gave none.
         let mut list = [SocketAddr::from(([0, 0, 0, 0], 0)); NP];
         let mut n = 0;
-        for a in learned.into_iter().chain(addrs.into_iter().flatten()) {
+        for a in addrs.first().copied().flatten().into_iter().chain(learned).chain(addrs.iter().skip(1).copied().flatten()) {
             if !list.get(..n).unwrap_or_default().contains(&a)
                 && let Some(d) = list.get_mut(n)
             {

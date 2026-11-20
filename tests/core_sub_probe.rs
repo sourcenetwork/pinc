@@ -695,3 +695,44 @@ fn two_probes_of_different_protocols_that_lapse_together_make_one_handshake() {
         assert_eq!(roots, 1, "the two lapsed probes made {roots} handshakes");
     });
 }
+
+/// A lapsed probe's handshake flies first to the first address the caller gave, ahead of the address the probed
+/// session learned: the connectivity client's primary is the first address it passed.
+#[test]
+fn a_lapsed_probe_flies_first_to_the_first_address_the_caller_gave() {
+    big_stack(|| {
+        let (mut net, a, b) = silent_parent();
+        let addr_b = net.nodes[b].addr;
+        net.loss = Some(Box::new(move |_, to, _| to == addr_b));
+        let x: SocketAddr = ([192, 0, 2, 77], 4433).into();
+        let (peer, now) = (net.nodes[b].node, net.now);
+        net.nodes[a]
+            .cmd(
+                now,
+                Command::Connect {
+                    node: peer,
+                    alpn: ALPN_B,
+                    addrs: &[x, addr_b],
+                    role: Role::Other,
+                },
+            )
+            .unwrap();
+        let marker = net.captured.len();
+        let addr_a = net.nodes[a].addr;
+        let long = |n: &CoreNet| {
+            n.captured[marker..]
+                .iter()
+                .find(|(f, _, d)| *f == addr_a && d[0] & 0x80 != 0)
+                .map(|(_, t, _)| *t)
+        };
+        assert!(
+            net.run(now + 5 * SEC_NS, |n| long(n).is_some()),
+            "the probe never lapsed"
+        );
+        assert_eq!(
+            long(&net),
+            Some(x),
+            "the lapse flew first to an address the caller did not give first"
+        );
+    });
+}
