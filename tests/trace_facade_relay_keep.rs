@@ -32,6 +32,8 @@ use smol::block_on;
 const U: u64 = 1_350_000_000_000;
 /// Records of the table.
 const NODES: usize = 1030;
+/// The tries of a write before it is given up (`MAX_TRIES` of `relay/state/keep.rs`).
+const MAX_TRIES: u64 = 8;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Tear {
@@ -139,6 +141,15 @@ impl Run {
         };
         r.restart(0, Tear::None);
         r
+    }
+
+    /// The number of the node the job out is about.
+    fn job_node(&self) -> usize {
+        match &self.job {
+            Some(KeepJob::Put { node, .. } | KeepJob::Remove(node)) => self.node_number(node),
+            Some(KeepJob::Mail { node, .. }) => self.member_number(node),
+            None => 0,
+        }
     }
 
     fn node_number(&self, id: &NodeId) -> usize {
@@ -266,13 +277,44 @@ impl Run {
         self.view_line("restart", tear);
     }
 
-    /// A rerun at `t` of the restore on the same probe.
+    /// The next run of the same run: a restart at 0 on the same store, the job out lost.
+    fn again(mut self) -> Self {
+        let tear = if self.job.is_some() { Tear::Lost } else { Tear::None };
+        self.restart(0, tear);
+        self
+    }
+
+    /// The run ends at `t` and the same core runs again: the write out is given back and the restore, run again,
+    /// restores nothing.
     fn rerun(&mut self, t: u64, tear: Tear) {
         self.cut_for(tear);
         self.t = t;
+        self.probe.end();
+        let (recs, mail) = (self.recs_view(), self.mail_view());
         let kept = block_on(self.store.load()).unwrap();
         self.probe.restore(t * U, &kept);
+        assert!(self.probe.restored(), "a restored core says it was not");
+        assert!(
+            recs == self.recs_view() && mail == self.mail_view(),
+            "a rerun restored again"
+        );
         self.view_line("rerun", tear);
+    }
+
+    /// The kind of the job out.
+    fn kind(&self) -> &'static str {
+        match &self.job {
+            None => "none",
+            Some(KeepJob::Put { .. }) => "put",
+            Some(KeepJob::Remove(_)) => "remove",
+            Some(KeepJob::Mail { .. }) => "mail",
+        }
+    }
+
+    /// Take the next job and check its kind.
+    fn expect(&mut self, kind: &str) {
+        self.job();
+        assert_eq!(self.kind(), kind, "the job is not the one the case intends");
     }
 
     fn cut_for(&mut self, tear: Tear) {
@@ -388,6 +430,7 @@ impl Run {
         if ok {
             self.apply(&job);
         }
+        self.probe.written(ok);
         let _ = writeln!(self.out, "{{\"op\":\"write\",\"ok\":{ok}}}");
     }
 
@@ -407,8 +450,50 @@ impl Run {
     }
 }
 
+/// Writes the store refuses: one given up after its tries, one tried again behind a mark not tried yet, with the
+/// run ending while the retry is out.
+fn failures(r: &mut Run) {
+    r.hold(0, 3);
+    let errs = r.probe.store_errors();
+    r.expect("mail");
+    for i in 1..=MAX_TRIES {
+        r.write(false);
+        r.tick(i);
+        r.expect(if i < MAX_TRIES { "mail" } else { "none" });
+    }
+    assert_eq!(
+        r.probe.store_errors() - errs,
+        MAX_TRIES + 1,
+        "a write given up is counted once per try and once more"
+    );
+    r.restart(0, Tear::None);
+    r.publish(0, 5, 1);
+    r.expect("put");
+    let first = r.job_node();
+    r.write(false);
+    r.expect("none");
+    r.publish(0, 6, 1);
+    r.tick(1);
+    r.expect("put");
+    assert_ne!(r.job_node(), first, "the retry went before a mark not tried yet");
+    r.write(true);
+    r.expect("put");
+    assert_eq!(r.job_node(), first, "the failed write is not tried again");
+    r.rerun(1, Tear::Lost);
+    r.expect("put");
+    assert_eq!(
+        r.job_node(),
+        first,
+        "the write out at the end of the run is not written again"
+    );
+    r.write(true);
+    r.expect("none");
+    r.restart(0, Tear::None);
+}
+
 /// The boundary run, one case after the other.
 fn boundary(r: &mut Run) {
+    failures(r);
     // a record, refreshed, stale
     r.publish(0, 1, 1);
     r.job();
@@ -486,14 +571,21 @@ fn boundary(r: &mut Run) {
     r.hold(31, 2);
     r.job();
     r.rerun(32, Tear::Whole);
+    r.expect("mail");
+    assert_eq!(
+        r.job_node(),
+        2,
+        "the packets of the write out are not written in the next run"
+    );
+    r.write(true);
     // a hand over
     r.hold(32, 2);
     r.heard(32, 2);
 }
 
-fn seeded(seed: u64) -> String {
+fn seeded(seed: u64, prev: Run) -> Run {
     let mut rng = SplitMix64::new(seed);
-    let mut r = Run::new();
+    let mut r = prev.again();
     for _ in 0..200 {
         let v = rng.next_u64() % 100;
         let t = r.t;
@@ -527,7 +619,7 @@ fn seeded(seed: u64) -> String {
         }
     }
     r.finish();
-    r.out
+    r
 }
 
 fn pick(rng: &mut SplitMix64, r: &Run) -> Tear {
@@ -543,10 +635,15 @@ fn facade_relay_keep_trace() {
             let mut r = Run::new();
             boundary(&mut r);
             r.finish();
-            let mut out = r.out;
+            let mut out = std::mem::take(&mut r.out);
             for seed in 1..=20 {
-                out.push_str(&seeded(seed));
+                r = seeded(seed, r);
+                out.push_str(&std::mem::take(&mut r.out));
             }
+            let count = |what: &str| out.matches(what).count();
+            assert!(count("\"op\":\"write\",\"ok\":false") >= 10, "too few failed writes");
+            assert!(count("\"op\":\"rerun\"") >= 3, "too few reruns");
+            assert!(count("\"op\":\"job\",\"k\":\"mail\"") >= 12, "too few mail jobs");
             if let Ok(dir) = std::env::var("PINC_TRACE_DIR") {
                 std::fs::create_dir_all(&dir).unwrap();
                 std::fs::write(std::path::Path::new(&dir).join("relay-keep.ndjson"), out).unwrap();

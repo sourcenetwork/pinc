@@ -98,18 +98,33 @@ impl KeepProbe {
         self.core.on_timeout(now);
     }
 
-    /// The next write the core asks for.
+    /// The next write the core asks for; none while one is out.
     pub fn next_job(&mut self) -> Option<KeepJob> {
-        Some(match self.core.next_job()? {
+        Some(match self.core.next_write()? {
             super::Job::Put(node, record, received) => KeepJob::Put { node, record, received },
             super::Job::Remove(n) => KeepJob::Remove(n),
             super::Job::Mail(node, blob) => KeepJob::Mail { node, blob },
         })
     }
 
-    /// Put back what the store kept, at `now`.
+    /// Put back what the store kept, at `now`; nothing once it ran, as in [`crate::relay::Part::restore`].
     pub fn restore(&mut self, now: u64, kept: &Kept) {
-        self.core.restore(now, kept);
+        self.core.restore_once(now, kept);
+    }
+
+    /// Whether [`KeepProbe::restore`] ran.
+    pub fn restored(&self) -> bool {
+        self.core.restored()
+    }
+
+    /// The write taken last finished, `ok` if the store kept it, as in [`crate::relay::Part::store_written`].
+    pub fn written(&mut self, ok: bool) {
+        self.core.written(ok);
+    }
+
+    /// The run ends: the write out is given back, as in [`crate::relay::Part::end`].
+    pub fn end(&mut self) {
+        self.core.end_run();
     }
 
     /// The sequence number and the time received of the record held for `node`, whether or not past its lifetime.
