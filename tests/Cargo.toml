@@ -1809,6 +1809,10 @@ name = "trace_finish_resend"
 path = "trace_finish_resend.rs"
 
 [[test]]
+name = "trace_quiet_probe"
+path = "trace_quiet_probe.rs"
+
+[[test]]
 name = "trace_responder_limit"
 path = "trace_responder_limit.rs"
 

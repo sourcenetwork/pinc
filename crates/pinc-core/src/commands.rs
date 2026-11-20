@@ -257,6 +257,8 @@ ep_impl! {
                 // A dial probing its quiet parent keeps the flight for its own handshake (QUIET_PROBE).
                 if let Some(i) = self.probe_slot(session) {
                     self.keep_flight_paths(i, addrs, skip_primary);
+                    let of = self.probe_of(i);
+                    self.trace_probe(now, 5, i, of, 1 << 8);
                     return Ok(Value::None);
                 }
                 let i = self.live(session)?;
@@ -296,6 +298,8 @@ ep_impl! {
                     if let Some(s) = self.slots.get_mut(i) {
                         s.m.probe_resend = Some(delay);
                     }
+                    let of = self.probe_of(i);
+                    self.trace_probe(now, 5, i, of, 2 << 8);
                     return Ok(Value::None);
                 }
                 let i = self.live(session)?;
@@ -306,6 +310,8 @@ ep_impl! {
                     if let Some(s) = self.slots.get_mut(i) {
                         s.m.probe_hold = hold;
                     }
+                    let of = self.probe_of(i);
+                    self.trace_probe(now, 5, i, of, if hold { 3 << 8 } else { 4 << 8 });
                     return Ok(Value::None);
                 }
                 let i = self.live(session)?;
@@ -487,6 +493,12 @@ ep_impl! {
                 reason: ConnectFailure::Refused,
             });
             return Err(CommandError::Refused);
+        }
+        // The model reads the session the dial would ride or probe before the dial chooses.
+        #[cfg(feature = "trace")]
+        if let Some(p) = self.find_parent(&node, now).or_else(|| self.find_quiet_parent(&node, now)) {
+            let of = (p, self.slots.get(p).map_or(0, |s| s.m.generation));
+            self.trace_probe(now, 8, usize::MAX, of, 0);
         }
         if let Some(parent) = self.find_parent(&node, now) {
             return self.open_sub(parent, node, alpn, role, now);

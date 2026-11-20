@@ -157,6 +157,8 @@ ep_impl! {
         if self.slots.get(i).is_some_and(|s| {
             s.m.in_use && s.m.probed_until > now && now.saturating_sub(s.m.last_rx) < crate::sub::PARENT_RX
         }) {
+            let g = self.slots.get(i).map_or(0, |s| s.m.generation);
+            self.trace_probe(now, 1, usize::MAX, (i, g), 0);
             self.ride_probes(i, now);
         }
         let Some(slot) = self.slots.get_mut(i) else { return };

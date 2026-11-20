@@ -255,6 +255,7 @@ ep_impl! {
             s.m.dial_addrs = addrs;
         }
         trace!(self, now, Sub { step: 3, parent: parent as u64, child: i as u64 });
+        self.trace_probe(now, 0, i, (parent, probed_gen), 0);
         self.recompute_probed(parent, now);
         self.settle(i, now);
         Ok(self.session_id(i))
@@ -299,11 +300,15 @@ ep_impl! {
             && let Some(mem) = self.slots.get_mut(i).and_then(|s| s.mem.take())
         {
             trace!(self, now, Sub { step: 4, parent: parent as u64, child: i as u64 });
+            self.trace_probe(now, 2, i, (probed, probed_gen), 0);
             // A failed construction retired the slot with its memory; an open that could not be queued is undone
             // by the redial of `open_sub_over`, which reports the dial.
             match self.open_sub_over(parent, i, mem, parts, peer, alpn, role, now) {
                 Ok(_) => self.apply_flight(i, now),
-                Err(_) if self.slots.get(i).is_some_and(|s| !s.m.in_use) => self.fail_probe(i, session, now),
+                Err(_) if self.slots.get(i).is_some_and(|s| !s.m.in_use) => {
+                    self.trace_probe(now, 4, i, (probed, probed_gen), 0);
+                    self.fail_probe(i, session, now);
+                }
                 Err(_) => {}
             }
             return;
@@ -321,6 +326,7 @@ ep_impl! {
                 })
             })
             .flatten();
+        let facts = self.probe_facts(probed, probed_gen, now);
         // A pulse session's liveness is its carrier's, so a late answer is not proof of death: it is never closed.
         // vertexia: packets in flight stand in for application data in flight, so the probe's own unanswered ping usually keeps a dead session up until its path times out; exact needs a transport count of unacknowledged stream bytes (pinc#693)
         let quiet = was_quiet
@@ -337,12 +343,14 @@ ep_impl! {
             conn.close(&mut env, &mut lent!(self), code::NO_ERROR);
             self.settle(probed, now);
         }
+        let closed = u64::from(quiet) << 3;
         // Another protocol's handshake to the peer is running: wait on it instead of making a second one.
         if let Some(wp) = self.find_waiting_parent(&peer, alpn.as_bytes())
             && let Ok(parts) = self.wait_parts(wp)
             && let Some(mem) = self.slots.get_mut(i).and_then(|s| s.mem.take())
         {
             trace!(self, now, Sub { step: 7, parent: wp as u64, child: i as u64 });
+            self.trace_probe_with(now, 3, i, probed_gen, facts, closed | 3 << 4);
             match self.open_sub_wait_over(wp, i, mem, parts, peer, alpn, role, now) {
                 Ok(_) => self.apply_flight(i, now),
                 Err(_) if self.slots.get(i).is_some_and(|s| !s.m.in_use) => self.fail_probe(i, session, now),
@@ -368,13 +376,17 @@ ep_impl! {
         // is asked before the memory is taken, so a refusal frees the slot with its memory.
         let route = list.iter().find_map(|a| self.route_for(a).map(|l| (*a, l)));
         let (Some((first, local)), Some(prekey)) = (route, self.prekey.clone()) else {
+            self.trace_probe_with(now, 3, i, probed_gen, facts, closed);
             self.fail_probe(i, session, now);
             return;
         };
         let Some(mem) = self.slots.get_mut(i).and_then(|s| s.mem.take()) else {
+            self.trace_probe_with(now, 3, i, probed_gen, facts, closed);
             self.fail_probe(i, session, now);
             return;
         };
+        let given = if addrs.contains(&Some(first)) { 1 } else if learned == Some(first) { 2 } else { 0 };
+        self.trace_probe_with(now, 3, i, probed_gen, facts, closed | given << 4);
         match self.dial_fresh(i, mem, now, peer, alpn, &prekey, list, role, first, local) {
             Ok(()) => self.apply_flight(i, now),
             Err(_) => self.fail_probe(i, session, now),
@@ -386,6 +398,7 @@ ep_impl! {
     /// moment the connection exists) and a `HoldFlight`. A refusal is ignored, as the connectivity client ignores
     /// the refusal of the same commands.
     fn apply_flight(&mut self, i: usize, now: u64) {
+        let of = self.probe_of(i);
         let Some(s) = self.slots.get_mut(i) else { return };
         let (fanout, skip) = (core::mem::take(&mut s.m.probe_fanout), core::mem::take(&mut s.m.probe_skip_primary));
         let (resend, hold) = (s.m.probe_resend.take(), core::mem::take(&mut s.m.probe_hold));
@@ -396,12 +409,15 @@ ep_impl! {
                 *d = *a;
                 n += 1;
             }
+            self.trace_probe(now, 6, i, of, 1 << 8);
             let _ = self.flight_paths(i, buf.get(..n).unwrap_or_default(), skip, now);
         }
         if let Some(d) = resend {
+            self.trace_probe(now, 6, i, of, 2 << 8);
             let _ = self.first_resend(i, d, now);
         }
         if hold {
+            self.trace_probe(now, 6, i, of, 3 << 8);
             let _ = self.hold_flight(i, true, now);
         }
     }
@@ -428,6 +444,46 @@ ep_impl! {
         }
     }
 
+    /// The facts of the probed slot for the trace (`TraceEvent::Probe` bits): pulse, heard, in flight, and whether the
+    /// slot still holds the generation `of_gen`. Without the `trace` feature nothing is read.
+    fn probe_facts(&self, probed: usize, of_gen: u32, now: u64) -> (u64, u64) {
+        #[cfg(not(feature = "trace"))]
+        {
+            let _ = (probed, of_gen, now);
+            (0, 0)
+        }
+        #[cfg(feature = "trace")]
+        self.slots.get(probed).map_or((0, 0), |s| {
+            let infl = s.conn.as_ref().is_some_and(|c| c.recovery().packets_in_flight() > 0);
+            let heard = now.saturating_sub(s.m.last_rx) < PARENT_RX;
+            let bits = u64::from(s.m.pulse)
+                | u64::from(heard) << 1
+                | u64::from(infl) << 2
+                | u64::from(s.m.in_use && s.m.generation == of_gen) << 6;
+            (u64::from(s.m.generation), bits)
+        })
+    }
+
+    /// The probed slot and the generation probe `i` names.
+    pub(crate) fn probe_of(&self, i: usize) -> (usize, u32) {
+        self.slots.get(i).map_or((NIL as usize, 0), |s| (s.m.probe_parent as usize, s.m.probe_of_gen))
+    }
+
+    /// Record a step of the probe of slot `child` for the model: the facts of `probed` as they are now, with `extra`
+    /// bits. Costs nothing without the `trace` feature.
+    pub(crate) fn trace_probe(&mut self, now: u64, step: u64, child: usize, of: (usize, u32), extra: u64) {
+        let facts = self.probe_facts(of.0, of.1, now);
+        self.trace_probe_with(now, step, child, of.1, facts, extra);
+    }
+
+    /// As [`trace_probe`](Self::trace_probe) with the facts read earlier (a lapse reads them before it closes).
+    fn trace_probe_with(&mut self, now: u64, step: u64, child: usize, of_gen: u32, (generation, bits): (u64, u64), extra: u64) {
+        let child = if child == usize::MAX { u64::MAX } else { child as u64 };
+        trace!(self, now, Probe { step, child, r#gen: generation, of_gen: u64::from(of_gen), bits: bits | extra });
+        #[cfg(not(feature = "trace"))]
+        let _ = (step, child, of_gen, generation, bits, extra);
+    }
+
     /// End probe `i`, whose application holds `session`, without a session: the application is told the dial was
     /// refused. A slot a failed construction already retired is not freed again.
     fn fail_probe(&mut self, i: usize, session: SessionId, now: u64) {
@@ -450,6 +506,8 @@ ep_impl! {
         let (node, alpn) = self.slots.get(i).map_or((None, None), |s| (s.m.peer, s.m.alpn));
         let pidx = self.slots.get(i).map_or(NIL, |s| s.m.probe_parent);
         trace!(self, now, Sub { step: 6, parent: u64::from(pidx), child: i as u64 });
+        let of = self.probe_of(i);
+        self.trace_probe(now, 7, i, of, 0);
         if let (Some(node), Some(alpn)) = (node, alpn) {
             self.emit(Event::ConnectFailed {
                 session: Some(session),
