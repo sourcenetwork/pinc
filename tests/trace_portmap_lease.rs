@@ -368,7 +368,7 @@ impl<'a> Run<'a> {
                     i64::try_from(self.tick).unwrap(),
                     "a lease did not start at its request"
                 );
-                self.moved = false;
+                self.moved = before.announce_next.is_some();
             }
             "refuse" => self.moved = true,
             _ => {
@@ -453,7 +453,9 @@ impl<'a> Run<'a> {
                 self.rec("gw_restart");
             }
             Act::Stop => {
-                let held = self.pm.probe().held.is_some();
+                // A release goes out for a held mapping and for a round in flight, which may have made one.
+                let pre = self.pm.probe();
+                let held = pre.held.is_some() || pre.step == "pcp";
                 self.pm.stop(self.t);
                 if held {
                     self.req.insert("release");
