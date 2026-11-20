@@ -487,11 +487,7 @@ impl<K: KeyStore, D: Discovery, A: Admission, C: Carriers<Pf>, Q: RoleSpec<K>, P
         };
         let core = build(cfg, T0, ns_to_ms(wall))?;
         // The relay's clock is the wall clock; the endpoint's counts the same time from its own first instant.
-        let origin = if <Q::Built as Role>::ON {
-            crate::drive::role_origin(wall)
-        } else {
-            0
-        };
+        let origin = if <Q::Built as Role>::ON { wall } else { 0 };
         let role = role.build(core.identity(), local, crate::drive::role_clock(origin, T0))?;
         Ok((
             Parts {

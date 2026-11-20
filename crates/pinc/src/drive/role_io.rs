@@ -124,11 +124,12 @@ impl<H: Hosted> Shared<H> {
         if !pinc_core::is_relay_addr(to) {
             return false;
         }
+        let Some(mut role) = self.role() else { return false };
         // Before the role restored its mailbox the packet is taken and dropped, as a lost one: the transport resends.
         if !self.role_ready.get() {
+            role.lost();
             return true;
         }
-        let Some(mut role) = self.role() else { return false };
         let rnow = self.relay_now(now);
         let mut carried = false;
         for d in bytes.chunks(segment.max(1)) {

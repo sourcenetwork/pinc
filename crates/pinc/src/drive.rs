@@ -46,11 +46,6 @@ use crate::standby::Ticket;
 
 /// The first time the endpoint sees, so no time is zero.
 pub(crate) const T0: u64 = 10_000_000_000;
-/// What the relay role's clock is made from: the wall clock at the endpoint's first instant.
-pub(crate) const fn role_origin(wall: u64) -> u64 {
-    wall
-}
-
 /// The relay role's clock at endpoint time `now`: the wall clock at the first instant plus the time elapsed since.
 pub(crate) const fn role_clock(origin: u64, now: u64) -> u64 {
     origin.saturating_add(now.saturating_sub(T0))
@@ -527,6 +522,54 @@ mod tests {
     use crate::endpoint::{Endpoint, Pinc};
     use crate::platform::TestPlatform;
 
+    const SEC: u64 = 1_000_000_000;
+
+    /// A platform whose wall clock reads the given nanoseconds.
+    struct Wall(u64);
+
+    impl Platform for Wall {
+        type Instant = u64;
+        type Error = Infallible;
+
+        fn now(&self) -> u64 {
+            0
+        }
+
+        fn wall_ns(&self) -> u64 {
+            self.0
+        }
+
+        fn random(&self, out: &mut [u8]) -> Result<(), Infallible> {
+            for (i, b) in (0u8..=255).cycle().zip(out) {
+                *b = i.wrapping_mul(31).wrapping_add(7);
+            }
+            Ok(())
+        }
+    }
+
+    /// An endpoint with the relay role, on a platform whose wall clock reads `wall`; its carriers never complete.
+    fn rolled(wall: u64) -> Endpoint<impl Hosted> {
+        let carriers = crate::relay::CarrierFns::new(
+            async || -> crate::Result<((), crate::carrier::CarrierKind)> { core::future::pending().await },
+            async |_: &crate::relay::Peer, _: crate::carrier::CarrierKind| -> crate::Result<()> {
+                Err(crate::error::Error::config("no peers"))
+            },
+            async |_: &(), buf: Vec<u8>| -> (crate::Result<usize>, Vec<u8>) { (Ok(0), buf) },
+            async |_: &(), buf: Vec<u8>, _: usize| -> (crate::Result<usize>, Vec<u8>) { (Ok(0), buf) },
+            async |_: ()| {},
+        );
+        Pinc::builder_on(Wall(wall))
+            .local_addr("192.0.2.1:4000".parse().unwrap())
+            .hub()
+            .relay_role(crate::relay::Relay::builder(), carriers)
+            .build(
+                async |_buf: &mut [u8]| -> Result<(usize, SocketAddr), Infallible> { core::future::pending().await },
+                async |pkt: &[u8], _to: SocketAddr| -> Result<usize, Infallible> { Ok(pkt.len()) },
+                async |_at: u64| {},
+            )
+            .unwrap()
+    }
+
     #[cfg(not(feature = "std"))]
     fn recv_max<H: Hosted>(_: &Endpoint<H>) -> usize {
         H::RECV_MAX
@@ -615,10 +658,34 @@ mod tests {
     #[test]
     fn the_roles_clock_is_the_wall_clock_even_below_the_endpoints_first_instant() {
         let (wall, sec) = (3_000_000_000, 1_000_000_000);
-        let origin = role_origin(wall);
+        let origin = wall;
         assert_eq!(role_clock(origin, T0), wall, "the role starts at the wall clock");
         assert_eq!(role_clock(origin, T0 + 2 * sec), wall + 2 * sec);
         assert_eq!(endpoint_clock(origin, wall + 2 * sec), T0 + 2 * sec);
+    }
+
+    /// The relay role's clock is read from the platform's wall clock when the endpoint is built, below the endpoint's
+    /// first instant or not.
+    #[test]
+    fn the_role_starts_at_the_platforms_wall_clock() {
+        let wall = 3 * SEC;
+        let ep = rolled(wall);
+        let due = ep.0.shared.role().unwrap().due(wall).unwrap();
+        assert!((wall..=wall + SEC).contains(&due), "the role's first deadline is {due}, not near {wall}");
+    }
+
+    /// A datagram for a member that the endpoint hands over before the role restored its mailbox is taken and counted
+    /// as dropped, and the role sends nothing.
+    #[test]
+    fn a_datagram_for_a_member_before_the_role_is_restored_is_dropped_and_counted() {
+        let ep = rolled(3 * SEC);
+        let sh = &ep.0.shared;
+        let to = pinc_core::relay_addr(false, 0, 1);
+        let mut core = sh.lock().unwrap();
+        assert!(sh.role_carries(&mut core, T0, &to, b"x", 1), "the datagram was left to the socket");
+        drop(core);
+        assert!(sh.role_outgoing(&mut [0u8; 1500]).is_none());
+        assert_eq!(ep.relay_stats().unwrap().hub_dropped, 1, "the drop was not counted");
     }
 
     /// The endpoints of a thread share the pools with `std`, and each holds its own without.

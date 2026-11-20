@@ -938,6 +938,11 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
         self.event(Event::StoreFailed);
     }
 
+    /// A packet for the relay's own endpoint or a member was dropped before the relay could take it.
+    pub(crate) fn hub_lost(&mut self) {
+        self.counters.hub_dropped += 1;
+    }
+
     pub(crate) fn accept_failed(&mut self) {
         self.counters.accept_errors += 1;
     }

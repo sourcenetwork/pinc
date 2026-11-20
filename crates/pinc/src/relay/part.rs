@@ -294,6 +294,11 @@ impl<C: Carriers, K: KeyStore, St: Store, A: Access> Part<C, K, St, A> {
         self.core.tunnel(now, remote, bytes)
     }
 
+    /// A packet for a member was dropped before the part could take it: it is counted like one the hub had no room for.
+    pub(crate) fn lost(&mut self) {
+        self.core.hub_lost();
+    }
+
     /// End the carrier of `node` (its right to hold one was withdrawn); whether it had one. The close shows in the next
     /// [`Part::poll`].
     pub fn close_carrier(&mut self, node: &NodeId) -> bool {

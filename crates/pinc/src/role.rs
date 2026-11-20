@@ -58,6 +58,10 @@ pub trait Role: sealed::Sealed + Sized {
     #[doc(hidden)]
     fn carry(&mut self, relay_now: u64, remote: &SocketAddr, bytes: &[u8]) -> bool;
 
+    /// The endpoint's datagram for a member was dropped before the role could carry it: count it.
+    #[doc(hidden)]
+    fn lost(&mut self);
+
     /// The next datagram the relay wants to send: its remote and its length in `out`.
     #[doc(hidden)]
     fn outgoing(&mut self, out: &mut [u8]) -> Option<(SocketAddr, usize)>;
@@ -137,6 +141,8 @@ impl Role for () {
         false
     }
 
+    fn lost(&mut self) {}
+
     fn outgoing(&mut self, _: &mut [u8]) -> Option<(SocketAddr, usize)> {
         None
     }
@@ -209,6 +215,10 @@ impl<C: Carriers, K: KeyStore, St: Store, A: Access> Role for Part<C, K, St, A> 
 
     fn carry(&mut self, relay_now: u64, remote: &SocketAddr, bytes: &[u8]) -> bool {
         self.tunnel(relay_now, remote, bytes)
+    }
+
+    fn lost(&mut self) {
+        Part::lost(self);
     }
 
     fn outgoing(&mut self, out: &mut [u8]) -> Option<(SocketAddr, usize)> {
