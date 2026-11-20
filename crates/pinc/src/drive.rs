@@ -267,7 +267,7 @@ impl<H: Hosted> Shared<H> {
         T0.saturating_add(u64::try_from(since.as_nanos()).unwrap_or(u64::MAX))
     }
 
-    fn instant(&self, at: u64) -> <H::Platform as Platform>::Instant {
+    pub(crate) fn instant(&self, at: u64) -> <H::Platform as Platform>::Instant {
         self.start.add(Duration::from_nanos(at.saturating_sub(T0)))
     }
 
@@ -527,6 +527,71 @@ mod tests {
                 async |_at: u64| {},
             )
             .unwrap()
+    }
+
+    /// A platform whose clock the test sets.
+    #[derive(Clone)]
+    struct Clock(Rc<core::cell::Cell<u64>>);
+
+    impl Platform for Clock {
+        type Instant = u64;
+        type Error = Infallible;
+
+        fn now(&self) -> u64 {
+            self.0.get()
+        }
+
+        fn wall_ns(&self) -> u64 {
+            1_700_000_000_000_000_000
+        }
+
+        fn random(&self, out: &mut [u8]) -> Result<(), Infallible> {
+            for (i, b) in (0u8..=255).cycle().zip(out) {
+                *b = i.wrapping_mul(31).wrapping_add(7);
+            }
+            Ok(())
+        }
+    }
+
+    /// An endpoint whose start is the clock's value now.
+    fn started(clock: &Clock) -> Endpoint<impl Hosted<Platform = Clock> + use<>> {
+        Pinc::builder_on(clock.clone())
+            .limits(crate::Limits {
+                connections: 4,
+                ..crate::Limits::default()
+            })
+            .build(
+                async |_buf: &mut [u8]| -> Result<(usize, SocketAddr), Infallible> { core::future::pending().await },
+                async |pkt: &[u8], _to: SocketAddr| -> Result<usize, Infallible> { Ok(pkt.len()) },
+                async |_at: u64| {},
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn the_clock_saturates_and_follows_the_platform() {
+        for start in [0, u64::MAX - 5, T0] {
+            let clock = Clock(Rc::new(core::cell::Cell::new(start)));
+            let ep = started(&clock);
+            let sh = &ep.0.shared;
+            assert_eq!(sh.now(), T0);
+            clock.0.set(start.saturating_add(3));
+            assert_eq!(sh.now(), T0 + 3);
+            clock.0.set(u64::MAX);
+            assert_eq!(sh.now(), T0.saturating_add(u64::MAX - start));
+            // below the start the clock reads as the start, and a step back follows the platform
+            clock.0.set(start.saturating_sub(1));
+            assert_eq!(sh.now(), T0);
+            clock.0.set(start.saturating_add(2));
+            let a = sh.now();
+            clock.0.set(start.saturating_add(1));
+            assert_eq!(a - sh.now(), 1);
+            assert_eq!(sh.instant(0), start);
+            assert_eq!(sh.instant(T0 - 1), start);
+            assert_eq!(sh.instant(T0), start);
+            assert_eq!(sh.instant(T0 + 4), start.saturating_add(4));
+            assert_eq!(sh.instant(u64::MAX), start.saturating_add(u64::MAX - T0));
+        }
     }
 
     /// The endpoints of a thread share the pools with `std`, and each holds its own without.

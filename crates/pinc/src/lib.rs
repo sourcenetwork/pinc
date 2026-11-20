@@ -133,6 +133,8 @@ pub use pinc_crypto::NodeId;
 pub use pinc_node::{PortMapStats, Timed, TimerStats};
 /// The urgency a stream starts with; see [`SendStream::set_urgency`].
 pub use pinc_transport::stream::DEFAULT_URGENCY;
+#[cfg(feature = "trace")]
+pub use platform::trace_ns_to_ms;
 pub use platform::{HostError, HostInstant, Platform, System};
 pub use protocol::{MAX_TAG, Protocol, Registered, read_tag, write_tag};
 pub use records::{KNOWN_MAX, MAX_HINTS, PeerRecord, Records, Rendezvous};

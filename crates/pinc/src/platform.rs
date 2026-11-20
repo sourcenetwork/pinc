@@ -104,6 +104,14 @@ pub(crate) const fn ns_to_ms(ns: u64) -> u64 {
     ns / 1_000_000
 }
 
+/// `ns_to_ms`, for trace validation.
+#[cfg(feature = "trace")]
+#[doc(hidden)]
+#[must_use]
+pub const fn trace_ns_to_ms(ns: u64) -> u64 {
+    ns_to_ms(ns)
+}
+
 // The standard library's platform: kept together so that the part that needs `std` is one block.
 
 /// The standard library's platform: `Instant` and `SystemTime`, `io::Error`, and the operating system's randomness. The

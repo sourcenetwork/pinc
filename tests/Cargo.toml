@@ -1259,6 +1259,10 @@ name = "trace_facade_relay_carriers"
 path = "trace_facade_relay_carriers.rs"
 
 [[test]]
+name = "trace_platform_time"
+path = "trace_platform_time.rs"
+
+[[test]]
 name = "trace_halfopen"
 path = "trace_halfopen.rs"
 

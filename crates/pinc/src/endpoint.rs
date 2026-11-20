@@ -831,6 +831,20 @@ impl<H: Hosted, D: Discovery> Endpoint<H, D> {
         }
     }
 
+    /// The endpoint's clock now, as a probe (with the `trace` feature, which the tests enable).
+    #[cfg(feature = "trace")]
+    #[doc(hidden)]
+    pub fn trace_now(&self) -> u64 {
+        self.0.shared.now()
+    }
+
+    /// The platform instant of the endpoint time `at`, as a probe (with the `trace` feature, which the tests enable).
+    #[cfg(feature = "trace")]
+    #[doc(hidden)]
+    pub fn trace_instant(&self, at: u64) -> <H::Platform as Platform>::Instant {
+        self.0.shared.instant(at)
+    }
+
     /// The relay this endpoint is homed on now: the one its record names and a relayed path's first stop. A relay pinned
     /// with [`Relay::home`](crate::Relay::home) is it once that relay answers. `None` before any relay answered.
     pub fn home_relay(&self) -> Option<NodeId> {
