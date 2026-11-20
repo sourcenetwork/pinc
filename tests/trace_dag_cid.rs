@@ -23,7 +23,7 @@ use std::cmp::Ordering;
 use std::fmt::Write as _;
 
 use pinc_dag::cid::{Cid, CidError, CidRef, MAX_TEXT_LEN, cmp_text};
-use pinc_tests::SplitMix64;
+use pinc_tests::{SplitMix64, trace_cases};
 use pinc_wire::{WireError, varint};
 use sha2::{Digest, Sha256};
 
@@ -440,7 +440,7 @@ fn dag_cid_traces_are_consistent_with_the_code() {
         "no CID of the longest size"
     );
     let mut random_ok: Vec<Cid> = Vec::new();
-    for _ in 0..500 {
+    for _ in 0..trace_cases(100, 500) {
         let class = |rng: &mut SplitMix64, set: &[u64]| {
             if below(rng, 2) == 0 {
                 pick(rng, set)
@@ -461,7 +461,8 @@ fn dag_cid_traces_are_consistent_with_the_code() {
     assert!(grid.len() > 50 && random_ok.len() > 50);
 
     // parse and prefix: the derived and class inputs of every grid CID, and its own bytes for the random ones
-    for c in &grid {
+    // the quick profile derives inputs from every fourth CID of the grid
+    for c in grid.iter().step_by(trace_cases(4, 1)) {
         for input in derived_inputs(c.as_bytes()).iter().chain(&class_inputs(c.as_bytes())) {
             parse_and_prefix(&mut out, input);
         }
@@ -469,11 +470,11 @@ fn dag_cid_traces_are_consistent_with_the_code() {
     for c in &random_ok {
         parse_and_prefix(&mut out, c.as_bytes());
     }
-    let strings = strings_over(&[0, 1, 2, 0x12, 0x1e, 0x20, 0x80, 0xff], 4);
+    let strings = strings_over(&[0, 1, 2, 0x12, 0x1e, 0x20, 0x80, 0xff], trace_cases(3, 4));
     for s in strings.iter().cloned().chain((0..=255u8).map(|b| vec![b])) {
         parse_and_prefix(&mut out, &s);
     }
-    for _ in 0..1000 {
+    for _ in 0..trace_cases(200, 1000) {
         parse_and_prefix(&mut out, &random_string(&mut rng));
     }
 
@@ -514,7 +515,7 @@ fn dag_cid_traces_are_consistent_with_the_code() {
     for s in strings.iter().cloned().chain((0..=255u8).map(|b| vec![b])) {
         ptext_ev(&mut out, &base32(&s));
     }
-    for _ in 0..500 {
+    for _ in 0..trace_cases(100, 500) {
         let n = below(&mut rng, 140) as usize;
         let t: String = std::iter::once('b')
             .chain((0..n).map(|_| DIGITS[below(&mut rng, 32) as usize] as char))
@@ -537,7 +538,7 @@ fn dag_cid_traces_are_consistent_with_the_code() {
         }
     }
     let accepted: Vec<&Cid> = grid.iter().chain(&random_ok).collect();
-    for _ in 0..300 {
+    for _ in 0..trace_cases(60, 300) {
         let a = accepted[below(&mut rng, accepted.len() as u64) as usize];
         let b = accepted[below(&mut rng, accepted.len() as u64) as usize];
         cmp_ev(&mut out, a.as_bytes(), b.as_bytes());

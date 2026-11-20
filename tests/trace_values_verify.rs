@@ -38,7 +38,7 @@ use blake3::hazmat::{HasherExt, Mode, merge_subtrees_non_root, merge_subtrees_ro
 use pinc_dag::tree::{
     Cv, Layout, RangeEncoder, RangeVerifier, Step, TreeError, build_outboard_vec, encode_range, encoded_len,
 };
-use pinc_tests::SplitMix64;
+use pinc_tests::{SplitMix64, trace_cases};
 use pinc_values::verify::{GroupVerifier, Item};
 
 /// A value below `n` (`n > 0`).
@@ -543,7 +543,7 @@ fn verify_traces() -> Trace {
     let mut tr = Trace::default();
     let mut rng = SplitMix64::traced(0x6a75_5e11);
     let mut run = 0;
-    for case in 0..140u64 {
+    for case in 0..trace_cases(72, 140) as u64 {
         let log = below(&mut rng, 4) as u32;
         let g = 1024u64 << log;
         let groups = if case < 20 { case } else { below(&mut rng, 17) };

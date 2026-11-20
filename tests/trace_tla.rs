@@ -19,7 +19,7 @@ use std::fmt::Write as _;
 use std::ops::Range;
 
 use pinc_dag::tree::{Layout, RangeEncoder, Step, TreeError, encode_range, encoded_len};
-use pinc_tests::SplitMix64;
+use pinc_tests::{SplitMix64, trace_cases};
 use pinc_wire::{WireError, varint};
 
 /// A value below `n` (`n > 0`).
@@ -384,7 +384,7 @@ fn encoder_traces() -> String {
     let mut out = String::new();
     let mut rng = SplitMix64::traced(0x3c0d_e901);
     // small layouts: every pair of the interesting offsets, the whole stream
-    for k in 0..=12u64 {
+    for k in 0..=trace_cases(8, 12) as u64 {
         for log in [0u32, 1] {
             let g = 1024u64 << log;
             for d in [-1i64, 0, 1] {
@@ -407,7 +407,7 @@ fn encoder_traces() -> String {
         }
     }
     // random layouts of up to 2^54 groups with ranges of random size
-    for _ in 0..200 {
+    for _ in 0..trace_cases(40, 200) {
         let log = below(&mut rng, 21) as u32;
         let bits = below(&mut rng, 65) as u32;
         let len = if bits == 0 { 0 } else { rng.next_u64() >> (64 - bits) };
@@ -425,7 +425,7 @@ fn encoder_traces() -> String {
 fn encout_traces() -> String {
     let mut out = String::new();
     let mut rng = SplitMix64::traced(0x3c0d_e902);
-    for case in 0..160u64 {
+    for case in 0..trace_cases(80, 160) as u64 {
         let log = below(&mut rng, 3) as u32;
         let g = 1024u64 << log;
         let groups = if case < 12 { case } else { below(&mut rng, 20) };

@@ -26,7 +26,7 @@
 use std::fmt::Write as _;
 
 use pinc_table::{Array, Error, Storage};
-use pinc_tests::{SplitMix64, soaking};
+use pinc_tests::{SplitMix64, soaking, trace_cases};
 
 /// What the runs exercised.
 #[derive(Default)]
@@ -272,15 +272,15 @@ fn the_array_matches_the_model() {
     let mut out = String::new();
     let mut seen = Seen::default();
     let mut id = 1u32;
-    for (places, runs, calls) in [
-        (0, 4, 20),
-        (1, 8, 60),
-        (2, 8, 80),
-        (3, 12, 120),
-        (7, 12, 150),
-        (64, 6, 400),
+    for (places, quick, runs, calls) in [
+        (0, 1, 4, 20),
+        (1, 2, 8, 60),
+        (2, 2, 8, 80),
+        (3, 3, 12, 120),
+        (7, 3, 12, 150),
+        (64, 1, 6, 400),
     ] {
-        for _ in 0..runs {
+        for _ in 0..trace_cases(quick, runs) {
             run(&mut rng, &mut out, id, places, calls, &mut seen);
             id += 1;
         }

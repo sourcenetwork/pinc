@@ -41,7 +41,7 @@ use std::fmt::Write as _;
 
 use common::{Dir, Item, fixed_set, index, mutate, sorted, sym_diff, var_set};
 use pinc_reconcile::{Error, Fingerprint, Initiator, Limits, MemError, MemIndex, Reason, Responder, Step, item_id};
-use pinc_tests::SplitMix64;
+use pinc_tests::{SplitMix64, trace_cases};
 
 #[path = "trace_reconcile_scan.rs"]
 mod scanmod;
@@ -111,6 +111,8 @@ struct Tr {
     big: String,
     /// The cases the TLC trace check replays: those whose size times calls stays within `TLA_BUDGET`.
     tla: String,
+    /// The cases that fit the budget so far; the quick profile replays one in every few of them.
+    tla_fit: usize,
     stats: BTreeMap<String, usize>,
     next_id: u32,
 }
@@ -286,7 +288,10 @@ impl Case {
             case.push_str(body);
             // TLC replays an interpreted model: the cost of a case is its items times its calls.
             if n == 0 && (self.a.len() + self.b.len()) * body.lines().count() <= TLA_BUDGET {
-                tr.tla.push_str(&case);
+                if tr.tla_fit.is_multiple_of(trace_cases(8, 1)) {
+                    tr.tla.push_str(&case);
+                }
+                tr.tla_fit += 1;
             }
             if n == 0 { &mut tr.norm } else { &mut tr.big }.push_str(&case);
         }

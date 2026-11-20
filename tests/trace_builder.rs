@@ -33,7 +33,7 @@ use std::fmt::Write as _;
 use blake3::Hasher;
 use blake3::hazmat::{HasherExt, Mode, merge_subtrees_non_root, merge_subtrees_root};
 use pinc_dag::tree::{Cv, Layout, OutboardBuilder, RangeVerifier, TreeError};
-use pinc_tests::SplitMix64;
+use pinc_tests::{SplitMix64, trace_cases};
 
 /// A value below `n` (`n > 0`).
 fn below(rng: &mut SplitMix64, n: u64) -> u64 {
@@ -321,7 +321,7 @@ fn run_case(tr: &mut Trace, rng: &mut SplitMix64, run: usize, len: usize, log: u
 fn builder_traces() -> String {
     let mut tr = Trace::default();
     let mut rng = SplitMix64::traced(0xb011_de42);
-    for (run, case) in (0..170u64).enumerate() {
+    for (run, case) in (0..trace_cases(60, 170) as u64).enumerate() {
         let log = below(&mut rng, 4) as u32;
         let g = 1024usize << log;
         // The first cases walk every group count from 0 to 40 so the tree takes every shape; the rest are random,

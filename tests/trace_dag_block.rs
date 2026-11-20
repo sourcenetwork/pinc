@@ -24,7 +24,7 @@ use std::fmt::Write as _;
 
 use pinc_dag::block::{BlockError, BlockParts, BlockRef, Link, encode_block};
 use pinc_dag::cid::{Cid, CidError, CidRef};
-use pinc_tests::SplitMix64;
+use pinc_tests::{SplitMix64, trace_cases};
 use pinc_wire::WireError;
 use pinc_wire::cbor::{Decoder, Encoder, Item, MapReader};
 
@@ -885,7 +885,7 @@ fn dag_block_traces_are_consistent_with_the_code() {
             Cid::new(if i % 2 == 0 { 0x55 } else { 0x71 }, hash, &digest).unwrap()
         })
         .collect();
-    for _ in 0..300 {
+    for _ in 0..trace_cases(60, 300) {
         let p = random_part(&mut rng, &pool);
         let el = p.encoded_len();
         let caps = [el, el.saturating_sub(1), el + 3, 0, el / 2, 4096];
@@ -947,7 +947,7 @@ fn dag_block_traces_are_consistent_with_the_code() {
     for b in &written {
         assert!(parse_ev(&mut out, b).is_none(), "a block the encoder wrote was refused");
     }
-    for _ in 0..2000 {
+    for _ in 0..trace_cases(400, 2000) {
         let mut b = written[below(&mut rng, written.len() as u64) as usize].clone();
         match below(&mut rng, 3) {
             0 => {
@@ -962,7 +962,7 @@ fn dag_block_traces_are_consistent_with_the_code() {
         }
         parse_ev(&mut out, &b);
     }
-    for _ in 0..300 {
+    for _ in 0..trace_cases(60, 300) {
         let list = random_item_list(&mut rng, &pool);
         let end = below(&mut rng, 8) != 0;
         parse_ev(&mut out, &write_items(&list, end));

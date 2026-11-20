@@ -671,3 +671,12 @@ The trace tests record fewer generated cases in the quick profile (`trace_cases`
 | `queue.ndjson` | 7,430 | 21,128 | light runs 60 -> 8, ring-full runs 100..102 left out (run 103 kept), one long run of short queues added, one deep run of 4 |
 | `membership.ndjson` | 25,391 | 25,391 | nothing: every run is scripted |
 | `relay-keep.ndjson` | 6,082 | 9,298 | seeds 20 -> 4 |
+| `tla/dag_cid.ndjson` | 10,747 | 40,205 | random cases 500 -> 100, 1000 -> 200, 300 -> 60, grid inputs every 4th (floor of 10,000 lines kept) |
+| `tla/dag_block.ndjson` | 4,025 | 7,728 | random cases 300 -> 60, 2000 -> 400, 300 -> 60 (floor of 4,000 lines kept) |
+| `values_verify.ndjson` | 2,232 | 4,904 | random cases 140 -> 72 (floor of 2,000 events kept) |
+| `values_wire.ndjson` | 15,563 | 25,343 | random cases cut to between a tenth and 0.4 of the deep count in every family |
+| `tla/encoder.ndjson + tla/encout.ndjson` | 5,298 + 1,754 | 7,397 + 3,511 | random cases 200 -> 40 and 160 -> 80, small layouts 12 -> 8 |
+| `builder.ndjson` | 2,377 | 10,484 | random cases 170 -> 60 (floor of 2,000 lines kept) |
+| `table_array.ndjson` | 1,622 | 7,418 | runs per table size 4..12 -> 1..3 (the 64-place table 6 -> 1) |
+| `dtn_rs.ndjson` | 4,304 | 5,842 | gmul 1500 -> 300, trials 6 -> 2, the 127-by-128 solve left out |
+| `reconcile_tla.ndjson` | 22 | 132 | every 8th session |

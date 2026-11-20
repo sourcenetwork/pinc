@@ -33,7 +33,7 @@ use std::fmt::Write as _;
 use pinc_dtn::error::DtnError;
 use pinc_dtn::gf256::{inv, mul, mul_add, scale, xor_into};
 use pinc_dtn::rs::Rs;
-use pinc_tests::SplitMix64;
+use pinc_tests::{SplitMix64, trace_cases};
 
 /// The product by shift-and-add with reduction by 0x11d: the definition, independent of the tables.
 fn ref_mul(a: u8, b: u8) -> u8 {
@@ -106,7 +106,7 @@ fn field_and_code_trace() {
             out.push(format!(r#"{{"t":"gmul","a":{a},"b":{b},"r":{r}}}"#));
         }
     }
-    for _ in 0..1500 {
+    for _ in 0..trace_cases(300, 1500) {
         let (a, b, c) = (rng.next_u64() as u8, rng.next_u64() as u8, rng.next_u64() as u8);
         let r = mul(a, b);
         assert_eq!(r, ref_mul(a, b));
@@ -210,7 +210,7 @@ fn field_and_code_trace() {
         let rs = Rs::new(k, m).unwrap();
         let n = rs.n();
         for len in [1usize, 2, 5] {
-            for trial in 0..6 {
+            for trial in 0..trace_cases(2, 6) {
                 // Encode over garbage parity: the parity is overwritten, the data is left alone.
                 let mut block = rand_bytes(&mut rng, n * len);
                 let before = block.clone();
@@ -305,6 +305,10 @@ fn field_and_code_trace() {
 
     // The largest solves: k + m = 255 with 127 missing data symbols replaced by 127 parity symbols.
     for (k, m) in [(128usize, 127usize), (127, 128), (200, 55), (55, 200)] {
+        // the quick profile solves one of the two 127-symbol shapes (about 8 s of replay each)
+        if (k, m) == (127, 128) && trace_cases(0, 1) == 0 {
+            continue;
+        }
         let rs = Rs::new(k, m).unwrap();
         let (n, len) = (rs.n(), 2);
         let mut whole = rand_bytes(&mut rng, n * len);

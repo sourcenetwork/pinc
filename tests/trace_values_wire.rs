@@ -30,7 +30,7 @@
 
 use std::fmt::Write as _;
 
-use pinc_tests::SplitMix64;
+use pinc_tests::{SplitMix64, trace_cases};
 use pinc_values::span::Span;
 use pinc_values::wire::{GROUP_HDR, GroupHeader, ProofFrame, ProofReq, REQ_FIXED, REQ_MAX, Req};
 use pinc_wire::WireError;
@@ -631,7 +631,7 @@ fn value_wire_trace() {
         b.extend(rand_bytes(&mut rng, 32));
         ev_req(&mut tr, &b);
     }
-    for _ in 0..200 {
+    for _ in 0..trace_cases(20, 200) {
         let n = below(&mut rng, 90) as usize;
         let mut g = rand_bytes(&mut rng, n);
         if n > 0 && below(&mut rng, 2) == 0 {
@@ -653,7 +653,7 @@ fn value_wire_trace() {
         follows,
     };
     let mut valid_hdrs = Vec::new();
-    for _ in 0..40 {
+    for _ in 0..trace_cases(6, 40) {
         let h = hdr(
             word(&mut rng),
             (below(&mut rng, u64::from(u32::MAX)) + 1) as u32,
@@ -705,7 +705,7 @@ fn value_wire_trace() {
         b[13..15].copy_from_slice(&(plen as u16).to_be_bytes());
         ev_gh(&mut tr, &b);
     }
-    for _ in 0..150 {
+    for _ in 0..trace_cases(15, 150) {
         let n = below(&mut rng, 24) as usize;
         let mut g = rand_bytes(&mut rng, n);
         if n > 0 && below(&mut rng, 2) == 0 {
@@ -732,7 +732,7 @@ fn value_wire_trace() {
         1216,
     ];
     let mut pfs: Vec<Vec<u8>> = Vec::new();
-    for i in 0..60 {
+    for i in 0..trace_cases(24, 60) {
         let s = if i < 20 {
             (1u64 << (7 * (i % 9))).saturating_sub(i as u64 % 3)
         } else {
@@ -785,7 +785,7 @@ fn value_wire_trace() {
             ev_pf_head(&mut tr, s, 7 + i as u8, i as u64 * 99, 5, 6, cap);
         }
     }
-    for _ in 0..80 {
+    for _ in 0..trace_cases(10, 80) {
         let s = sid(&mut rng);
         for cap in 0..=34 {
             if cap % 5 == 0 || cap > 29 {
@@ -832,12 +832,12 @@ fn value_wire_trace() {
         }
         ev_pf(&mut tr, &[a]);
     }
-    for _ in 0..150 {
+    for _ in 0..trace_cases(15, 150) {
         let n = below(&mut rng, 60) as usize;
         let g = rand_bytes(&mut rng, n);
         ev_pf(&mut tr, &g);
     }
-    for _ in 0..40 {
+    for _ in 0..trace_cases(6, 40) {
         let mut g = vec![0x05];
         let extra = 21 + 64 * below(&mut rng, 20) as usize + below(&mut rng, 3) as usize;
         g.extend(rand_bytes(&mut rng, extra));
@@ -846,7 +846,7 @@ fn value_wire_trace() {
 
     // ---- PROOF_REQ ----
     let mut prs: Vec<Vec<u8>> = Vec::new();
-    for i in 0..60u32 {
+    for i in 0..trace_cases(24, 60) as u32 {
         let r = ProofReq {
             sid: if i < 20 {
                 (1u64 << (7 * (i % 9))).saturating_sub(u64::from(i % 3))
@@ -926,7 +926,7 @@ fn value_wire_trace() {
         ev_pr(&mut tr, &[s.as_slice(), &pr_tail].concat());
         ev_pf(&mut tr, &[s.as_slice(), &tail].concat());
     }
-    for _ in 0..150 {
+    for _ in 0..trace_cases(15, 150) {
         let n = below(&mut rng, 30) as usize;
         ev_pr(&mut tr, &rand_bytes(&mut rng, n));
     }
