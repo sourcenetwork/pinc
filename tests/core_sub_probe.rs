@@ -560,3 +560,53 @@ fn seven_probes_of_one_session_ride_it_on_a_one_mebibyte_stack() {
         .join()
         .unwrap();
 }
+
+/// A probe of a pulse session whose probe lapses without the carrier's answer leaves the session up: a pulse
+/// session's liveness is its carrier's, and a late answer is not proof of death.
+#[test]
+fn a_probe_of_a_pulse_session_that_lapses_leaves_the_session_up() {
+    big_stack(|| {
+        let (mut net, a, b) = silent_parent();
+        let parent = net.nodes[a].ep.sessions().next().unwrap();
+        net.nodes[a]
+            .cmd(
+                net.now,
+                Command::SetPulse {
+                    session: parent,
+                    on: true,
+                },
+            )
+            .unwrap();
+        net.run_for(SEC_NS);
+        let marker = net.captured.len();
+        let _ = dial(&mut net, a, b, ALPN_B);
+        // The carrier carried the ping, and no answer ever comes back.
+        let now = net.now;
+        net.nodes[a]
+            .cmd(
+                now,
+                Command::Pulse {
+                    session: parent,
+                    sent: true,
+                },
+            )
+            .unwrap();
+        assert!(
+            net.run(now + 5 * SEC_NS, |n| handshake_since(n, marker)),
+            "the probe never lapsed into a handshake"
+        );
+        net.run_for(5 * SEC_NS);
+        assert!(
+            !net.nodes[a].saw(|e| matches!(e, Event::Closed { session, .. } if *session == parent)),
+            "the lapse closed the live pulse session"
+        );
+        let r = net.nodes[a].cmd(
+            net.now,
+            Command::OpenStream {
+                session: parent,
+                bidi: false,
+            },
+        );
+        assert!(r.is_ok(), "the pulse session does not take a stream: {:?}", r.err());
+    });
+}
