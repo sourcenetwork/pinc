@@ -26,7 +26,13 @@
 (* that the command does not keep. A room loop step is one send of the     *)
 (* command: on a refusal it retries the stale flushes once (only when the  *)
 (* list was not empty when the loop began), then unloads the least used   *)
-(* loaded key and sends again, and fails with TpmFull when there is none.  *)
+(* loaded key and sends again. A flush the TPM refuses frees no slot: the  *)
+(* next least used key is tried (pc "unload"); with none left the loop     *)
+(* fails with the refusal ("refused") when a flush was refused, with       *)
+(* TpmFull otherwise. Loading an unloaded key again retries the stale      *)
+(* flushes first. `persist` records the key persistent once EvictControl  *)
+(* ran; a refused or lost flush of the transient copy is remembered on the *)
+(* stale list (it has room here) and persist answers Ok.                   *)
 (* `tpm_handle` (variant B: None for an unloaded key) sends nothing and is *)
 (* not modelled.                                                           *)
 (*                                                                         *)
@@ -40,17 +46,18 @@
 (*    list, so `reclaim` and `Drop` try it again;                          *)
 (*  - NoFalseFull: TpmFull only when the TPM is full and no loaded key     *)
 (*    other than the one the command keeps is left;                        *)
+(*  - NoFalseRefusal: a refused unload is the error only when no loaded    *)
+(*    key other than the one the command keeps is left;                    *)
+(*  - PersistTruthful: persist answers Ok exactly when the key is          *)
+(*    persistent;                                                          *)
 (*  - Usable: with Foreign + 2 <= Slots no operation ends in TpmFull       *)
 (*    unless a refused flush left an object in the TPM;                    *)
 (*  - Bounded: a room loop sends its command at most the number of keys    *)
 (*    loaded when it began plus two times;                                 *)
 (*  - NoLeakOnDrop: after Drop the TPM holds only foreign objects and the  *)
 (*    objects whose flush was refused.                                     *)
-(* Not modelled: a flush whose answer was lost after a successful          *)
-(* EvictControl in `persist` (the key stays recorded as loaded at a        *)
-(* number the TPM freed: today's behaviour, kept by the design), so no     *)
-(* config has both PERSIST and FlushLost; foreign objects that come and    *)
-(* go (a number on the stale list could then name another user's object). *)
+(* Not modelled: foreign objects that come and go (a number on the stale   *)
+(* list could then name another user's object).                            *)
 (* Configs: KeystoreSlots.cfg, KeystoreSlots_persist.cfg; witnesses        *)
 (* KeystoreSlots_w_unload.cfg (NeverUnloaded: the room loop unloads a key) *)
 (* and KeystoreSlots_w_full.cfg (NeverFull: TpmFull is reached when other  *)
@@ -87,10 +94,11 @@ Pos(k) == CHOOSE i \in 1..Len(lru) : lru[i] = k
 \* touch: the key becomes the most recently used
 Touch(k) == Append(SelectSeq(lru, LAMBDA x : x # k), k)
 
-NoRoom == [cmd |-> "none", obj |-> 0, keep |-> 0, rec |-> TRUE, sends |-> 0, base |-> 0, then |-> "idle"]
+NoRoom == [cmd |-> "none", obj |-> 0, keep |-> 0, rec |-> TRUE, sends |-> 0, base |-> 0, then |-> "idle", ref |-> FALSE]
 \* a room loop for cmd (its object obj for a Load), keeping key keep, begun with the stale list st
 Room(cmd, obj, keep, then, st) ==
-    [cmd |-> cmd, obj |-> obj, keep |-> keep, rec |-> st = {}, sends |-> 0, base |-> Cardinality(Loaded), then |-> then]
+    [cmd |-> cmd, obj |-> obj, keep |-> keep, rec |-> st = {}, sends |-> 0, base |-> Cardinality(Loaded), then |-> then,
+     ref |-> FALSE]
 
 Init == /\ tpm = [h \in Pool |-> IF h = PH THEN PRIMARY ELSE IF h <= Foreign + 1 THEN FOREIGN ELSE FREE]
         /\ place = [k \in Keys |-> NONE]
@@ -143,14 +151,16 @@ LpReg == /\ pc = "lp_reg"
          /\ pc' = "idle" /\ res' = "ok"
          /\ UNCHANGED <<tpm, stale, leaked, op, rm, dropped, unloaded>>
 
-\* handle_of (an unloaded key is loaded again, kept), then Sign (a persistent key takes a slot while it signs)
+\* handle_of (an unloaded key is loaded again, kept, after the stale flushes are retried), then Sign (a persistent
+\* key takes a slot while it signs)
 Sign(k) == /\ Idle /\ place[k] # NONE
            /\ lru' = Touch(k)
            /\ Begin("sign", k, 0)
-           /\ CASE place[k] = UN -> rm' = Room("load", k, k, "adopt", stale) /\ pc' = "room"
+           /\ CASE place[k] = UN -> Reclaim /\ rm' = Room("load", k, k, "adopt", stale') /\ pc' = "room"
                 [] place[k] = PERS -> rm' = Room("slot", 0, k, "done", stale) /\ pc' = "room"
-                [] OTHER -> rm' = rm /\ pc' = "done"
-           /\ UNCHANGED <<tpm, place, stale, leaked, dropped, unloaded>>
+                                     /\ UNCHANGED <<tpm, stale, leaked>>
+                [] OTHER -> rm' = rm /\ pc' = "done" /\ UNCHANGED <<tpm, stale, leaked>>
+           /\ UNCHANGED <<place, dropped, unloaded>>
 \* handle_of after its Load: adopt, record the handle
 Adopt == /\ pc = "adopt"
          /\ stale' = stale \ {op.h}
@@ -185,17 +195,20 @@ UnsealFlush == /\ pc = "unseal_flush"
 Persist(k) == /\ PERSIST /\ Idle /\ place[k] \notin {NONE, PERS}
               /\ lru' = Touch(k)
               /\ Begin("persist", k, IF place[k] > 0 THEN place[k] ELSE 0)
-              /\ IF place[k] = UN THEN rm' = Room("load", k, k, "adopt", stale) /\ pc' = "room"
-                 ELSE rm' = rm /\ pc' = "evict"
-              /\ UNCHANGED <<tpm, place, stale, leaked, dropped, unloaded>>
-\* EvictControl, then a plain flush of the transient object; a refused flush leaves the key recorded as loaded
+              /\ IF place[k] = UN THEN Reclaim /\ rm' = Room("load", k, k, "adopt", stale') /\ pc' = "room"
+                 ELSE rm' = rm /\ pc' = "evict" /\ UNCHANGED <<tpm, stale, leaked>>
+              /\ UNCHANGED <<place, dropped, unloaded>>
+\* EvictControl, then the key is persistent; a plain flush of the transient object, whose refusal (or lost answer)
+\* is remembered on the stale list (discard), and persist answers Ok
 Evict == /\ pc = "evict"
          /\ \E o \in Outs :
               /\ tpm' = [tpm EXCEPT ![op.h] = IF o = "kept" THEN @ ELSE FREE]
-              /\ place' = [place EXCEPT ![op.key] = IF o = "ok" THEN PERS ELSE @]
-              /\ res' = IF o = "ok" THEN "ok" ELSE "err"
+              /\ stale' = IF o = "ok" THEN stale ELSE stale \cup {op.h}
+              /\ leaked' = IF o = "kept" THEN leaked \cup {op.h} ELSE leaked
+         /\ place' = [place EXCEPT ![op.key] = PERS]
+         /\ res' = "ok"
          /\ pc' = "idle"
-         /\ UNCHANGED <<lru, stale, leaked, op, rm, dropped, unloaded>>
+         /\ UNCHANGED <<lru, op, rm, dropped, unloaded>>
 
 (* one send of the room loop's command *)
 RoomSend ==
@@ -210,23 +223,30 @@ RoomSend ==
        THEN /\ Reclaim
             /\ rm' = [rm EXCEPT !.rec = TRUE, !.sends = @ + 1]
             /\ UNCHANGED <<place, lru, pc, op, res, dropped, unloaded>>
-       ELSE LET cand == Loaded \ {rm.keep}
-            IN IF cand = {}
-               THEN /\ pc' = "idle" /\ res' = "full"
-                    /\ rm' = [rm EXCEPT !.sends = @ + 1]
-                    /\ UNCHANGED <<tpm, place, lru, stale, leaked, op, dropped, unloaded>>
-               ELSE LET k == CHOOSE x \in cand : \A y \in cand : Pos(x) <= Pos(y)
-                        h == place[k]
-                    IN /\ \E o \in Outs :
-                            /\ tpm' = [tpm EXCEPT ![h] = IF o = "kept" THEN @ ELSE FREE]
-                            /\ stale' = IF o = "ok" THEN stale ELSE stale \cup {h}
-                            /\ leaked' = IF o = "kept" THEN leaked \cup {h} ELSE leaked
-                            /\ pc' = IF o = "ok" THEN pc ELSE "idle"
-                            /\ res' = IF o = "ok" THEN res ELSE "err"
-                       /\ place' = [place EXCEPT ![k] = UN]
-                       /\ rm' = [rm EXCEPT !.sends = @ + 1]
-                       /\ unloaded' = TRUE
-                       /\ UNCHANGED <<lru, op, dropped>>
+       ELSE /\ pc' = "unload"
+            /\ rm' = [rm EXCEPT !.sends = @ + 1, !.ref = FALSE]
+            /\ UNCHANGED <<tpm, place, lru, stale, leaked, op, res, dropped, unloaded>>
+
+(* the unload of the room loop: the least used loaded key the command does not keep; a refused flush (or a lost
+   answer) frees no slot as far as the store knows, so the next one is tried; with none left the loop ends with the
+   refusal, or TpmFull when nothing was refused *)
+RoomUnload ==
+    /\ pc = "unload"
+    /\ LET cand == Loaded \ {rm.keep}
+       IN IF cand = {}
+          THEN /\ pc' = "idle" /\ res' = IF rm.ref THEN "refused" ELSE "full"
+               /\ UNCHANGED <<tpm, place, lru, stale, leaked, op, rm, dropped, unloaded>>
+          ELSE LET k == CHOOSE x \in cand : \A y \in cand : Pos(x) <= Pos(y)
+                   h == place[k]
+               IN /\ \E o \in Outs :
+                       /\ tpm' = [tpm EXCEPT ![h] = IF o = "kept" THEN @ ELSE FREE]
+                       /\ stale' = IF o = "ok" THEN stale ELSE stale \cup {h}
+                       /\ leaked' = IF o = "kept" THEN leaked \cup {h} ELSE leaked
+                       /\ pc' = IF o = "ok" THEN "room" ELSE "unload"
+                       /\ rm' = IF o = "ok" THEN rm ELSE [rm EXCEPT !.ref = TRUE]
+                  /\ place' = [place EXCEPT ![k] = UN]
+                  /\ unloaded' = TRUE
+                  /\ UNCHANGED <<lru, op, res, dropped>>
 
 (* Drop: flush every loaded key, the primary and the stale list, each answered on its own *)
 Drop == /\ Idle
@@ -240,14 +260,14 @@ Drop == /\ Idle
 
 Next == \/ \E k \in Keys : Generate(k) \/ LoadPersistent(k) \/ Sign(k) \/ Persist(k)
         \/ Seal \/ Unseal
-        \/ RoomSend \/ GenLoad \/ GenReg \/ LpReg \/ Adopt \/ Done \/ UnsealFlush \/ Evict
+        \/ RoomSend \/ RoomUnload \/ GenLoad \/ GenReg \/ LpReg \/ Adopt \/ Done \/ UnsealFlush \/ Evict
         \/ Drop
 Spec == Init /\ [][Next]_vars
 
 TypeOK == /\ tpm \in [Pool -> {FREE, PRIMARY, FOREIGN, SEALED} \cup Keys]
           /\ place \in [Keys -> {NONE, UN, PERS} \cup Pool]
           /\ stale \subseteq Pool /\ leaked \subseteq Pool
-          /\ res \in {"none", "busy", "ok", "err", "full"}
+          /\ res \in {"none", "busy", "ok", "err", "full", "refused"}
 
 \* after Drop the store is gone: its records name nothing (NoLeakOnDrop covers that state)
 Agree == ~dropped => /\ \A k \in Keys : place[k] > 0 => tpm[place[k]] = k
@@ -255,11 +275,14 @@ Agree == ~dropped => /\ \A k \in Keys : place[k] > 0 => tpm[place[k]] = k
 StaleNotLive == \A h \in stale : h # PH /\ tpm[h] # FOREIGN /\ \A k \in Keys : place[k] # h
 LeakedOnStale == ~dropped => leaked \subseteq stale
 NoFalseFull == ~dropped /\ pc = "idle" /\ res = "full" => ~HasRoom /\ Loaded \subseteq {rm.keep}
+NoFalseRefusal == ~dropped /\ pc = "idle" /\ res = "refused" => Loaded \subseteq {rm.keep}
+PersistTruthful == pc = "idle" /\ op.kind = "persist" /\ res # "busy" => (res = "ok" <=> place[op.key] = PERS)
 Usable == ~dropped /\ pc = "idle" /\ res = "full" /\ Foreign + 2 <= Slots => leaked # {}
-Bounded == pc = "room" => rm.sends <= rm.base + 1
+Bounded == pc \in {"room", "unload"} => rm.sends <= rm.base + 2 /\ (pc = "room" => rm.sends <= rm.base + 1)
 NoLeakOnDrop == dropped => \A h \in Pool : tpm[h] = FOREIGN \/ tpm[h] = FREE \/ h \in leaked
 
-Inv == TypeOK /\ Agree /\ StaleNotLive /\ LeakedOnStale /\ NoFalseFull /\ Usable /\ Bounded /\ NoLeakOnDrop
+Inv == TypeOK /\ Agree /\ StaleNotLive /\ LeakedOnStale /\ NoFalseFull /\ NoFalseRefusal /\ PersistTruthful /\ Usable
+       /\ Bounded /\ NoLeakOnDrop
 
 \* witnesses
 NeverUnloaded == ~unloaded
