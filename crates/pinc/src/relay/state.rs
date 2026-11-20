@@ -632,6 +632,7 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
             return;
         };
         let key = node_key(&peer);
+        let mut replaced = None;
         if self.conn(slot).is_some_and(|c| c.dialer || c.carrier.is_peer_relay()) {
             self.peer_open(slot, peer, kind);
             if self.conn(slot).is_some_and(|c| c.dying.is_some()) {
@@ -659,9 +660,17 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
                 c.session = Some(session);
             }
             self.handshaking -= 1;
-            self.by_node.insert(key, slot);
+            // the machine closes the session this one replaces, which names the node's new slot: the old carrier is
+            // closed here, by the slot the table held
+            replaced = self
+                .by_node
+                .insert(key, slot)
+                .filter(|&old| old != slot && self.conn(old).is_some_and(|c| c.session.is_some()));
             self.counters.carriers_opened += 1;
             self.event(Event::CarrierUp { node: peer, kind });
+        }
+        if let Some(old) = replaced {
+            self.dying(old, Closed::Replaced);
         }
         self.flush();
     }
@@ -757,18 +766,12 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
             c.as_ref()
                 .is_some_and(|c| c.node.as_ref() == Some(node) && c.session == Some(session))
         };
+        // a replaced carrier is no longer the node's entry (its replacement is): `on_open` closed it already
         let slot = self
             .by_node
             .get(&node_key(node))
             .copied()
-            .filter(|&s| self.conns.get(s).is_some_and(named))
-            // a replaced carrier is no longer the node's entry (its replacement is): found by a scan, once per
-            // reconnect of a node, at most `CARRIERS` streams
-            .or_else(|| {
-                (reason == CloseReason::Replaced)
-                    .then(|| self.conns.iter().position(named))
-                    .flatten()
-            });
+            .filter(|&s| self.conns.get(s).is_some_and(named));
         if let Some(slot) = slot {
             self.dying(
                 slot,
