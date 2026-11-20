@@ -461,6 +461,24 @@ mod tests {
         assert_eq!(t.resolve(&first), None, "the old address names the new holder");
     }
 
+    /// A datagram the endpoint sends to an address whose slot went to another node is taken and counted as dropped, not
+    /// sent to the node that holds the slot now.
+    #[test]
+    fn a_datagram_for_a_stale_relay_path_address_is_taken_and_counted() {
+        let identity = Rc::new(RefCell::new(Identity::from_seed_with(&[7; 32], &[0; 32]).unwrap()));
+        let local: SocketAddr = "192.0.2.1:4000".parse().unwrap();
+        let mut core =
+            Core::<(), SoftwareStore, AllowAll>::new(identity, AllowAll, &[], Limits::default(), Some(local), T0)
+                .unwrap();
+        let t = core.hub.as_mut().unwrap();
+        let first = t.addr_of(&nid(0));
+        for i in 1..=u16::try_from(SLOTS).unwrap() {
+            t.addr_of(&nid(i));
+        }
+        assert!(core.tunnel(T0, &first, b"x"), "a relay path address is the relay's");
+        assert_eq!(core.counters.hub_dropped, 1, "the datagram went to the slot's new holder");
+    }
+
     /// A pulse that does not fit the queue is counted as dropped.
     #[test]
     fn a_pulse_past_the_queue_is_counted() {
