@@ -44,6 +44,8 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `BroadcastNode_retryLost` | MaxNow 4 -> 1, Mids {1, 2, 3} -> {1, 2}, SeenCap 3 -> 2 (still room for every id) Witness: the print is read only while the id is logged (KeepPrint = FALSE, the rule before the fix). A retry of the message after the log let it go is a duplicate with no acknowledgement: RetryAcked fails, and the publisher gives up. |
 | `BroadcastNode_taken` | MaxNow 5 -> 2, TTL 2 -> 1, LogWin 3 -> 1 (the log lets a message go at 2), Mids {1, 2} -> {1} |
 | `BroadcastNode_two` | MaxNow 5 -> 1, TTL 2 -> 1, AcpCap 2 -> 1 (HeldMax 2 and FholdMax 2 kept) |
+| `BroadcastPending` | MaxCalls 5 -> 4 |
+| `BroadcastPending_drop` | MaxCalls 5 -> 4 |
 | `BroadcastPush` | N 4 -> 3, LogCap 3 -> 2 (the log still evicts) |
 | `BroadcastPush_away` | N 4 -> 2, LogCap 2 -> 1 (the log still evicts) |
 | `BroadcastPush_n6` | Subs {s1, s2} -> {s1}, LogCap 3 -> 2 (N = 6 kept; the log still evicts) |
