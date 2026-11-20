@@ -18,10 +18,12 @@ mod relay_members;
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
+use std::pin::pin;
 use std::rc::Rc;
+use std::task::{Context, Waker};
 
 use pinc::Identity;
-use pinc::relay::Relay;
+use pinc::relay::{Hosted, Relay};
 use relay_members::{bind_ports, build_relay, on_stack};
 
 #[test]
@@ -31,5 +33,59 @@ fn a_relay_builds_on_a_two_mebibyte_stack_in_an_unoptimised_build() {
         let kinds = Rc::new(RefCell::new(VecDeque::new()));
         let builder = Relay::builder().identity(Identity::from_seed(&[3; 32]).unwrap());
         drop(build_relay(&ports, &kinds, builder));
+    });
+}
+
+/// The identity builds on a 64 KiB stack: an Ed25519 key pair costs tens of bytes, so a microcontroller's stack is
+/// enough. Until the key pair stops moving 64 KiB by value, this aborts with a stack overflow (the floor measured in
+/// #681 is 512 KiB in this profile).
+#[test]
+fn an_identity_builds_on_a_64_kib_stack_in_an_unoptimised_build() {
+    std::thread::Builder::new()
+        .stack_size(64 << 10)
+        .spawn(|| {
+            let id = Identity::from_seed(&[3; 32]).unwrap();
+            assert_ne!(id.node_id().bytes, [0; 32]);
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+/// Poll `run` once and drop it: the first round of a relay.
+fn poll_run_once<H: Hosted>(relay: &Relay<H>) {
+    let mut run = pin!(relay.run());
+    let mut cx = Context::from_waker(Waker::noop());
+    let _ = run.as_mut().poll(&mut cx);
+}
+
+/// A relay without the hub role builds, its identity included, and polls `run` once on a 256 KiB stack.
+#[test]
+fn a_relay_polls_run_once_on_a_256_kib_stack_in_an_unoptimised_build() {
+    on_stack(256 << 10, || async {
+        let ports = bind_ports().await;
+        let kinds = Rc::new(RefCell::new(VecDeque::new()));
+        let builder = Relay::builder().identity(Identity::from_seed(&[3; 32]).unwrap());
+        let relay = build_relay(&ports, &kinds, builder);
+        poll_run_once(&relay);
+    });
+}
+
+/// A relay with the hub role builds, its identity included, and polls `run` once on a 256 KiB stack.
+///
+/// Ignored for a cause the key pair no longer owns: the hub endpoint's construction reserves its tables' by-value
+/// temporaries and a whole endpoint copy on the stack in this profile (~300 KiB, #736). The identity on this path
+/// builds on 64 KiB since the key pair shrank; the test is the done-when of #706's hub leg.
+#[test]
+#[ignore = "the hub endpoint's construction needs ~300 KiB of stack in this profile; #736"]
+fn a_hub_relay_polls_run_once_on_a_256_kib_stack_in_an_unoptimised_build() {
+    on_stack(256 << 10, || async {
+        let ports = bind_ports().await;
+        let kinds = Rc::new(RefCell::new(VecDeque::new()));
+        let builder = Relay::builder()
+            .identity(Identity::from_seed(&[3; 32]).unwrap())
+            .hub(ports.addr, &[]);
+        let relay = build_relay(&ports, &kinds, builder);
+        poll_run_once(&relay);
     });
 }

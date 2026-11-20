@@ -41,6 +41,23 @@ fn seed_for(alg: IdentityAlg, tweak: u8) -> Vec<u8> {
         .collect()
 }
 
+/// A key pair costs what its algorithm costs: the size stated on the type's docs, asserted here so a change that
+/// moves key material by value shows up in the suite. The ML-DSA-65 expanded key is a pointer, so the largest variant
+/// is a small algorithm's expanded key.
+#[test]
+fn a_key_pair_costs_what_its_algorithm_costs() {
+    big(|| {
+        // The number on the type's docs: with the `alloc` feature the expanded ML-DSA-65 key is boxed at setup, so
+        // every algorithm's key pair is the size of the largest small key plus the algorithm tag.
+        let expected = 240;
+        assert_eq!(
+            core::mem::size_of::<Keypair>(),
+            expected,
+            "Keypair's docs state this size"
+        );
+    });
+}
+
 fn public(kp: &Keypair) -> Vec<u8> {
     let mut pk = vec![0u8; MAX_PUBLIC_KEY_LEN];
     let n = kp.public_key(&mut pk).unwrap();

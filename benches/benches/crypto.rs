@@ -133,12 +133,48 @@ fn bench_kdf_and_drbg(c: &mut Criterion) {
     g.finish();
 }
 
+/// The key pair shapes of #706, measured before the API moves: for each algorithm, signing with the expanded key
+/// held in the enum (today), signing with the seed held and the key expanded per sign, and signing with the expanded
+/// key in a heap slot (the store's path). The seed decision is (a) against (b); (c) is the sanity row.
+fn bench_keypair_shape(c: &mut Criterion) {
+    for (name, alg) in [
+        ("ed25519", IdentityAlg::Ed25519),
+        ("p256", IdentityAlg::EcdsaP256),
+        ("ml_dsa_65", IdentityAlg::MlDsa65),
+        ("hybrid", IdentityAlg::Hybrid),
+    ] {
+        let seed: Vec<u8> = (0..alg.seed_len()).map(|i| (i as u8).wrapping_add(1)).collect();
+        let kp = Keypair::from_seed(alg, &seed).unwrap();
+        let boxed = Box::new(Keypair::from_seed(alg, &seed).unwrap());
+        let mut sig = vec![0u8; MAX_SIGNATURE_LEN];
+        let mut g = c.benchmark_group(format!("keypair_shape/{name}"));
+        g.bench_function("sign_expanded_in_enum", |b| {
+            b.iter(|| kp.sign(black_box(b"benchmark message"), black_box(&mut sig)).unwrap());
+        });
+        g.bench_function("sign_expand_per_sign", |b| {
+            b.iter(|| {
+                let kp = Keypair::from_seed(alg, black_box(&seed)).unwrap();
+                kp.sign(black_box(b"benchmark message"), black_box(&mut sig)).unwrap();
+            });
+        });
+        g.bench_function("sign_expanded_in_heap_slot", |b| {
+            b.iter(|| {
+                boxed
+                    .sign(black_box(b"benchmark message"), black_box(&mut sig))
+                    .unwrap()
+            });
+        });
+        g.finish();
+    }
+}
+
 criterion_group!(
     benches,
     bench_capabilities,
     bench_x25519,
     bench_kem,
     bench_signatures,
+    bench_keypair_shape,
     bench_aead,
     bench_header_protection,
     bench_kdf_and_drbg
