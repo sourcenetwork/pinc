@@ -90,6 +90,7 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `BroadcastRepair_gapmark` | MaxTime 45 -> 40 |
 | `BroadcastRepair_have` | MaxTime 45 -> 40 |
 | `BroadcastRepair_quiet` | MaxTime 45 -> 40 |
+| `BroadcastSubs` | Topics {1, 2} -> {1} |
 | `BroadcastSubsDelta` | MaxSteps 8 -> 4 |
 | `BroadcastSubsDelta_nocap` | Hinted {1, 2} -> {1}, MaxLives 2 -> 1 |
 | `BroadcastSubsDelta_nofrom` | Hinted {1, 2} -> {2}, MaxLives 2 -> 1 |
