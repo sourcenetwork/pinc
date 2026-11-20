@@ -73,7 +73,9 @@ fn take_out(
 }
 /// The size of a read.
 const READ_BUF: usize = 16 * 1024;
-/// The most bytes of the stream read ahead of the node, and of undecoded WebSocket frames.
+/// The most bytes of the stream read ahead of the node, and of undecoded WebSocket frames. A ping of two bytes is
+/// answered with six, so the answers waiting to be written stay under `OUT_CAP + 3 * IN_CAP`: reading stops once they
+/// pass `OUT_CAP`, and one read of pings adds at most three times what it read.
 const IN_CAP: usize = 64 * 1024;
 
 /// Where a carrier is.
@@ -138,6 +140,12 @@ impl<S> Slot<S> {
         self.inoff = 0;
         self.raw.clear();
         self.decoder = Decoder::new(WsRole::Server);
+    }
+
+    /// Whether the next read may start: the node has taken what was read, a whole read fits in the bytes waiting to be
+    /// decoded, and the writes are not behind. A peer that pings faster than the host writes waits in its own socket.
+    const fn want_read(&self) -> bool {
+        self.inoff >= self.inbuf.len() && self.raw.len() + READ_BUF <= IN_CAP && self.out.len() <= OUT_CAP
     }
 
     const fn is_ws(&self) -> bool {
@@ -565,9 +573,7 @@ impl<H: Hosted> Shared<H> {
                         open.cancel();
                         close.cancel();
                         self.carrier_feed(r, ver);
-                        let want_read = self
-                            .with_slot(r, ver, |s| s.inoff >= s.inbuf.len() && s.raw.len() <= IN_CAP)
-                            .unwrap_or(false);
+                        let want_read = self.with_slot(r, ver, |s| s.want_read()).unwrap_or(false);
                         if want_read && !read.running(ver) {
                             let buf = self
                                 .with_slot(r, ver, |s| {
@@ -706,5 +712,32 @@ mod tests {
         let mut out = Vec::new();
         assert!(take_out(&mut out, &mut scratch, false, source(OUT_CAP + 200_000)));
         assert!(out.len() >= OUT_CAP && out.len() < OUT_CAP + scratch.len());
+    }
+
+    /// A peer that pings faster than the host writes the answers stops being read, so the answers stay bounded.
+    #[test]
+    fn a_peer_that_pings_faster_than_the_host_writes_is_not_read_on() {
+        let mut s = Slot::<()>::new();
+        let mut ping = [0u8; ws::MAX_HEADER];
+        let n = ws::encode(Opcode::Ping, &[], None, &mut ping).unwrap_or(0);
+        assert!(n > 0);
+        let mut reads = 0;
+        while s.want_read() && reads < 1000 {
+            reads += 1;
+            for _ in 0..READ_BUF / n {
+                s.raw.extend_from_slice(ping.get(..n).unwrap_or_default());
+            }
+            assert_eq!(ws_fill(&mut s), Ok(false));
+        }
+        assert!(
+            reads < 1000,
+            "still reading with {} bytes of answers waiting",
+            s.out.len()
+        );
+        assert!(
+            s.out.len() <= OUT_CAP + 3 * IN_CAP,
+            "{} bytes of answers waiting",
+            s.out.len()
+        );
     }
 }
