@@ -150,9 +150,10 @@ impl Map {
         d / MS_NS
     }
 
-    /// The real length of the event queue for the model's `q`.
+    /// The real length of the event queue for the model's `q`: literal up to QB + 1 (the leaf one dial past the low
+    /// bound, real as it is), and S - 2 (the leaf one read below S - 1) and up stand for the stall region.
     pub fn real_q(&self, q: u64) -> usize {
-        if q <= self.qb {
+        if q <= self.qb + 1 {
             q as usize
         } else {
             self.rs - (self.s - q) as usize
@@ -926,7 +927,7 @@ pub fn walk<const K: usize, const D: usize>(file: &str) -> bool {
         k("OMAX") == 1 && OrphanProbe::MAX == 1500,
         "{file}: the model's lengths of parts do not straddle the code's largest held part"
     );
-    assert!(k("S") - 1 > k("QB") + 1, "{file}: the model's queue bounds overlap");
+    assert!(k("S") - 2 > k("QB") + 1, "{file}: the model's queue bounds overlap");
     let ids = c.get("IDS").and_then(Json::arr).unwrap().iter().map(num).collect();
     let map = Map {
         origin: 0,
