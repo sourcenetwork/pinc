@@ -151,11 +151,13 @@ Remove(c, id) ==
        ELSE IF f = c.act THEN [c |-> c, r |-> "active"]
        ELSE [c |-> [c EXCEPT !.t[f] = None], r |-> "ok"]
 
-\* path_lost: gone and unvalidated, choose_path, forget_gone
+\* path_lost: gone and unvalidated, and nothing left armed on it (no probe, re-join or challenge), choose_path,
+\* forget_gone
 Lost(c, id) ==
     LET f == PO!Find(c.t, id)
     IN IF f = 0 THEN [c |-> c, r |-> "unknown"]
-       ELSE [c |-> ForgetGone(Choose([c EXCEPT !.t[f].gone = TRUE, !.t[f].v = FALSE])), r |-> "ok"]
+       ELSE [c |-> ForgetGone(Choose([c EXCEPT !.t[f].gone = TRUE, !.t[f].v = FALSE, !.t[f].pr = FALSE,
+                                               !.t[f].rj = FALSE, !.t[f].sc = FALSE])), r |-> "ok"]
 
 \* set_active
 SetActive(c, id) ==
