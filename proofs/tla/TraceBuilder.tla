@@ -80,13 +80,14 @@ Begin ==
               /\ bst' = BB!InitState(P2, BB!MkLay(U!W(ev.len), U!W(g), 64))
               /\ i' = k + 1
 
-(* one call of update *)
+(* one call of update. TLC evaluates an operator's argument again at each of its uses in a step: the \E over a
+   one-value set takes the run's layout and the call's result once. *)
 UpdEv ==
     /\ i >= 1 /\ i <= Len(Trace)
-    /\ LET ev == Trace[i]
-           r == BB!UpdateCall(P, Lay, bst, U!W(ev.ilen), U!W(ev.olen))
-       IN /\ ev.t = "bupd"
-          /\ ev.pos = U!Val(bst.con)
+    /\ Trace[i].t = "bupd"
+    /\ \E lay \in {Lay} : \E r \in {BB!UpdateCall(P, lay, bst, U!W(Trace[i].ilen), U!W(Trace[i].olen))} :
+       LET ev == Trace[i]
+       IN /\ ev.pos = U!Val(bst.con)
           /\ ev.res = r.res
           /\ IF r.res = "ok" THEN SlotsMatch(bst, r.st, ev.slots) ELSE ev.slots = <<>>
           /\ bst' = r.st
@@ -96,10 +97,10 @@ UpdEv ==
 (* one call of finish, on a copy of the builder *)
 FinEv ==
     /\ i >= 1 /\ i <= Len(Trace)
-    /\ LET ev == Trace[i]
-           f == BB!FinishCall(P, Lay, bst, U!W(ev.olen))
-       IN /\ ev.t = "bfin"
-          /\ ev.res = f.res
+    /\ Trace[i].t = "bfin"
+    /\ \E lay \in {Lay} : \E f \in {BB!FinishCall(P, lay, bst, U!W(Trace[i].olen))} :
+       LET ev == Trace[i]
+       IN /\ ev.res = f.res
           /\ IF f.res = "ok"
              THEN /\ ev.root = f.root
                   /\ P.len = 0 => ev.root = P.e0
@@ -119,9 +120,12 @@ TraceSpec == Init /\ [][TNext]_vars
    written twice, every slot is a parent of the tree, the counters stay inside the declared length and the group *)
 Inv ==
     i >= 1 =>
-        /\ BB!Shape(bst, Lay)
-        /\ \A a, b \in 1..Len(bst.wr) : a # b => bst.wr[a].slot # bst.wr[b].slot
-        /\ \A a \in 1..Len(bst.wr) : U!Lt(bst.wr[a].slot, L!SpecParents(Lay.n))
+        LET lay == Lay
+            top == L!SpecParents(lay.n)
+        IN /\ BB!Shape(bst, lay)
+           \* the slots are distinct: as many as the writes
+           /\ Cardinality({bst.wr[a].slot : a \in 1..Len(bst.wr)}) = Len(bst.wr)
+           /\ \A a \in 1..Len(bst.wr) : U!Lt(bst.wr[a].slot, top)
 \* the end check (TraceEnd.tla): the trace has a line, its first line starts a run, and every run was taken to its
 \* end (the next "bnew" line or the end of the trace), each end reached marked by its position
 RunEnds == {k \in 2..Len(Trace) : Trace[k].t = "bnew"} \cup {Len(Trace) + 1}
