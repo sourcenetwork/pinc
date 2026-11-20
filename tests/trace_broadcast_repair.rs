@@ -10,7 +10,8 @@
 //! The test asserts the facts it relies on itself: the timer constants the schedule relies on, a lost message
 //! reaches the subscriber by the first gap check after it, the resubscription repairs what the cut link missed, the
 //! second hub gets a message from the first only by its anti-entropy, and the subscriber delivers all eight messages
-//! once. The trace is written to the directory in `PINC_TRACE_DIR` when it is set; otherwise nothing is written.
+//! once. `publish_reaches_both_hubs` checks the fan-out of a publish to both hubs, which the trace leaves out. The trace
+//! is written to the directory in `PINC_TRACE_DIR` when it is set; otherwise nothing is written.
 #![allow(
     clippy::unwrap_used,
     clippy::indexing_slicing,
@@ -246,4 +247,29 @@ fn repair_trace() {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("repair.ndjson"), &w.out).unwrap();
     }
+}
+
+/// A publish fans out to every hub the publisher reaches: with the link between the hubs down, hub 2 can only hold the
+/// message if the publisher handed it over itself, which `repair_trace` (the model's publisher writes to hub 1 only)
+/// leaves out.
+#[test]
+fn publish_reaches_both_hubs() {
+    let mut net = Net::new(IdentityAlg::Ed25519, 2, 2, 0);
+    net.link(2, 1, false);
+    net.link(0, 1, false);
+    net.subscribe(2, T);
+    net.run_until(0);
+    let mid = net.publish(3, T, &[1u8; 16]);
+    net.run_until(SEC);
+    for hub in 0..2 {
+        assert!(
+            net.nodes[hub].t.log_holds(T, &mid),
+            "hub {} did not get the publish from the publisher",
+            hub + 1
+        );
+    }
+    assert!(
+        net.delivered(2).contains(&mid),
+        "the subscriber did not get the message through hub 1"
+    );
 }
