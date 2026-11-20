@@ -453,6 +453,8 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `NodeSilence` | Pts -> PtsQuick (the widths 2^j - 1, 2^j, 2^j + 1 for 8 of the 65 j: 0, 1, 2, 32, 61 to 64; every constant's edge kept): 209 -> 38 points |
 | `NodeTimerBound` | CMAX 2 -> 1 (the counters saturate at 1, still reached) |
 | `Orphan` | the time scaled down: LIFE 2 -> 1, TAKE_LIFE 2 -> 1, TMAX 4 -> 2; MAX 2 -> 1, HMAX 4 -> 3 |
+| `Orphan_evict` | TMAX 4 -> 3 |
+| `Orphan_stale` | TMAX 4 -> 3 |
 | `PortMapLease` | last tick MaxT 7 -> 4, tries Tries 2 -> 1; bounded by constraint: behaviours of depth 14 (PortMapLeaseQuickBound) |
 | `PrekeyCache` | MaxClock 6 -> 4 (the cache fills, a get refreshes the older entry, the next insert evicts the least recently used) |
 | `PrekeyCache_n3` | MaxClock 6 -> 3 (the cache fills; the invariants insert into the full cache) |
