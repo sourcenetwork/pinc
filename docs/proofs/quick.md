@@ -211,9 +211,12 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `DgramSize_noguard` | the input domain Inputs (1587600 inputs) -> InputsQuick (20736): path 3 -> 2 sizes, interface 5 -> 2, buffer 7 -> 3, amplification 5 -> 3, flight 6 -> 4, handshake 7 -> 4, application 6 -> 3 |
 | `DgramSize_noiface` | the input domain Inputs (1587600 inputs) -> InputsQuick (20736): path 3 -> 2 sizes, interface 5 -> 2, buffer 7 -> 3, amplification 5 -> 3, flight 6 -> 4, handshake 7 -> 4, application 6 -> 3 |
 | `DialReport` | the time scaled down with the flights: Flights 4 -> 1, Promise 30 -> 2, Limit 32 -> 3, MaxNow 36 -> 5 |
+| `DialReport_answeratkeys` | MaxNow 36 -> 34 |
+| `DialReport_answeratreport` | MaxNow 36 -> 34 |
 | `DialReport_countheld` | the time scaled down with the flights: Flights 4 -> 2 (the early end after 2 + 4 = 6 ticks instead of 30), Promise 30 -> 6, Limit 32 -> 8, MaxNow 36 -> 12 |
 | `DialReport_fixed` | the time scaled down with the flights: Flights 4 -> 2 (the early end after 2 + 4 = 6 ticks instead of 30), Promise 30 -> 6, Limit 32 -> 8, MaxNow 36 -> 12, FixedBound 8 -> 4 (four first delays -> two, the flights) |
 | `DialReport_floor` | the time scaled down with the flights: Flights 4 -> 2 (the early end after 2 + 4 = 6 ticks instead of 30), Promise 30 -> 6, Limit 32 -> 8, MaxNow 36 -> 12 |
+| `DialReport_noanswer` | MaxNow 36 -> 34 |
 | `DialReport_nobound` | the time scaled down with the flights: Flights 4 -> 2 (the early end after 2 + 4 = 6 ticks instead of 30), Promise 30 -> 6, Limit 32 -> 8, MaxNow 36 -> 12 |
 | `DialReport_noreset` | the time scaled down with the flights: Flights 4 -> 2 (the early end after 2 + 4 = 6 ticks instead of 30), Promise 30 -> 6, Limit 32 -> 8, MaxNow 36 -> 12 |
 | `DialReport_thin` | the time scaled down with the flights: Flights 4 -> 2 (the early end after 2 + 4 = 6 ticks instead of 30), Promise 30 -> 6, Limit 32 -> 8, MaxNow 36 -> 12 |
