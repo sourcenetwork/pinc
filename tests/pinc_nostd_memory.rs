@@ -30,8 +30,10 @@ use std::task::{Context, Poll, Waker};
 
 use pinc::{Endpoint, Hosted, Limits, Pinc, Platform};
 
-/// The most an endpoint with no session may hold, in bytes: it holds 789,701 (the server) and 789,021 (the client).
-const BUILT_MAX: isize = 869_000;
+/// The most an endpoint with no session may hold, in bytes: it holds 1,861,229 (the server) and 1,860,549 (the
+/// client). 1,048,576 of that is the spill arena of the default limits (128 slots of 8,192 bytes), allocated whole
+/// when the endpoint is built; the rest stays under the 869,000 it had before the arena.
+const BUILT_MAX: isize = 869_000 + 1_048_576;
 /// The most one connected session that echoed 64 bytes may add, in bytes: it adds 2,857,873 (the server) and 2,867,821
 /// (the client), nearly all of it the room reserved for the slot's tables, which is written as the session uses it
 /// (`SLOT_BYTES` in `mem.rs` is 2,844,952).

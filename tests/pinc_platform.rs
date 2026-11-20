@@ -519,8 +519,9 @@ async fn a_prekey_rotation_asks_the_platform_for_fresh_entropy() {
 }
 
 /// The sizes of the default builder, of the built endpoint and of its `run` future, in an unoptimised build, as they
-/// were before the platform parameter existed.
-const BUILDER: usize = 400;
+/// were before the platform parameter existed; the builder is one word larger since its limits name the slots of the
+/// spill arena.
+const BUILDER: usize = 408;
 const ENDPOINT: usize = 8;
 const RUN: usize = 1072;
 
