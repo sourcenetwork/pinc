@@ -163,7 +163,9 @@ fn a_lost_path_added_again_carries_the_session() {
         net.a.conn.path_lost(PathId(1)).unwrap();
         assert!(!net.a.conn.path_validated(PathId(1)), "a lost path is not validated");
         let now = net.now;
-        net.a.with_env(now, |c, env| c.add_path(env, PathId(1), PathInfo::default())).unwrap();
+        net.a
+            .with_env(now, |c, env| c.add_path(env, PathId(1), PathInfo::default()))
+            .unwrap();
         assert!(
             net.run(net.now + 5 * SEC, |n| n.a.conn.path_validated(PathId(1))),
             "the path the endpoint added again never validated"
@@ -229,7 +231,10 @@ fn a_lost_path_arms_no_more_probes() {
                 .expect("the path is held")
         };
         let before = slot(&net);
-        assert!(before.rejoin && before.probes_left > 0, "the silent path is being re-joined");
+        assert!(
+            before.rejoin && before.probes_left > 0,
+            "the silent path is being re-joined"
+        );
         net.a.conn.path_lost(PathId(1)).unwrap();
         let after = slot(&net);
         assert!(after.gone);
