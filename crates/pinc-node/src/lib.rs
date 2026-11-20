@@ -46,7 +46,7 @@
 //!   by default, so a name change and the relay binary release that speaks the new name ship together, and a network
 //!   upgrades its hubs before its members: a hub and a member on different names is a broken network, not a supported
 //!   one, and speaking the previous name for one release is backwards compatibility, which is banned for now. Today's
-//!   name is `pinc/hub/2` (an example, not a promise). This is the record of the lockstep-release decision of #660;
+//!   name is `pinc/hub/3` (an example, not a promise). This is the record of the lockstep-release decision of #660;
 //!   the repo keeps no release notes, so this module's docs are the record.
 //!
 //! The crate is `no_std` with `alloc`, forbids unsafe code and uses no `dyn`. Every table is bounded.

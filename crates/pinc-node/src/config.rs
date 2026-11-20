@@ -66,8 +66,8 @@ pub(crate) const DENIED: u64 = pinc_membership::session::DENIED_CODE;
 /// on the old name with members on the new one, or the reverse, is a broken network, not a supported one. A hub and
 /// a member speaking the previous name for one release so a network can be upgraded node by node is backwards
 /// compatibility, which is banned for now. This rule is the record of the decision (see the `pinc-node` module docs
-/// and issue #660); today's name is `pinc/hub/2` (an example, not a promise).
-pub const HUB_ALPN: &[u8] = b"pinc/hub/2";
+/// and issue #660); today's name is `pinc/hub/3` (an example, not a promise).
+pub const HUB_ALPN: &[u8] = b"pinc/hub/3";
 /// The protocol id of the values layer.
 pub const VALUES_ALPN: &[u8] = b"pinc/values";
 /// The protocol id of the reconcile layer.
