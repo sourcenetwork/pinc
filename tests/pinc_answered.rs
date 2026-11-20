@@ -6,6 +6,8 @@
 #[macro_use]
 mod pinc_common;
 
+use std::time::Duration;
+
 use pinc::{Connection, ErrorKind, Hosted, NodeAddr};
 use pinc_common::{ECHO, SINK, serve_conn, within};
 
@@ -52,7 +54,13 @@ fn stopped_peer(e: &pinc::Error) -> bool {
 async fn a_dial_to_a_running_peer_is_answered_and_so_is_its_redial() {
     within(30, async {
         let (to, _task) = peer!();
-        let client = pinc_common::client().await;
+        // A short connect timeout, so the dial's own bound is far inside the test's.
+        let client = pinc_common::bind(
+            pinc_common::builder()
+                .alpn(ECHO)
+                .connect_timeout(Duration::from_secs(3)),
+        )
+        .await;
         let first = client.connect(to.clone(), ECHO).await.unwrap();
         first.answered().await.unwrap();
         assert!(first.is_answered());
