@@ -644,6 +644,8 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
 
     /// Ask the relays for the record of `peer`.
     pub(crate) fn lookup_start(&mut self, now: u64, peer: &NodeId) {
+        // A failure left by an earlier lookup that nobody waited for must not answer this one.
+        self.lookup_failed.retain(|p| p != peer);
         self.node.lookup(now, peer);
         self.dirty = true;
     }
