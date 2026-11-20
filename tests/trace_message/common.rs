@@ -464,6 +464,7 @@ pub fn write_ev(out: &mut String, m: &Msg, cap: usize) -> Result<Vec<u8>, WireEr
         Ok(b) => format!(r#"{{"res":"ok","bytes":{}}}"#, bytes(b)),
         Err(WireError::BufferTooSmall { needed }) => format!(r#"{{"res":"small","needed":{needed}}}"#),
         Err(WireError::VarintOverflow) => r#"{"res":"overflow"}"#.to_owned(),
+        Err(WireError::Unexpected(what)) => format!(r#"{{"res":"unexpected","what":"{what}"}}"#),
         Err(other) => panic!("a write returned {other:?}"),
     };
     let _ = writeln!(out, r#"{{"op":"write","m":{},"cap":{cap},"r":{res}}}"#, json(m));
@@ -873,6 +874,8 @@ pub enum Expect {
     Refused(&'static str),
     /// Not written: a length that does not fit its prefix.
     Overflow,
+    /// Not written: the writer refuses the field with this reason, the parser's own.
+    WriteRefused(&'static str),
 }
 
 /// The fields out of the documented ranges, with what each must do.
@@ -886,13 +889,8 @@ pub fn out_of_range() -> Vec<(Msg, Expect)> {
     );
     let mut v = Vec::new();
     for n in [0, 33, 255, 256] {
-        let expect = || {
-            if n == 256 {
-                Expect::Overflow
-            } else {
-                Expect::Refused("alpn length")
-            }
-        };
+        // The length rule comes before the conversion to a byte: 256 answers the length error, not an overflow.
+        let expect = || Expect::WriteRefused("alpn length");
         v.push((
             Msg::Initial {
                 full: false,

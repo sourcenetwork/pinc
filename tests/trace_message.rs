@@ -82,12 +82,13 @@ fn message_traces() {
         }
     }
 
-    // fields out of range: Initial::write and ResumeHello::write do not refuse an ALPN of 0 or 33 to 255 bytes (today's
-    // behaviour, recorded as it is); the parser refuses what they write
+    // fields out of range: Initial::write and ResumeHello::write refuse an ALPN of 0 or 33 or more bytes with the
+    // parser's own reason; the parser refuses the other fields' bytes they write
     for (m, expect) in out_of_range() {
         let r = write_ev(&mut out, &m, 70000);
         match expect {
             Expect::Overflow => assert_eq!(r.unwrap_err(), WireError::VarintOverflow),
+            Expect::WriteRefused(what) => assert_eq!(r.unwrap_err(), WireError::Unexpected(what)),
             Expect::Refused(what) => {
                 let written = r.unwrap();
                 assert_eq!(

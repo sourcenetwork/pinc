@@ -185,15 +185,24 @@ fn write_cid(w: &mut Writer<'_>, cid: &ConnId) -> Result<(), WireError> {
     w.put_slice(cid.as_bytes())
 }
 
+/// The one rule for an ALPN length, for the parser and the writer: 1 to [`MAX_ALPN_LEN`] bytes.
+const fn alpn_len_ok(n: usize) -> bool {
+    1 <= n && n <= MAX_ALPN_LEN
+}
+
 fn read_alpn<'a>(r: &mut Reader<'a>) -> Result<&'a [u8], WireError> {
     let len = usize::from(r.read_u8()?);
-    if !(1..=MAX_ALPN_LEN).contains(&len) {
+    if !alpn_len_ok(len) {
         return Err(WireError::Unexpected("alpn length"));
     }
     r.read_bytes(len)
 }
 
 fn write_alpn(w: &mut Writer<'_>, alpn: &[u8]) -> Result<(), WireError> {
+    // The length rule comes before the conversion to a byte, so a name of 256 bytes or more answers the length error.
+    if !alpn_len_ok(alpn.len()) {
+        return Err(WireError::Unexpected("alpn length"));
+    }
     w.put_u8(u8::try_from(alpn.len()).map_err(|_| WireError::VarintOverflow)?)?;
     w.put_slice(alpn)
 }
