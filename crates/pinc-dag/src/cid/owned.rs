@@ -79,8 +79,8 @@ impl Cid {
     /// Parse the multibase base32 lower text form.
     ///
     /// # Errors
-    /// [`CidError::BadText`] for a missing prefix, a character outside the alphabet, non-zero padding bits or a text
-    /// longer than any CID, plus any [`CidRef::parse`] error on the decoded bytes.
+    /// [`CidError::BadText`] for a missing prefix, a character outside the alphabet, non-zero padding bits, a text
+    /// whose length no CID has or a text longer than any CID, plus any [`CidRef::parse`] error on the decoded bytes.
     pub fn parse_text(s: &str) -> Result<Self, CidError> {
         let mut buf = [0u8; MAX_LEN];
         let n = text::decode(s, &mut buf)?;

@@ -124,6 +124,11 @@ fn text_parser_rejects_malformed_text() {
         Cid::parse_text(&dirty),
         Err(CidError::BadText("padding bits are not zero"))
     );
+    // One digit leaves 5 bits: no whole number of bytes, so no padding bit is to blame.
+    assert_eq!(
+        Cid::parse_text("ba"),
+        Err(CidError::BadText("the text is not a whole number of bytes"))
+    );
     let too_long = format!("b{}", "a".repeat(200));
     assert!(Cid::parse_text(&too_long).is_err());
 }

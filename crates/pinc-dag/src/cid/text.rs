@@ -65,7 +65,10 @@ pub(super) fn decode(text: &str, out: &mut [u8; MAX_LEN]) -> Result<usize, CidEr
             acc &= (1 << bits) - 1;
         }
     }
-    if bits >= 5 || acc != 0 {
+    if bits >= 5 {
+        return Err(CidError::BadText("the text is not a whole number of bytes"));
+    }
+    if acc != 0 {
         return Err(CidError::BadText("padding bits are not zero"));
     }
     Ok(n)
