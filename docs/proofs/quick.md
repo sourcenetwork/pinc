@@ -59,8 +59,16 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `BroadcastPublish_taken` | MaxNow 9 -> 8 |
 | `BroadcastPush` | N 4 -> 3, LogCap 3 -> 2 (the log still evicts) |
 | `BroadcastPush_away` | N 4 -> 2, LogCap 2 -> 1 (the log still evicts) |
+| `BroadcastPush_getdrop` | N 3 -> 2 |
 | `BroadcastPush_n6` | Subs {s1, s2} -> {s1}, LogCap 3 -> 2 (N = 6 kept; the log still evicts) |
+| `BroadcastPush_nocursor` | N 4 -> 3 |
+| `BroadcastPush_noforgot` | N 4 -> 3 |
+| `BroadcastPush_nogettell` | N 4 -> 3 |
+| `BroadcastPush_noguard` | LogCap 2 -> 1 |
+| `BroadcastPush_noresume` | N 3 -> 2 |
 | `BroadcastPush_noresume_live` | N 3 -> 2, LogCap 3 -> 2 |
+| `BroadcastPush_nosubtell` | N 4 -> 3 |
+| `BroadcastPush_notell` | LogCap 2 -> 1 |
 | `BroadcastPush_repair` | N 3 -> 2, LogCap 3 -> 2 (as in the deep config, the log never evicts) |
 | `BroadcastReach` | N 3 -> 2, TableBytes 12 -> 6 (still no table can overflow) |
 | `BroadcastReach_expire` | N 3 -> 2, TableBytes 12 -> 6 (still no table can overflow), MaxExpire 2 -> 1 |
