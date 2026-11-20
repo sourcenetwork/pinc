@@ -624,11 +624,23 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `ValuesSys_w_steal` | G 3 -> 2, Want {0,1,2} -> {0,1} |
 | `ValuesSys_w_store` | G 2 -> 1, Want {0,1} -> {0} |
 | `ValuesTime_dl` | MaxN 8 -> 3 |
+| `ValuesTime_dup` | MaxN 6 -> 5 |
+| `ValuesTime_first` | MaxN 4 -> 3 |
 | `ValuesTime_hold` | MaxN 10 -> 7, TimeSet {0,1,2,3} s -> {0,3} s |
 | `ValuesTime_holdsmall` | NG 5 -> 4, WantG {0..4} -> {0..3}, MaxN 13 -> 4 |
 | `ValuesTime_live` | MaxN 6 -> 3 |
+| `ValuesTime_low` | MaxN 4 -> 3 |
+| `ValuesTime_max` | MaxN 4 -> 3 |
+| `ValuesTime_seq` | MaxN 6 -> 5 |
 | `ValuesTime_stall` | MaxN 6 -> 3, TimeSet {0,1,3,9,17,33,100} s -> {0,1,9,17} s |
+| `ValuesTime_tail` | MaxN 6 -> 5 |
+| `ValuesTime_wbuf` | MaxN 6 -> 5 |
 | `ValuesTime_wbufreal` | MaxN 9 -> 7, TimeSet {0,1,2,3} s -> {0} s |
+| `ValuesTime_wdone` | MaxN 6 -> 5 |
+| `ValuesTime_wgran` | MaxN 6 -> 5 |
+| `ValuesTime_wredial` | MaxN 3 -> 2 |
+| `ValuesTime_wtail` | MaxN 6 -> 5 |
+| `ValuesTime_wtime` | MaxN 6 -> 5 |
 | `ValuesVerify` | the seed lengths -> fewer (NextQuick with MySeedsQuick: tiny 0..5 -> {0, 1, 3, 5}; small 0..7 and 0..13 -> {0, 3, 7} and {5, 13}; small_skip 0..5 -> {0, 1, 3, 5}) |
 | `ValuesVerifyRx` | Genuine -> GenuineQuick: value lengths 0..7 (groups of 2) and 0..13 (groups of 4) -> {0, 1, 3, 5} and {5, 9} |
 | `ValuesVerifyRx_nowhole` | Genuine -> GenuineQuick: value lengths 0..7 (groups of 2) and 0..13 (groups of 4) -> {0, 1, 3, 5} and {5, 9} |
