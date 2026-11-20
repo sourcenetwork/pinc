@@ -82,6 +82,8 @@ StepsF == {3 * SEC, 30 * SEC}
 StepsCQuick == {30 * SEC}
 \* the quick profile of ConnectLink_ridesHome.cfg: the longer step of StepsF alone
 StepsFQuick == {30 * SEC}
+\* the quick profile of ConnectLink_rides.cfg: steps of 5 s and 30 s (time points every 5 s)
+StepsBQuick == {5 * SEC, 30 * SEC}
 LDown == NewLink
 LDialing == [NewLink EXCEPT !.st = "dialing", !.ds = 0]
 LOpen == [NewLink EXCEPT !.st = "open", !.lrx = 0, !.hlt = 0, !.was = TRUE]

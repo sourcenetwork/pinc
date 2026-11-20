@@ -136,7 +136,7 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `ConnectLink` | Steps StepsC {7 s, 30 s} -> StepsCQuick {30 s}, Horizon 90 s -> 120 s (the lease is learned at 120 s) |
 | `ConnectLink_lease` | Horizon 75 s -> 40 s |
 | `ConnectLink_restart` | Horizon 6 s -> 2.4 s |
-| `ConnectLink_rides` | Horizon 70 s -> 20 s |
+| `ConnectLink_rides` | Steps StepsB {0.5 s, 3 s, 30 s} -> StepsBQuick {5 s, 30 s} (time points every 5 s up to the same Horizon of 70 s: the 40 s keepalive of the learned interval, the check and the ride are still reached) |
 | `ConnectLink_ridesHome` | Steps StepsF {3 s, 30 s} -> StepsFQuick {30 s}, Horizon 40 s -> 90 s (time points 0..39 s by 3 -> 0, 30, 60, 90: a keepalive check at 30 s, the reset that learns at 60 s, the ridden check's reset at 90 s) |
 | `ConnectMailbox` | MaxSeq 3 -> 2, Times {0, 2, 4} -> {0, 4}, MaxPkt 2 -> 1, B 7 -> 5 (two packets still overflow a member), plus ConnectMailboxQuickBound (behaviours of at most 5 calls) |
 | `ConnectMailbox_drain` | Times {0, 2, 4} -> {0, 4}, MaxPkt 2 -> 1, B 7 -> 5, plus ConnectMailbox_drainQuickBound (behaviours of at most 3 calls) |
