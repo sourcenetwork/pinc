@@ -40,10 +40,10 @@ FailEv == LET x == DtnFailed(F, L(Ev0.now), Ev0.peer)
           IN /\ Ev0.op = "fail" /\ F' = x.f /\ L(Ev0.at) = x.at /\ Rec(Ev0.peer, Ev0.e) /\ Size(F') = Ev0.len
              /\ redial' = Sooner(redial, x.at) /\ O(Ev0.redial) = redial'
 WaitsEv == /\ Ev0.op = "waits" /\ Window(F, L(Ev0.now), Ev0.peer) = Ev0.r
-           /\ Rec(Ev0.peer, Ev0.e) /\ F' = F /\ redial' = redial
+           /\ F' = F /\ redial' = redial /\ Rec(Ev0.peer, Ev0.e)
 ForgetEv == /\ Ev0.op = "forget" /\ F' = Forget(F, Ev0.peer) /\ Size(F') = Ev0.len /\ redial' = redial
 FireEv == /\ Ev0.op = "fire" /\ RedialDue(redial, L(Ev0.now)) = Ev0.r
-          /\ redial' = IF Ev0.r THEN None ELSE redial /\ O(Ev0.redial) = redial'
+          /\ redial' = (IF Ev0.r THEN None ELSE redial) /\ O(Ev0.redial) = redial'
           /\ F' = F
 DumpEv == /\ Ev0.op = "dump" /\ F' = F /\ redial' = redial
           /\ Used(F) = {Ev0.entries[k][1] : k \in DOMAIN Ev0.entries}
