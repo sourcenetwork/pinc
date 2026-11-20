@@ -554,9 +554,9 @@ mod tests {
             async |_: &crate::relay::Peer, _: crate::carrier::CarrierKind| -> crate::Result<()> {
                 Err(crate::error::Error::config("no peers"))
             },
-            async |_: &(), buf: Vec<u8>| -> (crate::Result<usize>, Vec<u8>) { (Ok(0), buf) },
-            async |_: &(), buf: Vec<u8>, _: usize| -> (crate::Result<usize>, Vec<u8>) { (Ok(0), buf) },
-            async |_: ()| {},
+            async |_s: &(), buf: Vec<u8>| -> (crate::Result<usize>, Vec<u8>) { (Ok(0), buf) },
+            async |_s: &(), buf: Vec<u8>, _: usize| -> (crate::Result<usize>, Vec<u8>) { (Ok(0), buf) },
+            async |_s: ()| {},
         );
         Pinc::builder_on(Wall(wall))
             .local_addr("192.0.2.1:4000".parse().unwrap())
@@ -674,7 +674,10 @@ mod tests {
         let rnow = sh.relay_now(T0);
         assert_eq!(rnow, wall, "the role's clock does not start at the wall clock");
         let due = sh.role().unwrap().due(rnow).unwrap();
-        assert!(due <= rnow + SEC, "the role's first deadline is {due} at {rnow}, more than a second away");
+        assert!(
+            due <= rnow + SEC,
+            "the role's first deadline is {due} at {rnow}, more than a second away"
+        );
     }
 
     /// A datagram for a member that the endpoint hands over before the role restored its mailbox is taken and counted
