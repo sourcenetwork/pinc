@@ -359,6 +359,8 @@ impl<H: Hosted> Shared<H> {
                     core.driver = Some(t);
                 }
                 if !turn.driving {
+                    // The attempt may have added a deadline the driver does not sleep until.
+                    core.kick();
                     return Poll::Pending;
                 }
                 let want = core.deadline();
