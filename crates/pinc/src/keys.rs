@@ -254,14 +254,65 @@ impl Prekeys {
     }
 }
 
+#[cfg(test)]
+impl Prekeys {
+    /// The generations held (oldest first), `next`, `rotate_at` and `used`.
+    pub(crate) fn view(&self) -> (Vec<u64>, u64, u64, u32) {
+        (
+            self.held.iter().map(|(g, _)| *g).collect(),
+            self.next,
+            self.rotate_at,
+            self.used,
+        )
+    }
+}
+
 /// Whether a wire handle names the identity key.
 pub(crate) const fn is_identity(key: WireHandle) -> bool {
     key.0 == IDENTITY.0
 }
 
+/// What the trace tests of the prekeys share: the output file and the word encoding.
+#[cfg(test)]
+pub(crate) mod trace_out {
+    use alloc::format;
+    use alloc::string::String;
+
+    /// A `u64` as the four 16-bit limbs the trace models read, least significant first.
+    pub(crate) fn limbs(v: u64) -> String {
+        format!(
+            "[{},{},{},{}]",
+            v & 0xffff,
+            (v >> 16) & 0xffff,
+            (v >> 32) & 0xffff,
+            v >> 48
+        )
+    }
+
+    /// Append `lines` to `prekeys.ndjson` under `PINC_TRACE_DIR`, in one write; nothing when the variable is unset.
+    #[allow(clippy::unwrap_used, reason = "tests assert")]
+    pub(crate) fn append(lines: &str) {
+        use std::io::Write as _;
+        if let Ok(dir) = std::env::var("PINC_TRACE_DIR") {
+            std::fs::create_dir_all(&dir).unwrap();
+            let mut f = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(std::path::Path::new(&dir).join("prekeys.ndjson"))
+                .unwrap();
+            f.write_all(lines.as_bytes()).unwrap();
+        }
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "tests assert")]
 mod tests {
+    use alloc::format;
+    use alloc::string::{String, ToString};
+    use alloc::vec::Vec;
+    use core::fmt::Write as _;
+
     use super::*;
 
     #[test]
@@ -333,5 +384,227 @@ mod tests {
         assert_ne!(node(1), node(2));
         let seeded = |e: u8| Identity::from_seed_with(&[9; 32], &[e; 32]).unwrap().node_id();
         assert_eq!(seeded(1), seeded(2));
+    }
+
+    /// A small generator for the seeded runs (the crate's unit tests cannot use `pinc_tests`).
+    struct SplitMix64(u64);
+
+    impl SplitMix64 {
+        fn next_u64(&mut self) -> u64 {
+            self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = self.0;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        }
+    }
+
+    /// A `Prekeys` beside a reference written from its documentation; every call is checked against the reference
+    /// and recorded.
+    struct Run {
+        p: Prekeys,
+        store: SoftwareStore,
+        held: Vec<u64>,
+        next: u64,
+        at: u64,
+        used: u32,
+        infos: Vec<(u64, PrekeyInfo)>,
+        out: String,
+    }
+
+    impl Run {
+        fn new(k: u8) -> Self {
+            let mut r = Self {
+                p: Prekeys::new([k; 32]),
+                store: SoftwareStore::from_entropy([k; 32]),
+                held: Vec::new(),
+                next: 1,
+                at: 0,
+                used: 0,
+                infos: Vec::new(),
+                out: String::new(),
+            };
+            r.event("new", "");
+            r
+        }
+
+        fn st(&self) -> String {
+            let held: Vec<String> = self.held.iter().map(ToString::to_string).collect();
+            format!(
+                r#"{{"held":[{}],"next":{},"at":{},"used":{}}}"#,
+                held.join(","),
+                self.next,
+                trace_out::limbs(self.at),
+                self.used
+            )
+        }
+
+        /// Check the state against the reference, then record the event with the state after it.
+        fn event(&mut self, op: &str, fields: &str) {
+            let (held, next, at, used) = self.p.view();
+            assert_eq!(
+                (held, next, at, used),
+                (self.held.clone(), self.next, self.at, self.used)
+            );
+            assert!(next < 1 << 31 && used < 1 << 31, "a number past what the model reads");
+            let st = self.st();
+            writeln!(self.out, r#"{{"t":"pk","op":"{op}"{fields},"st":{st}}}"#).unwrap();
+        }
+
+        /// `rotate`; `fail` is the draw (1 or 2) that the host's source refuses.
+        fn rot(&mut self, now: u64, fail: Option<u32>) {
+            let mut draws = 0;
+            let store = &mut self.store;
+            let mut random = |out: &mut [u8]| {
+                draws += 1;
+                if fail == Some(draws) {
+                    Err(key_error(pinc_keystore::KeyStoreError::Entropy))
+                } else {
+                    store.random(out).map_err(key_error)
+                }
+            };
+            let res = self.p.rotate(now, &mut random);
+            let mut gen_id = 0;
+            match res {
+                Ok(info) => {
+                    assert!(fail.is_none());
+                    gen_id = info.handle().0;
+                    assert_eq!(gen_id, self.next, "the handle is the new generation");
+                    self.held.push(self.next);
+                    while self.held.len() > 2 {
+                        self.held.remove(0);
+                    }
+                    self.at = now.saturating_add(PREKEY_LIFE);
+                    self.used = 0;
+                    self.next += 1;
+                    self.infos.push((gen_id, info));
+                }
+                Err(_) => assert!(fail.is_some()),
+            }
+            let fields = format!(
+                r#","now":{},"ok":{},"res":{},"gen":{gen_id}"#,
+                trace_out::limbs(now),
+                fail.is_none(),
+                gen_id != 0
+            );
+            self.event("rot", &fields);
+        }
+
+        fn due(&mut self, now: u64) {
+            let r = self.p.due(now);
+            assert_eq!(r, now >= self.at || self.used >= PREKEY_USES);
+            writeln!(
+                self.out,
+                r#"{{"t":"pk","op":"due","now":{},"r":{r}}}"#,
+                trace_out::limbs(now)
+            )
+            .unwrap();
+        }
+
+        /// `decapsulate` of generation `h`, with a real encapsulation when `valid` and the generation was issued.
+        fn dec(&mut self, h: u64, valid: bool) {
+            let info = self.infos.iter().find(|(g, _)| *g == h).map(|(_, i)| i.clone());
+            let (ct, want) = match info.filter(|_| valid) {
+                Some(info) => {
+                    let ek = Software.kem_encaps_key(info.encaps_key()).unwrap();
+                    let m = [h.to_le_bytes()[0] ^ 0x5a; 32];
+                    let (ct, secret) = Software.kem_encapsulate(&ek, &m).unwrap();
+                    (Software.kem_ciphertext_bytes(&ct).to_vec(), Some(*secret.expose()))
+                }
+                None => (Vec::new(), None),
+            };
+            if h == self.next.saturating_sub(1) {
+                self.used = self.used.saturating_add(1);
+            }
+            let answered = want.is_some() && self.held.contains(&h);
+            let got = self.p.decapsulate(WireHandle(h), &ct);
+            assert_eq!(got.is_some(), answered, "answered exactly when held and valid");
+            if let Some(secret) = got {
+                assert_eq!(Some(*secret.expose()), want, "the encapsulated secret");
+            }
+            let fields = format!(r#","h":{h},"valid":{},"ans":{answered}"#, want.is_some());
+            self.event("dec", &fields);
+        }
+    }
+
+    const TOP_START: u64 = u64::MAX - PREKEY_LIFE;
+
+    #[test]
+    fn trace_prekeys() {
+        let mut out = String::new();
+        let mut r = Run::new(1);
+        r.due(0);
+        r.dec(0, false);
+        r.dec(1, false);
+        r.rot(0, None);
+        for now in [0, 1, PREKEY_LIFE - 1, PREKEY_LIFE] {
+            r.due(now);
+        }
+        for _ in 0..63 {
+            r.dec(1, true);
+        }
+        r.due(1);
+        r.dec(1, true);
+        r.due(1);
+        r.dec(0, false);
+        r.rot(3, None);
+        r.dec(1, true);
+        r.due(4);
+        r.rot(5, Some(1));
+        r.rot(5, Some(2));
+        r.rot(6, None);
+        r.dec(1, true);
+        r.dec(2, true);
+        r.dec(3, true);
+        r.dec(4, false);
+        r.rot(1_000_000_000_000, None);
+        r.due(5);
+        r.rot(5, None);
+        r.rot(TOP_START, None);
+        r.due(u64::MAX - 1);
+        r.due(u64::MAX);
+        r.rot(u64::MAX - 1, None);
+        r.rot(u64::MAX, None);
+        r.due(u64::MAX);
+        r.rot(0, None);
+        out.push_str(&r.out);
+        for seed in 1..=8u64 {
+            let mut r = Run::new(u8::try_from(seed).unwrap());
+            let mut rng = SplitMix64(seed);
+            let mut last = 0u64;
+            for _ in 0..200 {
+                let now = match rng.next_u64() % 14 {
+                    0 => 0,
+                    1 => 1,
+                    2 => 2,
+                    3 => PREKEY_LIFE - 1,
+                    4 => PREKEY_LIFE,
+                    5 => PREKEY_LIFE + 1,
+                    6 => TOP_START - 1,
+                    7 => TOP_START,
+                    8 => u64::MAX - 1,
+                    9 => u64::MAX,
+                    10 => last,
+                    11 => last.saturating_sub(1),
+                    12 => last.saturating_add(1),
+                    _ => last.saturating_add(rng.next_u64() % 1_000_000_000_000),
+                };
+                last = now;
+                match rng.next_u64() % 8 {
+                    0 | 1 => {
+                        let fail =
+                            (rng.next_u64().is_multiple_of(8)).then(|| 1 + u32::from(rng.next_u64().is_multiple_of(2)));
+                        r.rot(now, fail);
+                    }
+                    2..=5 => {
+                        let h = rng.next_u64() % (r.next + 2);
+                        r.dec(h, !rng.next_u64().is_multiple_of(4));
+                    }
+                    _ => r.due(now),
+                }
+            }
+            out.push_str(&r.out);
+        }
+        trace_out::append(&out);
     }
 }
