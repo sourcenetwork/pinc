@@ -28,7 +28,8 @@
 (*           generation of the carrier that sealed it                       *)
 (*   due     Rly::drain_due (the held packets wait for the endpoint's view) *)
 (*   fails   the calls of dial_failed (the relay's health, netcheck.rs)    *)
-(*   dropped the held packets dropped as the oldest                        *)
+(*   dropped the packets dropped: held ones as the oldest, or with no     *)
+(*           carrier to send on                                            *)
 (*                                                                         *)
 (* The link's timing is ConnectLink.tla's (proved there); here each answer *)
 (* the link can give in its state is a parameter of the call: the tick's   *)
@@ -68,8 +69,12 @@ StartDial(W, cf) ==
     IF k = "none" THEN W
     ELSE [W EXCEPT !.c.kind = k, !.c.gen = @ + 1, !.io = Append(@, OpenIo(k))]
 
-(* want_dial answered Dial: the link is dialing, then act(Dial) *)
-LinkDial(W, cf) == StartDial([W EXCEPT !.c.link = "dialing"], cf)
+(* has_carrier: a stream address is configured; a relay reached over UDP only has none *)
+HasCarrier(cf) == cf.addr # "udp"
+
+(* want_dial answered Dial: the link is dialing, then act(Dial); the link of a relay with no carrier is never asked
+   (Connectivity::want_dial, and tick skips the relay), so it stays as it is *)
+LinkDial(W, cf) == IF HasCarrier(cf) THEN StartDial([W EXCEPT !.c.link = "dialing"], cf) ELSE W
 
 (* dial_failed: net.failed; the failover it may start moves the home to another slot (ConnectClient.tla) *)
 DialFailed(W) == [W EXCEPT !.c.fails = @ + 1]
@@ -108,9 +113,11 @@ Hold(c, p, cap) ==
 
 Sealed(c, ps) == [k \in 1..Len(ps) |-> [p |-> ps[k], g |-> c.gen]]
 
-(* send_packet: before_send may reset an open link (bs), an open link takes the packet unless a drain is due (fix
-   K4: then it is held behind the others), otherwise it is held and the link may dial (wd) *)
+(* send_packet: a relay with no carrier drops the packet (counted) and holds nothing; before_send may reset an open
+   link (bs), an open link takes the packet unless a drain is due (fix K4: then it is held behind the others),
+   otherwise it is held and the link may dial (wd) *)
 SendPacket(W, p, bs, wd, cf) ==
+    IF ~HasCarrier(cf) THEN [W EXCEPT !.c.dropped = @ + 1] ELSE
     LET W1 == IF bs /\ W.c.link = "open" THEN ActClose([W EXCEPT !.c.link = "down"]) ELSE W IN
     IF W1.c.link = "open" /\ ~W1.c.due THEN [W1 EXCEPT !.c.out = Append(@, [p |-> p, g |-> W1.c.gen])]
     ELSE LET W2 == [W1 EXCEPT !.c = Hold(@, p, cf.cap)] IN

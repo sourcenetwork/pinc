@@ -40,6 +40,8 @@
 (*  HeldFirst         "What waited for the carrier goes out first, in     *)
 (*                    order" (carrier_open): no packet routed after the   *)
 (*                    carrier opened leaves before one held when it opened *)
+(*  NoCarrierDown     the link of a relay with no carrier stays Down and   *)
+(*                    holds nothing: no dial site moves it to Dialing     *)
 (* Witnesses (TLC must violate): ConnectCarriers_w_open (NoFallbackOpen: a *)
 (* carrier opens after a failed dial of the other kind). _w_slow checks   *)
 (* HeldFirst on a very slow node (with fix K4 a packet sent while the      *)
@@ -133,7 +135,8 @@ StreamOnLiveLink == c.car # "none" => c.link # "down"
 OpenMatches == (c.link = "open") <=> (c.car = "open")
 OneStream == ~badS
 DialKind == ~badK
-FailsCounted == addr # "udp" => c.fails = c.gen - ups - (IF c.link = "dialing" THEN 1 ELSE 0)
+FailsCounted == c.fails = c.gen - ups - (IF c.link = "dialing" THEN 1 ELSE 0)
+NoCarrierDown == ~HasCarrier(cf) => c.link = "down" /\ c.held = <<>> /\ c.gen = 0
 NoticesAlternate == ~badN /\ (up <=> c.link = "open")
 SameCarrier == \A k \in 1..Len(c.out) : c.out[k].g = c.gen
 HeldBound == Len(c.held) <= Cap
