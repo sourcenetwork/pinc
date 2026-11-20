@@ -1497,3 +1497,11 @@ path = "pinc_nostd_memory.rs"
 [[test]]
 name = "pinc_nostd_stack"
 path = "pinc_nostd_stack.rs"
+
+[[test]]
+name = "trace_facade_records"
+path = "trace_facade_records.rs"
+
+[[test]]
+name = "mbt_facade_open"
+path = "mbt_facade_open.rs"
