@@ -95,6 +95,14 @@ impl Pm {
         for r in &mut self.retiring {
             *r = r.take().filter(|c| !c.stopped());
         }
+        // Keep the queue in the order the clients were stopped: the oldest first, no gap before a client.
+        let mut next = 0;
+        for i in 0..RETIRING {
+            if self.retiring.get(i).is_some_and(Option::is_some) {
+                self.retiring.swap(next, i);
+                next += 1;
+            }
+        }
     }
 }
 
@@ -127,7 +135,9 @@ where
                 if !c.stopped() {
                     let slot = retiring.iter().position(Option::is_none).unwrap_or_else(|| {
                         overflows = overflows.saturating_add(1);
-                        0
+                        // The oldest release goes: it moves to the end and is overwritten there.
+                        retiring.rotate_left(1);
+                        RETIRING - 1
                     });
                     if let Some(r) = retiring.get_mut(slot) {
                         *r = Some(c);

@@ -532,3 +532,55 @@ fn more_unsent_releases_than_the_queue_holds_are_counted() {
         .join()
         .unwrap();
 }
+
+#[test]
+fn a_full_queue_of_unsent_releases_drops_the_oldest_even_after_a_slot_was_freed() {
+    std::thread::Builder::new()
+        .stack_size(256 << 20)
+        .spawn(|| {
+            // The nonce of each client, as its release shows it: client k's release goes out when client k + 1 starts.
+            let mut by_client = vec![[0u8; 12]];
+            let mut reference = member();
+            reference.set_local(&[local()]);
+            for i in 0..7u64 {
+                reference.start_port_mapping(SEC * (i + 1), Some(gw().ip()), local(), 120);
+                let asked = to_gateway(&mut reference);
+                if let Some(r) = asked
+                    .iter()
+                    .map(|b| pcp::decode_request(b).unwrap())
+                    .find(|r| r.lifetime == 0)
+                {
+                    by_client.push(r.nonce);
+                }
+            }
+            // Clients 1 to 4 are stopped and wait for their release; the first release goes out and frees its slot;
+            // two more clients are stopped, so the queue is full when the last one is.
+            let mut node = member();
+            node.set_local(&[local()]);
+            for i in 0..5u64 {
+                node.start_port_mapping(SEC * (i + 1), Some(gw().ip()), local(), 120);
+            }
+            let mut b = [0u8; 2048];
+            let (to, n) = node.poll_udp(&mut b).unwrap();
+            assert_eq!(to, gw());
+            assert_eq!(pcp::decode_request(&b[..n]).unwrap().nonce, by_client[1]);
+            for i in 5..7u64 {
+                node.start_port_mapping(SEC * (i + 1), Some(gw().ip()), local(), 120);
+            }
+            let sent: Vec<[u8; 12]> = to_gateway(&mut node)
+                .iter()
+                .map(|d| pcp::decode_request(d).unwrap())
+                .filter(|r| r.lifetime == 0)
+                .map(|r| r.nonce)
+                .collect();
+            assert_eq!(node.port_mapping_stats().release_overflows, 1);
+            assert_eq!(
+                sent,
+                [by_client[3], by_client[4], by_client[5], by_client[6]],
+                "the release dropped is the oldest waiting (client 2), and the others go in the order they were stopped"
+            );
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
