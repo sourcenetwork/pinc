@@ -65,7 +65,10 @@ use runs::{big_run, room_run, small_run};
 fn the_half_open_cap_matches_the_models() {
     let (ms, ns, seen) = big_stack(|| {
         let (mut ms, mut ns, mut seen) = (String::new(), String::new(), Seen::default());
-        for (run, seed) in [(1u32, 0x686f_0001u64), (2, 0x686f_0002)] {
+        for (run, seed) in [(1u32, 0x686f_0001u64), (2, 0x686f_0002)]
+            .into_iter()
+            .take(trace_cases(1, 2))
+        {
             let (a, b, s) = big_run(run, seed);
             ms.push_str(&a);
             ns.push_str(&b);
@@ -77,7 +80,7 @@ fn the_half_open_cap_matches_the_models() {
             ns.push_str(&b);
             add(&mut seen, &s);
         }
-        for run in 10..50u32 {
+        for run in 10..(10 + trace_cases(6, 40) as u32) {
             let (a, b, s) = small_run(run, 0x686f_0100 + u64::from(run));
             ms.push_str(&a);
             ns.push_str(&b);

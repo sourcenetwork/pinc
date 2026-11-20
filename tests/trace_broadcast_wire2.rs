@@ -22,7 +22,7 @@ use std::fmt::Write as _;
 use pinc_broadcast::wire::Malformed;
 use pinc_broadcast::wire2::{Head2, MAX_HEAD2, VERSION};
 use pinc_crypto::IdentityAlg;
-use pinc_tests::{SplitMix64, soaking};
+use pinc_tests::{SplitMix64, soaking, trace_cases};
 use pinc_wire::hlc::Hlc;
 
 const REASONS: [&str; 7] = [
@@ -281,8 +281,11 @@ fn cuts(len: usize) -> BTreeSet<usize> {
     if len <= 200 {
         (0..len).collect()
     } else {
+        // the quick profile takes every eighth of the cuts of a long head, but the last eight
+        let thin = trace_cases(8, 1);
         (0..=72)
-            .chain((0..len).filter(|c| c % 32 == 0))
+            .step_by(thin)
+            .chain((0..len).filter(|c| c % (32 * thin) == 0))
             .chain(len - 8..len)
             .collect()
     }
@@ -311,7 +314,12 @@ fn mutations(run: &mut Run, o: &Owned, full: &[u8]) {
 }
 
 fn damaged(run: &mut Run, done: &[(Owned, u32, Vec<u8>)]) {
-    for (o, blen, v) in done.iter().filter(|(_, b, _)| [0, 1, 3].contains(b)) {
+    // the quick profile damages every second head
+    for (o, blen, v) in done
+        .iter()
+        .filter(|(_, b, _)| [0, 1, 3].contains(b))
+        .step_by(trace_cases(2, 1))
+    {
         let blen = *blen as usize;
         let mut full = v.clone();
         full.extend(std::iter::repeat_n(0xab, blen));
@@ -357,7 +365,7 @@ fn widest(run: &mut Run, rng: &mut SplitMix64) {
 }
 
 fn seeded(run: &mut Run, rng: &mut SplitMix64) {
-    for _ in 0..1500 {
+    for _ in 0..trace_cases(150, 1500) {
         let len = usize::try_from(rng.next_u64() % 300).unwrap();
         let mut b = vec![0u8; len];
         rng.fill(&mut b);
@@ -370,7 +378,7 @@ fn seeded(run: &mut Run, rng: &mut SplitMix64) {
         run.parse(&b).ok();
         run.prefix(&b).ok();
     }
-    for _ in 0..500 {
+    for _ in 0..trace_cases(50, 500) {
         let tag = u8::try_from(1 + rng.next_u64() % 4).unwrap();
         let mut o = Owned::base(tag, rng);
         rng.fill(&mut o.origin);

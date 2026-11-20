@@ -21,7 +21,7 @@
 
 use std::fmt::Write as _;
 
-use pinc_tests::SplitMix64;
+use pinc_tests::{SplitMix64, trace_cases};
 use pinc_transport::recovery::{LOSS_SCALE, LossEstimate, REPAIR_MIN_AGE, REPAIR_THRESHOLD, SECOND};
 
 const COUNTS: [u32; 16] = [
@@ -236,7 +236,7 @@ fn the_loss_estimate_matches_the_model() {
 
     // 4. seeded estimates
     let mut below = |n: u64| rng.next_u64() % n;
-    for _ in 0..200 {
+    for _ in 0..trace_cases(50, 200) {
         let mut r = Run::new(&mut out, &mut seen);
         for _ in 0..50 {
             match below(20) {

@@ -654,3 +654,16 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `VerifiedRanges` | capacity N 3 -> 2, offsets MaxOff 7 -> 5 (three runs still overflow N) |
 | `VerifiedRanges_n1` | offsets MaxOff 7 -> 3 (two runs still overflow N = 1) |
 | `VerifierBytes` | Seeds -> SeedsQuick (small values up to one group + 1 byte, not three; 1 KiB groups only), CfgsOf -> CfgsOfQuick (a real or GiB seed: one genuine stream of g + 1 bytes, groups 0..2, no tampered item) |
+
+## Trace sizes
+
+The trace tests record fewer generated cases in the quick profile (`trace_cases` in `tests/support/lib.rs`; `PINC_TRACE_DEEP=1`, set by the deep profile, records the full count). Line counts are from `wc -l`.
+
+| Trace file | Quick lines | Deep lines | What was cut |
+|---|---|---|---|
+| `portmap/codec.ndjson` | 134,794 | 1,610,888 | random encodes 2048 -> 110, random decodes 4096 -> 1024 |
+| `bcast/wire2.ndjson` | 8,884 | 37,558 | random cases 1500 -> 150 and 500 -> 50, every 8th cut point, every 2nd damaged mutation |
+| `dtn_codec_node.ndjson` | 3,094 | 17,853 | random cases 3000 -> 300 and 1000 -> 100 twice, every 20th pick and mutation position |
+| `halfopen.ndjson` | 1,681 | 3,369 | random runs 40 -> 6, one of the two long seeded runs |
+| `streams.ndjson` | 5,127 | 13,921 | every 3rd of the 40 seeded runs |
+| `loss_estimate.ndjson` | 8,518 | 16,168 | random cases 200 -> 50 |

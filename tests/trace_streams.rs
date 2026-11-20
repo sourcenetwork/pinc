@@ -35,7 +35,7 @@
 
 use std::fmt::Write as _;
 
-use pinc_tests::{SplitMix64, big_stack};
+use pinc_tests::{SplitMix64, big_stack, trace_cases};
 use pinc_transport::stream::pool::{BufferPool, CHUNK_SIZE, Chunk};
 use pinc_transport::stream::trace::{SlotView, TableView};
 use pinc_transport::stream::{Config, ControlFrame, NoSource, PeerLimits, StreamError, Streams};
@@ -738,7 +738,9 @@ fn stream_table_runs_match_the_models() {
     big_stack(|| {
         let mut out = String::new();
         let (mut jumped, mut past, mut released, mut ctl_released) = (false, false, false, false);
-        for run_id in 1..=40u32 {
+        // every few runs in the quick profile: the early-dial runs (ids above 24) and the reset ones (above 36) stay
+        let every = trace_cases(3, 1) as u32;
+        for run_id in (1..=40u32).filter(|id| id % every == 0) {
             let r = run(
                 0x5354_5245_414d_0000 + u64::from(run_id),
                 &mut out,

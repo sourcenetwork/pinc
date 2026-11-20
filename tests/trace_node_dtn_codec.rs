@@ -41,7 +41,7 @@ use pinc_crypto::IdentityAlg;
 use pinc_dtn::head::SignedHead;
 use pinc_node::dtn_save_probe::{self as save, Read};
 use pinc_node::dtn_wire_probe as wire;
-use pinc_tests::SplitMix64;
+use pinc_tests::{SplitMix64, trace_cases};
 
 /// A run: `a..b` and its bytes.
 type Run = (u64, u64, Vec<u8>);
@@ -315,11 +315,13 @@ fn picks(len: usize, bounds: &[usize]) -> Vec<usize> {
         return (0..len).collect();
     }
     let mut s = BTreeSet::new();
-    s.extend(0..120.min(len));
-    s.extend(len.saturating_sub(120)..len);
-    s.extend((0..len).step_by(61));
+    // the quick profile takes every twentieth of the cuts at the ends, the stride and the bounds
+    let thin = trace_cases(20, 1);
+    s.extend((0..120.min(len)).step_by(thin));
+    s.extend((len.saturating_sub(120)..len).step_by(thin));
+    s.extend((0..len).step_by(61 * thin));
     for &b in bounds {
-        s.extend(b.saturating_sub(18)..(b + 19).min(len));
+        s.extend((b.saturating_sub(18)..(b + 19).min(len)).step_by(thin));
     }
     s.into_iter().collect()
 }
@@ -329,9 +331,10 @@ fn mut_pos(len: usize) -> Vec<usize> {
         return (0..len).collect();
     }
     let mut s = BTreeSet::new();
-    s.extend(0..56);
+    let thin = trace_cases(20, 1);
+    s.extend((0..56).step_by(thin));
     s.extend(len - 8..len);
-    s.extend((0..len).step_by(211));
+    s.extend((0..len).step_by(211 * thin));
     s.into_iter().collect()
 }
 
@@ -663,7 +666,7 @@ fn readers(out: &mut String) {
 
 fn random(out: &mut String, h: &Head) {
     let mut rng = SplitMix64::new(0x6e64_6300);
-    for _ in 0..3000 {
+    for _ in 0..trace_cases(300, 3000) {
         let mut b = vec![0u8; (rng.next_u64() % 120) as usize];
         rng.fill(&mut b);
         if rng.next_u64() % 2 == 0 && b.len() >= 2 {
@@ -672,7 +675,7 @@ fn random(out: &mut String, h: &Head) {
         }
         read(out, &b);
     }
-    for _ in 0..1000 {
+    for _ in 0..trace_cases(100, 1000) {
         let mut b = vec![0u8; (rng.next_u64() % 120) as usize];
         rng.fill(&mut b);
         if rng.next_u64() % 2 == 0 && b.len() >= 16 {
@@ -681,7 +684,7 @@ fn random(out: &mut String, h: &Head) {
         }
         chk(out, h, &b);
     }
-    for _ in 0..1000 {
+    for _ in 0..trace_cases(100, 1000) {
         let mut b = vec![0u8; (rng.next_u64() % 12) as usize];
         rng.fill(&mut b);
         let _ = next(out, &b);

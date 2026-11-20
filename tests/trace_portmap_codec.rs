@@ -30,7 +30,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use pinc_portmap::natpmp::{self, NatPmpError};
 use pinc_portmap::pcp::{self, MapRequest, PcpError};
-use pinc_tests::SplitMix64;
+use pinc_tests::{SplitMix64, trace_cases};
 
 /// A JSON array of the bytes.
 fn arr(b: &[u8]) -> String {
@@ -584,7 +584,7 @@ fn the_codecs_match_the_models() {
 
     // seeded random values per encoder, and random bytes per decoder
     let mut rng = SplitMix64::traced(0x636f_6465);
-    for _ in 0..2048 {
+    for _ in 0..trace_cases(110, 2048) {
         r.enc(&MapRequest {
             lifetime: rng.next_u64() as u32,
             client: rand_ip(&mut rng),
@@ -634,7 +634,7 @@ fn the_codecs_match_the_models() {
         });
     }
     const LENS: [usize; 14] = [0, 1, 2, 8, 11, 12, 13, 16, 23, 24, 25, 59, 60, 61];
-    for _ in 0..4096 {
+    for _ in 0..trace_cases(1024, 4096) {
         let n = if rng.next_u64() % 2 == 0 {
             LENS[(rng.next_u64() % LENS.len() as u64) as usize]
         } else {
