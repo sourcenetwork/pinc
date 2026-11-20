@@ -39,6 +39,9 @@ use crate::standby::{Standby, Ticket};
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "tests assert")]
 mod adjacent_tests;
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "tests assert")]
+mod fixes_tests;
 mod gate;
 mod ops;
 #[cfg(test)]

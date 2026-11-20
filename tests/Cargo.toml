@@ -598,6 +598,10 @@ name = "pinc_async"
 path = "pinc_async.rs"
 
 [[test]]
+name = "pinc_fixes"
+path = "pinc_fixes.rs"
+
+[[test]]
 name = "pinc_cancel"
 path = "pinc_cancel.rs"
 
