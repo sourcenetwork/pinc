@@ -410,6 +410,10 @@ par witness_tlc streams_early_w Streams Streams_early_w OpenerInside
 par witness_tlc streams_early_rel Streams Streams_early_rel NoReleaseOfEarly
 par run_tlc streams_early_ctl Streams Streams_early_ctl
 par witness_tlc streams_early_ctl_w Streams Streams_early_ctl_w PeerNeverRefuses
+par run_tlc streams_raise Streams Streams_raise
+par witness_tlc streams_raise_w Streams Streams_raise_w RaiseNotHeld
+par run_tlc streams_announce StreamsAnnounce StreamsAnnounce
+par witness_tlc streams_announce_w StreamsAnnounce StreamsAnnounce_w NoAnnShown
 par run_tlc recovery Recovery Recovery
 par run_tlc recovery_count Recovery Recovery_count
 par run_tlc recovery_flags Recovery Recovery_flags

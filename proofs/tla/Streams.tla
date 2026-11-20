@@ -247,6 +247,10 @@ GatePrefix == \A i, j \in Live : (T.slots[i].ord < T.slots[j].ord /\ CanSend(T, 
 \* the credit given never lets a peer that keeps to it have more streams live than the configured limit MAXREM: the
 \* streams it may still open plus those live are at most MAXREM (Streams_cap_w.cfg plants the cap that ignored it)
 CreditInLimit == T.ad.adv > AdmittedN(T) => T.ad.adv - AdmittedN(T) + T.rl <= MAXREM
+\* whatever state a refresh starts from, it leaves nothing of the room unadvertised: no raise is held back for size
+\* (the receiver cannot see streams opened and not written on; Streams_raise_w.cfg finds the eighth rule before it
+\* holding one back)
+RaiseNotHeld == RefreshAdmit(T).ad.adv >= AdmittedN(T) + AdmitRoom(T)
 \* every slot above the mark is new, so the scans that stop at the mark miss no stream with data, a retransmission or
 \* a control frame to send, after any run of frees, reuses and resets; and the mark is tight: its own slot is held, so
 \* a scan covers no more slots than the highest live stream (Streams_mark_w.cfg plants a free that lowers the mark)

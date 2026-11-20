@@ -57,8 +57,11 @@
 (* in all (T.ad.adv: the handshake value, raised by MAX_STREAMS), keeps the *)
 (* first charges of the streams the opener has not opened yet in the pool  *)
 (* (Resv), and the opener never opens beyond the limit it was given        *)
-(* (T.ad.lim). A raise is sent when the room grew by an eighth of the      *)
-(* credit last given, or at once when the opener used all of it. A peer    *)
+(* (T.ad.lim). A raise is sent whenever the room grew: the receiver       *)
+(* cannot see streams the opener opened and has not written on, so a raise *)
+(* held back for size could strand an opener that used all its credit     *)
+(* (RefreshAdmitOld, the eighth rule before it, is for the witness         *)
+(* Streams_raise_w.cfg only). A peer                                       *)
 (* stream inside the credit is admitted with no pool test, however many    *)
 (* lower ids its frame opens with it. The held-back rule below stays as    *)
 (* the net for a peer that ignores the credit and for a full pool.         *)
@@ -134,7 +137,7 @@ MarkOnFree(S, hw, i) == IF i = hw THEN TopHeld(S) ELSE hw
 MarkOnFreeLow(S, hw, i) == Min(hw, i - 1)
 Init0 == [slots |-> [i \in 1..N |-> NewSlot], rn |-> [c \in 0..1 |-> 0], lo |-> [c \in 0..1 |-> 0],
           rl |-> 0, ll |-> 0, ext |-> 0, hw |-> 0,
-          ad |-> [lim |-> PM, adv |-> Adv0, at |-> 0, pend |-> FALSE, early |-> FALSE]]
+          ad |-> [lim |-> PM, adv |-> Adv0, pend |-> FALSE, early |-> FALSE]]
 
 (* ---- the range set (ranges.rs): sorted, disjoint, non-adjacent intervals, at most RR ---- *)
 InsertR(rs, s, e) ==
@@ -214,10 +217,17 @@ AdmitRoom(T) == LET fit == Max(Avail(T) - GU(T), 0) \div FirstW
                 IN Min(Min(Max(CapLive - T.rl, 0), FreeSlots(T)), AdmitFit(fit))
 RefreshAdmit(T) ==
     LET now == AdmittedN(T) + AdmitRoom(T)
+    IN IF now > T.ad.adv THEN [T EXCEPT !.ad.adv = now, !.ad.pend = TRUE] ELSE T
+\* the rule before f0267052: a raise waited until the room grew by an eighth of the credit last given (one stream at
+\* least) unless the opener had used all of it. The table no longer keeps adv_at (the streams admitted when adv was
+\* set), so it is taken as 0, its value until the first raise: exact up to the first raise, where Streams_raise_w.cfg
+\* finds the hold
+RefreshAdmitOld(T) ==
+    LET now == AdmittedN(T) + AdmitRoom(T)
         usedUp == T.ad.adv <= AdmittedN(T)
-        step == Max((T.ad.adv - T.ad.at) \div 8, 1)
+        step == Max(T.ad.adv \div 8, 1)
     IN IF now > T.ad.adv /\ (usedUp \/ now - T.ad.adv >= step)
-          THEN [T EXCEPT !.ad.adv = now, !.ad.at = AdmittedN(T), !.ad.pend = TRUE]
+          THEN [T EXCEPT !.ad.adv = now, !.ad.pend = TRUE]
           ELSE T
 Regrant(T) == LET T1 == RefreshAdmit(T) IN IF RETRY /\ AnyDefer(T1) THEN GrantRun(T1, 0) ELSE T1
 

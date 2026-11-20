@@ -70,7 +70,7 @@ TOf(v) ==
      rn |-> [c \in 0..1 |-> v.rn[c + 1]], lo |-> [c \in 0..1 |-> v.lo[c + 1]],
      rl |-> v.rl, ll |-> v.ll,
      ext |-> v.ext, hw |-> v.hw,
-     ad |-> [lim |-> v.ad[1], adv |-> v.ad[2], at |-> v.ad[3], pend |-> v.adp, early |-> v.early]]
+     ad |-> [lim |-> v.ad[1], adv |-> v.ad[2], pend |-> v.adp, early |-> v.early]]
 
 InitEv == /\ Ev.op = "init" /\ TOf(Ev.v) = PT(Init0) /\ rs' = Init0
 EndEv == /\ Ev.op = "end" /\ rs' = rs
