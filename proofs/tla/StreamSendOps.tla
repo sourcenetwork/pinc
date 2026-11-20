@@ -201,7 +201,10 @@ Finish(s) ==
 \* open_source: av is the bytes the source holds (the test's source returns fewer past them)
 OpenSource(s, len, av) ==
     IF ~s.open THEN [s |-> s, err |-> "StreamState"]
-    ELSE IF s.src \/ s.wr > 0 \/ s.fs # -1 THEN [s |-> s, err |-> "WrongKind"]
+    ELSE IF s.src THEN [s |-> s, err |-> "WrongKind"]
+    \* a reset half refuses a source as finished (send.rs open_source)
+    ELSE IF s.rst # 0 THEN [s |-> s, err |-> "Finished"]
+    ELSE IF s.wr > 0 \/ s.fs # -1 THEN [s |-> s, err |-> "WrongKind"]
     ELSE IF len > MAXOFF THEN [s |-> s, err |-> "FlowControl"]
     ELSE [s |-> [s EXCEPT !.src = TRUE, !.srcon = TRUE, !.av = av, !.fs = len, !.fin = "pend"], err |-> "ok"]
 
