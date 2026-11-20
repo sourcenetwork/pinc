@@ -435,13 +435,17 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
 
     /// Bar `node` and end every session with it, with the code [`DENIED`].
     pub(crate) fn revoke(&mut self, now: u64, node: &NodeId) -> Result<()> {
+        let fresh = !self.admit.is_revoked(node);
         if !self.admit.bar(node) {
             return Err(Error::new(ErrorKind::Busy, "too many peers are revoked"));
         }
+        if self.node.revoke(now, &node.bytes).is_err() {
+            if fresh {
+                self.admit.lift(node);
+            }
+            return Err(Error::new(ErrorKind::Busy, "too many peers are revoked"));
+        }
         self.known.forget(&node.bytes);
-        self.node
-            .revoke(now, &node.bytes)
-            .map_err(|_| Error::new(ErrorKind::Busy, "too many peers are revoked"))?;
         self.dirty = true;
         Ok(())
     }
