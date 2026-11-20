@@ -188,6 +188,11 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `ConnectWs_ops` | FLs {14000000, 14000002} -> {14000002} (a payload of 2 bytes) |
 | `ConnectWs_reach` | ReadSizes {1, 1000} -> {1} |
 | `ConnectWs_reach_max` | ReadSizes {20, 1000} -> {20} |
+| `CoreRouteIndex` | Slots {1, 2, 3} -> {1, 2} |
+| `CoreRouteIndex_keepold` | Slots {1, 2, 3} -> {1, 2} |
+| `CoreRouteIndex_nofree` | Slots {1, 2, 3} -> {1, 2} |
+| `CoreRouteIndex_nosync` | Slots {1, 2, 3} -> {1, 2} |
+| `CoreRouteIndex_noverify` | Slots {1, 2, 3} -> {1, 2} |
 | `CoreState` | Lives -> LivesQuick (endpoints 3 -> 2: the full one left out), Positions -> PositionsQuick (middle bytes every 7th -> every 21st) |
 | `CoreTable` | N 3 -> 2, KeySet {1, 2, 3} -> {1, 2} |
 | `CoreTable_chain` | N 3 -> 2, KeySet {1, 2, 3} -> {1, 2} |
