@@ -541,6 +541,35 @@ impl Net {
         &self.nodes[i].h.events
     }
 
+    /// Whether any event node `i` received names `topic`: a subscribe that ended anywhere, a message of it, a repair,
+    /// a fallback or a restore. The hub's refusal notice of #695/#738 names the topic too, so a hub that cannot hold
+    /// a subscription is told about through this, whatever event carries the telling.
+    pub fn told_about(&self, i: usize, topic: &[u8]) -> bool {
+        self.events(i).iter().any(|e| match e {
+            Ev::Msg { topic: t, .. }
+            | Ev::Repaired { topic: t, .. }
+            | Ev::Fallback { topic: t, .. }
+            | Ev::Restored { topic: t, .. }
+            | Ev::Subscribed { topic: t, .. }
+            | Ev::Acp { topic: t, .. } => t == topic,
+            _ => false,
+        })
+    }
+
+    /// The topics node `i` was told `Subscribed` about.
+    pub fn subscribed(&self, i: usize) -> Vec<Vec<u8>> {
+        self.events(i)
+            .iter()
+            .filter_map(|e| {
+                if let Ev::Subscribed { topic, .. } = e {
+                    Some(topic.clone())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
     /// How many frames of type `ty` went over the wire so far.
     pub fn count(&self, ty: u8) -> usize {
         self.log.iter().filter(|(_, _, _, t, _)| *t == ty).count()

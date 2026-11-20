@@ -218,3 +218,55 @@ fn a_full_dedupe_set_refuses_new_ids_instead_of_growing() {
     assert_eq!(net.delivered(2).len(), SEEN_CAP);
     assert_eq!(full, 5);
 }
+
+/// The topic `n` of a member's run of topics: distinct names, so a hub's table entry per topic is one each.
+fn topic(n: usize) -> Vec<u8> {
+    format!("topic/{n}").into_bytes()
+}
+
+/// A hub whose topic table is full drops a member's SUB for a new topic and tells nobody (#695): the member's join
+/// returned `Ok`, and no event of the hub, of the topic, ever reaches the member's application. The fix answers with
+/// a notice, so the member is told about the topic even though it never hears `Subscribed`: every topic the member
+/// joined ends up named in its events, whatever event carries the telling.
+#[test]
+fn a_join_the_hub_cannot_hold_is_never_left_untold() {
+    let limits = pinc_broadcast::Limits {
+        max_topics: 31,
+        ..pinc_broadcast::Limits::default()
+    };
+    let mut net = Net::with_limits(&[IdentityAlg::Ed25519; 3], 1, SEC, limits);
+    // Member 1 fills the hub's table: 31 topics, one entry each.
+    for n in 0..31 {
+        net.subscribe(1, &topic(n));
+    }
+    net.run_until(SEC + 2 * SEC);
+    let got = net.subscribed(1);
+    assert_eq!(got.len(), 31, "the member's own topics end in Subscribed");
+    // Member 2 joins a 32nd topic: the hub's table is full of member 1's.
+    net.subscribe(2, &topic(31));
+    net.run_until(SEC + 30 * SEC);
+    assert!(
+        net.told_about(2, &topic(31)),
+        "the hub tells the member it cannot hold the topic"
+    );
+}
+
+/// The same at the defaults: two followers join 64 and 65 distinct topics, 129 at a hub that holds 128. Every topic
+/// either follower joined is named in that follower's events.
+#[test]
+fn the_same_at_the_defaults_with_two_followers() {
+    let mut net = Net::new(IdentityAlg::Ed25519, 1, 2, SEC);
+    for n in 0..64 {
+        net.subscribe(1, &topic(n));
+    }
+    for n in 0..65 {
+        net.subscribe(2, &topic(100 + n));
+    }
+    net.run_until(SEC + 30 * SEC);
+    for n in 0..64 {
+        assert!(net.told_about(1, &topic(n)), "member 1 told about {n}");
+    }
+    for n in 0..65 {
+        assert!(net.told_about(2, &topic(100 + n)), "member 2 told about {}", 100 + n);
+    }
+}
