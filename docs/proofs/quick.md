@@ -468,6 +468,13 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `PrekeyCache_n0` | MaxClock 4 -> 3 |
 | `PrekeyCache_n3` | MaxClock 6 -> 3 (the cache fills; the invariants insert into the full cache) |
 | `Queue` | PMAX 7 -> 4 |
+| `Queue_deep` | PMAX 8 -> 7 |
+| `Queue_drop` | PMAX 8 -> 7 |
+| `Queue_edge` | PMAX 8 -> 7 |
+| `Queue_head` | PMAX 6 -> 5 |
+| `Queue_lost` | PMAX 8 -> 7 |
+| `Queue_over` | PMAX 8 -> 7 |
+| `Queue_purge` | PMAX 8 -> 7 |
 | `Queue_wrap` | PMAX 8 -> 5, CL {1, 2, 3, 5} -> {1} (four pushes of one class and four pops wrap the head of the ring of CAP 4) |
 | `Reach` | N 3 -> 2, S 4 -> 3, PMAX 9 -> 6 |
 | `Reconcile` | UniMax 5 -> 3; Xor8 <- Xor8Quick and XorTab <- XorTabQuick (the byte XOR from a 16 x 16 table of half bytes) |
