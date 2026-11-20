@@ -62,14 +62,14 @@ RInputs == RShort \cup RLong
 
 RNs == {U!W(k) : k \in {0, 1, 2, 3, 4, 8, 9, 10}} \cup {U!Max64}
 RCalls == {[op |-> "peek"], [op |-> "varint"]} \cup {[op |-> "bytes", n |-> x] : x \in RNs}
-          \cup {[op |-> "uN", n |-> k] : k \in {1, 2, 4, 8}}
+          \cup {[op |-> "uN", k |-> k] : k \in {1, 2, 4, 8}}
 
 WCap == 10
 U64Val == U!Add(U!Shl(U!W(16909060), 32), U!W(84281096))   \* 0x0102030405060708
 WCalls == {[op |-> "slice", b |-> [i \in 1..k |-> i]] : k \in {0, 1, 2, 3, 9, 10, 11}}
-          \cup {[op |-> "uN", n |-> 1, v |-> U!W(171)], [op |-> "uN", n |-> 2, v |-> U!W(258)],
-                [op |-> "uN", n |-> 4, v |-> U!W(16909060)], [op |-> "uN", n |-> 8, v |-> U64Val],
-                [op |-> "uN", n |-> 8, v |-> U!Max64]}
+          \cup {[op |-> "uN", k |-> 1, v |-> U!W(171)], [op |-> "uN", k |-> 2, v |-> U!W(258)],
+                [op |-> "uN", k |-> 4, v |-> U!W(16909060)], [op |-> "uN", k |-> 8, v |-> U64Val],
+                [op |-> "uN", k |-> 8, v |-> U!Max64]}
           \cup {[op |-> "varint", v |-> x] :
                   x \in {U!W(0), U!W(127), U!W(128), U!Sub(U!Pw(63), U!One), U!Pw(63), U!Max64}}
           \cup {[op |-> "ensure", n |-> x] : x \in {U!W(0), U!W(1), U!W(10), U!W(11), U!Max64}}
@@ -98,7 +98,7 @@ RCursor(in, r) == r.pos + Len(r.rest) = Len(in) /\ r.rest = SubSeq(in, r.pos + 1
 RTake(r, cl) ==
     CASE cl.op = "peek" -> (IF Len(r.rest) >= 1 THEN 0 ELSE -1)
       [] cl.op = "bytes" -> (IF U!Le(cl.n, U!W(Len(r.rest))) THEN U!Val(cl.n) ELSE -1)
-      [] cl.op = "uN" -> (IF cl.n <= Len(r.rest) THEN cl.n ELSE -1)
+      [] cl.op = "uN" -> (IF cl.k <= Len(r.rest) THEN cl.k ELSE -1)
       [] cl.op = "varint" -> IF V!Decode(r.rest).kind = "ok" THEN V!Decode(r.rest).n ELSE -1
 
 RStepOK(in, pre, cl, x) ==
@@ -110,13 +110,13 @@ RStepOK(in, pre, cl, x) ==
             /\ x.st.pos = pre.pos + k
             /\ (CASE cl.op = "peek" -> x.res.b = in[pre.pos + 1]
                   [] cl.op = "bytes" -> x.res.bytes = taken
-                  [] cl.op = "uN" -> Len(taken) = cl.n /\ BeBytes(x.res.v, cl.n) = taken
+                  [] cl.op = "uN" -> Len(taken) = cl.k /\ BeBytes(x.res.v, cl.k) = taken
                   [] cl.op = "varint" -> V!Encode(x.res.v, 16) = [kind |-> "ok", bytes |-> taken])
        /\ (k < 0) =>                                                                    \* RRefused
             /\ x.st = pre
             /\ (CASE cl.op = "peek" -> x.res = Trunc(U!One)
                   [] cl.op = "bytes" -> x.res = Trunc(U!Sub(cl.n, U!W(Len(pre.rest))))
-                  [] cl.op = "uN" -> x.res = Trunc(U!W(cl.n - Len(pre.rest)))
+                  [] cl.op = "uN" -> x.res = Trunc(U!W(cl.k - Len(pre.rest)))
                   [] cl.op = "varint" ->
                        IF V!Decode(pre.rest).kind = "truncated" THEN x.res = Trunc(U!One)
                        ELSE x.res = [kind |-> V!Decode(pre.rest).kind])
@@ -124,7 +124,7 @@ RStepOK(in, pre, cl, x) ==
 (* the bytes a write must append: the slice, the big-endian form of the value, the canonical varint *)
 WBytes(cl) ==
     CASE cl.op = "slice" -> cl.b
-      [] cl.op = "uN" -> BeBytes(cl.v, cl.n)
+      [] cl.op = "uN" -> BeBytes(cl.v, cl.k)
       [] cl.op = "varint" -> V!Encode(cl.v, 16).bytes
 
 Untouched(w) == \A i \in (w.pos + 1)..Len(w.buf) : w.buf[i] = -1
@@ -144,7 +144,7 @@ WStepOK(cap, pre, cl, x) ==
                /\ (x.res.kind = "ok") =>                                                \* WAdvance
                     /\ x.st.pos = pre.pos + Len(bs)
                     /\ SubSeq(x.st.buf, pre.pos + 1, x.st.pos) = bs
-                    /\ (cl.op = "uN" => Len(bs) = cl.n /\ BeWord(bs) = cl.v)
+                    /\ (cl.op = "uN" => Len(bs) = cl.k /\ BeWord(bs) = cl.v)
                /\ (x.res.kind # "ok") =>                                                \* WRefused
                     /\ x.st = pre
                     /\ x.res = Small(U!W(pre.pos + Len(bs) - cap))

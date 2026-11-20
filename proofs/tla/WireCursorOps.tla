@@ -81,12 +81,12 @@ RReadVarint(r) ==
        ELSE LET x == RReadBytes(r, U!W(d.n))
             IN IF x.res.kind # "ok" THEN x ELSE [res |-> [kind |-> "ok", v |-> d.v], st |-> x.st]
 
-(* one reader call: [op |-> "peek"], [op |-> "bytes", n |-> usize word], [op |-> "uN", n |-> 1, 2, 4 or 8],
+(* one reader call: [op |-> "peek"], [op |-> "bytes", n |-> usize word], [op |-> "uN", k |-> 1, 2, 4 or 8],
    [op |-> "varint"]; peek_u8 takes &self and leaves the state as it was *)
 RCall(r, cl) ==
     CASE cl.op = "peek" -> [res |-> RPeek(r), st |-> r]
       [] cl.op = "bytes" -> RReadBytes(r, cl.n)
-      [] cl.op = "uN" -> RReadUN(r, cl.n)
+      [] cl.op = "uN" -> RReadUN(r, cl.k)
       [] cl.op = "varint" -> RReadVarint(r)
 
 (* ---- Writer ---- *)
@@ -128,11 +128,11 @@ WPutVarint(w, v) ==
        ELSE IF e.kind = "small" THEN [res |-> Small(U!W(e.needed)), st |-> w]
        ELSE [res |-> Ok, st |-> [buf |-> Splice(w.buf, w.pos, e.bytes), pos |-> w.pos + Len(e.bytes)]]
 
-(* one writer call: [op |-> "slice", b], [op |-> "uN", n |-> 1, 2, 4 or 8, v |-> word], [op |-> "varint", v],
+(* one writer call: [op |-> "slice", b], [op |-> "uN", k |-> 1, 2, 4 or 8, v |-> word], [op |-> "varint", v],
    [op |-> "ensure", n |-> usize word]; ensure takes &self and leaves the state as it was *)
 WCall(w, cl) ==
     CASE cl.op = "slice" -> WPutSlice(w, cl.b)
-      [] cl.op = "uN" -> (IF cl.n = 1 THEN WPutU8(w, U!Val(cl.v)) ELSE WPutUN(w, cl.v, cl.n))
+      [] cl.op = "uN" -> (IF cl.k = 1 THEN WPutU8(w, U!Val(cl.v)) ELSE WPutUN(w, cl.v, cl.k))
       [] cl.op = "varint" -> WPutVarint(w, cl.v)
       [] cl.op = "ensure" -> [res |-> WEnsure(w, cl.n), st |-> w]
 

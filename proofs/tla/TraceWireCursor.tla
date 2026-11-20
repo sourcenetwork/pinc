@@ -30,10 +30,10 @@ Init == c = [t |-> "root"]
 ToRCall(e) ==
     CASE e.op = "peek" -> [op |-> "peek"]
       [] e.op = "bytes" -> [op |-> "bytes", n |-> U!FromLimbs(e.n)]
-      [] e.op = "u8" -> [op |-> "uN", n |-> 1]
-      [] e.op = "u16" -> [op |-> "uN", n |-> 2]
-      [] e.op = "u32" -> [op |-> "uN", n |-> 4]
-      [] e.op = "u64" -> [op |-> "uN", n |-> 8]
+      [] e.op = "u8" -> [op |-> "uN", k |-> 1]
+      [] e.op = "u16" -> [op |-> "uN", k |-> 2]
+      [] e.op = "u32" -> [op |-> "uN", k |-> 4]
+      [] e.op = "u64" -> [op |-> "uN", k |-> 8]
       [] e.op = "varint" -> [op |-> "varint"]
 
 RResOK(e, res) ==
@@ -57,10 +57,10 @@ RFold(r, cs, i) ==
 
 ToWCall(e) ==
     CASE e.op = "slice" -> [op |-> "slice", b |-> e.b]
-      [] e.op = "u8" -> [op |-> "uN", n |-> 1, v |-> U!W(e.v)]
-      [] e.op = "u16" -> [op |-> "uN", n |-> 2, v |-> U!FromLimbs(e.v)]
-      [] e.op = "u32" -> [op |-> "uN", n |-> 4, v |-> U!FromLimbs(e.v)]
-      [] e.op = "u64" -> [op |-> "uN", n |-> 8, v |-> U!FromLimbs(e.v)]
+      [] e.op = "u8" -> [op |-> "uN", k |-> 1, v |-> U!W(e.v)]
+      [] e.op = "u16" -> [op |-> "uN", k |-> 2, v |-> U!FromLimbs(e.v)]
+      [] e.op = "u32" -> [op |-> "uN", k |-> 4, v |-> U!FromLimbs(e.v)]
+      [] e.op = "u64" -> [op |-> "uN", k |-> 8, v |-> U!FromLimbs(e.v)]
       [] e.op = "varint" -> [op |-> "varint", v |-> U!FromLimbs(e.v)]
       [] e.op = "ensure" -> [op |-> "ensure", n |-> U!FromLimbs(e.n)]
 
