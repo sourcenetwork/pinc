@@ -1,23 +1,26 @@
 ------------------------- MODULE TraceFacadeRelayKeep -------------------------
 (***************************************************************************)
-(* Trace validation of what a node that carries the relay role keeps      *)
-(* across a restart: relay/state/keep.rs over the real state machine and  *)
+(* Trace validation of what a node that carries the relay role keeps       *)
+(* across a restart: relay/state/keep.rs over the real state machine and   *)
 (* MemStore.                                                               *)
 (*                                                                         *)
 (* The Rust test tests/trace_facade_relay_keep.rs drives a real relay core *)
 (* through the probe KeepProbe (crates/pinc, cargo feature `trace`):       *)
 (* records published (new, refreshed, stale, past a full table), packets   *)
 (* held and handed over, timers, the store writes the core asks for (each  *)
-(* written to a real MemStore, or failed), and restarts with the same      *)
-(* store at any clock, some in the middle of a write that lands torn, and  *)
-(* second runs on the same core. Every call must be the step the operators *)
-(* of FacadeRelayKeepOps.tla compute: the answer of each call, the record  *)
-(* and the packets the machine holds after it, every write job, and after  *)
-(* each restore the whole of what was put back and the store error count.  *)
+(* written to a real MemStore, or failed and given back as Part does),     *)
+(* restarts with the same store at any clock, some in the middle of a      *)
+(* write that lands torn, and ends of a run with the same core run again   *)
+(* (the write out given back, nothing restored). Every call must be the    *)
+(* step the operators of FacadeRelayKeepOps.tla compute: the answer of     *)
+(* each call, the record and the packets the machine holds after it, every *)
+(* write job, and after each restore and rerun the whole of what the       *)
+(* machine holds and the store error count.                                *)
 (*                                                                         *)
 (* Times are in units of RECORD_TTL_NS / 4; nodes and members are numbered *)
 (* in the order of their store key. Needs the TLA+ CommunityModules (Json, *)
-(* IOUtils) and PINC_TRACE_DIR, the directory that holds relay-keep.ndjson. *)
+(* IOUtils) and PINC_TRACE_DIR, the directory that holds                   *)
+(* relay-keep.ndjson.                                                      *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
 CONSTANTS NR, NM, RCAP, MCAP, MBP, MAILQ, TTL, AGE
@@ -29,8 +32,8 @@ Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/relay-keep.ndjson")
 E == Trace[i]
 Rng(f) == {f[j] : j \in DOMAIN f}
 Ids(l) == [j \in 1..Len(l) |-> l[j].id]
-\* the clock of a call within one run never goes back
-At(t) == [s EXCEPT !.now = t]
+\* the clock of a call within one run never goes back; the probe sets last_now as the calls that bring these events do
+At(t) == [s EXCEPT !.now = t, !.ln = t]
 
 \* what the test read back after a restore: every record held, every member's packets (members 1..NM in order)
 View(m, e) == /\ {x.n : x \in Rng(e.recs)} = {n \in Nodes : m.rec[n].seq # 0}
@@ -48,10 +51,10 @@ RestartEv == /\ E.op = "restart" /\ TearFits(E)
                 IN st' = st1 /\ s' = m /\ View(m, E)
              /\ job' = NoJob
 
+\* Part::end gives the write out back; the part was restored, so the next run restores nothing (R2)
 RerunEv == /\ E.op = "rerun" /\ TearFits(E) /\ E.t >= s.now
-           /\ LET st1 == Torn(E)
-                  m == Restore(s, E.t, st1)
-              IN st' = st1 /\ s' = m /\ View(m, E)
+           /\ LET m == IF job.k = "none" THEN s ELSE Requeue(s, job)
+              IN st' = Torn(E) /\ s' = m /\ View(m, E)
            /\ job' = NoJob
 
 PublishEv == /\ E.op = "publish" /\ E.t >= s.now
@@ -83,10 +86,11 @@ JobEv == /\ E.op = "job" /\ job.k = "none"
             /\ s' = r.s /\ job' = r.job
          /\ UNCHANGED st
 
+\* Part::store_written: a failure is counted, marked again and waits for the clock to move on (R3)
 WriteEv == /\ E.op = "write" /\ job.k # "none"
            /\ st' = IF E.ok THEN Apply(st, job) ELSE st
+           /\ s' = IF E.ok THEN s ELSE Failed(s, job)
            /\ job' = NoJob
-           /\ UNCHANGED s
 
 Init == i = 1 /\ s = Machine0(0) /\ st = St0 /\ job = NoJob
 Step == /\ i <= Len(Trace)
