@@ -670,10 +670,12 @@ mod tests {
     fn the_role_starts_at_the_platforms_wall_clock() {
         let wall = 3 * SEC;
         let ep = rolled(wall);
-        let due = ep.0.shared.role().unwrap().due(wall).unwrap();
+        let sh = &ep.0.shared;
+        let rnow = sh.relay_now(wall);
+        let due = sh.role().unwrap().due(rnow).unwrap();
         assert!(
-            (wall..=wall + SEC).contains(&due),
-            "the role's first deadline is {due}, not near {wall}"
+            (rnow..=rnow + SEC).contains(&due),
+            "the role's first deadline is {due} at {rnow}, not within a second"
         );
     }
 
