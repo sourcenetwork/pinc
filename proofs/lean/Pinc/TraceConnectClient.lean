@@ -124,7 +124,7 @@ def replayEvent (j : J) (w : W) : Except String W := do
     check (lives == (← intListF j "lives")) "splice live"
     pure w
   | "direct" =>
-    check ((← field j "res").bool? == some (directFirst (← boolF j "first") (← boolF j "hub") (← ns j "fd") (← ns j "started")))
+    check ((← field j "res").bool? == some (directFirst (← boolF j "first") (← boolF j "hub") (← boolF j "restarted") (← ns j "fd") (← ns j "started")))
       "direct_first"
     pure w
   | "select" =>

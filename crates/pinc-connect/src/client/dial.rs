@@ -6,8 +6,9 @@
 //! peer whose dial had already ended).
 //!
 //! **The first flight.** [`select`] picks the candidate paths one handshake try is sent on:
-//! - *B8, HUB_DIRECT_FIRST* ([`direct_first`]): a late-starting node (its first dial came after 10 s) sends the
-//!   first flight to a hub on its known UDP address only, and the relay copy joins at the first resend 300 ms later.
+//! - *B8, HUB_DIRECT_FIRST* ([`direct_first`]): a late-starting node (its first dial came after 10 s) or a node
+//!   that just restarted sends the first flight to a hub on its known UDP address only, and the relay copy joins at
+//!   the first resend 300 ms later.
 //! - *B9, THIN_HS0*: while a hub-session Initial is resent under the 4 s wait, only relay paths carry it, but only on
 //!   a node that has heard nothing yet (no round trip of any kind).
 //! - *Relay path of a direct-first session*: it is withheld at creation and registered 2 s later on an established
@@ -64,9 +65,17 @@ pub const fn flight_relays(peer: Option<u8>, own: Option<u8>) -> [Option<u8>; 2]
     }
 }
 
-/// B8: whether the first flight of this dial goes to the hub's direct address only.
-pub const fn direct_first(first_try: bool, is_hub: bool, first_dial_at: u64, started: u64) -> bool {
-    first_try && is_hub && first_dial_at.saturating_sub(started) > LATE_START
+/// B8: whether the node counts as late at `first_dial_at`: a node that just restarted always does, it never
+/// satisfies the 10 s test, so the restart flag stands beside it. The one copy of the test: the dial's first
+/// flight ([`direct_first`]) and the punch's birth (`Connectivity::late_start`) both read it.
+pub const fn late_start(restarted: bool, first_dial_at: u64, started: u64) -> bool {
+    restarted || first_dial_at.saturating_sub(started) > LATE_START
+}
+
+/// B8: whether the first flight of this dial goes to the hub's direct address only. A node that just restarted
+/// counts as late from its first dial: it never satisfies the 10 s test, so the restart flag stands beside it.
+pub const fn direct_first(first_try: bool, is_hub: bool, restarted: bool, first_dial_at: u64, started: u64) -> bool {
+    first_try && is_hub && late_start(restarted, first_dial_at, started)
 }
 
 /// Whether this send of a hub-session Initial goes by relay paths only: a resend inside the first

@@ -92,7 +92,8 @@ TGSLOW == 250000
 RLYONCE == 30 * SEC
 RLYMIN == 4 * SEC
 
-DirectFirst(first, hub, fd, started) == first /\ hub /\ SatSub(fd, started) > LATESTART
+\* a node that just restarted counts as late from its first dial
+DirectFirst(first, hub, restarted, fd, started) == first /\ hub /\ (restarted \/ SatSub(fd, started) > LATESTART)
 
 \* a candidate is <<"u", addr>> or <<"r", relay>>; views is a sequence of [some, live, gen]
 KeepCand(t, views, c) ==

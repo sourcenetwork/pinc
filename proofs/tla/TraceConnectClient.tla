@@ -66,7 +66,7 @@ Ev1 ==
       [] Ev.m = "snew" -> /\ T' = NewSplices(Ev.p, Ev.r) /\ Step /\ UNCHANGED <<P, PE, LK, NC>>
       [] Ev.m = "seen" -> /\ T' = Seen(T, Ev.now, Ev.relay, Ev.peer, Ev.from) /\ Step /\ UNCHANGED <<P, PE, LK, NC>>
       [] Ev.m = "sview" -> /\ SpliceView /\ Step /\ UNCHANGED <<P, T, PE, LK, NC>>
-      [] Ev.m = "direct" -> /\ DirectFirst(Ev.first, Ev.hub, Ev.fd, Ev.started) = Ev.res /\ Step /\ UNCHANGED <<P, T, PE, LK, NC>>
+      [] Ev.m = "direct" -> /\ DirectFirst(Ev.first, Ev.hub, Ev.restarted, Ev.fd, Ev.started) = Ev.res /\ Step /\ UNCHANGED <<P, T, PE, LK, NC>>
       [] Ev.m = "select" ->
            LET r == Select(Ev.cands, [now |-> Ev.try.now, dialer |-> Ev.try.dialer, tries |-> Ev.try.tries, rtt |-> Ev.try.rtt,
                                       nortt |-> Ev.try.nortt, hs0 |-> Ev.try.hs0, haslast |-> Ev.try.haslast, last |-> Ev.try.last],

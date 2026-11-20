@@ -48,12 +48,39 @@ fn b8_direct_first_applies_to_a_hub_first_try_of_a_late_start() {
     assert_eq!(HUB_RELAY_DELAY, 300 * MS);
     let started = 0;
     assert!(
-        !direct_first(true, true, 10 * S, started),
+        !direct_first(true, true, false, 10 * S, started),
         "a dial at exactly 10 s is not late"
     );
-    assert!(direct_first(true, true, 10 * S + 1, started));
-    assert!(!direct_first(false, true, 20 * S, started), "only the first try");
-    assert!(!direct_first(true, false, 20 * S, started), "only a hub");
+    assert!(direct_first(true, true, false, 10 * S + 1, started));
+    assert!(!direct_first(false, true, false, 20 * S, started), "only the first try");
+    assert!(!direct_first(true, false, false, 20 * S, started), "only a hub");
+}
+
+#[test]
+fn b8_a_restarted_node_dials_a_hub_direct_first_from_its_first_dial() {
+    // A node that just restarted never satisfies the 10 s late-start test (its first dial comes seconds after it
+    // came up), so the restart flag counts beside it: the first dial of a restarted node is direct-first at once.
+    let started = 0;
+    assert!(
+        direct_first(true, true, true, S, started),
+        "a restarted node's first dial, 1 s in, is direct-first"
+    );
+    assert!(
+        direct_first(true, true, true, 0, started),
+        "even a dial at the instant of the start"
+    );
+    assert!(
+        !direct_first(false, true, true, 20 * S, started),
+        "the restart flag does not override the first-try rule"
+    );
+    assert!(
+        !direct_first(true, false, true, S, started),
+        "the restart flag does not override the hub rule"
+    );
+    assert!(
+        !direct_first(true, true, false, S, started),
+        "without the restart flag the 10 s rule still holds"
+    );
 }
 
 #[test]

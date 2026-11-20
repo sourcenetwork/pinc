@@ -102,7 +102,8 @@ pub struct Shared {
     pub keep_learn: bool,
     /// The learned keepalive interval, 0 until a carrier died silently with KEEP_LEARN on.
     pub keep_iv: u64,
-    /// The node just restarted: the home carrier dial waits [`rule::DEFER`].
+    /// The node just restarted: the home carrier dial waits [`rule::DEFER`], and the flag is never cleared, so the
+    /// restart rules hold for the node's whole life.
     pub restarted: bool,
     /// When the restart defer ends, set by the first dial attempt after a restart.
     pub defer_until: Option<u64>,

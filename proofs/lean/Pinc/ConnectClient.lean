@@ -161,9 +161,9 @@ def tgSlow : Nat := 250000000
 def rlyOnce : Nat := 30 * sec
 def rlyOnceMin : Nat := 4 * sec
 
-/-- `direct_first` (HUB_DIRECT_FIRST). -/
-def directFirst (firstTry isHub : Bool) (firstDialAt started : Nat) : Bool :=
-  firstTry && isHub && decide (satSub firstDialAt started > lateStart)
+/-- `direct_first` (HUB_DIRECT_FIRST). A node that just restarted counts as late from its first dial. -/
+def directFirst (firstTry isHub restarted : Bool) (firstDialAt started : Nat) : Bool :=
+  firstTry && isHub && (restarted || decide (satSub firstDialAt started > lateStart))
 
 inductive Cand where
   | udp (a : Nat)

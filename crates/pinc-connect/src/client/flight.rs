@@ -100,7 +100,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
         } else {
             self.candidates_for(&node, hints, Some(now), fwd, &mut cands)
         };
-        let direct = hub.is_some() && direct_first(true, true, first_dial, self.start);
+        let direct = hub.is_some() && direct_first(true, true, self.shared.restarted, first_dial, self.start);
         let mut chosen = [Cand::Relay(0); 16];
         let list: &[Cand] = cands.get(..nc).unwrap_or_default();
         let (m, carried) = if direct {

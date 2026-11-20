@@ -113,7 +113,8 @@ pub struct Config<const R: usize> {
     pub relays: [Option<RelayCfg>; R],
     /// The node is a phone.
     pub phone: bool,
-    /// The process just restarted.
+    /// The process just restarted. Never cleared: the restart rules (the direct-first first flight to a hub, the
+    /// home-carrier defer) hold for the node's whole life.
     pub restarted: bool,
     /// The time the node started.
     pub start: u64,
@@ -780,7 +781,6 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
             return false;
         }
         self.udp_any = true;
-        self.shared.restarted = false;
         match d {
             Datagram::Qadr { nonce, addr } => {
                 let before = self.net.home();

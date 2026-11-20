@@ -296,3 +296,108 @@ fn twelve_dials_that_end_in_one_drive_all_drop_their_lookups() {
         assert_eq!(conn.lookups_outstanding(), 0, "a dial that ended kept its lookup");
     });
 }
+
+/// The restart rule: a relay control datagram does not end the restart. A node that just restarted defers its home
+/// carrier dial by the restart defer; the first relay datagram must not clear that, or a restarted node dials its home
+/// carrier at once and the defer never runs.
+#[test]
+fn a_relay_datagram_does_not_end_the_restart_defer_of_the_home_carrier() {
+    big_stack(|| {
+        let host = Box::new(Host::new(0x42, "192.168.1.2:4433".parse().unwrap(), 1000 * SEC));
+        let relay = id(&ed(0x77));
+        let relay_udp: SocketAddr = "203.0.113.10:4433".parse().unwrap();
+        let local: SocketAddr = "192.168.1.2:4433".parse().unwrap();
+        let mut relays = [None; 2];
+        relays[0] = Some(RelayCfg {
+            id: relay,
+            udp: Some(relay_udp),
+            // A carrier address: a relay reached over UDP only is never dialed, so it has no defer to keep.
+            tcp: Some("203.0.113.10:443".parse().unwrap()),
+            ws: None,
+        });
+        let cfg = Config {
+            me: host.identity.node_id(),
+            identity: host.identity,
+            relays,
+            phone: false,
+            restarted: true,
+            start: 1000 * SEC,
+            v6: false,
+            keep_learn: false,
+        };
+        let mut conn: Box<Connectivity<Software, 2, 4>> =
+            Box::new(Connectivity::new(cfg, host.prekey_info.clone(), Software, 7));
+        conn.set_local(&[local]);
+        let mut ep = Stub {
+            route: (local, relay_udp),
+            now: 1000 * SEC,
+            retx: 0,
+            next: 0,
+            dials: 2,
+            gone: false,
+            lists: Vec::new(),
+        };
+        let mut drbg = Drbg::new(&[0x63; 32]);
+        // A tunnelled packet from the relay: a relay control datagram, the kind a quiet node still hears.
+        let packet = [0x40u8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        let mut out = [0u8; 64];
+        let n = Datagram::Spl {
+            src: relay,
+            flag: 0,
+            packet: &packet,
+        }
+        .encode(&mut out)
+        .unwrap();
+        let t = 1000 * SEC + 20 * MS;
+        assert!(conn.handle_udp(t, relay_udp, &out[..n]));
+        assert!(conn.shared().restarted, "a relay datagram does not end the restart");
+        // The relay answers the address discovery and becomes the home; that is what starts the home carrier's
+        // dial, so the defer has to hold here.
+        let mut env = Env {
+            provider: &Software,
+            now: t,
+            drbg: &mut drbg,
+        };
+        let mut now = t;
+        while conn.home() != Some(0) && now < t + 3 * SEC {
+            now += 50 * MS;
+            env.now = now;
+            conn.drive(now, &mut ep, &mut env, None);
+            while let Some((_, to, n)) = conn.poll_udp_from(&mut out) {
+                if to == relay_udp
+                    && let Ok(Datagram::Qad { nonce }) = Datagram::decode(&out[..n])
+                {
+                    let m = Datagram::Qadr {
+                        nonce,
+                        addr: "198.51.100.7:4433".parse().unwrap(),
+                    }
+                    .encode(&mut out)
+                    .unwrap();
+                    conn.handle_udp(now + 20 * MS, relay_udp, &out[..m]);
+                }
+            }
+        }
+        assert_eq!(conn.home(), Some(0), "the relay became the home");
+        env.now = now + 100 * MS;
+        conn.tick(now + 100 * MS, &mut env, None);
+        conn.drive(now + 100 * MS, &mut ep, &mut env, None);
+        assert_eq!(
+            conn.carrier_state(0),
+            pinc_connect::client::link::State::Down,
+            "the home carrier is still inside the restart defer"
+        );
+        env.now = now + pinc_connect::client::link::rule::DEFER + MS;
+        conn.tick(now + pinc_connect::client::link::rule::DEFER + MS, &mut env, None);
+        conn.drive(
+            now + pinc_connect::client::link::rule::DEFER + MS,
+            &mut ep,
+            &mut env,
+            None,
+        );
+        assert_ne!(
+            conn.carrier_state(0),
+            pinc_connect::client::link::State::Down,
+            "after the defer the home carrier dials"
+        );
+    });
+}

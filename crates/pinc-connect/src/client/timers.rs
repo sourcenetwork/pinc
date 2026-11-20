@@ -1,6 +1,5 @@
 //! The timers of [`Connectivity`]: carrier links, lookups, address discovery, the record, beacons and suspension.
 
-use pinc_core::LATE_START;
 use pinc_crypto::Provider;
 use pinc_security::Env;
 use pinc_transport::recovery::deadline_after;
@@ -258,8 +257,10 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
         self.gossip_alpn = pinc_security::Alpn::new(alpn);
     }
 
-    /// Whether the node's first dial counts as a late start.
+    /// Whether the node's first dial counts as a late start: a node that just restarted always does, it never
+    /// satisfies the 10 s test. The test itself is [`late_start`](super::dial::late_start), shared with the dial's
+    /// first flight.
     pub const fn late_start(&self, first_dial: u64) -> bool {
-        first_dial.saturating_sub(self.start) > LATE_START
+        super::dial::late_start(self.shared.restarted, first_dial, self.start)
     }
 }

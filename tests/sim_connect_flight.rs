@@ -17,7 +17,12 @@ use std::net::SocketAddr;
 use connect_sim_common::*;
 use pinc_core::{is_relay_addr, relay_parts};
 use pinc_sim::{LanConfig, LinkConfig, MS, SEC, StreamPolicy, Time};
-use pinc_tests::Cmd;
+use pinc_tests::{Cmd, Ev};
+
+/// A reach-out message a node received.
+fn reach_out(e: &Ev) -> bool {
+    matches!(e, Ev::Ep(pinc_core::Event::ReachOut { .. }))
+}
 
 /// A hub (relay) the client dials from inside a LAN that drops UDP, so the direct flight is always lost.
 fn blocked_hub(seed: u64, one_way: Time) -> (World, pinc_sim::NodeId, pinc_sim::NodeId, SocketAddr) {
@@ -87,6 +92,70 @@ fn a_late_start_dial_to_a_hub_flies_direct_first_and_the_relay_copy_joins_at_the
             "the hub's endpoint was reached through the carrier"
         );
         let _ = (SEC, LinkConfig::default(), StreamPolicy::default());
+    });
+}
+
+#[test]
+fn a_restarted_nodes_first_hub_dial_one_second_after_start_flies_direct_first_and_punches_late() {
+    big(|| {
+        // The node just restarted: its first dial comes 1 s after it came up, far inside the 10 s late-start
+        // window, so only the restart flag can make the dial direct-first.
+        let mut w = World::new(76);
+        let (r, rs) = w.relay(1, relay_ip(10));
+        let mut spec = client_spec(0xa1, priv_addr(1), &[rs]);
+        spec.restarted = true;
+        let a = w.client_public(&spec);
+        w.run(secs(1));
+        let hub = w.relay_node(r).id();
+        let t0 = secs(1);
+        w.sim.command(
+            t0,
+            a,
+            Cmd::Dial {
+                node: hub,
+                hints: vec![rs.udp.unwrap()],
+                role: pinc_core::Role::Hub,
+            },
+        );
+        w.run(t0 + 250 * MS);
+        let f = flights(&w, a, t0, t0 + 250 * MS);
+        assert!(
+            !f.is_empty() && f.iter().all(|(_, relay)| !relay),
+            "the restarted node's first flight goes to the direct address only: {f:?}"
+        );
+        w.run(t0 + secs(30));
+        assert!(w.connected(a).is_some(), "the hub session came up\n{}", w.dump(a));
+        let est = w
+            .when(a, |e| {
+                matches!(e, pinc_tests::Ev::Ep(pinc_core::Event::Connected { .. }))
+            })
+            .unwrap();
+        assert!(
+            est < t0 + 300 * MS,
+            "the direct flight was answered before the first resend"
+        );
+        // The relay path of a direct-first session is withheld at creation and registered 2 s later.
+        let relay_tx: Vec<Time> = w
+            .client(a)
+            .tx_log
+            .iter()
+            .filter(|(t, to, _)| *t >= t0 && is_relay_addr(to))
+            .map(|(t, _, _)| *t)
+            .collect();
+        assert!(
+            relay_tx.first().is_some_and(|t| *t >= t0 + 2 * SEC),
+            "the relay path joins at 2 s, not before: {relay_tx:?}"
+        );
+        // B8 also makes the session born LateHubDirect: its first punch waits 3 s, not FIRST_DELAY.
+        let punch = |from: Time, to: Time| {
+            w.sim
+                .events(r)
+                .iter()
+                .filter(|(t, e)| *t >= from && *t < to && reach_out(e))
+                .count()
+        };
+        assert_eq!(punch(est, t0 + 3 * SEC), 0, "nothing in the first three seconds");
+        assert!(punch(t0 + 3 * SEC, t0 + 4 * SEC) > 0, "the punch ran at three seconds");
     });
 }
 

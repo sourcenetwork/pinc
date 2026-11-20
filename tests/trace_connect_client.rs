@@ -268,13 +268,14 @@ fn dial_events(out: &mut Vec<String>) {
     for _ in 0..2000 {
         let first_try = rng.next_u64().is_multiple_of(2);
         let is_hub = rng.next_u64().is_multiple_of(2);
+        let restarted = rng.next_u64().is_multiple_of(2);
         let fd = pick(&mut rng, &[0, 5 * S, 10 * S, 11 * S, 100 * S]);
         let started = pick(&mut rng, &[0, 5 * S]);
         out.push(format!(
-            r#"{{"t":"cl","m":"direct","first":{first_try},"hub":{is_hub},"fd":{},"started":{},"res":{}}}"#,
+            r#"{{"t":"cl","m":"direct","first":{first_try},"hub":{is_hub},"restarted":{restarted},"fd":{},"started":{},"res":{}}}"#,
             us(fd),
             us(started),
-            dial::direct_first(first_try, is_hub, fd, started)
+            dial::direct_first(first_try, is_hub, restarted, fd, started)
         ));
     }
     for _ in 0..4000 {
