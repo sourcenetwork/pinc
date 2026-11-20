@@ -380,6 +380,11 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `IntegrationCodecs_w_tagzero` | the IPv6 relay addresses Addrs (all 390625 over 0..4) -> AddrsQuick (1600: each segment over the values relay_parts tells apart) |
 | `IntegrationCodecs_w_wlong` | the IPv6 relay addresses Addrs (all 390625 over 0..4) -> AddrsQuick (1600: each segment over the values relay_parts tells apart) |
 | `Keepalive` | times NOWS {0, 20, 100, 110} -> {100, 110}, TXS {0, 95, 100} -> {0, 95}, RXS {0, 100} -> {0}, APPS {0, 85, 100} -> {0, 85} |
+| `Keepalive_acc80` | TXS {0, 100} -> {100} |
+| `Keepalive_direct` | NOWS {0, 20, 100, 110} -> {0, 100, 110} |
+| `Keepalive_moved` | NOWS {0, 20, 100, 110} -> {0, 100, 110} |
+| `Keepalive_norev` | NOWS {0, 20, 100, 110} -> {0, 100, 110} |
+| `Keepalive_plain` | NOWS {0, 20, 100, 110} -> {0, 100, 110} |
 | `KeyRoll` | MaxPn 2 -> 1, MaxTime 2 -> 1 |
 | `KeyRoll_collide` | MaxPn 2 -> 1 (both requests, the answer and a packet under the new key still fit); bounded by constraint: behaviours of at most 8 levels (KeyRoll_collideQuickBound) |
 | `KeyRoll_forge` | MaxTime 2 -> 1, Sat 2 -> 1; bounded by constraint: behaviours of at most 8 levels (KeyRoll_forgeQuickBound) |
