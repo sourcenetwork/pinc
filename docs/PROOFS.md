@@ -503,6 +503,9 @@ The only things taken on trust are the dependencies, not this repository's code:
   and on the public area of a blob), the operating system's random source, and the TPM (a software TPM in the traces).
   The transport of the TPM client pairs each command with its own response; the response carries no command code, so the
   client cannot check it.
+- The prekey store (`SoftPrekeys`) numbers its keys by a 64-bit generation that wraps; it is taken that fewer than
+  `2^64` rotations happen (one a second takes 5.8e11 years), so the generation of a key never names the current one
+  again. `SoftPrekeys_wrap` is a witness of this bound.
 
 ## Being closed
 
