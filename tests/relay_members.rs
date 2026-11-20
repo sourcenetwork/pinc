@@ -36,7 +36,7 @@ pub fn wall_ns() -> u64 {
 
 /// The dialing carrier and its key material; a function of its own so the large values live in its frame only.
 #[inline(never)]
-fn dial_carrier(
+pub fn dial_carrier(
     kp: &Keypair,
     seed: &[u8; 32],
     relay: NodeId,

@@ -77,6 +77,8 @@ pub use self::part::{Part, SharedIdentity, StoreWrite};
 pub use self::peers::Peer;
 use self::run::Inner;
 use self::state::Core;
+#[cfg(feature = "trace")]
+pub use self::state::probe::{KeepJob, KeepProbe};
 pub use self::stats::{Closed, Event, Reason, Stats};
 pub use self::store::{Kept, KeptRecord, MemStore, Store};
 use crate::error::{Error, Result};

@@ -38,6 +38,9 @@ mod keep;
 mod mesh;
 mod tunnel;
 
+#[cfg(feature = "trace")]
+pub(super) mod probe;
+
 pub(crate) use keep::Job;
 
 /// The most control datagrams waiting for the socket.

@@ -1247,6 +1247,18 @@ name = "trace_facade_stream"
 path = "trace_facade_stream.rs"
 
 [[test]]
+name = "trace_facade_role_clock"
+path = "trace_facade_role_clock.rs"
+
+[[test]]
+name = "trace_facade_relay_keep"
+path = "trace_facade_relay_keep.rs"
+
+[[test]]
+name = "trace_facade_relay_carriers"
+path = "trace_facade_relay_carriers.rs"
+
+[[test]]
 name = "trace_halfopen"
 path = "trace_halfopen.rs"
 
