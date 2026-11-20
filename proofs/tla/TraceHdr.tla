@@ -112,14 +112,16 @@ SmppEv == LET r == SampleAt(Ev0.p, Ev0.po)
              /\ r = SampleAt(Ev0.u, Ev0.po) /\ (r.err = "ok" => r.s = Ev0.s) /\ (r.err # "ok" => Ev0.s = <<>>)
 
 Init == i = 1
-Step == /\ i <= Len(Trace) /\ Ev0.t = "txhd"
-        /\ (LwEv \/ LpEv \/ SwEv \/ SdEv \/ UnEv \/ DgEv \/ SealEv \/ OpenEv \/ HwEv \/ HfEv \/ PadEv \/ SmpEv \/ SmppEv)
-        /\ i' = i + 1
+Step == i <= Len(Trace) /\ i' = i + 1
 Finished == i > Len(Trace) /\ UNCHANGED i
 TNext == Step \/ Finished
 TraceSpec == Init /\ [][TNext]_i
 
-Inv == TRUE
+\* every line is a call the model makes the same way, checked on the state that points at it: the lines are
+\* independent, and TLC evaluates the model's LET values once in a state predicate but again at each use in a step
+Inv == i <= Len(Trace) =>
+           /\ Ev0.t = "txhd"
+           /\ (LwEv \/ LpEv \/ SwEv \/ SdEv \/ UnEv \/ DgEv \/ SealEv \/ OpenEv \/ HwEv \/ HfEv \/ PadEv \/ SmpEv \/ SmppEv)
 \* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
 ReplayAtEnd == ReplaySeen(i > Len(Trace))
 ReplayEnded == ReplayRead(Len(Trace))
