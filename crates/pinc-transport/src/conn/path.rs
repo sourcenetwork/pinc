@@ -304,6 +304,7 @@ conn_impl! {
     /// A new direct path is probed with PATH_CHALLENGE once the handshake is done; a new relay path is valid as it is
     /// and is not probed. Nothing is heard on a new path until a datagram arrives on it, as in the reference model: a
     /// session that moves onto a relay path it added does not read as heard from the moment the path was added.
+    /// When the active path is gone, the best usable path takes the session at once.
     ///
     /// # Errors
     /// [`PathError::TooMany`] if the table is full and no unused path can make room.
@@ -549,7 +550,7 @@ conn_impl! {
     /// path must rank behind every direct one, or the session never leaves it for a direct path that validates. A path
     /// the connection does not track is left alone: the amplification limit still guards it.
     ///
-    /// The active path is chosen again only if it is now a relay path (or there is none): the reference model
+    /// The active path is chosen again only if it is now a relay path, gone, or there is none: the reference model
     /// chooses by itself only from a relay, and otherwise when a direct path validates. A session on a direct path
     /// stays on it whatever the endpoint says of another path. Chosen again there, it would leave a direct path
     /// slower than a second for a relay path whose round trip is not known yet and reads as zero.

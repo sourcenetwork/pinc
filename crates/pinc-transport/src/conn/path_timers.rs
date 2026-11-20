@@ -1,8 +1,9 @@
 //! The path timers: idle-out of a quiet direct path, the probes that fall due, and the fall back to a relay path after
 //! probe timeouts.
 //!
-//! Invariants: a timer only moves the active path onto a validated relay path; every probe it fires belongs to an
-//! unvalidated path with a probe left; the re-join cadence is set once per abandonment.
+//! Invariants: a timer moves the active path only onto a validated path, and falls back only onto a validated relay
+//! path whose address is not gone; every probe it fires belongs to an unvalidated path with a probe left; the re-join
+//! cadence is set once per abandonment.
 
 use pinc_crypto::Provider;
 use pinc_security::Env;
