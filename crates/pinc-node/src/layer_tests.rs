@@ -19,7 +19,7 @@ use pinc_connect::client::{Config as ConnCfg, RelayCfg};
 use pinc_core::{ConnectFailure, Event, SessionId};
 use pinc_crypto::{Drbg, IdentityAlg, Keypair, Software};
 use pinc_security::{Alpn, Env, KeyHandle, LocalIdentity, PrekeyPolicy, SoftPrekeys};
-use pinc_values::knobs::OPEN_RETRY;
+use pinc_values::knobs::{OPEN_RETRY, RESTREAM_DELAY};
 
 use crate::apps::{Apps, Enabled, NoDtn, NoIndex, NoValues, SetsApp};
 use crate::config::{Config, HUB_ALPN, SETS_ALPN, TABLE_MAX};
@@ -463,5 +463,100 @@ fn a_hung_up_values_session_that_closes_is_reported_to_every_fetch_on_it() {
             ));
         }
         assert_eq!(told, 2, "a fetch of the closed session was not told it is gone");
+    });
+}
+
+/// The other end of the same redial: it hung up the shared session and dialed again, so a newer session of ours is
+/// already the one the node opens streams on when the endpoint ends the old one. No fetch is told the provider is
+/// gone; each fetch that had a stream on the old session hears that stream reset and asks again on the new one, and
+/// a fetch on the new session hears nothing. The new session is entered the way `layer_up` does it, without the
+/// fetches' connected notice, so that the reset is what makes each fetch ask again (a fetch that had not heard it
+/// still holds a stream on the old session and would not).
+#[test]
+fn a_values_session_that_closes_after_a_newer_one_was_dialed_resets_only_its_own_streams() {
+    big(|| {
+        let mut node = node_cfg(false, true, true);
+        let peer = hub().bytes;
+        let (old, new) = (SessionId(DIALED), SessionId(DIALED + 1));
+        let fetch = |node: &mut TNode, root: u8| {
+            let req = ValuesRequest {
+                root: [root; 32],
+                length: 1 << 20,
+                ranges: &[],
+                providers: &[peer],
+                deadline: None,
+            };
+            node.values_fetch(S, &req).unwrap();
+        };
+        let streams_on = |node: &TNode, session: SessionId| {
+            let mut lids: Vec<_> = node
+                .values_view()
+                .streams
+                .iter()
+                .filter(|s| s.3 == session)
+                .map(|s| s.0)
+                .collect();
+            lids.sort_unstable();
+            lids
+        };
+        fetch(&mut node, 7);
+        fetch(&mut node, 7);
+        node.settle(S);
+        node.layer_up(S, Layer::Values, old, peer, false);
+        node.settle(S);
+        assert_eq!(
+            streams_on(&node, old).len(),
+            2,
+            "each fetch has its stream on the old session"
+        );
+        // What the stall redial leaves: the hung-up session still recorded, the newer one the node dialed in `lout`.
+        node.io.lout.remove(&(Layer::Values, peer));
+        node.io.lout.insert((Layer::Values, peer), new);
+        node.io.lsess.insert(
+            new,
+            LSess {
+                layer: Layer::Values,
+                peer,
+                incoming: false,
+                opened: S,
+            },
+        );
+        fetch(&mut node, 8);
+        node.settle(S);
+        let on_new = streams_on(&node, new);
+        assert_eq!(on_new.len(), 1, "the third fetch has its stream on the new session");
+        while node.poll_trace().is_some() {}
+        node.layer_closed(S, old);
+        assert_eq!(
+            node.io.lout.get(&(Layer::Values, peer)),
+            Some(&new),
+            "the newer session is still the dialed one"
+        );
+        assert!(
+            streams_on(&node, old).is_empty(),
+            "the old session's stream records are gone"
+        );
+        assert_eq!(streams_on(&node, new), on_new, "the new session's stream is untouched");
+        // Told the provider is gone, a fetch would log a retry; told its stream was reset, it asks again once the
+        // restream delay passes, on the session now dialed.
+        node.handle_timeout(S + RESTREAM_DELAY);
+        let (mut closed, mut asked) = (0, Vec::new());
+        while let Some(item) = node.poll_trace() {
+            match item.body {
+                Body::Values(_, pinc_values::trace::Trace::Retry(_)) => closed += 1,
+                Body::Values(_, pinc_values::trace::Trace::Requested { stream, .. }) => asked.push(stream),
+                _ => {}
+            }
+        }
+        assert_eq!(closed, 0, "no fetch was told the provider is gone");
+        assert_eq!(
+            asked.len(),
+            2,
+            "each fetch of the old session heard its stream reset and asked again"
+        );
+        let mut after = streams_on(&node, new);
+        after.retain(|l| !on_new.contains(l));
+        assert_eq!(after.len(), 2, "the asks went to the new session, one stream per fetch");
+        assert!(streams_on(&node, old).is_empty(), "nothing is left on the old session");
     });
 }
