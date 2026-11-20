@@ -8,7 +8,7 @@
 //! the session it would ride or probe, read before it chose, and whether it probed, failed or did neither), `cmd`
 //! (every flight command sent, and whether the probing dial kept it), `stats`, `hear` (the settle gate saw a packet
 //! on a probed session), `ride`, `lapse` (with whether it closed the probed session, the first address it flew to and
-//! the commands applied), `fail` and `end`. A dial that reads no session has the facts of none.
+//! the commands applied), `fail` and `end`. A dial that reads no session carries no facts.
 //!
 //! The scenarios: a ride; a lapse that closes the quiet session; a lapse of a pulse session; a lapse with a write in
 //! flight; a lapse after the probed session ended (another generation); two lapses that wait on one handshake; a
@@ -178,16 +178,16 @@ impl Rec {
         let (peer, to, now) = (net.nodes[b].node, net.nodes[b].addr, net.now);
         let rep = net.nodes[a].connect(now, peer, alpn, to, Role::Other);
         let batch = read(net, a);
-        let read_of = batch.iter().find(|p| p.0 == 8).copied().unwrap_or((8, 0, 0, 0, 0));
+        let read_of = batch.iter().find(|p| p.0 == 8).copied();
         let started = batch.iter().find(|p| p.0 == 0);
         let out = match (&rep, started) {
             (Err(_), _) => "fail",
             (Ok(_), Some(_)) => "probe",
             (Ok(_), None) => "other",
         };
-        let f = facts(read_of);
+        let f = read_of.map_or_else(String::new, |p| format!(",{}", facts(p)));
         self.line(&format!(
-            r#"{{"t":"qp","ev":"dial","w":{w},"gave":true,"out":"{out}",{f}}}"#
+            r#"{{"t":"qp","ev":"dial","w":{w},"gave":true,"out":"{out}"{f}}}"#
         ));
         let sid = rep.as_ref().ok().map(|r| net.nodes[a].session(r));
         if let Some(p) = started {
