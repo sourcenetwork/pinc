@@ -593,8 +593,12 @@ fn trace_iface() {
         r.redial_closed();
         // 10: the pattern of the second test: timing out at the sleep, the timeout gone, a second suspension
         let slot = r.timing_out();
-        r.ev(0, Ev::Suspend);
         r.block(false);
+        let a2 = r.net.nodes[2].addr;
+        let mark = r.net.nodes[0].sent.len();
+        let end = r.net.now + 5 * SEC_NS;
+        r.net.run(end, |n| n.nodes[0].sent[mark..].iter().any(|s| s.1 == a2));
+        r.ev(0, Ev::Suspend);
         let end = r.net.now + 5 * SEC_NS;
         if r.net.run(end, |n| !pto(n, slot)) {
             r.ev(0, Ev::Suspend);
@@ -661,8 +665,9 @@ fn trace_iface() {
     });
 }
 
-/// A session already timing out when its sleep went out is redialed on resume, whatever else happens while it is
-/// asleep: a second suspension sends no new sleep, so it cannot change what the first one saw.
+/// A session already timing out when its sleep went out is redialed on resume even when the probe it had in flight is
+/// acknowledged while it sleeps and the suspension is reported again: a second suspension sends no SLEEP, so it keeps
+/// what the first one saw.
 #[test]
 fn a_session_timing_out_at_its_sleep_redials_after_a_second_suspend() {
     big_stack(|| {
@@ -682,9 +687,20 @@ fn a_session_timing_out_at_its_sleep_redials_after_a_second_suspend() {
             net.run(end, |n| pto(n, slot)),
             "the session to node 2 never showed a probe timeout"
         );
+        net.loss = None;
+        let mark = net.nodes[0].sent.len();
+        let end = net.now + 5 * SEC_NS;
+        assert!(
+            net.run(end, |n| n.nodes[0].sent[mark..].iter().any(|s| s.1 == a2)),
+            "no probe left for node 2 once it was reachable"
+        );
+        assert!(pto(&net, slot), "the probe timeout cleared before the suspension");
         let now = net.now;
         net.nodes[0].cmd(now, Command::Suspend).unwrap();
-        net.loss = None;
+        assert!(
+            net.nodes[0].ep.trace_iface_slot(slot).unwrap().2,
+            "the session timing out at its sleep is not in doubt"
+        );
         let end = net.now + 5 * SEC_NS;
         assert!(
             net.run(end, |n| !pto(n, slot)),
@@ -692,6 +708,10 @@ fn a_session_timing_out_at_its_sleep_redials_after_a_second_suspend() {
         );
         let now = net.now;
         net.nodes[0].cmd(now, Command::Suspend).unwrap();
+        assert!(
+            net.nodes[0].ep.trace_iface_slot(slot).unwrap().2,
+            "a second suspension dropped the doubt of the first"
+        );
         net.nodes[0].cmd(now, Command::Resume { moved: false }).unwrap();
         let closed = |net: &CoreNet| {
             net.nodes[0].saw(|e| matches!(e, Event::Closed { session, reason: EndReason::Redial } if *session == s2))

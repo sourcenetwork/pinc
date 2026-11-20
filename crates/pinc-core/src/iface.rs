@@ -6,7 +6,8 @@
 //! suspension puts every established session to sleep. On resume the sessions wake, with one exception: a node that
 //! changed address while suspended, and a session that was already timing out when its SLEEP went out, cannot be woken
 //! reliably, so those sessions close at once with `Redial` and the application dials again instead of waiting for an
-//! answer that will not come.
+//! answer that will not come. The doubt is taken when a session's SLEEP goes out: a second suspension before the
+//! resume does not change it.
 //! A link that comes back also reaches the sessions still in their handshake: a dialing side sends its flight at once.
 //! A node that lost its link and was suspended before the link came back is in doubt too: its sessions close at once
 //! with `Redial` on resume.
@@ -178,7 +179,10 @@ ep_impl! {
                 continue;
             }
             let Some(conn) = slot.conn.as_mut() else { continue };
-            slot.m.sleep_doubt = conn.recovery().pto_count() > 0 || self.dark;
+            // The doubt is taken when the SLEEP goes out: a session already asleep keeps the one its SLEEP left with.
+            if !conn.asleep() {
+                slot.m.sleep_doubt = conn.recovery().pto_count() > 0 || self.dark;
+            }
             let mut env = env!(self, now);
             trace!(self, now, Iface { slot: i as u64, call: 3 });
             conn.sleep(&mut env);
