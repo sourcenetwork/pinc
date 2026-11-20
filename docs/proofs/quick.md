@@ -530,6 +530,16 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `ReplyPath_held` | Ids {1, 2, 3, 4, 5} -> {1, 2, 3, 4} |
 | `ReplyPath_one` | Ids {1, 2} -> {1} |
 | `Rtt` | CAP 2 -> 1, PEERS {1, 2, 3} -> {1, 2} (one peer past a full table still), DEPTH 4 -> 3 |
+| `Rtt_evict` | DEPTH 4 -> 3 |
+| `Rtt_floor` | DEPTH 7 -> 6 |
+| `Rtt_floor9` | DEPTH 7 -> 6 |
+| `Rtt_full` | DEPTH 4 -> 3 |
+| `Rtt_hubhalf` | DEPTH 4 -> 3 |
+| `Rtt_peakfloor` | DEPTH 4 -> 3 |
+| `Rtt_peakzero` | DEPTH 4 -> 3 |
+| `Rtt_sat` | DEPTH 4 -> 3 |
+| `Rtt_thin` | DEPTH 4 -> 3 |
+| `Rtt_zeroreset` | DEPTH 4 -> 3 |
 | `Rx` | KMAX 4 -> 3, SENTN 2 -> 1, CONFN 2 -> 1, HOR 400 -> 30 (three calls still overflow CAP 2 and fill both tables) |
 | `Rx_wide` | SENTN 3 -> 1, CONFN 2 -> 1, HOR 300 -> 0 (KMAX 4 kept: four packets overflow CAP 3) |
 | `Streams` | HOR 3 -> 1, LMAX 2 -> 1, MAXOFF 8 -> 5, DT 1 -> 0, Next -> NextQuick (Next without its stuttering steps, the same behaviours); one byte of data and one grant (limit 4 -> 5); no window grows: that needs 3 bytes read in one round trip (HOR 3) |
