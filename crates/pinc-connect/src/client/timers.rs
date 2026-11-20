@@ -69,7 +69,8 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
     }
 
     /// Run every timer at `now`. `wall_ms` is the node's wall clock in milliseconds; with it the layer asks the host
-    /// to sign its record ([`Connectivity::sign_request`]), without it nothing is signed.
+    /// to sign its record ([`Connectivity::sign_request`]). Without it on this tick the clock an earlier tick or
+    /// [`suspend`](Self::suspend) gave is used, and before any clock was given nothing is signed.
     pub fn tick(&mut self, now: u64, env: &mut Env<'_, P>, wall_ms: Option<u64>) {
         self.clock = self.clock.max(now);
         if wall_ms.is_some() {
