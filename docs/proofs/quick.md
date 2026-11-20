@@ -435,7 +435,16 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `MembershipSys_w_switch` | MaxSec 160 -> 70, Script ScrPrimaryHyst -> ScrPrimaryHystQuick (the drop to 40 ms at 20 s, not 100 s) |
 | `Mtu` | KMAX 5 -> 4 (the drop to the floor takes four calls) |
 | `NodeBackoff` | TIMES {0, 70 s, u64::MAX} -> {0, u64::MAX} (TimesDefQuick); bounded by constraint: behaviours of at most 4 levels (NodeBackoffQuickBound) |
+| `NodeBackoff_blocked` | PEERS {1, 2} -> {1} |
+| `NodeBackoff_cap` | PEERS {1, 2} -> {1} |
 | `NodeBackoff_denymax` | PEERS {1, 2} -> {1} (the hub), TIMES {0, 70 s, u64::MAX} -> {0, u64::MAX} (TimesDefQuick) |
+| `NodeBackoff_full` | PEERS {1, 2} -> {1} |
+| `NodeBackoff_pruned` | PEERS {1, 2} -> {1} |
+| `NodeBackoff_reset` | PEERS {1, 2} -> {1} |
+| `NodeBackoff_sat` | PEERS {1, 2} -> {1} |
+| `NodeBackoff_shed` | PEERS {1, 2} -> {1} |
+| `NodeBackoff_shedfree` | PEERS {1, 2} -> {1} |
+| `NodeBackoff_window` | PEERS {1, 2} -> {1} |
 | `NodeValues` | NMAX 3 -> 2 (at most 2 streams added in a behaviour), SIDS {1, 2, 3} -> {1, 2} (a hung-up session and its redial) |
 | `NodeSets` | SIDS {1, 2, 3} -> {1, 2} (a dial, a filler's session, and the endpoint refusing a third), NSTARTS 2 -> 1 (one round in all: a start refused Busy is not reached, NodeSets_busy is its witness) |
 | `NodeSets_cancel` | SIDS {1, 2, 3} -> {1, 2} (a dial, a filler's session, and the endpoint refusing a third), NSTARTS 2 -> 1 (one round in all: a start refused Busy is not reached, NodeSets_busy is its witness) |
