@@ -6,10 +6,13 @@
 //! domain-separated from the plain algorithms. Signing here is the software path: it is deterministic and takes any
 //! randomness from the caller.
 //!
-//! ML-DSA-65 keys hold their expanded matrix inline on a target without an allocator (about 64 KiB each, 128 KiB for
-//! a hybrid): there is nowhere else for it to stay, so keep a [`Keypair`] off small stacks there. With the `alloc`
-//! feature (default) the expanded key is boxed once, at setup, and a key pair of any algorithm costs a few dozen
-//! bytes.
+//! ML-DSA-65 keys hold their expanded matrix inline on a target without an allocator (about 64 KiB, for the hybrid
+//! too): there is nowhere else for it to stay. With the `alloc` feature (default) the expanded key is boxed once, in
+//! [`Keypair::from_seed`], and a key pair of any algorithm is 240 bytes. Storage is not construction:
+//! [`Keypair::from_seed`] for ML-DSA-65 and the hybrid builds the 64 KiB expanded key in the caller's frame before
+//! the box copies it out, in every build, so those two algorithms need several hundred KiB of stack to construct a
+//! key pair (measured on aarch64: 512 KiB with this crate optimised, 256 KiB overflowing; 1 MiB at opt-level 0);
+//! Ed25519 and P-256 construct on 8 KiB.
 
 #[cfg(feature = "alloc")]
 extern crate alloc;
@@ -260,9 +263,12 @@ fn hybrid_inner(seed: &[u8]) -> Result<Inner, CryptoError> {
 
 /// A software signing key pair, zeroized on drop.
 ///
-/// With the `alloc` feature the expanded ML-DSA-65 key is boxed once, at setup, so a key pair of any algorithm is
-/// `size_of::<Keypair>()` = 240 bytes: the largest small algorithm's expanded key, plus the algorithm tag. Without an
-/// allocator the ML-DSA-65 expanded key lives inline and a key pair is 65,928 bytes for every algorithm.
+/// With the `alloc` feature the expanded ML-DSA-65 key is boxed once, in [`Keypair::from_seed`], so a key pair of any
+/// algorithm is `size_of::<Keypair>()` = 240 bytes: the largest small algorithm's expanded key, plus the algorithm
+/// tag. Without an allocator the ML-DSA-65 expanded key lives inline and a key pair is 65,928 bytes for every
+/// algorithm. Storage is not construction: `from_seed` for ML-DSA-65 and the hybrid still builds the 64 KiB
+/// expanded key in the caller's frame before the box copies it out, so those two algorithms need several hundred
+/// KiB of stack to construct a key pair; an Ed25519 or P-256 key pair constructs on 8 KiB.
 pub struct Keypair(Inner);
 
 impl core::fmt::Debug for Keypair {
@@ -329,6 +335,12 @@ fn put(out: &mut [u8], at: usize, bytes: &[u8]) -> Result<(), CryptoError> {
 impl Keypair {
     /// Derive a key pair from `seed`, which is [`IdentityAlg::seed_len`] bytes (for a hybrid, the Ed25519 seed
     /// followed by the ML-DSA seed).
+    ///
+    /// Construction cost is not storage cost: for ML-DSA-65 and the hybrid this builds the 64 KiB expanded key in
+    /// the caller's frame before the box copies it out (the crate holds no allocation-free expansion, since
+    /// `forbid(unsafe_code)` bars writing into the box in place), so those two algorithms need several hundred KiB
+    /// of stack here; Ed25519 and P-256 construct on 8 KiB. The returned key pair is small under `alloc` for
+    /// every algorithm.
     ///
     /// # Errors
     /// [`CryptoError::InvalidLength`] for a wrong-sized seed, [`CryptoError::InvalidSecretKey`] for a P-256 seed
@@ -416,5 +428,16 @@ impl Keypair {
             }
         }
         Ok(self.alg().signature_len())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// The size stated on [`super::Keypair`]'s docs, for both layouts: without an allocator it is master's layout,
+    /// the expanded ML-DSA-65 key inline in every key pair.
+    #[test]
+    fn a_key_pair_is_the_size_its_docs_state() {
+        let expected = if cfg!(feature = "alloc") { 240 } else { 65_928 };
+        assert_eq!(core::mem::size_of::<super::Keypair>(), expected);
     }
 }
