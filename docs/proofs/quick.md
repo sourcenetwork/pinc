@@ -456,6 +456,14 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `Orphan_evict` | TMAX 4 -> 3 |
 | `Orphan_stale` | TMAX 4 -> 3 |
 | `PortMapLease` | last tick MaxT 7 -> 4, tries Tries 2 -> 1; bounded by constraint: behaviours of depth 14 (PortMapLeaseQuickBound) |
+| `PortMapLease_announcedrop` | MaxT 7 -> 6 |
+| `PortMapLease_noepoch` | MaxT 7 -> 6 |
+| `PortMapLease_noexpiry` | MaxT 7 -> 6 |
+| `PortMapLease_nofloor` | MaxT 7 -> 6 |
+| `PortMapLease_norenew` | MaxT 7 -> 6 |
+| `PortMapLease_nostopdrop` | MaxT 7 -> 6 |
+| `PortMapLease_refusal` | MaxT 7 -> 6 |
+| `PortMapLease_stalefloor` | MaxT 7 -> 6 |
 | `PrekeyCache` | MaxClock 6 -> 4 (the cache fills, a get refreshes the older entry, the next insert evicts the least recently used) |
 | `PrekeyCache_n3` | MaxClock 6 -> 3 (the cache fills; the invariants insert into the full cache) |
 | `Queue` | PMAX 7 -> 4 |
