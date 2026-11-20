@@ -21,7 +21,12 @@
 (* it is not compared. Whether the outstanding notice is cancelled (K6 as *)
 (* revised: a resume or a second suspend keeps the request, its answer     *)
 (* signs and sends nothing) follows from the calls; the record shows the  *)
-(* request still outstanding, then no datagram for its answer.            *)
+(* request still outstanding, then no datagram for its answer. A tick or  *)
+(* drive first runs the links' own ticks (LinkTickOK: a down link may     *)
+(* redial, a dial that waited too long or a dead carrier closes), so a    *)
+(* link that was down may be dialing when the suspension's close comes,   *)
+(* and that close takes it too (close_for_suspend closes every link not   *)
+(* down).                                                                  *)
 (*                                                                         *)
 (* Times are microseconds from the clock at the first event; u64::MAX is  *)
 (* written as 2147483647 (TMax). The code's close one nanosecond later is *)
@@ -55,15 +60,23 @@ Obs(W) == /\ W.s.job.k = Ev.job /\ W.s.job.r = Ev.jr
 \* the next run of the test: a new client
 InitE == /\ Ev.op = "init" /\ Ev.job = "none" /\ Ev.link = "open" /\ s' \in Fresh /\ i' = i + 1
 
+\* the links' ticks of a tick or drive: relay 1's state after them (nl), and whether it closed (cl)
+TickW(nl, cl) == LinkTick(W0(s), [x \in {1} |-> nl], IF cl THEN {1} ELSE {})
+Links == {"open", "dialing", "down"}
+
 CallE ==
     CASE Ev.op = "tick" ->
-            \E pw \in BOOLEAN, rj \in BOOLEAN, bj \in BOOLEAN :
-                (pw => ~RecordWanted(s)) /\ Obs(TickStep(W0(s), Ev.now, Ev.w, pw, rj, bj, K))
+            \E nl \in Links, cl \in BOOLEAN, pw \in BOOLEAN, rj \in BOOLEAN, bj \in BOOLEAN :
+                /\ LinkTickOK(s.lk[1], nl, cl)
+                /\ pw => ~RecordWanted(s)
+                /\ Obs(TickStep(TickW(nl, cl), Ev.now, Ev.w, pw, rj, bj, K))
       [] Ev.op = "drive" ->
-            \E pw \in BOOLEAN, rj \in BOOLEAN, bj \in BOOLEAN, rj2 \in BOOLEAN, bj2 \in BOOLEAN, bc \in BOOLEAN :
+            \E nl \in Links, cl \in BOOLEAN, pw \in BOOLEAN, rj \in BOOLEAN, bj \in BOOLEAN, rj2 \in BOOLEAN,
+               bj2 \in BOOLEAN, bc \in BOOLEAN :
+                /\ LinkTickOK(s.lk[1], nl, cl)
                 /\ pw => ~RecordWanted(s)
                 /\ bc => Ev.w
-                /\ Obs(DriveStep(W0(s), Ev.now, Ev.w, pw, rj, bj, rj2, bj2, bc, K))
+                /\ Obs(DriveStep(TickW(nl, cl), Ev.now, Ev.w, pw, rj, bj, rj2, bj2, bc, K))
       [] Ev.op = "suspend" -> \E rj \in BOOLEAN, bj \in BOOLEAN : Obs(SuspendStep(W0(s), Ev.now, rj, bj, K))
       [] Ev.op = "resume" -> \E wr \in BOOLEAN : Obs(ResumeStep(W0(s), wr, K))
       [] Ev.op = "answer" -> \E rj \in BOOLEAN, bj \in BOOLEAN : Obs(SignResponse(W0(s), Ev.now, Ev.ok, rj, bj, K))
