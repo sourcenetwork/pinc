@@ -263,7 +263,13 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `DtnStore` | N 3 -> 2, Budget 4 -> 2, ByteVals {0,1,2,3,5} -> {1,2}, NowVals {0,1,2} -> {0,1} |
 | `DtnStore_cross` | MaxSeq 3 -> 2 |
 | `Early` | packets KMAX 5 -> 3; RecvStep -> RecvStepQuick: datagram lengths 1..2 -> {1} |
+| `Early_ampopen` | KMAX 5 -> 4 |
+| `Early_anyframe` | KMAX 5 -> 4 |
+| `Early_anyphase` | KMAX 5 -> 4 |
 | `Early_cap3` | packets KMAX 5 -> 4; RecvStep -> RecvStepQuick: datagram lengths 1..2 -> {1} |
+| `Early_noclear` | KMAX 5 -> 4 |
+| `Early_oldest` | KMAX 5 -> 4 |
+| `Early_redrain` | KMAX 5 -> 4 |
 | `Encoder` | WalkK 8 -> 3, Seeds -> SeedsQuick (the powers of two 0..64 -> 13 around the edges, the big logs {0, 10, 20} -> {0, 20}, the overflow multiples 0..30 -> {0, 1, 2, 30}, the encoded multiples 0..4 -> 0..2) |
 | `ExtIn` | CAP 3 -> 2, PMAX 9 -> 5 |
 | `FacadeAcpForget` | bounded by constraint: behaviours of depth 8 (FacadeAcpForgetQuickBound); one peer and two listed protocols are what it is about The code as built, one peer and two listed protocols taken either way, any hook to start with (the host may edit it). Revoke, unrevoke and admission_changed drop both answers of the peer, a dial to a revoked peer is refused before anything is sent, each session is decided on its own protocol and direction, the endpoint is told whether the peer is allowed any of the questions it is asked about, its own sessions and dials among them, and a dial the gate allows drops a refusal held for its peer. |
