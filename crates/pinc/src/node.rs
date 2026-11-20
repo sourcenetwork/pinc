@@ -225,7 +225,9 @@ macro_rules! define {
 }
 ladder!(define);
 
-#[cfg(test)]
+// The ceilings are those of the shipping build: the probes of the `trace` feature add state (an endpoint is about
+// 119,000 B with them), so the check does not run there.
+#[cfg(all(test, not(feature = "trace")))]
 mod tests {
     use core::mem::size_of;
 
