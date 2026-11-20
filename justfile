@@ -223,10 +223,12 @@ bench *args:
     cargo bench {{benches}} {{args}}
 
 # Install the pinned TLA+ tools the proofs use (checksums verified) and a `tlc` wrapper in ~/.local/bin.
+# vertexia: the 1.8.0 jar comes from upstream's pre-release tag, whose file is replaced with each new build, so its
+# checksum fails after the next one: re-pin the name and checksum then; a mirror of the pinned jar would end that.
 tla-tools:
     mkdir -p "{{tla_home}}" "$HOME/.local/bin"
     just _fetch "{{tla_home}}/tla2tools.jar" https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar 936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88
-    just _fetch "{{tla_home}}/tla2tools-2026.11.06.jar" https://github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla2tools.jar e1f11b75c4b5bc4478ba0ac5cb6ae28e40a01b0016bc33e0aa97da22dfdbcd7f
+    just _fetch "{{tla_home}}/tla2tools-2026.11.19.jar" https://github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla2tools.jar fdffef247f563ef6edbfd44958d2a82db79e7564e07cb673262d896353fa6713
     just _fetch "{{tla_home}}/CommunityModules-deps-202611060952.jar" https://github.com/tlaplus/CommunityModules/releases/download/202611060952/CommunityModules-deps.jar a3b27c40f1fb5085f30c6ead37e918457f8cfc62c1e50a1dc668ef592ad2b5fb
     printf '#!/usr/bin/env bash\nexec java -XX:+UseParallelGC -cp "%s/tla2tools.jar" tlc2.TLC "$@"\n' "{{tla_home}}" > "$HOME/.local/bin/tlc"
     chmod +x "$HOME/.local/bin/tlc"
