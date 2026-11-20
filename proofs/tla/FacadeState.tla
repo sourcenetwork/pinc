@@ -40,16 +40,11 @@
 (*             what the input holds                                        *)
 (*   Merge     restoring a canonical state into an empty endpoint gives    *)
 (*             exactly the book and record number written                  *)
-(*   AddrKept  `addresses` counts the input's entries with an address in   *)
-(*             the book after (fix F14; before it, every entry counted:    *)
-(*             one with no address and one the full book refused too)      *)
-(* FacadeState_count.cfg checks AddrDoc, the doc of `Restored::addresses`  *)
-(* (state.rs 47: "Nodes whose addresses went into the address book"),      *)
-(* counting nodes, not entries: it FAILS on the input that names a node    *)
-(* twice (parse accepts it, the count takes it twice) until the code       *)
-(* counts a node once or parse refuses a node twice. FacadeState_full.cfg  *)
-(* is a witness that a full book refuses an input's address (NoneRefused   *)
-(* fails).                                                                 *)
+(*   AddrKept  `addresses` counts the input's nodes with an address in    *)
+(*             the book after, a node named by several entries once (the   *)
+(*             doc of `Restored::addresses`, fix F14 and the node count)   *)
+(* FacadeState_full.cfg is a witness that a full book refuses an input's   *)
+(* address (NoneRefused fails).                                            *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
 
@@ -146,12 +141,8 @@ Merge == cs.k = "case" /\ cs.in.enc /\ cs.live = L0 /\ R.ok /\ Canonical(cs.in.s
     /\ R.live.seq = (IF cs.in.ver = 2 THEN cs.in.src.seq ELSE L0.seq)
     /\ R.live.core = CS!Restore(CEmpty, cs.in.src.core, NOW).live
 
-\* what the code counts since F14: the input's entries with an address in the book after
-AddrKept == cs.k = "case" /\ R.ok =>
-    R.res[4] = Cardinality({k \in 1..Len(P.book) : \E j \in 1..Len(P.book[k][2]) :
-                                                   <<P.book[k][1], P.book[k][2][j]>> \in F!Pairs(R.live.book)})
 \* the doc: nodes of the input with an address in the book after (a node named twice counts once)
-AddrDoc == cs.k = "case" /\ R.ok =>
+AddrKept == cs.k = "case" /\ R.ok =>
     R.res[4] = Cardinality({e[1] : e \in {x \in F!Range(P.book) : \E j \in 1..Len(x[2]) :
                                                               <<x[1], x[2][j]>> \in F!Pairs(R.live.book)}})
 \* witness: some input's address is refused by the bounds

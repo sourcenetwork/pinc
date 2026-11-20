@@ -64,4 +64,3 @@ par run_tlc facade_state FacadeState FacadeState
 par witness_tlc facade_state_full FacadeState FacadeState_full NoneRefused
 par run_tlc limits_fit LimitsFit LimitsFit
 par witness_tlc limits_fit_wrap LimitsFit LimitsFit_wrap Sound
-par witness_tlc facade_state_count FacadeState FacadeState_count AddrDoc

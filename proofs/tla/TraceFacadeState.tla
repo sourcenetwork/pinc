@@ -59,7 +59,7 @@ EvOK(ev) ==
               /\ ~ev.ok => ev.after = ev.before
               /\ ev.ok => /\ F!Range(Book(ev.after.book)) = F!Range(F!Merge(bb, p.book))
                           /\ ev.after.seq = (IF p.ver = 2 THEN F!MaxBE(ev.before.seq, p.seq) ELSE ev.before.seq)
-                          /\ ev.res[4] = F!MergeN(bb, p.book, 0).n
+                          /\ ev.res[4] = F!MergeN(bb, p.book).n
       \* a full book refuses every new node, and the restore counts none of them (fix F14)
       [] ev.op = "full" -> /\ ev.before = 4096 /\ ev.after = 4096 /\ ev.ok /\ ev.added = 0 /\ ev.addresses = 0
       [] OTHER -> FALSE

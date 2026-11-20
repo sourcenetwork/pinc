@@ -19,7 +19,7 @@
 (* CR(core, bytes) is the core's restore ([ok, live, res]), so the core is *)
 (* whatever model the caller composes (FacadeState.tla: CoreStateOps).     *)
 (***************************************************************************)
-EXTENDS Integers, Sequences
+EXTENDS Integers, Sequences, FiniteSets
 CONSTANTS NB, IP4, IP6, PORT, CLEN, CNT, SEQ, BOOKMAX, ADDRSMAX
 
 Drop(s, n) == SubSeq(s, n + 1, Len(s))
@@ -104,13 +104,15 @@ AddAll(book, node, as, kept) ==
     IF as = <<>> THEN [book |-> book, kept |-> kept]
     ELSE LET b == AddAddr(book, node, Head(as))
          IN AddAll(b, node, Tail(as), kept \/ <<node, Head(as)>> \in Pairs(b))
-\* the entries merged in order; n counts the entries with an address kept (state.rs 168-172, fix F14)
-RECURSIVE MergeN(_, _, _)
-MergeN(book, es, n) ==
-    IF es = <<>> THEN [book |-> book, n |-> n]
+\* the entries merged in order; ns is the set of nodes with an address kept, n counts them: a node named by several
+\* entries counts once (state.rs restore_state, fix F14 and the count of nodes)
+RECURSIVE MergeS(_, _, _)
+MergeS(book, es, ns) ==
+    IF es = <<>> THEN [book |-> book, ns |-> ns]
     ELSE LET r == AddAll(book, Head(es)[1], Head(es)[2], FALSE)
-         IN MergeN(r.book, Tail(es), n + (IF r.kept THEN 1 ELSE 0))
-Merge(book, es) == MergeN(book, es, 0).book
+         IN MergeS(r.book, Tail(es), IF r.kept THEN ns \cup {Head(es)[1]} ELSE ns)
+MergeN(book, es) == LET m == MergeS(book, es, {}) IN [book |-> m.book, n |-> Cardinality(m.ns)]
+Merge(book, es) == MergeN(book, es).book
 
 (* ---- restore_state ---- *)
 \* every check that can refuse (parse, then the core) comes before the first write
@@ -120,10 +122,10 @@ Restore(live, bs, CR(_, _)) ==
     IF ~p.ok THEN RFail(live)
     ELSE LET c == CR(live.core, p.core) IN
          IF ~c.ok THEN RFail(live)
-         ELSE LET m == MergeN(live.book, p.book, 0)
+         ELSE LET m == MergeN(live.book, p.book)
               IN [ok |-> TRUE,
                   live |-> [core |-> c.live, book |-> m.book,
                             seq |-> IF p.ver = 2 THEN MaxBE(live.seq, p.seq) ELSE live.seq],
-                  \* Restored { tickets, peers, prekeys } of the core, then addresses: the entries the book kept
+                  \* Restored { tickets, peers, prekeys } of the core, then addresses: the nodes the book kept an address of
                   res |-> c.res \o <<m.n>>]
 =============================================================================
