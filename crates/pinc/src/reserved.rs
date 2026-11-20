@@ -90,4 +90,58 @@ mod tests {
             check(&p[..p.len() - 1]).unwrap();
         }
     }
+
+    /// The model's cases (`FacadeReserved.tla`, `Cut`), each with the answer its rule expects, as ndjson.
+    #[test]
+    fn trace_reserved() {
+        use crate::trace_util::{jb, write_trace};
+        use core::fmt::Write as _;
+        let mut out = alloc::string::String::new();
+        let rows: Vec<_> = PREFIXES.iter().map(|p| jb(p)).collect();
+        writeln!(out, r#"{{"t":"reserved","op":"prefixes","p":[{}]}}"#, rows.join(",")).unwrap();
+        for (k, d) in signed_statements().iter().enumerate() {
+            assert!(check(d).is_err());
+            writeln!(
+                out,
+                r#"{{"t":"reserved","op":"stmt","k":{},"d":{},"refused":true}}"#,
+                k + 1,
+                jb(d)
+            )
+            .unwrap();
+        }
+        let mut cases: Vec<(Vec<u8>, bool)> = Vec::new();
+        for p in PREFIXES {
+            cases.push((p.to_vec(), true));
+            cases.extend((0..p.len()).map(|n| (p[..n].to_vec(), false)));
+            for k in 0..p.len() {
+                for v in [p[k].wrapping_add(1), p[k] ^ 0x20, 0] {
+                    if v != p[k] {
+                        let mut d = p.to_vec();
+                        d[k] = v;
+                        cases.push((d, false));
+                    }
+                }
+            }
+            for x in [0u8, 32, 120, 255] {
+                let mut d = p.to_vec();
+                d.push(x);
+                cases.push((d, true));
+            }
+        }
+        for x in *b"19" {
+            let mut d = PREFIXES[0].to_vec();
+            d.extend_from_slice(&[b'v', x, b' ', 1, 2, 3]);
+            cases.push((d, true));
+        }
+        for (d, refused) in &cases {
+            assert_eq!(check(d).is_err(), *refused, "{d:?}");
+            writeln!(
+                out,
+                r#"{{"t":"reserved","op":"case","d":{},"refused":{refused}}}"#,
+                jb(d)
+            )
+            .unwrap();
+        }
+        write_trace("facade_reserved.ndjson", &out);
+    }
 }
