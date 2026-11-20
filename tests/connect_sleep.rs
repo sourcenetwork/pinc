@@ -1,5 +1,4 @@
-//! The signing work of a suspending node: a sleep notice asked for and then not wanted is answered and dropped, and a
-//! tick without a wall clock signs nothing.
+//! The signing work of a suspending node: a sleep notice asked for and then not wanted is answered and dropped.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
 
 mod connect_common;
@@ -7,13 +6,13 @@ mod connect_rig;
 
 use connect_common::{SEC, big_stack};
 use connect_rig::{Ans, Custody, Rig};
-use pinc_connect::client::Io;
 use pinc_connect::client::link::State;
+use pinc_connect::client::{Io, Notice};
 use pinc_connect::record::Record;
 use pinc_connect::relay::datagram::Datagram;
 use pinc_connect::relay::sleep;
 use pinc_crypto::Software;
-use pinc_security::{Env, KeyRequest};
+use pinc_security::{Env, KeyRequest, KeyResponse};
 use pinc_tests::{Answer, Host};
 
 struct Soft(Box<Host>);
@@ -165,5 +164,25 @@ fn a_second_suspend_before_the_closing_tick_keeps_the_carrier_until_its_notice_i
             std::iter::from_fn(|| rig.conn.poll_io()).any(|io| matches!(io, Io::Close { relay: 0 })),
             "the carrier closes once the notice is signed"
         );
+    });
+}
+
+#[test]
+fn a_cancelled_notice_the_host_fails_to_sign_raises_no_failure() {
+    big_stack(|| {
+        for bad in [Some(KeyResponse::Failed), Some(KeyResponse::Signature(&[0u8; 3])), None] {
+            let (mut rig, mut keys, now, _) = up();
+            let wall = now / 1_000_000;
+            rig.conn.suspend(now, wall);
+            let old = take_answer(&rig, &mut keys, now);
+            rig.conn.resume(now);
+            while rig.conn.poll_notice().is_some() {}
+            rig.conn.sign_response(now, bad.unwrap_or_else(|| old.response()));
+            assert!(
+                !std::iter::from_fn(|| rig.conn.poll_notice()).any(|n| n == Notice::SignFailed),
+                "a notice nobody wants failed"
+            );
+            assert!(notices(&mut rig).is_empty(), "a notice nobody wants was sent");
+        }
     });
 }

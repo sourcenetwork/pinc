@@ -5,7 +5,7 @@
 //!
 //! After every call the test reads the signing job the layer waits on (a sleep notice, a record or a beacon), the
 //! datagrams it queued (the sleep notices, the beacons), the `SignFailed` notices and the carrier closes it asked of
-//! the host. On its own it asserts that a refused signature raises exactly one `SignFailed` and sends nothing, that
+//! the host. On its own it asserts that a refused signature raises exactly one `SignFailed` (none for a notice no longer wanted) and sends nothing, that
 //! sleep notices go out in pairs and only when a notice was signed, and (in the fixed runs) that no close follows a
 //! resume and that a suspension closes only after its notice was answered. Where the code differs from its
 //! documentation (a second suspend, a notice behind a record job, a tick without a wall clock) the trace records what
@@ -100,6 +100,8 @@ struct Run {
     strict: bool,
     resumed: bool,
     slept: bool,
+    /// The request outstanding is a sleep notice no longer wanted: its answer is dropped, whatever it is.
+    dropped: bool,
 }
 
 impl Run {
@@ -132,6 +134,7 @@ impl Run {
             strict: fixed,
             resumed: false,
             slept: false,
+            dropped: false,
         };
         // what bring-up left behind is not part of the run
         run.snap();
@@ -222,7 +225,11 @@ impl Run {
             );
         }
         if let Some((Mode::Short | Mode::Failed, _)) = answer {
-            assert_eq!(s.fails, 1, "a refused signature raises exactly one SignFailed");
+            let fails = usize::from(!self.dropped);
+            assert_eq!(
+                s.fails, fails,
+                "a refused signature raises one SignFailed, a dropped notice's none"
+            );
             assert!(s.udp.is_empty(), "a refused signature sent a notice");
         }
         if !s.closes.is_empty() {
@@ -253,6 +260,7 @@ impl Run {
 
     fn suspend(&mut self, d: i64) {
         let now = self.clock(d);
+        self.dropped |= self.job_of().0 == "sleep";
         self.rig.conn.suspend(now, now / 1_000_000);
         self.resumed = false;
         self.slept = false;
@@ -261,6 +269,7 @@ impl Run {
 
     fn resume(&mut self, d: i64) {
         let now = self.clock(d);
+        self.dropped |= self.job_of().0 == "sleep";
         self.rig.conn.resume(now);
         self.resumed = true;
         self.emit("resume", &format!(r#""now":{},"#, Self::dj(d)), None);
@@ -312,6 +321,7 @@ impl Run {
             &format!(r#""now":{},"ok":{},"#, Self::dj(d), mode == Mode::Ok),
             Some((mode, sleep)),
         );
+        self.dropped = false;
     }
 
     /// Answer at the clock of the last call.

@@ -133,6 +133,12 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
     pub fn sign_response(&mut self, now: u64, resp: KeyResponse<'_>) {
         self.clock = self.clock.max(now);
         let Some(mut job) = self.sign.job.take() else { return };
+        // Nobody wants a cancelled notice, so its failure is no failure.
+        if job.kind == Kind::Sleep && job.cancelled {
+            self.start_jobs(now);
+            self.maybe_close_for_suspend(now);
+            return;
+        }
         let ok = match resp {
             KeyResponse::Signature(sig) if sig.len() == self.identity.alg().signature_len() => {
                 self.complete(now, &mut job, sig)
@@ -187,9 +193,6 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
                 true
             }
             Kind::Sleep => {
-                if job.cancelled {
-                    return true;
-                }
                 let Ok(len) = sleep::finish(&mut job.buf, job.signed, sig) else {
                     return false;
                 };
