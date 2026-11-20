@@ -119,19 +119,25 @@ pub const fn trace_ns_to_ms(ns: u64) -> u64 {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct System;
 
-/// The latest instant `self + d` can reach: the step is halved until it fits. Only with the `std` feature.
+/// The latest instant `self + d` can reach, to the nanosecond. Only with the `std` feature.
 #[cfg(feature = "std")]
 impl HostInstant for std::time::Instant {
     #[inline]
     fn add(self, d: Duration) -> Self {
-        let mut step = d;
-        while !step.is_zero() {
-            if let Some(t) = self.checked_add(step) {
-                return t;
-            }
-            step /= 2;
+        if let Some(t) = self.checked_add(d) {
+            return t;
         }
-        self
+        // Bisect for the largest step that fits: `lo` fits, `hi` does not (cold: about 94 probes at most).
+        let (mut lo, mut hi) = (Duration::ZERO, d);
+        while hi.saturating_sub(lo) > Duration::from_nanos(1) {
+            let mid = lo + hi.saturating_sub(lo) / 2;
+            if self.checked_add(mid).is_some() {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        self.checked_add(lo).unwrap_or(self)
     }
 
     #[inline]
@@ -232,6 +238,20 @@ mod tests {
         assert_eq!(t.add(Duration::ZERO), t);
         assert_eq!(t.add(Duration::from_secs(2)).since(t), Duration::from_secs(2));
         assert_eq!(t.since(far), Duration::ZERO);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn adding_past_the_end_reaches_the_latest_instant() {
+        use std::time::Instant;
+
+        let t = Instant::now();
+        let far = t.add(Duration::MAX);
+        assert!(far >= t);
+        assert!(
+            far.checked_add(Duration::from_nanos(1)).is_none(),
+            "a later instant exists"
+        );
     }
 
     #[cfg(feature = "std")]
