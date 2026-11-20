@@ -251,6 +251,16 @@ async fn peer_open_byte<H: Hosted + 'static>(c: Connection<H>, uni: bool) -> Out
     }
 }
 
+/// Finish the sending half of every stream in `halves`, and drop them.
+async fn finish_halves<H: Hosted + 'static>(halves: Vec<Out<H>>) -> Out<H> {
+    for h in halves {
+        if let Out::Bi(mut s, _recv) = h {
+            s.finish().await.expect("the peer finishes");
+        }
+    }
+    Out::Unit
+}
+
 async fn peer_send<H: Hosted + 'static>(p: Rc<Peer<H>>) -> Out<H> {
     let j = p.chunks.get() + 1;
     let mut g = p.send.borrow_mut();
@@ -958,28 +968,32 @@ fn documented<H: Hosted + 'static>(n: u32, t: &mut T<H>) {
             t.finish_s();
         }
         2 => {
-            // The peer opens 49 bidirectional and 49 unidirectional streams and writes a byte on each; the subject
-            // accepts each and drops its receiving half while the peer keeps the stream open. The limit of streams
-            // of a session (100, the setup stream included) is below the 128 stopped streams a session remembers, so the table never fills.
-            for uni in [false, true] {
-                for _ in 0..49 {
-                    let kept = t.finish(peer_open_byte(t.pc(), uni));
-                    t.keep.push(kept);
-                    // The receiving half is dropped here; the sending half of a bidirectional stream stays.
-                    let got = if uni {
-                        t.finish(accept_uni(t.conn()))
-                    } else {
-                        t.finish(accept_bi(t.conn()))
-                    };
-                    if let Out::Bi(s, _recv) = got {
-                        t.keep.push(Out::Send(s));
-                    }
-                    t.settle();
+            // The list of discarded streams passes the 128 streams a session used to remember: the subject opens 29
+            // two-way streams and drops their receiving halves, then the peer opens 99 more (with the stream of
+            // `begin`, the 100 it may hold), the subject accepts each and drops its receiving half, and last the
+            // stream of `begin` is dropped with unread bytes. A dropped stream is always discarded, so it holds nothing.
+            let mut local = Vec::new();
+            for _ in 0..29 {
+                if let Out::Bi(s, _recv) = t.finish(peer_open_byte(t.conn(), false)) {
+                    local.push(Out::Send(s));
+                }
+            }
+            let mut peer_halves = Vec::new();
+            for _ in 0..99 {
+                peer_halves.push(t.finish(peer_open_byte(t.pc(), false)));
+                if let Out::Bi(s, _recv) = t.finish(accept_bi(t.conn())) {
+                    local.push(Out::Send(s));
                 }
             }
             t.psend();
             t.drecv();
-            t.held();
+            let held = t.held();
+            assert!(!held, "a stream dropped after 128 others still held what the peer sent");
+            t.finish(finish_halves(peer_halves));
+            t.finish(peer_fin(Rc::clone(&t.p)));
+            drop(t.s.borrow_mut().take());
+            drop(local);
+            t.settle();
         }
         _ => {
             t.pdg();
