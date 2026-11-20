@@ -70,3 +70,22 @@ fn nine_pings_in_one_read_leave_one_answer_and_an_open_carrier() {
     );
     assert_eq!(core.counters.slow_closed, 0);
 }
+
+/// A node that opens a second session replaces the first: the first carrier is closed by the slot the node's table
+/// held, and the node keeps one session, on the second.
+#[test]
+fn a_second_session_of_a_node_closes_the_first_carrier_by_its_slot() {
+    let mut core = core(Limits::default());
+    let node = pinc_crypto::NodeId {
+        alg: pinc_crypto::IdentityAlg::Ed25519,
+        bytes: [5; 32],
+    };
+    let first = core.add_conn((), CarrierKind::Tcp, T0).unwrap();
+    core.on_open(first, node, T0);
+    let second = core.add_conn((), CarrierKind::Tcp, T0).unwrap();
+    core.on_open(second, node, T0);
+    assert_eq!(core.conn(first).unwrap().dying, Some(Closed::Replaced), "the replaced carrier stays open");
+    assert_eq!(core.conn(second).unwrap().dying, None, "the new carrier was closed");
+    assert_eq!(core.by_node.get(&node_key(&node)), Some(&second));
+    assert_eq!(core.sm.sessions(), 1, "the node holds more than one session");
+}
