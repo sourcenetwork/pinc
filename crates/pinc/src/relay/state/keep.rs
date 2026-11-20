@@ -143,7 +143,8 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
     }
 
     /// Put back what the store kept. A record or packet past its lifetime is not restored, and a record is removed from
-    /// the store; a record that does not verify is removed too.
+    /// the store; a record that does not verify is removed too. A record whose bytes do not parse names no node: it is
+    /// counted as a store error and left for the store to drop.
     pub(crate) fn restore(&mut self, now: u64, kept: &Kept) {
         self.keep.restoring = true;
         for r in &kept.records {

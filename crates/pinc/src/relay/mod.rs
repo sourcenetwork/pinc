@@ -15,20 +15,20 @@
 //! relay.run().await?;
 //! ```
 //!
-//! # Embedded or run as a service
+//! # Embedded or run as a node of its own
 //!
 //! The relay owns no process, socket, runtime or timer. It runs on the closures the host passes, so a node can take
 //! the relay role inside its own process: the host shares one UDP socket and one executor with its other endpoints,
 //! awaits [`Relay::run`] next to them, and stops it with [`Relay::stop`] without ending anything else. No deployment
-//! needs a relay service: any of its nodes that others can reach can take the role. A dedicated host can also run it
-//! as a service of its own, as the relay server in `sourcenetwork/pinc_relay` does. The example binary is a minimal
-//! host of the second kind.
+//! needs a relay binary: any of its nodes that others can reach can take the role. A dedicated host can also run a
+//! node whose only job is the relay role, as the relay binary (`sourcenetwork/pinc_relay`) does. The example binary
+//! is a minimal host of the second kind.
 //!
 //! # What it keeps
 //!
-//! The identity is the host's key store. Signed records are handed to a [`Store`] as they are stored and restored from
-//! it when [`Relay::run`] starts (the default [`MemStore`] keeps them in memory, shared between clones). The mailbox
-//! of the state machine is in memory only.
+//! The identity is the host's key store. Signed records and the packets held for sleeping members are handed to a
+//! [`Store`] and restored from it when [`Relay::run`] starts (the default [`MemStore`] keeps them in memory, shared
+//! between clones).
 //!
 //! # What an operator sees
 //!
