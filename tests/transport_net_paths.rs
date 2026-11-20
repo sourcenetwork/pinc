@@ -185,3 +185,24 @@ fn a_session_followed_onto_an_unanswered_direct_path_leaves_it_at_the_third_prob
         assert_eq!(net.a.conn.stats().ptos, 3, "the session left the unanswered path late");
     });
 }
+
+/// The endpoint names the address of a path it lost again (the interface came back): the held slot starts over, is
+/// challenged and validated, and carries the session.
+#[test]
+fn a_lost_path_added_again_carries_the_session() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let mut net = connected(&mut w, &mut sa, &mut sb, Link::new(40, Params::new(10 * MS)));
+        net.a.conn.path_lost(PathId(1)).unwrap();
+        assert!(!net.a.conn.path_validated(PathId(1)), "a lost path is not validated");
+        let now = net.now;
+        net.a.with_env(now, |c, env| c.add_path(env, PathId(1), PathInfo::default())).unwrap();
+        assert!(
+            net.run(net.now + 5 * SEC, |n| n.a.conn.path_validated(PathId(1))),
+            "the path the endpoint added again never validated"
+        );
+        let data = pattern(20_000, 41);
+        bulk(&mut net, &data, 30 * SEC);
+    });
+}
