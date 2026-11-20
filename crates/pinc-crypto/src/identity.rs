@@ -12,7 +12,7 @@
 //! [`Keypair::from_seed`] for ML-DSA-65 and the hybrid builds the 64 KiB expanded key in the caller's frame before
 //! the box copies it out, in every build, so those two algorithms need several hundred KiB of stack to construct a
 //! key pair (measured on aarch64: 512 KiB with this crate optimised, 256 KiB overflowing; 1 MiB at opt-level 0);
-//! Ed25519 and P-256 construct on 8 KiB there. On x86_64 at opt-level 0 an Ed25519 key pair needs between 64 and
+//! Ed25519 and P-256 construct on 8 KiB there. On `x86_64` at opt-level 0 an Ed25519 key pair needs between 64 and
 //! 96 KiB: the curve arithmetic's vector code reserves 44 KiB in one frame of an unoptimised build.
 
 #[cfg(feature = "alloc")]
@@ -270,7 +270,7 @@ fn hybrid_inner(seed: &[u8]) -> Result<Inner, CryptoError> {
 /// algorithm. Storage is not construction: `from_seed` for ML-DSA-65 and the hybrid still builds the 64 KiB
 /// expanded key in the caller's frame before the box copies it out, so those two algorithms need several hundred
 /// KiB of stack to construct a key pair; an Ed25519 or P-256 key pair constructs on 8 KiB on aarch64, and an Ed25519
-/// one on 96 KiB on x86_64 at opt-level 0 (the module docs say where the rest goes).
+/// one on 96 KiB on `x86_64` at opt-level 0 (the module docs say where the rest goes).
 pub struct Keypair(Inner);
 
 impl core::fmt::Debug for Keypair {
@@ -341,7 +341,7 @@ impl Keypair {
     /// Construction cost is not storage cost: for ML-DSA-65 and the hybrid this builds the 64 KiB expanded key in
     /// the caller's frame before the box copies it out (the crate holds no allocation-free expansion, since
     /// `forbid(unsafe_code)` bars writing into the box in place), so those two algorithms need several hundred KiB
-    /// of stack here; Ed25519 and P-256 construct on 8 KiB on aarch64, Ed25519 on 96 KiB on x86_64 at opt-level 0.
+    /// of stack here; Ed25519 and P-256 construct on 8 KiB on aarch64, Ed25519 on 96 KiB on `x86_64` at opt-level 0.
     /// The returned key pair is small under `alloc` for every algorithm.
     ///
     /// # Errors

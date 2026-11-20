@@ -38,7 +38,7 @@ fn a_relay_builds_on_a_two_mebibyte_stack_in_an_unoptimised_build() {
 
 /// The identity builds on a 128 KiB stack: an Ed25519 key pair costs tens of bytes and is no longer moved 64 KiB by
 /// value (#706; before, the floor measured in #681 was 512 KiB in this profile, so this aborted with a stack
-/// overflow). What is left is the curve arithmetic: on x86_64 its vector code reserves 44 KiB in one frame at
+/// overflow). What is left is the curve arithmetic: on `x86_64` its vector code reserves 44 KiB in one frame at
 /// opt-level 0, so 64 KiB overflows there and 96 KiB is enough (64 KiB is enough on aarch64).
 #[test]
 fn an_identity_builds_on_a_128_kib_stack_in_an_unoptimised_build() {
