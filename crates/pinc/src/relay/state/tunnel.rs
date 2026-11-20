@@ -7,11 +7,14 @@
 //! the embedder calls [`Core::hub_pump`].
 //!
 //! Invariants: the queue and its byte arena never pass `WORK_BACKLOG` items, a packet past it is counted as dropped;
-//! the table of slots that name members in relay path addresses never grows past `SLOTS` and reuses the oldest first;
-//! a session is a member's only after the embedder reported it; the members never pass the limit `hub_sessions`; the
-//! member a datagram came from is found through the endpoint's table of sessions by address, not by a walk.
+//! the table of slots that name members in relay path addresses never grows past `SLOTS`, never takes a slot from a
+//! member, and gives a reused slot a new generation, carried in the address's port, so an address the endpoint still
+//! holds for the old holder names nobody; a session is a member's only after the embedder reported it; the members
+//! never pass the limit `hub_sessions`; the member a datagram came from is found through the endpoint's table of
+//! sessions by address, not by a walk, and a node's slot and sessions by ordered maps, not by a scan. The tables are
+//! bounded: `slots` and `index` by `SLOTS`, `members` and `by_node` by `hub_sessions` (at most `CARRIERS`).
 
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
 use core::net::SocketAddr;
 
@@ -20,7 +23,7 @@ use pinc_crypto::NodeId;
 use pinc_keystore::KeyStore;
 use pinc_node::Ep;
 
-use super::Core;
+use super::{Core, node_key};
 use crate::relay::access::Access;
 
 /// The relay path addresses name a member by a 16-bit slot; this many are kept.
@@ -41,7 +44,12 @@ enum Work {
 pub(super) struct Tunnel {
     local: SocketAddr,
     members: BTreeMap<SessionId, NodeId>,
-    slots: Vec<NodeId>,
+    /// The members' sessions by node, so a node's sessions are one range.
+    by_node: BTreeSet<([u8; 33], SessionId)>,
+    /// Who holds each slot, and the slot's generation.
+    slots: Vec<(NodeId, u16)>,
+    /// The slot each holder has.
+    index: BTreeMap<[u8; 33], u16>,
     next_slot: usize,
     work: Vec<Work>,
     arena: Vec<u8>,
@@ -52,7 +60,9 @@ impl Tunnel {
         Self {
             local,
             members: BTreeMap::new(),
+            by_node: BTreeSet::new(),
             slots: Vec::new(),
+            index: BTreeMap::new(),
             next_slot: 0,
             work: Vec::new(),
             arena: Vec::new(),
@@ -63,21 +73,89 @@ impl Tunnel {
         self.members.len()
     }
 
+    /// Whether any session of the node in slot `i` is a member's.
+    fn held(&self, i: usize) -> bool {
+        self.slots.get(i).is_some_and(|(n, _)| {
+            let key = node_key(n);
+            self.by_node
+                .range((key, SessionId(0))..)
+                .next()
+                .is_some_and(|(k, _)| *k == key)
+        })
+    }
+
+    /// The slot of `node`, taking a free one or, when the table is full, the next that no member holds.
     fn slot_of(&mut self, node: &NodeId) -> u16 {
-        let i = self.slots.iter().position(|x| x == node).unwrap_or_else(|| {
-            if self.slots.len() < SLOTS {
-                self.slots.push(*node);
-                self.slots.len() - 1
-            } else {
-                let i = self.next_slot;
-                self.next_slot = (i + 1) % SLOTS;
-                if let Some(s) = self.slots.get_mut(i) {
-                    *s = *node;
+        let key = node_key(node);
+        if let Some(&slot) = self.index.get(&key) {
+            return slot;
+        }
+        let i = if self.slots.len() < SLOTS {
+            self.slots.push((*node, 0));
+            self.slots.len() - 1
+        } else {
+            // at most `hub_sessions` skips: the members are fewer than the slots
+            let mut i = self.next_slot;
+            for _ in 0..SLOTS {
+                if !self.held(i) {
+                    break;
                 }
-                i
+                i = (i + 1) % SLOTS;
             }
-        });
-        u16::try_from(i).unwrap_or(0)
+            self.next_slot = (i + 1) % SLOTS;
+            if let Some((holder, generation)) = self.slots.get_mut(i) {
+                self.index.remove(&node_key(holder));
+                *holder = *node;
+                *generation = generation.wrapping_add(1);
+            }
+            i
+        };
+        let slot = u16::try_from(i).unwrap_or(0);
+        self.index.insert(key, slot);
+        slot
+    }
+
+    /// The relay path address that names `node`: its slot, and the slot's generation in the port.
+    fn addr_of(&mut self, node: &NodeId) -> SocketAddr {
+        let slot = self.slot_of(node);
+        let mut addr = relay_addr(false, 0, slot);
+        addr.set_port(self.slots.get(usize::from(slot)).map_or(0, |s| s.1));
+        addr
+    }
+
+    /// The node a relay path address names now: nobody if its slot went to another node since.
+    fn resolve(&self, addr: &SocketAddr) -> Option<NodeId> {
+        let (_, slot) = relay_parts(addr)?;
+        self.slots
+            .get(usize::from(slot))
+            .filter(|(_, generation)| *generation == addr.port())
+            .map(|(n, _)| *n)
+    }
+
+    fn add_member(&mut self, session: SessionId, node: NodeId) {
+        self.members.insert(session, node);
+        self.by_node.insert((node_key(&node), session));
+    }
+
+    fn remove_member(&mut self, session: SessionId) -> Option<NodeId> {
+        let node = self.members.remove(&session)?;
+        self.by_node.remove(&(node_key(&node), session));
+        Some(node)
+    }
+
+    /// The sessions of `node`, lowest first.
+    fn sessions_of<'a>(&'a self, node: &NodeId) -> impl Iterator<Item = SessionId> + 'a {
+        let key = node_key(node);
+        self.by_node
+            .range((key, SessionId(0))..)
+            .take_while(move |(k, _)| *k == key)
+            .map(|(_, s)| *s)
+    }
+
+    /// The direct address of `node`'s validated session, any of its sessions: where a datagram for the member goes,
+    /// and whether the relay may tunnel to it.
+    fn remote<E: Ep>(&self, ep: &E, node: &NodeId) -> Option<SocketAddr> {
+        self.sessions_of(node).find_map(|sid| session_remote(ep, sid))
     }
 
     fn push(&mut self, w: impl FnOnce(usize, usize) -> Work, bytes: &[u8]) -> bool {
@@ -98,15 +176,6 @@ fn session_remote<E: Ep>(ep: &E, sid: SessionId) -> Option<SocketAddr> {
         .flatten()
         .map(|(_, r)| r)
         .filter(|r| !pinc_core::is_relay_addr(r))
-}
-
-/// The direct address of `node`'s validated session, any of its sessions: where a datagram for the member goes, and
-/// whether the relay may tunnel to it.
-fn node_remote<E: Ep>(ep: &E, members: &BTreeMap<SessionId, NodeId>, node: &NodeId) -> Option<SocketAddr> {
-    members
-        .iter()
-        .filter(|(_, n)| *n == node)
-        .find_map(|(sid, _)| session_remote(ep, *sid))
 }
 
 impl<S, K: KeyStore, A: Access> Core<S, K, A> {
@@ -165,21 +234,20 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
         for w in work {
             match w {
                 Work::Local(from, s, e) => {
-                    let slot = t.slot_of(&from);
+                    let addr = t.addr_of(&from);
                     if let Some(p) = t.arena.get_mut(s..e) {
-                        ep.handle_datagram(now, t.local, relay_addr(false, 0, slot), p);
+                        ep.handle_datagram(now, t.local, addr, p);
                     }
                 }
                 Work::Pulse(node) => {
-                    if let Some((session, _)) = t.members.iter().find(|(_, n)| **n == node) {
-                        let session = *session;
-                        if let Ok(r) = ep.command(now, Command::Pulse { session, sent: true }) {
-                            out.extend(r.events.iter().copied());
-                        }
+                    if let Some(session) = t.sessions_of(&node).next()
+                        && let Ok(r) = ep.command(now, Command::Pulse { session, sent: true })
+                    {
+                        out.extend(r.events.iter().copied());
                     }
                 }
                 Work::Udp(node, s, e) => {
-                    let addr = node_remote(ep, &t.members, &node);
+                    let addr = t.remote(&*ep, &node);
                     if let (Some(a), Some(b)) = (addr, t.arena.get(s..e)) {
                         self.queue_udp(a, b);
                     } else {
@@ -212,7 +280,7 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
                     self.counters.hub_dropped += 1;
                     return;
                 }
-                t.members.insert(session, node);
+                t.add_member(session, node);
                 if let Ok(r) = ep.command(
                     now,
                     Command::SetRole {
@@ -224,7 +292,7 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
                 }
             }
             EpEvent::Closed { session, .. } => {
-                if let Some(node) = t.members.remove(&session) {
+                if let Some(node) = t.remove_member(session) {
                     self.sm.udp_gone(&node);
                     if !t.members.values().any(|n| *n == node) {
                         self.fx.set_direct(&node, false);
@@ -233,8 +301,7 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
             }
             EpEvent::PathChanged { session, .. } => {
                 if let Some(node) = t.members.get(&session).copied() {
-                    self.fx
-                        .set_direct(&node, node_remote(&*ep, &t.members, &node).is_some());
+                    self.fx.set_direct(&node, t.remote(&*ep, &node).is_some());
                 }
             }
             EpEvent::PeerAwake { session } => {
@@ -251,10 +318,10 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
     /// A datagram the endpoint wants to send to `remote`: whether it was a relay path address, which names a member
     /// (the datagram then goes to the member's carrier, or is dropped if the slot names nobody).
     pub(crate) fn tunnel(&mut self, now: u64, remote: &SocketAddr, bytes: &[u8]) -> bool {
-        let Some((_, slot)) = relay_parts(remote) else {
+        if relay_parts(remote).is_none() {
             return false;
-        };
-        let node = self.hub.as_ref().and_then(|t| t.slots.get(usize::from(slot)).copied());
+        }
+        let node = self.hub.as_ref().and_then(|t| t.resolve(remote));
         match node {
             Some(n) => {
                 // vertexia: a refused packet is counted and traced by the machine
@@ -356,6 +423,44 @@ mod tests {
         );
         assert_eq!(core.sm.mailbox_pending(&m).0, 0);
         assert_eq!(core.counters.refused, refused);
+    }
+
+    fn nid(i: u16) -> NodeId {
+        let mut bytes = [0u8; 32];
+        bytes[..2].copy_from_slice(&i.to_be_bytes());
+        NodeId {
+            alg: IdentityAlg::Ed25519,
+            bytes,
+        }
+    }
+
+    fn tunnel() -> Tunnel {
+        Tunnel::new("192.0.2.1:4000".parse().unwrap())
+    }
+
+    /// A member's relay path address stays the member's when the table of slots is full and wraps.
+    #[test]
+    fn a_full_table_of_slots_never_reuses_a_members_slot() {
+        let mut t = tunnel();
+        let a = nid(0);
+        let a_addr = t.addr_of(&a);
+        t.add_member(SessionId(1), a);
+        for i in 1..=u16::try_from(SLOTS).unwrap() {
+            t.addr_of(&nid(i));
+        }
+        assert_eq!(t.resolve(&a_addr), Some(a), "the member's address names another node");
+        assert_eq!(t.addr_of(&a), a_addr);
+    }
+
+    /// A slot taken from a node that is not a member names nobody under the address it had before.
+    #[test]
+    fn a_reused_slot_does_not_answer_to_its_old_address() {
+        let mut t = tunnel();
+        let first = t.addr_of(&nid(0));
+        for i in 1..=u16::try_from(SLOTS).unwrap() {
+            t.addr_of(&nid(i));
+        }
+        assert_eq!(t.resolve(&first), None, "the old address names the new holder");
     }
 
     /// A pulse that does not fit the queue is counted as dropped.
