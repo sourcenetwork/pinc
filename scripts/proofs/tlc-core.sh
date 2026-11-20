@@ -18,5 +18,7 @@ par run_tlc settle Settle Settle
 par run_tlc settle_watch Settle Settle_watch
 par run_tlc settle_held Settle Settle_held
 par run_tlc tx Tx Tx
+par run_tlc tx_flag Tx Tx_flag
 par witness_tlc tx_w_stash Tx Tx_w_stash NoStash
 par witness_tlc tx_w_full Tx Tx_w_full NotFull
+par witness_tlc tx_w_late Tx Tx_w_late ClassOK

@@ -20,12 +20,13 @@
 (* session alone in its queue in place only when its class still names    *)
 (* that queue; a lone session whose class changed goes to the queue of    *)
 (* its class (before C2 it stayed, and the trace check failed on such a   *)
-(* call). Requeue is a session waiting in the queue of another class: it  *)
-(* moves to the back of the queue of its class. An open queued in a       *)
-(* waiting broadcast session promotes it at once (dirty_promote, fix C2); *)
-(* mark_dirty leaves a waiting session where it is, and a session that    *)
-(* became broadcast moves at its next turn (Tx.tla changes a class only   *)
-(* by an open and by a send, so that case is not reached there).          *)
+(* call). mark_dirty puts a session that is not waiting at the back of    *)
+(* the queue its class names (Meta::send_queue) and leaves a waiting one  *)
+(* where it is. Promote is dirty_promote (fix C2): an open queued in a     *)
+(* waiting broadcast session, or its broadcast flag cleared, moves it from *)
+(* the broadcast queue to the back of the ordinary one at once; a session *)
+(* whose flag is set while it waits in the ordinary queue moves at its    *)
+(* next turn (Rotate).                                                     *)
 (***************************************************************************)
 EXTENDS Integers, Sequences
 
@@ -51,9 +52,10 @@ Cls(gossip, ctrl) == IF gossip /\ ~ctrl THEN 2 ELSE 1
 (* dirty_rotate as the module doc states it: the session served goes to the back of the queue of class c *)
 Rotate(qs, qi, c) == Enq(Pop(qs, qi), Head(qs[qi]), c)
 
-(* the module doc's reading of a session waiting in the queue of another class *)
 Remove(qs, i) == <<SelectSeq(qs[1], LAMBDA x : x # i), SelectSeq(qs[2], LAMBDA x : x # i)>>
-Requeue(qs, i, c) == IF Waits(qs, i) /\ ~InQ(qs[c], i) THEN Enq(Remove(qs, i), i, c) ELSE Enq(qs, i, c)
+(* dirty_promote: a session of class c waiting in the broadcast queue goes to the back of the ordinary one when c is
+   ordinary; anything else is left as it is *)
+Promote(qs, i, c) == IF c = 1 /\ InQ(qs[2], i) THEN Enq(Remove(qs, i), i, 1) ELSE qs
 
 (* len.div_ceil(seg.max(1)) *)
 Segs(len, seg) == IF seg <= 1 THEN len ELSE (len + seg - 1) \div seg
