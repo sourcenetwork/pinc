@@ -33,6 +33,9 @@ use pinc_transport::stream::NoSource;
 /// One `TraceEvent::Probe`: the step, the child slot, the generation now, the one the probe names, the bits.
 type P = (u64, u64, u64, u64, u64);
 
+/// A resolution waiting for the commands applied after it: the dial, the event, the facts, closed, first, applied.
+type Pending<'a> = (u64, &'a str, String, bool, usize, Vec<&'a str>);
+
 const FIRST: [&str; 4] = ["none", "caller", "learned", "wait"];
 const CMD: [&str; 5] = ["", "paths", "resend", "hold", "unhold"];
 
@@ -104,8 +107,7 @@ impl Rec {
     /// Write the lines of the steps a resolution made: the settle gate, a ride, a lapse (with the commands applied
     /// after it), a failed ride and an end.
     fn flush(&mut self, batch: &[P]) {
-        // (w, event, facts, closed, first, applied)
-        let mut pending: Vec<(u64, &str, String, bool, usize, Vec<&str>)> = Vec::new();
+        let mut pending: Vec<Pending> = Vec::new();
         for p in batch {
             let w = self.w_of(p.1);
             match p.0 {
