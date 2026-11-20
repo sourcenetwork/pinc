@@ -357,6 +357,8 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `HeaderProt` | FirstSet 0..255 -> 0..31 and 224..255 (every pattern of the 5 bits the mask can touch, under the 3 high bits all clear and all set) |
 | `HeaderProt_pn` | field and mask bytes Smp {0,165,255} -> {0,165} |
 | `Heap` | N 5 -> 4, T 2 -> 1 |
+| `Heap_full` | N 5 -> 4 |
+| `Heap_hi` | N 4 -> 3 |
 | `Held` | ring CAP 3 -> 2, pushes PMAX 9 -> 6 |
 | `HubCodec_snap` | Snaps -> SnapsQuick: snapshot entries up to 3 -> 2 |
 | `HubCodec_snapn` | MutPos -> MutPosQuick, CutPos -> CutPosQuick (entry boundaries mutated and cut: all 64 or 65 entries -> the first 3 and the last 3) |
