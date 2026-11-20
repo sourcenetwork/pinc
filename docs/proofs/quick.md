@@ -97,6 +97,8 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `BroadcastSubsDelta_nogap` | Hinted {1, 2} -> {1}, MaxLives 2 -> 1 |
 | `BroadcastSubsDelta_nohint` | MaxSteps 8 -> 6 |
 | `BroadcastSubsDelta_three` | MaxSteps 8 -> 4 |
+| `BroadcastSystem` | MaxFlips 3 -> 2 |
+| `BroadcastSystem_fb` | MaxFlips 3 -> 2 |
 | `BroadcastSystem_live` | MaxFlips 3 -> 2 |
 | `BroadcastWire` | AllBytes -> AllBytesQuick: the message id byte held at 0 past the first byte; MaxLen 10 as deep (a head with a public key, tag 1, parses) |
 | `BuilderBytes` | Seeds -> SeedsQuick: group sizes {1, 2, 4} -> {1, 2}, lengths up to 4 groups + 1 -> 3 groups + 1, KiB groups {1024, 2048} -> {1024}, arith j 0..54 -> {0, 1, 32, 54} |
