@@ -364,7 +364,7 @@ pub struct Connectivity<P: Provider, const R: usize, const PEERS: usize> {
     pub(super) io: [Option<Io>; IO_QUEUE],
     pub(super) notices: [Option<Notice>; NOTICES],
     pub(super) duty: Duty,
-    pub(super) next_publish: u64,
+    pub(super) next_publish: Option<u64>,
     pub(super) next_probe: u64,
     pub(super) scid: u64,
     pub(super) sess: [Option<super::drive::Sess>; SESSIONS],
@@ -453,7 +453,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
             io: [None; IO_QUEUE],
             notices: [None; NOTICES],
             duty: Duty::new(cfg.start),
-            next_publish: 0,
+            next_publish: None,
             next_probe: cfg.start,
             scid: seed,
             sess: [None; SESSIONS],
@@ -679,7 +679,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
         {
             self.class = Some(c);
             self.notice(Notice::Class(c));
-            self.next_publish = now;
+            self.next_publish = Some(now);
         }
     }
 
@@ -804,7 +804,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
                     self.act_pub(now, h, a);
                 }
             }
-            self.next_publish = now;
+            self.next_publish = Some(now);
         }
     }
 

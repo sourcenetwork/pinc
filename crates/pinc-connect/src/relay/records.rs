@@ -12,6 +12,7 @@
 //! signature itself ([`crate::record::Record::parse_verified`]), so a relay is not trusted to vouch for a record.
 
 use pinc_crypto::NodeId;
+use pinc_transport::recovery::deadline_after;
 
 use super::table::Table;
 use super::{Effect, RecordOrigin, Reject, Relay, Sink, Trace, rule};
@@ -179,15 +180,15 @@ impl<const C: usize, const R: usize, const MN: usize, const MB: usize> Relay<C, 
         let me = self.cfg.me;
         self.store(now, bytes, RecordOrigin::Own, Some(&me), sink)?;
         self.replicate(bytes, sink);
-        self.next_publish = now.saturating_add(rule::RECORD_REPUBLISH_NS);
+        self.next_publish = deadline_after(now, rule::RECORD_REPUBLISH_NS);
         Ok(())
     }
 
     pub(crate) fn republish_due<S: Sink>(&mut self, now: u64, sink: &mut S) {
-        if self.next_publish == 0 || now < self.next_publish {
+        if self.next_publish.is_none_or(|t| now < t) {
             return;
         }
-        self.next_publish = now.saturating_add(rule::RECORD_REPUBLISH_NS);
+        self.next_publish = deadline_after(now, rule::RECORD_REPUBLISH_NS);
         let me = self.cfg.me;
         let Some(s) = self.records.table.get_mut(&me) else {
             return;

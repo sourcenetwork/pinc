@@ -447,7 +447,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
             return;
         };
         self.notice(Notice::Home(h));
-        self.next_publish = now;
+        self.next_publish = Some(now);
         let ctx = self.ctx(h);
         let act = self
             .rly
@@ -551,7 +551,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
             self.drain_held(now, relay);
         }
         if self.net.home() == Some(relay) {
-            self.next_publish = now;
+            self.next_publish = Some(now);
         }
     }
 

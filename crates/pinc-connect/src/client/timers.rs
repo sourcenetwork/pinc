@@ -26,7 +26,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
         for d in [
             self.lookups.next_deadline(),
             // A record due while the home carrier is not open waits for the carrier: its opening re-arms the time.
-            Some(self.next_publish).filter(|p| *p != 0 && *p != u64::MAX && self.can_publish()),
+            self.next_publish.filter(|_| self.can_publish()),
             self.beacons_on.then(|| self.duty.deadline()).flatten(),
             self.close_deadline(),
             self.session_deadline(),
@@ -138,17 +138,13 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
     /// Ask for the signed record when it is due (the class or home changed, the carrier opened, or 1800 s passed)
     /// and the home carrier is open.
     fn publish(&mut self, now: u64) {
-        if self.next_publish == 0
-            || self.next_publish == u64::MAX
-            || now < self.next_publish
-            || self.sign.record_wanted()
-        {
+        if self.next_publish.is_none_or(|t| now < t) || self.sign.record_wanted() {
             return;
         }
         if self.can_publish() {
             self.sign.want_record();
             // Disarmed until the signature is answered.
-            self.next_publish = u64::MAX;
+            self.next_publish = None;
         }
     }
 

@@ -17,6 +17,7 @@ use core::net::SocketAddr;
 
 use pinc_crypto::Provider;
 use pinc_security::{KeyRequest, KeyResponse};
+use pinc_transport::recovery::deadline_after;
 
 use super::conn::{Connectivity, Notice};
 use crate::carrier::Frame;
@@ -129,7 +130,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
             self.notice(Notice::SignFailed);
             // The work is tried again at its next due time; a failed record waits a retry period.
             if job.kind == Kind::Record {
-                self.next_publish = now.saturating_add(super::netcheck::HOME_RETRY_NS);
+                self.next_publish = deadline_after(now, super::netcheck::HOME_RETRY_NS);
             }
         }
         self.start_jobs(now);
@@ -146,10 +147,10 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
                     record: job.buf.get(..len).unwrap_or_default(),
                 };
                 if self.frame_to(now, job.relay, &frame) {
-                    self.next_publish = now.saturating_add(rule::RECORD_REPUBLISH_NS);
+                    self.next_publish = deadline_after(now, rule::RECORD_REPUBLISH_NS);
                 } else {
                     // The carrier went away meanwhile: publish again when it opens.
-                    self.next_publish = now;
+                    self.next_publish = Some(now);
                 }
                 true
             }
@@ -207,7 +208,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
             self.sign.record = false;
             match self.record_job(wall_ms) {
                 Some(job) => self.sign.job = Some(job),
-                None => self.next_publish = now.saturating_add(super::netcheck::HOME_RETRY_NS),
+                None => self.next_publish = deadline_after(now, super::netcheck::HOME_RETRY_NS),
             }
             return;
         }

@@ -124,7 +124,18 @@ impl Rig {
     }
 
     /// Address discovery, the home relay and the carrier handshake, up to an open carrier. Returns the time after.
-    pub fn bring_up<C: Custody>(&mut self, custody: &mut C, mut now: u64, answered: &mut usize) -> u64 {
+    pub fn bring_up<C: Custody>(&mut self, custody: &mut C, now: u64, answered: &mut usize) -> u64 {
+        self.bring_up_after(custody, now, SEC, answered)
+    }
+
+    /// As [`Rig::bring_up`], with `step` between the address discovery and the carrier (0 keeps every call at `now`).
+    pub fn bring_up_after<C: Custody>(
+        &mut self,
+        custody: &mut C,
+        mut now: u64,
+        step: u64,
+        answered: &mut usize,
+    ) -> u64 {
         let wall = |now: u64| now / 1_000_000;
         let mut env = Env {
             provider: &Software,
@@ -145,7 +156,7 @@ impl Rig {
             .expect("the relay answers");
         assert!(self.conn.handle_udp(now, self.udp, &reply));
         assert_eq!(self.conn.home(), Some(0));
-        now += SEC;
+        now += step;
         let mut env = Env {
             provider: &Software,
             now,

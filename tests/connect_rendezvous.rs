@@ -235,6 +235,30 @@ fn the_own_record_is_republished_every_1800_seconds() {
 }
 
 #[test]
+fn an_own_record_set_at_the_clock_start_or_limit_is_republished_on_time_or_never() {
+    let mut fx = Fx::new();
+    let p1 = nid(0x91);
+    fx.r.add_peer(p1);
+    let rec = record_bytes(&fx.kp, fx.me, 1);
+    fx.r.set_own_record(0, &rec, &mut fx.s).unwrap();
+    fx.fx();
+    fx.r.handle_timeout(rule::RECORD_REPUBLISH_NS, &mut fx.s);
+    assert_eq!(fx.fx(), [Rec::Peer(p1, enc(&Frame::Sync { record: &rec }))]);
+    // a record set so late that its republish time is past the clock's last instant is never republished
+    let mut fx = Fx::new();
+    fx.r.add_peer(p1);
+    fx.r.set_own_record(u64::MAX - 1, &rec, &mut fx.s).unwrap();
+    fx.fx();
+    for _ in 0..2 {
+        fx.r.handle_timeout(u64::MAX, &mut fx.s);
+        assert!(
+            !fx.fx().iter().any(|r| matches!(r, Rec::Peer(..))),
+            "a record republished at the clock's last instant"
+        );
+    }
+}
+
+#[test]
 fn a_record_that_is_not_refreshed_expires() {
     let mut fx = Fx::new();
     let kp = ed(0x61);

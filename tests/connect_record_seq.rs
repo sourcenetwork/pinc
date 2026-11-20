@@ -110,3 +110,21 @@ fn a_record_signed_again_within_a_millisecond_or_after_the_clock_was_set_back_ge
         assert_eq!(requested_seq(&rig), third + 1_001);
     });
 }
+
+#[test]
+fn a_home_carrier_opened_at_clock_zero_asks_for_the_record_at_once() {
+    big_stack(|| {
+        let host = Box::new(Host::new(0x31, "192.168.1.2:4433".parse().unwrap(), 1000 * SEC));
+        let (identity, prekey) = (host.identity, host.prekey_info.clone());
+        let mut keys = Soft(host);
+        let mut rig = Rig::new(&identity, prekey);
+        let mut answered = 0;
+        // Every call is at clock 0: the carrier opens there, so the record is due at 0.
+        let _ = rig.bring_up_after(&mut keys, 0, 0, &mut answered);
+        tick(&mut rig, 0, 0);
+        assert!(
+            rig.conn.sign_request().is_some(),
+            "the record due at clock 0 was never asked for"
+        );
+    });
+}

@@ -354,10 +354,6 @@ impl<const C: usize, const R: usize, const MN: usize, const MB: usize> Relay<C, 
     /// The next time [`Relay::handle_timeout`] has work, or `None` if nothing is scheduled.
     pub fn next_deadline(&self) -> Option<u64> {
         let sweep = self.last_sweep.saturating_add(rule::SWEEP_NS).min(self.next_ping);
-        Some(if self.next_publish == 0 {
-            sweep
-        } else {
-            sweep.min(self.next_publish)
-        })
+        Some(self.next_publish.map_or(sweep, |p| sweep.min(p)))
     }
 }

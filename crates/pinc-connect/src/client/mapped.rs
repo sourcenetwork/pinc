@@ -59,7 +59,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
                 if let Some(c) = self.class {
                     self.notice(Notice::Class(c));
                 }
-                self.next_publish = now;
+                self.next_publish = Some(now);
             }
         }
     }
