@@ -156,7 +156,10 @@ impl Ctl {
             return false;
         }
         slot.pending = false;
-        let _ = refs.push(FrameRef::Control { kind: K_EXT, id: slot.key });
+        let _ = refs.push(FrameRef::Control {
+            kind: K_EXT,
+            id: slot.key,
+        });
         true
     }
 
