@@ -690,7 +690,11 @@ fn start(seed_peers: (NodeId, NodeId)) -> Run {
         run.ep().reset.clear();
         run.deliver(at(0), Event::StreamOpened { session: s, stream: 1 });
     }
-    assert!(run.ep().reset.is_empty(), "the setup's answered streams were refused");
+    assert!(
+        run.ep().reset.is_empty(),
+        "the setup's answered streams were refused: {:?}",
+        run.ep().reset
+    );
     let ep = run.ep();
     ep.closed.clear();
     ep.dials.clear();
