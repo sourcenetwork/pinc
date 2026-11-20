@@ -2,14 +2,13 @@
 
 `proofs/tla/` and `proofs/lean/` hold TLA+ specifications, checked with TLC, and Lean 4 proofs of PINC's state machines
 and pure functions. Both are kept identical to the Rust code by validating traces recorded from the real code against
-each. Proven in full: `pinc-crypto`, `pinc-keystore`, `pinc-values`, `pinc-dtn` (custody, the charged
-store, forwarding, erasure coding, layout, codecs, reception, one-shot encryption and the multi-node scenarios) and the
-relay side of `pinc-connect` with its codecs, carrier link, client rules and the protected carrier's framing, records and
-keys. Of `pinc-wire` the varints are proven, and of `pinc-dag` the verified-range sets, the tree layout, the builder and
-the range verifier (value roots and range proofs); the DAG-CBOR codec, the reader and writer, CIDs, blocks and CAR
-files are tested, not modelled. `pinc-security` (handshake, key schedule, record keys, key roll, credit
-record, amplification budget and padding, ticket stores), `pinc-membership`, `pinc-broadcast` and `pinc-reconcile` are proven except for the
-items under [Being closed](proofs/closing.md). A model that is known to state an older rule than the code is listed in
+each. Proven in full (every non-trivial file has a TLA+ model checked by TLC over stated bounds or a Lean theorem, and a
+trace check or model-based test of the code): `pinc-security`, `pinc-wire`, `pinc-dag`, `pinc-table`, `pinc-portmap`,
+`pinc-reconcile` and `pinc-dtn`. `pinc-crypto`, `pinc-keystore`, `pinc-membership`, `pinc-connect` and `pinc-transport`
+are proven except for the items under [Being closed](proofs/closing.md). `pinc-core`, `pinc-node`, `pinc-values`,
+`pinc-broadcast` and the facade `pinc` are proven except for those items and the checks that fail or have not finished,
+listed in [#748](https://github.com/sourcenetwork/pinc/issues/748). The models of the DAG-CBOR codec and of blocks, CAR
+files and CIDs run only in the deep profile. A model that is known to state an older rule than the code is listed in
 [#601](https://github.com/sourcenetwork/pinc/issues/601) until it is corrected: a green check of such a model says
 nothing about the rule that changed.
 Run everything with `just proofs` (the quick profile) or `just proofs-deep` (the full bounds).

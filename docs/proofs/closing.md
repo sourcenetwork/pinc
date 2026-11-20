@@ -1,15 +1,16 @@
 # Proofs: being closed
 
 These items are still open; they are listed so nothing is hidden:
-- `pinc-wire` and `pinc-dag`: the canonical DAG-CBOR codec (`pinc-wire`'s `cbor`, with the reader and the writer) and
-  CIDs, blocks and CAR files (`pinc-dag`'s `cid`, `block`, `car`) have no model; they are tested, not modelled
-  ([#606](https://github.com/sourcenetwork/pinc/issues/606)).
+- `pinc-wire` and `pinc-dag`: the models of the canonical DAG-CBOR codec (with the reader and the writer) and of
+  CIDs, blocks and CAR files run only in the deep profile (`just proofs-deep`).
 - `pinc-crypto` and `pinc-keystore`: the labels of `pinc-broadcast` are private constants, so they are not in the label registry or its trace; the zeroization statement covers the named buffers of the crate, not the copies a dependency makes of a scalar passed by value; the TPM store is traced against a software TPM only, and a refused flush after a failed `ReadPublic` in `generate` leaks the handle without an error; the TPM refuses an object auth value longer than the digest of its name algorithm (32 bytes), which the client reports as the TPM's code. The TPM client's resend of a command answered `TPM_RC_RETRY`, `TPM_RC_YIELDED` or `TPM_RC_TESTING` is checked
   at the trace level (the same bytes sent again, at most 8 sends; the store's programs are checked on the commands
   that took effect); the typed error after the last resend is covered by unit tests, not by the TPM model.
 - The TLC models are bounded as listed (the Lean theorems are not); the trace checks cover the recorded runs only;
-  the model-based tests cover the bounded state graphs of their configs only, and so far three components.
-- The proofs of `pinc-core` are being written. Until they are here, that crate is tested, not proven.
+  the model-based tests cover the bounded state graphs of their configs only, in the eleven tests of `scripts/proofs/mbt.sh`.
+- `pinc-core`: the model-based test of the endpoint (`MbtEndpoint`) covers the endpoint's use of its tables; it fails
+  on the config with a stalled event queue ([#748](https://github.com/sourcenetwork/pinc/issues/748)). The text below
+  was written before that model and is being brought in line with it (the same issue).
   The half-open cap and the life of an unauthenticated session are proved (see "half-open cap" above: at most 256
   counted sessions, a refused first flight changes no slot, no arrival frees a session, no first flight makes a
   fifth holder of an id, a session leaves the count only when it is established or freed, and is gone at the first timer call at or
@@ -131,7 +132,7 @@ These items are still open; they are listed so nothing is hidden:
   only for a ghost of that ring, and no other event (`ackRing_events`, `ackRange1_events`, `ackRanges_events`).
 - Of the stream table, the send half (send credit, the retransmission queue with its cut to the acknowledged
   prefix, the final size, source-backed streams) is modelled by `StreamSend.tla`: see its rows under
-  [Properties](properties.md), transport. Urgency order and datagrams are not modelled.
+  [Properties](properties.md), transport. Urgency order is not modelled.
 - The stream-table TLC configs are kept to about a minute each on the check host, which cut them to: `Streams`
   (offsets up to 3 of a 8-byte cap, was 6 of 12), `Streams_caps` (two slots, ids 0, 4 and 8, frames at offsets up to 2,
   was 3, a clock that does not advance), `Streams_ext` (offsets up to 2 of a 6-byte cap, was 4 of 12, other users of
@@ -192,12 +193,9 @@ These items are still open; they are listed so nothing is hidden:
   one candidate, and that taking a peer from the pending table clears its entry. The candidates of a flight
   (`candidates_for`, `flight_relays`), the source address of a tunnel packet and the freshness of a found record are not
   modelled.
-- `pinc-connect`, the protected carrier: four places where the code does not do what `session.rs` documents, found
+- `pinc-connect`, the protected carrier: three places where the code does not do what `session.rs` documents, found
   while modelling it (the models follow the code; nothing is delivered, opened or sealed after the end in any of
-  them). `CarrierError::is_fatal` is documented as whether the carrier ended and says no for `OutputFull`, but a poll
-  or key answer that returns `OutputFull` ends the carrier (a listener whose host polls eleven copies of the dialer's
-  first message without transmitting: the eleventh returns `OutputFull`, `is_fatal()` is false and `is_ended()` is
-  true). The module says that after the end every later call returns `Closed`, but `answer_soft` returns
+  them). The module says that after the end every later call returns `Closed`, but `answer_soft` returns
   `Handshake(UnexpectedKeyResponse)`, `seal_bytes` checks the length first (`UnitSize`, `NoRoom`) and `seal` the encoder
   and the room (`Frame`, `NoRoom`); `transmit` still hands out handshake bytes queued before the end. `key_response`
   is documented to fail with `Handshake` when no request is outstanding, but on an open carrier it returns `Closed` and
