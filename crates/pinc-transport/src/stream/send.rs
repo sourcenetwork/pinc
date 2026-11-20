@@ -29,6 +29,14 @@ enum Reset {
     Acked,
 }
 
+/// An empty frame that shows the receiver this stream exists, so it counts every stream opened below it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Announce {
+    No,
+    Due,
+    Sent,
+}
+
 #[derive(Debug)]
 pub(super) struct Send<S, const C: usize> {
     pub(super) open: bool,
@@ -44,6 +52,7 @@ pub(super) struct Send<S, const C: usize> {
     final_size: Option<u64>,
     fin: Fin,
     reset: Reset,
+    announce: Announce,
     /// A write was cut short by the connection's send buffer cap and the application has not been woken since.
     pub(super) cap_cut: bool,
 }
@@ -63,6 +72,7 @@ impl<S: StreamSource, const C: usize> Send<S, C> {
         final_size: None,
         fin: Fin::None,
         reset: Reset::None,
+        announce: Announce::No,
         cap_cut: false,
     };
 
@@ -96,6 +106,16 @@ impl<S: StreamSource, const C: usize> Send<S, C> {
         } else {
             self.written.saturating_sub(self.sent_max)
         }
+    }
+
+    /// Mark the stream for an announce when it is open and nothing of it was sent or queued; returns whether it was
+    /// marked. Once per stream.
+    pub(super) fn announce(&mut self) -> bool {
+        let silent = self.live() && self.sent_max == 0 && self.unsent() == 0 && self.announce == Announce::No;
+        if silent {
+            self.announce = Announce::Due;
+        }
+        silent
     }
 
     pub(super) fn release_all(&mut self, pool: &mut BufferPool<'_>) {
@@ -195,7 +215,10 @@ impl<S: StreamSource, const C: usize> Send<S, C> {
         }
         let fin_only = self.fin == Fin::Pending && self.final_size == Some(self.sent_max);
         let credit = !self.is_source || self.limit > self.sent_max;
-        (!self.lost.is_empty() || fin_only, self.unsent() > 0 && credit)
+        (
+            !self.lost.is_empty() || fin_only,
+            (self.unsent() > 0 && credit) || self.announce == Announce::Due,
+        )
     }
 
     pub(super) const fn control_pending(&self) -> bool {
@@ -344,6 +367,12 @@ impl<S: StreamSource, const C: usize> Send<S, C> {
             }
             return None;
         }
+        if self.announce == Announce::Due {
+            self.announce = Announce::Sent;
+            if self.sent_max == 0 && self.unsent() == 0 {
+                return Some(frame(0, 0, false));
+            }
+        }
         let mut n = self.unsent().min(budget as u64);
         if n == 0 {
             return None;
@@ -411,6 +440,9 @@ impl<S: StreamSource, const C: usize> Send<S, C> {
 
     /// The range was declared lost. Returns how many range-map overflows were absorbed.
     pub(super) fn on_lost(&mut self, offset: u64, len: u64, fin: bool) -> usize {
+        if len == 0 && !fin && self.announce == Announce::Sent && self.sent_max == 0 {
+            self.announce = Announce::Due;
+        }
         self.requeue(offset, len, fin)
     }
 

@@ -157,6 +157,9 @@ conn_impl! {
     /// of that kind would work.
     fn opened(&mut self, bidi: bool) -> Result<StreamId, StreamError> {
         let r = self.streams.open_stream(&self.pool, bidi);
+        if matches!(r, Err(StreamError::StreamLimit)) {
+            self.streams.announce_top();
+        }
         if matches!(r, Err(StreamError::StreamLimit | StreamError::Exhausted)) {
             self.open_wait |= 1 << u8::from(bidi);
         }

@@ -605,6 +605,21 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         Ok(id)
     }
 
+    /// An open was refused for want of credit: show the peer the newest stream of each kind we opened and sent
+    /// nothing on, so it counts every stream below it and can give the credit back. Each stream is shown once.
+    pub fn announce_top(&mut self) {
+        for c in 0..2 {
+            let Some(top) = self.local_opened.get(c).copied().unwrap_or(0).checked_sub(1) else {
+                continue;
+            };
+            let id = (top << 2) | ((c as u64) << 1) | u64::from(!self.is_client);
+            let Some(i) = self.find(id) else { continue };
+            if self.slots.get_mut(i).is_some_and(|s| s.send.announce()) {
+                self.refresh(i);
+            }
+        }
+    }
+
     /// Set the urgency of a stream; a lower number is served first (the default is [`DEFAULT_URGENCY`]).
     ///
     /// # Errors

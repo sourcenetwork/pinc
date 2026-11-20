@@ -3,7 +3,8 @@
 //! opens many silent streams at once is admitted; a stream that ends gives the opener one more while every other one
 //! stays live; the configured window is the one advertised and the one the streams run with; and, on a table, a
 //! window charged to the ledger from its stream's first byte, with streams admitted while a first charge fits; an
-//! opener that opened its whole credit and wrote nothing on the last streams gets every released place back.
+//! opener that opened its whole credit and wrote nothing on the last streams gets every released place back, and shows
+//! the peer its newest silent stream when an open is refused.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -502,4 +503,37 @@ fn an_opener_that_opens_its_whole_credit_without_data_gets_every_released_place_
 #[test]
 fn a_long_lived_stream_does_not_strand_the_credit_of_silent_unidirectional_opens() {
     silent_opens_after_release(false, true);
+}
+
+#[test]
+fn a_refused_open_shows_the_peer_its_newest_silent_stream_of_each_kind_once() {
+    let pool = BufferPool::new_boxed(64);
+    let mut cfg = stream::Config::new(true);
+    cfg.peer = stream::PeerLimits {
+        window: 1 << 20,
+        max_streams: 4,
+    };
+    let mut t = Box::new(Table::new(&cfg, &pool));
+    for bidi in [true, true, true, false] {
+        t.open_stream(&pool, bidi).unwrap();
+    }
+    assert_eq!(t.open_stream(&pool, true), Err(StreamError::StreamLimit));
+    t.announce_top();
+    let drain = |t: &mut Table| -> std::collections::BTreeSet<(u64, u64, usize, bool)> {
+        std::iter::from_fn(|| t.next_stream_frame(1200))
+            .map(|c| (c.id, c.offset, c.len, c.fin))
+            .collect()
+    };
+    assert_eq!(drain(&mut t), [(8, 0, 0, false), (2, 0, 0, false)].into());
+    t.announce_top();
+    assert!(drain(&mut t).is_empty(), "each stream is shown once");
+    t.on_lost(8, 0, 0, false);
+    assert_eq!(
+        drain(&mut t),
+        [(8, 0, 0, false)].into(),
+        "a lost announce is sent again"
+    );
+    let mut pool = pool;
+    t.on_acked(&mut pool, 8, 0, 0, false);
+    assert!(drain(&mut t).is_empty());
 }
