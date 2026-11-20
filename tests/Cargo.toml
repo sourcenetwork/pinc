@@ -1624,6 +1624,10 @@ name = "mbt_soft_prekeys"
 path = "mbt_soft_prekeys.rs"
 
 [[test]]
+name = "mbt_connect_found"
+path = "mbt_connect_found.rs"
+
+[[test]]
 name = "trace_connect_carriers"
 path = "trace_connect_carriers.rs"
 

@@ -19,4 +19,4 @@ mbt_cases MbtFacadeOpen MbtFacadeOpen facade_open.ndjson
 mbt_cases MbtConnectFound MbtConnectFound connect_found.ndjson
 PINC_MBT_DIR="$dir/mbt" cargo test -q -p pinc-tests --features hwenc --test mbt_orphan --test mbt_halfopen --test mbt_endpoint \
     --test mbt_ranges --test mbt_reasm --test mbt_node_sets --test mbt_portmap_fallback --test mbt_outbox --test mbt_soft_prekeys \
-    --test mbt_facade_open -- --nocapture
+    --test mbt_facade_open --test mbt_connect_found -- --nocapture
