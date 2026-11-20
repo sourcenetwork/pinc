@@ -25,9 +25,17 @@
 (* moves it, so a stranger can make a half-open session cost at most Hold, *)
 (* and the half-open cap bounds the table at the cap times Hold.           *)
 (*                                                                         *)
+(* The end instant. The handshake has run out at the first instant past   *)
+(* its limit (handshake_end = limit + 1). An input and a timer due at one  *)
+(* instant have no order the rule fixes; the code hands over an input at  *)
+(* that instant before the timers due at it. So a Finish handed over at    *)
+(* the end instant is taken while the expiry has not run there (both are  *)
+(* enabled at it, in either order), and no Finish is taken later.          *)
+(*                                                                         *)
 (* What must never happen:                                                 *)
-(*  HalfOpenBounded - a half-open session outlives Hold, whatever the      *)
-(*  dialer does;                                                           *)
+(*  HalfOpenBounded - a half-open session is still there once the timers   *)
+(*  of the end instant of Hold (Hold + 1) have run, whatever the dialer    *)
+(*  does;                                                                  *)
 (*  SlowFinishHolds - a responder that answered drops a Finish that        *)
 (*  arrives within Hold;                                                   *)
 (*  UnansweredKeepsBase - a responder that never answered holds the        *)
@@ -90,12 +98,18 @@ Tick == /\ t < MaxT
                     THEN t ELSE armed
         /\ UNCHANGED <<rtt, answerAt, rejectAt, finishAt, r>>
 
-\* The Finish arrives while the handshake waits, after the responder answered: it holds the session.
-Finish == /\ r = "open" /\ t = finishAt /\ Answered /\ t <= Limit
+\* A Finish is due: it arrives while the handshake waits, after the responder answered, at the latest at the end
+\* instant Limit + 1 (handed over there before the expiry runs).
+FinishDue == r = "open" /\ t = finishAt /\ Answered /\ t <= Limit + 1
+\* The expiry is due: the limit is exceeded, not reached.
+ExpireDue == r = "open" /\ t > Limit
+
+\* The Finish holds the session.
+Finish == /\ FinishDue
           /\ r' = "done" /\ UNCHANGED <<t, rtt, answerAt, rejectAt, finishAt, armed>>
 
-\* The handshake runs out past its limit (the limit is exceeded, not reached).
-Expire == /\ r = "open" /\ t > Limit
+\* The handshake runs out.
+Expire == /\ ExpireDue
           /\ r' = "gone" /\ UNCHANGED <<t, rtt, answerAt, rejectAt, finishAt, armed>>
 
 \* A Finish that comes before the responder answered is not one (the dialer cannot finish what it was never sent).
@@ -109,7 +123,8 @@ Spec == Init /\ [][Next]_vars
 TypeOK == /\ t \in 0..MaxT /\ rtt \in 1..MaxRtt /\ answerAt \in {0, 1, Never} /\ rejectAt \in {0, 1, Never} /\ armed \in 0..MaxT
           /\ r \in {"open", "done", "gone"}
 
-\* A half-open session never outlives the hold, the tick that passes it included.
+\* A half-open session is gone once the timers of the hold's end instant (Hold + 1) have run: open at most up to that
+\* instant, never at a later one.
 HalfOpenBounded == r = "open" => t <= Hold + 1
 
 \* A responder that answered takes a Finish that arrives within the hold.

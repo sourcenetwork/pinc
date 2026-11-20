@@ -55,14 +55,16 @@ Start == /\ Ev.t = "init"
          /\ i' = i + 1
 
 \* The model moves towards the next observation: a Finish or an expiry at this tick, or the next tick while the
-\* observation is of a later one.
+\* observation is of a later one. At the end instant both may be due; the code hands the input over before the timers
+\* due at that instant, so the expiry is taken there only when no Finish is due.
 Model == /\ Ev.t = "obs"
-         /\ \/ R!Finish \/ R!Expire
+         /\ \/ R!Finish \/ (R!Expire /\ ~R!FinishDue)
             \/ (R!Tick \/ R!Ignore) /\ Ev.tk > t
          /\ UNCHANGED i
 
-\* Nothing more is due at this tick: neither a Finish nor an expiry.
-Settled == ~(r = "open" /\ ((t = finishAt /\ R!Answered /\ t <= R!Limit) \/ t > R!Limit))
+\* Nothing more is due at this tick: neither a Finish (at the end instant too: an input there goes before the timers)
+\* nor an expiry.
+Settled == ~(R!FinishDue \/ R!ExpireDue)
 
 \* The responder at tick t is the model's.
 Obs == /\ Ev.t = "obs"
