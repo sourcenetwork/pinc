@@ -146,23 +146,25 @@ impl<H: Hosted> Shared<H> {
     /// store kept, then polls the host's carriers and the store writes, which its locals hold in flight.
     pub(super) async fn role_task(&self) {
         self.role_ready.set(false);
-        let Some(load) = self.role().map(|r| r.load()) else {
-            return pending().await;
-        };
-        let kept = match load.await {
-            Ok(kept) => kept,
-            Err(e) => {
-                // A relay does not start with an unknown set of records: the endpoint stops with the store's error.
-                if let Some(mut core) = self.lock() {
-                    core.fail(e);
-                }
+        // A run after a run (the future was dropped and awaited again): the role holds what the store kept already.
+        if !self.role().is_some_and(|r| r.restored()) {
+            let Some(load) = self.role().map(|r| r.load()) else {
                 return pending().await;
+            };
+            let kept = match load.await {
+                Ok(kept) => kept,
+                Err(e) => {
+                    // A relay does not start with an unknown set of records: the endpoint stops with the store's error.
+                    if let Some(mut core) = self.lock() {
+                        core.fail(e);
+                    }
+                    return pending().await;
+                }
+            };
+            if let Some(mut role) = self.role() {
+                role.restore(self.relay_now(self.now()), &kept);
             }
-        };
-        if let Some(mut role) = self.role() {
-            role.restore(self.relay_now(self.now()), &kept);
         }
-        drop(kept);
         let Some(driver) = self.role().map(|r| r.start_io()) else {
             return pending().await;
         };

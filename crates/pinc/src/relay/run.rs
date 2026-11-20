@@ -76,10 +76,12 @@ where
     A: Access,
 {
     let h = &inner.host;
-    let load = inner.part.borrow().load();
-    let kept = load.await?;
-    inner.part.borrow_mut().restore(h.now(), &kept);
-    drop(kept);
+    // a run after a run: the machine holds what the store kept, and the writes still owed are queued
+    if !inner.part.borrow().restored() {
+        let load = inner.part.borrow().load();
+        let kept = load.await?;
+        inner.part.borrow_mut().restore(h.now(), &kept);
+    }
 
     let mut driver = Box::pin(inner.part.borrow().drive());
     let mut recv = None;

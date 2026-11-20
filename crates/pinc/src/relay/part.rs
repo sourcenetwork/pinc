@@ -72,6 +72,8 @@ pub struct Part<C: Carriers, K: KeyStore = SoftwareStore, St: Store = MemStore, 
     pub(super) store: Rc<St>,
     /// What the write out now is about; a failure or the end of the run marks it again.
     writing: Option<Mark>,
+    /// [`Part::restore`] ran: the machine holds what the store kept.
+    restored: bool,
 }
 
 impl<C: Carriers, K: KeyStore, St: Store, A: Access> core::fmt::Debug for Part<C, K, St, A> {
@@ -87,6 +89,7 @@ impl<C: Carriers, K: KeyStore, St: Store, A: Access> Part<C, K, St, A> {
             carriers,
             store: Rc::new(store),
             writing: None,
+            restored: false,
         }
     }
 
@@ -122,8 +125,15 @@ impl<C: Carriers, K: KeyStore, St: Store, A: Access> Part<C, K, St, A> {
         async move { store.load().await }
     }
 
+    /// Whether [`Part::restore`] ran already. The machine then holds what the store kept: a second run of the part must
+    /// not load and restore again (the held packets would be held twice), and the writes still owed stay queued.
+    pub const fn restored(&self) -> bool {
+        self.restored
+    }
+
     /// Put what the store kept back: the records and the packets held for sleeping members.
     pub fn restore(&mut self, now: u64, kept: &Kept) {
+        self.restored = true;
         self.core.restore(now, kept);
     }
 
@@ -303,6 +313,10 @@ impl<C: Carriers, K: KeyStore, St: Store, A: Access> Part<C, K, St, A> {
     /// The run is over: drop every stream and tell the host's carriers ([`Carriers::ended`]). Call it when the driver
     /// stops without having waited for [`Part::is_stopped`]; the part also does it when dropped.
     pub fn end(&mut self, now: u64) {
+        // a write that was out is given back: the run that held it is gone
+        if let Some(mark) = self.writing.take() {
+            self.core.requeue(mark);
+        }
         self.core.abort_all(now);
         self.carriers.ended();
     }
@@ -432,6 +446,27 @@ mod tests {
     }
 
     #[test]
+    fn a_run_that_ended_asks_for_an_accept_again() {
+        let (mut p, accepts) = part(Flaky::default());
+        let mut cx = Context::from_waker(Waker::noop());
+        p.poll(&mut cx, T0);
+        assert_eq!(accepts.get(), 1);
+        p.end(T0);
+        p.poll(&mut cx, T0 + SEC);
+        assert_eq!(accepts.get(), 2, "the second run never asked for an accept");
+    }
+
+    #[test]
+    fn a_write_in_flight_when_the_run_ends_is_given_back() {
+        let (mut p, _) = part(Flaky::default());
+        p.restore(T0, &owed_write());
+        let w = p.next_store_write().expect("one write is owed");
+        drop(w);
+        p.end(T0);
+        assert!(p.next_store_write().is_some(), "the write that was in flight is lost");
+    }
+
+    #[test]
     fn a_failed_write_is_tried_again_after_a_second() {
         let store = Flaky::default();
         store.fail_first.set(true);
@@ -448,5 +483,16 @@ mod tests {
         p.store_written(true, T0 + SEC);
         assert_eq!(store.writes.get(), 2);
         assert!(p.next_store_write().is_none());
+    }
+
+    #[test]
+    fn a_part_knows_it_was_restored() {
+        let (mut p, _) = part(Flaky::default());
+        assert!(!p.restored());
+        p.restore(T0, &Kept::default());
+        assert!(
+            p.restored(),
+            "a second run would restore into a machine that holds it all"
+        );
     }
 }

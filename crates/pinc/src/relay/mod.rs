@@ -28,7 +28,7 @@
 //!
 //! The identity is the host's key store. Signed records and the packets held for sleeping members are handed to a
 //! [`Store`] and restored from it when [`Relay::run`] starts (the default [`MemStore`] keeps them in memory, shared
-//! between clones).
+//! between clones). A second run of the same relay takes it as it was left, restored once.
 //!
 //! # What an operator sees
 //!
@@ -300,6 +300,8 @@ struct RunGuard<'a, H: Hosted, K: KeyStore, St: Store, A: Access>(&'a Inner<H, K
 impl<H: Hosted, K: KeyStore, St: Store, A: Access> Drop for RunGuard<'_, H, K, St, A> {
     fn drop(&mut self) {
         self.0.running.set(false);
+        // a stop belongs to the run it ended: the next run starts
+        self.0.stop.set(false);
         if let Ok(mut part) = self.0.part.try_borrow_mut() {
             part.end(self.0.host.now());
         }

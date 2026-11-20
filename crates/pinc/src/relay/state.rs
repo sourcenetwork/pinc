@@ -724,6 +724,8 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
             drop(self.finish(slot, now));
         }
         self.stopping = false;
+        // the accept in flight was dropped with the run: the next run asks again
+        self.accept_out = false;
     }
 
     /// Apply the effects of the machine's last call.

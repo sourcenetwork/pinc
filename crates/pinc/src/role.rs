@@ -10,7 +10,7 @@
 //! Invariants: the role is borrowed only inside a call and never across an await or a call of a host closure; the part
 //! is given the relay clock (nanoseconds since the Unix epoch) and the endpoint its own, the driver adding the fixed
 //! offset between them; the in-flight operations of the host's carriers live in the future of `run`, so a role is
-//! driven by one `run` at a time and ends when it ends.
+//! driven by one `run` at a time and ends when it ends (a later `run` takes the role as it was left, restored once).
 
 use alloc::vec::Vec;
 use core::future::{Ready, pending, ready};
@@ -79,6 +79,10 @@ pub trait Role: sealed::Sealed + Sized {
     /// Everything the store kept, to give to [`Role::restore`].
     #[doc(hidden)]
     fn load(&self) -> impl Future<Output = Result<Kept>> + use<Self>;
+
+    /// Whether the store's contents were restored already, by an earlier run.
+    #[doc(hidden)]
+    fn restored(&self) -> bool;
 
     /// Put what the store kept back.
     #[doc(hidden)]
@@ -153,6 +157,10 @@ impl Role for () {
         ready(Ok(Kept::default()))
     }
 
+    fn restored(&self) -> bool {
+        true
+    }
+
     fn restore(&mut self, _: u64, _: &Kept) {}
 
     fn next_write(&mut self) -> Option<impl Future<Output = Result<()>> + use<>> {
@@ -223,6 +231,10 @@ impl<C: Carriers, K: KeyStore, St: Store, A: Access> Role for Part<C, K, St, A> 
 
     fn load(&self) -> impl Future<Output = Result<Kept>> + use<C, K, St, A> {
         Part::load(self)
+    }
+
+    fn restored(&self) -> bool {
+        Part::restored(self)
     }
 
     fn restore(&mut self, relay_now: u64, kept: &Kept) {

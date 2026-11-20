@@ -47,6 +47,8 @@ struct TestRelay {
     events: Box<dyn Fn() -> Option<Event>>,
     stop: Box<dyn Fn()>,
     task: Option<nuclei::Task<pinc::Result<()>>>,
+    /// Await the relay's run again, on the same relay.
+    again: Box<dyn Fn() -> nuclei::Task<pinc::Result<()>>>,
 }
 
 async fn start(seed: u8, limits: Limits, store: MemStore) -> TestRelay {
@@ -68,6 +70,7 @@ fn start_on(ports: &Ports, seed: u8, limits: Limits, store: MemStore, peers: &[P
     }
     let relay = build_relay(ports, &kinds, builder.store(store).hub(addr, &[HUB]));
     let (r1, r2, r3, r4) = (relay.clone(), relay.clone(), relay.clone(), relay.clone());
+    let r5 = relay.clone();
     let task = nuclei::spawn_local(async move { r1.run().await });
     TestRelay {
         addr,
@@ -77,6 +80,10 @@ fn start_on(ports: &Ports, seed: u8, limits: Limits, store: MemStore, peers: &[P
         events: Box::new(move || r3.next_event()),
         stop: Box::new(move || relay.stop()),
         task: Some(task),
+        again: Box::new(move || {
+            let r = r5.clone();
+            nuclei::spawn_local(async move { r.run().await })
+        }),
     }
 }
 
@@ -344,6 +351,66 @@ fn stopping_the_relay_closes_every_carrier_and_the_run_returns() {
             assert!(task.await.is_ok());
             assert!(a.recv().await.is_none());
             assert!(b.recv().await.is_none());
+        })
+    });
+}
+
+#[test]
+fn a_relay_that_was_stopped_runs_again_and_serves() {
+    on_big_stack(|| {
+        within(60, async {
+            let store = MemStore::new();
+            let mut r = start(0x7a, Limits::default(), store.clone()).await;
+            let mut a = Member::connect(&r, 0x91, CarrierKind::Tcp).await;
+            a.publish(1).await;
+            eventually(10, "the first record is kept", || async { store.len() == 1 }).await;
+            (r.stop)();
+            assert!(r.task.take().unwrap().await.is_ok());
+            r.task = Some((r.again)());
+            let mut b = Member::connect(&r, 0x92, CarrierKind::Tcp).await;
+            b.publish(1).await;
+            eventually(10, "the second run keeps a record", || async { store.len() == 2 }).await;
+        })
+    });
+}
+
+#[test]
+fn a_second_run_hands_over_a_held_packet_once() {
+    on_big_stack(|| {
+        within(60, async {
+            let store = MemStore::new();
+            let mut r = start(0x7b, Limits::default(), store.clone()).await;
+            let mut a = Member::connect(&r, 0x93, CarrierKind::Tcp).await;
+            let mut b = Member::connect(&r, 0x94, CarrierKind::Tcp).await;
+            a.publish(1).await;
+            b.publish(1).await;
+            eventually(10, "both records kept", || async { store.len() == 2 }).await;
+            let mut notice = [0u8; 512];
+            let n = sleep::sign(&b.kp, &r.id, wall_ns() / 1_000_000, &mut notice).unwrap();
+            b.send(&Frame::Sleep { notice: &notice[..n] }).await;
+            let bid = b.id;
+            drop(b);
+            stats_where(&r, "member b gone", |s| s.carriers == 1).await;
+            a.send(&Frame::Send {
+                dst: bid,
+                flag: 3,
+                packet: &[3; 100],
+            })
+            .await;
+            stats_where(&r, "one packet held", |s| s.mailbox.stored == 1).await;
+            (r.stop)();
+            assert!(r.task.take().unwrap().await.is_ok());
+            r.task = Some((r.again)());
+            let mut b2 = Member::connect(&r, 0x94, CarrierKind::Tcp).await;
+            match decode(&b2.recv().await.unwrap()) {
+                Frame::Recv { flag, packet, .. } | Frame::RecvNew { flag, packet, .. } => {
+                    assert_eq!((flag, packet), (3, &[3; 100][..]));
+                }
+                other => panic!("{other:?}"),
+            }
+            b2.send(&Frame::Ping).await;
+            assert_eq!(decode(&b2.recv().await.unwrap()), Frame::Pong);
+            assert_eq!((r.stats)().mailbox.delivered, 1);
         })
     });
 }
