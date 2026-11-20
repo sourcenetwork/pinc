@@ -37,6 +37,10 @@
 (* Checked:                                                                *)
 (*  - RestoredLive (keep.rs: nothing past its lifetime is restored; a      *)
 (*    record that does not verify is not restored);                        *)
+(*  - RestoreFirst (keep.rs restore, table.rs Table::insert refuses when   *)
+(*    full: a restart holds exactly the first RECORDS live, verifying      *)
+(*    records in the store's order and marks every other parsed record    *)
+(*    for removal, a mark past the marks' room counted);                   *)
 (*  - MailOrdered (packets restored oldest first, each once, over a second *)
 (*    run too);                                                            *)
 (*  - RecSynced, LifeSynced, MailSynced (store.rs, keep.rs: what the       *)
@@ -113,7 +117,7 @@ Init == /\ s = Restore(Machine0(0), 0, St0)
         /\ job = NoJob
         /\ writing = FALSE
         /\ failed = FALSE
-        /\ rs = [at |-> 0, recs |-> {}, pks |-> {}]
+        /\ rs = [at |-> 0, recs |-> {}, pks |-> {}, fit |-> TRUE, over |-> FALSE]
         /\ g = [full |-> FALSE, tear |-> FALSE, back |-> FALSE, ticked |-> FALSE, pubs |-> 0, pid |-> 0, rst |-> 0,
                wf |-> 0, gu |-> 0, gv |-> {}, gt |-> FALSE, gq |-> FALSE, gx |-> {}, dr |-> {}, nd |-> 0]
 
@@ -186,11 +190,26 @@ WriteFail ==
                          !.gx = IF give /\ job.k = "remove" THEN @ \cup {job.n} ELSE @]
     /\ UNCHANGED <<st, rs>>
 
-\* what a restore put back, for RestoredLive
+\* the kept records a restore at t may take: live and verifying
+Takeable(t, st1) == {n \in Nodes : st1.rec[n].seq # 0 /\ SatSub(t, st1.rec[n].rcv) < TTL /\ st1.rec[n].bad = "ok"}
+\* keep.rs restore with Table::insert refusing on a full table (no eviction): the fresh machine holds exactly the first
+\* RCAP takeable records in the store's order, and every other kept record whose bytes parse is marked for removal,
+\* unless the marks are full (a lost mark, counted)
+RestoreFit(m, t, st1) ==
+    LET c == Takeable(t, st1)
+        took == {n \in Nodes : m.rec[n].seq # 0}
+        other == {n \in Nodes : st1.rec[n].seq # 0 /\ st1.rec[n].bad # "noparse"} \ took
+    IN /\ took = {n \in c : Cardinality({k \in c : k < n}) < RCAP}
+       /\ other \subseteq m.kx \/ Cardinality(m.kx) >= XCAP
+
+\* what a restore put back, for RestoredLive; fit for RestoreFirst, over (more takeable records than the table) for
+\* the witness NoRestoreOver
 Restored(m, t, st1) ==
     [at |-> t,
      recs |-> {[n |-> n, rcv |-> m.rec[n].rcv, bad |-> st1.rec[n].bad] : n \in {k \in Nodes : m.rec[k].seq # 0}},
-     pks |-> UNION {{m.mb[k][j] : j \in 1..Len(m.mb[k])} : k \in Members}]
+     pks |-> UNION {{m.mb[k][j] : j \in 1..Len(m.mb[k])} : k \in Members},
+     fit |-> RestoreFit(m, t, st1),
+     over |-> Cardinality(Takeable(t, st1)) > RCAP]
 
 \* the process stops (in the middle of the write out, if one is) and starts again with the same identity and store
 Restart(t, mode) ==
@@ -239,6 +258,10 @@ TypeOK == /\ s.now \in 0..TMAX
 
 RestoredLive == /\ \A x \in rs.recs : SatSub(rs.at, x.rcv) < TTL /\ x.bad = "ok"
                 /\ \A p \in rs.pks : SatSub(rs.at, p.at) < AGE
+
+RestoreFirst == rs.fit
+\* witness (_w_over.cfg must violate it): a restart finds more takeable records than the table
+NoRestoreOver == ~rs.over
 
 MailOrdered == \A m \in Members : \A j \in 1..(Len(s.mb[m]) - 1) : s.mb[m][j].id < s.mb[m][j + 1].id
 
