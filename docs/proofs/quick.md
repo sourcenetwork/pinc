@@ -457,6 +457,8 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `Orphan` | the time scaled down: LIFE 2 -> 1, TAKE_LIFE 2 -> 1, TMAX 4 -> 2; MAX 2 -> 1, HMAX 4 -> 3 |
 | `Orphan_evict` | TMAX 4 -> 3 |
 | `Orphan_stale` | TMAX 4 -> 3 |
+| `PathMove_gain` | TMAX 3 -> 2 (a third challenge is never drawn; an IPv6 direct path active beside a usable direct path with a shorter round trip, the case of fix T11, is still reached) |
+| `PathMove_stuck` | NP 3 -> 2, Ids {1, 2, 3} -> {1, 2} (three paths are never held at once; fail_over from a direct path not validated with a relayed path held, the case of fix T5, is still taken) |
 | `PortMapLease` | last tick MaxT 7 -> 4, tries Tries 2 -> 1; bounded by constraint: behaviours of depth 14 (PortMapLeaseQuickBound) |
 | `PortMapLease_announcedrop` | MaxT 7 -> 6 |
 | `PortMapLease_noepoch` | MaxT 7 -> 6 |
