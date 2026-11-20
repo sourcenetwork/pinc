@@ -379,3 +379,22 @@ proptest! {
         run_pool(&ops, slots, spare, owned);
     }
 }
+
+#[test]
+fn a_refused_array_gives_its_block_back() {
+    let refused = Array::new(mem(3, false), 1, 1).unwrap_err();
+    assert_eq!((refused.error, refused.storage.len()), (Error::Storage { need: 4 }, 3));
+    let refused = Array::new(refused.storage, 70_000, 0).unwrap_err();
+    assert_eq!((refused.error, refused.storage.len()), (Error::Capacity, 3));
+    assert!(Array::new(refused.storage, 1, 0).is_ok());
+}
+
+#[test]
+fn a_refused_pool_gives_its_block_back() {
+    let refused = Pool::<()>::new(mem(15, false), 1, 4).unwrap_err();
+    assert_eq!((refused.error, refused.storage.len()), (Error::Storage { need: 16 }, 15));
+    let max = usize::try_from(u32::MAX).unwrap();
+    let refused = Pool::<()>::new(refused.storage, 1, max + 1).unwrap_err();
+    assert_eq!((refused.error, refused.storage.len()), (Error::Capacity, 15));
+    assert!(Pool::<()>::new(refused.storage, 0, 4).is_ok());
+}

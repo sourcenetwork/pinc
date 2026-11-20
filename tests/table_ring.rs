@@ -132,3 +132,10 @@ fn a_refused_block_comes_back_in_the_error() {
     r.push(&[9; 4]).unwrap();
     assert_eq!(r.pop(), Some(&[9u8; 4][..]));
 }
+
+#[test]
+fn a_ring_refused_for_its_capacity_gives_its_block_back() {
+    let refused = Ring::new(mem(5, false), usize::MAX, 2).unwrap_err();
+    assert_eq!(refused.error, Error::Capacity);
+    assert_eq!(refused.storage.len(), 5);
+}

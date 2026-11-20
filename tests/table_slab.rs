@@ -495,3 +495,13 @@ proptest! {
         run(&ops, real, cap as u64 + extra, spare, owned || wide);
     }
 }
+
+#[test]
+fn a_refused_slab_gives_its_block_back() {
+    let need = SortedSlab::bytes(8, 8, 4);
+    let refused = SortedSlab::new(mem(need - 1, false), 8, 8, 4).unwrap_err();
+    assert_eq!((refused.error, refused.storage.len()), (Error::Storage { need }, need - 1));
+    let refused = SortedSlab::new(refused.storage, 100, usize::MAX, 4).unwrap_err();
+    assert_eq!((refused.error, refused.storage.len()), (Error::Capacity, need - 1));
+    assert!(SortedSlab::new(refused.storage, 1, 8, 4).is_ok());
+}
