@@ -26,8 +26,9 @@
 (* The doubt is the module doc's: a session is in doubt when it was timing *)
 (* out, or the node had lost its link, when its SLEEP went out, and a      *)
 (* SLEEP goes out once per suspension (pinc-transport life.rs sleep does   *)
-(* nothing on a connection already asleep). The code recomputes the doubt  *)
-(* at every Suspend, also for a session already asleep.                    *)
+(* nothing on a connection already asleep). The code takes the doubt only  *)
+(* for a session not yet asleep (fix C3); before C3 it recomputed it at   *)
+(* every Suspend, also for a session already asleep.                       *)
 (***************************************************************************)
 EXTENDS Integers, Sequences
 
