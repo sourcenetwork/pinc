@@ -351,6 +351,8 @@ impl<const C: usize> Recv<C> {
         self.highest = final_size;
         self.final_size = Some(final_size);
         self.reset = Some(code);
+        // The sender ended the stream: a stop request that waits or was sent is over.
+        self.stop_acked();
         self.read_off = final_size;
         self.contig = final_size;
         self.release_all(pool);

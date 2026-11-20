@@ -492,3 +492,29 @@ fn a_stream_asked_to_stop_is_granted_no_more_window() {
         [ControlFrame::MaxStreamData { id: 4, max: 112 * 1024 }]
     );
 }
+
+/// A stop request not yet sent when the sender's reset arrives is never sent: the sender already ended the stream.
+#[test]
+fn a_stop_request_is_dropped_when_the_senders_reset_arrives() {
+    let (mut pool, mut t) = setup(1024, |c| c.initial_stream_window = 64 * 1024);
+    t.on_stream_frame(&mut pool, 8, 0, b"y", false).unwrap();
+    t.stop_sending(&mut pool, 8, 2).unwrap();
+    t.on_reset_stream(&mut pool, 8, 5, 1).unwrap();
+    assert!(
+        drain_control(&mut t).is_empty(),
+        "a stream the sender reset was asked to stop"
+    );
+}
+
+/// A stop request already sent is not sent again when it is lost after the sender's reset arrived.
+#[test]
+fn a_stop_request_already_sent_is_not_sent_again_after_a_reset() {
+    let (mut pool, mut t) = setup(1024, |c| c.initial_stream_window = 64 * 1024);
+    t.on_stream_frame(&mut pool, 8, 0, b"y", false).unwrap();
+    t.stop_sending(&mut pool, 8, 2).unwrap();
+    let frame = ControlFrame::StopSending { id: 8, error_code: 2 };
+    assert_eq!(drain_control(&mut t), [frame]);
+    t.on_reset_stream(&mut pool, 8, 5, 1).unwrap();
+    t.on_control_lost(&frame);
+    assert!(drain_control(&mut t).is_empty(), "a stop for a reset stream came back");
+}
