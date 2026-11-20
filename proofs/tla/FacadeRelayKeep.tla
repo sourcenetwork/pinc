@@ -48,8 +48,20 @@
 (*    for leaves the store behind only with a store error counted);        *)
 (*  - MarksBounded (keep.rs: the records marked, held and to remove are    *)
 (*    each at most twice the record table, the members marked at most the  *)
-(*    mailbox members); KeptBounded (store.rs: Kept.records is bounded by  *)
-(*    RECORDS; not where writes fail: _w_kept, a finding);                 *)
+(*    mailbox members); RoleBounded (the role's own tables: records,       *)
+(*    member slots, mailboxes, marks, failed writes and tries stay within  *)
+(*    their bounds, in every config, failing writes included);             *)
+(*  - StoreOwed (every record in the store that the machine does not hold  *)
+(*    is owed a removal: marked, waiting in the failed writes, or out; or  *)
+(*    its removal was given up or never marked, for want of room or bytes  *)
+(*    that do not parse) and DropsCounted (each such step counted a store  *)
+(*    error), in every config; a restart restores from the store and       *)
+(*    marks the removal of every record it does not take, so the store     *)
+(*    comes back to the machine's records once the removals land;          *)
+(*    KeptBounded (the store holds at most RECORDS records) only where     *)
+(*    writes do not fail: while removals are refused the store holds more  *)
+(*    (_w_kept), and the contract of store.rs Kept.records says the relay  *)
+(*    keeps at most RECORDS and removes the rest;                          *)
 (*  - WritingHasJob (part.rs: a write is out only while one runs, over the *)
 (*    end of a run too);                                                   *)
 (*  - TriesBounded, FailedBounded (keep.rs: no write is tried more than    *)
@@ -64,9 +76,12 @@
 (* _w_noparse (RecSynced: a record that does not parse is counted and left *)
 (* in the store), _w_mailq (MailSynced: a lost mailbox mark, counted),     *)
 (* _w_given and _w_gfull (NoGivenTries, NoGivenFull: a write is given up   *)
-(* after MAX_TRIES tries, and when the failed writes are full), _w_kept    *)
-(* (FINDING, KeptBounded: a failed removal waits behind a put that lands,  *)
-(* so the store holds more records than the table).                       *)
+(* after MAX_TRIES tries, and when the failed writes are full), _w_owed    *)
+(* (OwedOnly: a record the machine dropped stays in the store with its     *)
+(* removal given up, counted: StoreOwed's other case), _w_kept             *)
+(* (KeptBounded: a failed removal waits behind a put that lands, so the    *)
+(* store holds more records than the table until the removal lands, or,   *)
+(* given up, until a restart marks it again).                              *)
 (***************************************************************************)
 EXTENDS FacadeRelayKeepOps
 
@@ -88,7 +103,9 @@ VARIABLES s,       \* the machine and Keep
           failed,  \* a store write failed
           rs,      \* what the last restore put back, at which clock
           g        \* ghosts: full, tear, back, ticked, pubs, pid, rst; since the last restart: wf (writes failed), gu
-                   \* (writes given up), gv (their nodes and members), gt and gq (given up by tries, by a full queue)
+                   \* (writes given up), gv (their nodes and members), gt and gq (given up by tries, by a full queue),
+                   \* gx (the nodes whose removal was given up), dr (the nodes whose removal was not marked for want
+                   \* of room, or whose kept bytes do not parse) and nd (the steps that dropped one: each counts)
 vars == <<s, st, job, writing, failed, rs, g>>
 
 Init == /\ s = Restore(Machine0(0), 0, St0)
@@ -98,7 +115,7 @@ Init == /\ s = Restore(Machine0(0), 0, St0)
         /\ failed = FALSE
         /\ rs = [at |-> 0, recs |-> {}, pks |-> {}]
         /\ g = [full |-> FALSE, tear |-> FALSE, back |-> FALSE, ticked |-> FALSE, pubs |-> 0, pid |-> 0, rst |-> 0,
-               wf |-> 0, gu |-> 0, gv |-> {}, gt |-> FALSE, gq |-> FALSE]
+               wf |-> 0, gu |-> 0, gv |-> {}, gt |-> FALSE, gq |-> FALSE, gx |-> {}, dr |-> {}, nd |-> 0]
 
 Publish(n, q) ==
     /\ g.pubs < PUBS
@@ -119,9 +136,12 @@ HeardA(m) ==
     /\ s' = Heard(Called(s), m)
     /\ UNCHANGED <<st, job, writing, failed, rs, g>>
 
+\* note_sweep takes the records the machine dropped out of held and marks their removal; one with no room is lost
 TickA ==
-    /\ s' = Tick(s)
-    /\ g' = [g EXCEPT !.ticked = TRUE]
+    LET s1 == Tick(s)
+        lost == (s.kh \ s1.kh) \ s1.kx
+    IN /\ s' = s1
+       /\ g' = [g EXCEPT !.ticked = TRUE, !.dr = @ \cup lost, !.nd = IF lost # {} THEN @ + 1 ELSE @]
     /\ UNCHANGED <<st, job, writing, failed, rs>>
 
 Advance ==
@@ -149,6 +169,11 @@ WriteOk ==
 \* the node or member a write is about
 Kind(j) == [k |-> IF j.k = "mail" THEN "mail" ELSE "rec", n |-> j.n]
 
+\* the removal of node n is still to be written: marked, waiting in the failed writes, or out
+RemoveOwed(m, j, n) == \/ n \in m.kx
+                       \/ \E x \in 1..Len(m.fq) : m.fq[x].k = "remove" /\ m.fq[x].n = n
+                       \/ j.k = "remove" /\ j.n = n
+
 \* Part::store_written(false): counted, queued behind the marks not tried yet or given up, the next write after the
 \* part's clock moved on
 WriteFail ==
@@ -157,7 +182,8 @@ WriteFail ==
     /\ job' = NoJob /\ writing' = FALSE /\ failed' = TRUE
     /\ LET give == GivenUp(s)
        IN g' = [g EXCEPT !.wf = @ + 1, !.gu = IF give THEN @ + 1 ELSE @, !.gv = IF give THEN @ \cup {Kind(job)} ELSE @,
-                         !.gt = @ \/ (give /\ s.tr + 1 >= MAXT), !.gq = @ \/ (give /\ Len(s.fq) >= FQ)]
+                         !.gt = @ \/ (give /\ s.tr + 1 >= MAXT), !.gq = @ \/ (give /\ Len(s.fq) >= FQ),
+                         !.gx = IF give /\ job.k = "remove" THEN @ \cup {job.n} ELSE @]
     /\ UNCHANGED <<st, rs>>
 
 \* what a restore put back, for RestoredLive
@@ -172,10 +198,14 @@ Restart(t, mode) ==
     /\ IF writing THEN mode \in TORN \cup {"lost", "whole"} /\ TearOk(job, mode) ELSE mode = "lost"
     /\ LET st1 == IF writing THEN Tear(st, job, mode) ELSE st
            m == Restore(Machine0(t), t, st1)
+           \* the kept records restore neither takes nor marks for removal: bytes that do not parse, or a mark with
+           \* no room; each counted once
+           lost == {n \in Nodes : st1.rec[n].seq # 0 /\ m.rec[n].seq = 0 /\ n \notin m.kx}
        IN /\ st' = st1
           /\ s' = m
           /\ rs' = Restored(m, t, st1)
-          /\ g' = [g EXCEPT !.rst = @ + 1, !.ticked = FALSE, !.wf = 0, !.gu = 0, !.gv = {},
+          /\ g' = [g EXCEPT !.rst = @ + 1, !.ticked = FALSE, !.wf = 0, !.gu = 0, !.gv = {}, !.gx = {}, !.dr = lost,
+                            !.nd = Cardinality(lost),
                             !.tear = @ \/ (mode \in {"noparse", "noverify", "prefix"}),
                             !.back = @ \/ (t < s.now /\ (rs'.recs # {} \/ rs'.pks # {}))]
     /\ job' = NoJob /\ writing' = FALSE
@@ -190,7 +220,8 @@ Rerun(mode) ==
     /\ st' = IF writing THEN Tear(st, job, mode) ELSE st
     /\ s' = IF writing THEN Requeue(s, job) ELSE s
     /\ job' = NoJob /\ writing' = FALSE
-    /\ g' = [g EXCEPT !.rst = @ + 1]
+    /\ LET lost == IF writing /\ job.k = "remove" /\ ~RemoveOwed(s', NoJob, job.n) THEN {job.n} ELSE {}
+       IN g' = [g EXCEPT !.rst = @ + 1, !.dr = @ \cup lost, !.nd = IF lost # {} THEN @ + 1 ELSE @]
     /\ UNCHANGED <<failed, rs>>
 
 Next == \/ \E n \in Nodes, q \in 1..SEQS : Publish(n, q)
@@ -252,6 +283,20 @@ GivenCounted == s.errs >= g.wf + g.gu
 
 KeptBounded == Cardinality({n \in Nodes : st.rec[n].seq # 0}) <= RCAP
 
+\* every record in the store that the machine does not hold is owed a removal, or its removal was given up or never
+\* marked (no room, or bytes that do not parse), which DropsCounted counts; a restart restores from the store and
+\* marks the removal of every record it does not take, so what is owed comes back
+StoreOwed == \A n \in Nodes : (st.rec[n].seq # 0 /\ s.rec[n].seq = 0) =>
+                 RemoveOwed(s, job, n) \/ n \in g.gx \/ n \in g.dr
+\* every failed write counts, a write given up once more, and every step that dropped a removal at least once
+\* (counters live as long as the machine, as the ghosts since the restart)
+DropsCounted == s.errs >= g.wf + g.gu + g.nd
+
+\* the role's own tables within their bounds, whatever the store does: the machine's records, member slots and
+\* mailboxes, the marks (MarksBounded), the failed writes (FailedBounded) and the tries (TriesBounded)
+RoleBounded == /\ Count(s.rec) <= RCAP /\ Cardinality(s.slot) <= MCAP /\ \A m \in Members : Len(s.mb[m]) <= MBP
+               /\ MarksBounded /\ FailedBounded /\ TriesBounded
+
 WritingHasJob == writing = (job.k # "none")
 
 \* witnesses: each must be violated
@@ -260,4 +305,7 @@ NoTear == ~g.tear
 NoBack == ~g.back
 NoGivenTries == ~g.gt
 NoGivenFull == ~g.gq
+\* every record in the store the machine does not hold is owed a removal: fails where a removal is given up or not
+\* marked (_w_owed), the case StoreOwed lets the error counter account for
+OwedOnly == \A n \in Nodes : (st.rec[n].seq # 0 /\ s.rec[n].seq = 0) => RemoveOwed(s, job, n)
 =============================================================================
