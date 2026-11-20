@@ -447,11 +447,11 @@ impl<H: Hosted> Shared<H> {
                         break;
                     };
                     rx.set(None);
-                    #[cfg(feature = "trace")]
-                    crate::trace_turn::took();
                     progressed = true;
                     match res {
                         Ok((n, from, segment)) => {
+                            #[cfg(feature = "trace")]
+                            crate::trace_turn::took();
                             let now = self.now();
                             let from = canon(from);
                             if let Some(mut core) = self.lock() {
