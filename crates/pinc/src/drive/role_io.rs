@@ -38,7 +38,7 @@ impl<H: Hosted> Shared<H> {
     }
 
     /// The relay clock at endpoint time `now`.
-    fn relay_now(&self, now: u64) -> u64 {
+    pub(super) fn relay_now(&self, now: u64) -> u64 {
         super::role_clock(self.role_wall0, now)
     }
 
