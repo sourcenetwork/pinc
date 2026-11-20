@@ -140,7 +140,13 @@ impl Fetch {
         } else {
             self.take_chunk(&*st, want)
         };
-        if new.is_empty() && outstanding == 0 && conn {
+        // A provider whose last request could not open takes no stolen work for STEAL_IDLE: it would hold it unasked.
+        let blocked = self
+            .provs
+            .get(pi)
+            .and_then(|p| p.blocked)
+            .is_some_and(|t| now.saturating_sub(t) < STEAL_IDLE);
+        if new.is_empty() && outstanding == 0 && conn && !blocked {
             new = self.steal(io, now, pi);
         }
         if new.is_empty() {
@@ -150,8 +156,10 @@ impl Fetch {
             p.assign.extend(&new);
             // vertexia: the idle clock of a provider that had nothing starts when it is given work, so work just
             // handed over is not stolen back at once; the reference design leaves the stale time of its last granule.
+            // It starts again at the first request for that work that opens (open_request).
             if outstanding == 0 {
                 p.lp = Some(now);
+                p.asked = false;
             }
         }
         io.split().2.trace(
@@ -312,6 +320,9 @@ impl Fetch {
             return false;
         };
         let Ok(stream) = se.open_stream(id, URGENCY) else {
+            if let Some(p) = self.provs.get_mut(pi) {
+                p.blocked = Some(now);
+            }
             return false;
         };
         let mut buf = [0u8; REQ_MAX];
@@ -335,6 +346,14 @@ impl Fetch {
                 bytes: ranges.iter().map(|s| s.len).sum(),
             },
         );
+        if let Some(p) = self.provs.get_mut(pi) {
+            p.blocked = None;
+            if !p.asked {
+                // The idle clock starts when the work is first asked for, not when it was handed over.
+                p.asked = true;
+                p.lp = Some(now);
+            }
+        }
         if let Some(s) = self.rx.get_mut(slot) {
             *s = Some(Rx::new(pi, stream, plan, &self.root));
         }

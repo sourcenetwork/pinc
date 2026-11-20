@@ -177,12 +177,19 @@ struct Prov {
     conn: bool,
     dialing: bool,
     retry: Option<u64>,
-    /// The time of its last verified group.
+    /// The start of its idle clock: its last verified group, the hand-over of work when it held none, or the first
+    /// request for that work.
     lp: Option<u64>,
     /// Verified bytes it delivered.
     pb: u64,
     /// The time of its first verified group.
     pt: Option<u64>,
+    /// A request for its work opened since the work was handed over: the idle clock starts at the first one, so time
+    /// it could not be asked (no session, no stream credit) is not idleness.
+    asked: bool,
+    /// When its last request stream could not open: for STEAL_IDLE after it, or until a session comes up, it is no
+    /// thief.
+    blocked: Option<u64>,
 }
 
 impl Prov {
@@ -198,6 +205,8 @@ impl Prov {
             lp: None,
             pb: 0,
             pt: None,
+            asked: false,
+            blocked: None,
         }
     }
 }
@@ -399,6 +408,7 @@ impl Fetch {
         let assigned = self.provs.get_mut(pi).is_some_and(|s| {
             s.dialing = false;
             s.conn = true;
+            s.blocked = None;
             s.in_assign
         });
         if assigned {
