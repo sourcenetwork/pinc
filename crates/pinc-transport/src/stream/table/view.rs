@@ -34,7 +34,7 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
             local_live: self.local_live,
             ext: (pool.used_chunks() as u64).saturating_sub(held),
             high_water: self.used() as u64,
-            admit: [self.admit.limit, self.admit.adv, self.admit.adv_at],
+            admit: [self.admit.limit, self.admit.adv],
             admit_pend: self.admit.pend,
             early: self.admit.early,
         }

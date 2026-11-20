@@ -7,8 +7,9 @@
 //! opener the first value in the handshake (`max_streams` of the credit record) and raises it with a `MAX_STREAMS`
 //! frame. A limit only grows: a shrinking pool is not taken back, the receiver holds back the surplus stream instead.
 //!
-//! Invariants: `limit` and `adv` never decrease; a frame is queued only when `adv` grew; a raise of less than an
-//! eighth of the credit last given waits unless the opener has used up all of it.
+//! Invariants: `limit` and `adv` never decrease; a frame is queued only when `adv` grew, and every growth is queued at
+//! once: the receiver cannot see streams the opener opened and has not written on, so a raise held back for size could
+//! strand an opener that used all its credit.
 
 /// The credit state of both directions of a stream table.
 #[derive(Debug, Clone, Copy, Default)]
@@ -17,8 +18,6 @@ pub(super) struct Admit {
     pub(super) limit: u64,
     /// As receiver: the limit last advertised, the handshake value first.
     pub(super) adv: u64,
-    /// The streams admitted when `adv` was set.
-    pub(super) adv_at: u64,
     /// A `MAX_STREAMS` frame with `adv` is waiting to be sent.
     pub(super) pend: bool,
     /// The receiver side is on: credit is given and kept in the pool.
@@ -31,7 +30,6 @@ impl Admit {
     pub(super) const NEW: Self = Self {
         limit: 0,
         adv: 0,
-        adv_at: 0,
         pend: false,
         on: true,
         early: false,
@@ -48,18 +46,12 @@ impl Admit {
     }
 
     /// The receiver admitted `admitted` streams in all and has room for `room` more now: queue a raise of the
-    /// advertised limit when it grew by an eighth of the credit last given (one stream at least), or by anything once
-    /// the opener has used all it was given.
+    /// advertised limit whenever that grew. A raise is never held back for size: streams the opener opened and has
+    /// not written on are invisible here, so a held raise could leave it blocked with room free.
     pub(super) fn update(&mut self, admitted: u64, room: u64) {
         let now = admitted.saturating_add(room);
-        if !self.on || now <= self.adv {
-            return;
-        }
-        let used_up = self.adv <= admitted;
-        let step = (self.adv.saturating_sub(self.adv_at) / 8).max(1);
-        if used_up || now - self.adv >= step {
+        if self.on && now > self.adv {
             self.adv = now;
-            self.adv_at = admitted;
             self.pend = true;
         }
     }
@@ -101,18 +93,28 @@ mod tests {
     }
 
     #[test]
-    fn a_small_raise_waits_and_a_used_up_credit_is_raised_at_once() {
-        // 16 streams of credit given at the start: a raise of 1 is under an eighth (2), so it waits.
+    fn every_growth_of_the_room_is_raised_at_once() {
         let mut r = receiver(16);
         r.update(10, 7);
-        assert_eq!(r.take(), None);
-        // A raise of 2 reaches the eighth.
-        r.update(10, 8);
-        assert_eq!(r.take(), Some(18));
+        assert_eq!(r.take(), Some(17), "one more stream is sent at once");
         assert_eq!(r.take(), None, "a frame is taken once");
-        // The opener used up all 18: any growth is sent.
-        r.update(18, 1);
-        assert_eq!(r.take(), Some(19));
+        r.update(10, 8);
+        r.update(10, 9);
+        assert_eq!(r.take(), Some(19), "raises not yet sent become one frame");
+        r.update(19, 1);
+        assert_eq!(r.take(), Some(20));
+    }
+
+    #[test]
+    fn a_raise_is_never_held_for_an_opener_the_receiver_cannot_see() {
+        // 32 given and used; the places come back one at a time while the opener opens new streams silently.
+        let mut r = receiver(32);
+        let mut last = 0;
+        for room in 1..=32 {
+            r.update(32, room);
+            last = r.take().unwrap_or(last);
+        }
+        assert_eq!(last, 64);
     }
 
     #[test]

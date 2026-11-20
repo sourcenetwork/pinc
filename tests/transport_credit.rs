@@ -2,7 +2,8 @@
 //! credit instead of sending them, every stream arrives with its bytes, and the receiver holds none back; a frame that
 //! opens many silent streams at once is admitted; a stream that ends gives the opener one more while every other one
 //! stays live; the configured window is the one advertised and the one the streams run with; and, on a table, a
-//! window charged to the ledger from its stream's first byte, with streams admitted while a first charge fits.
+//! window charged to the ledger from its stream's first byte, with streams admitted while a first charge fits; an
+//! opener that opened its whole credit and wrote nothing on the last streams gets every released place back.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -432,4 +433,73 @@ fn a_window_is_charged_from_its_first_byte_and_a_stream_is_admitted_while_a_firs
     assert_eq!(raise, Some(9), "five admitted and room for four more");
     t.on_stream_frame(&mut pool, 20, 0, &[5], false).unwrap();
     assert_eq!(t.stats().held_back, 1);
+}
+
+/// The opener opens its whole credit with one byte each, ends all of them but the first when `keep`, and, once the
+/// peer has released them, opens silently (nothing written) as far as it is allowed: every place that came back must
+/// be usable, though the receiver cannot see the streams opened and not written on.
+fn silent_opens_after_release(bidi: bool, keep: bool) {
+    big_stack(move || {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let mut net = setup(&mut w, &mut sa, &mut sb, Link::new(67, Params::new(10 * MS)));
+        assert!(net.connect(net.now + 10 * SEC), "{:?}", net.rx_drops);
+        net.run(net.now + SEC, |_| false);
+        let limit = usize::from(net.a.conn.peer_credit().max_streams);
+        assert_eq!(limit, 32, "half the slots of the table");
+        let ids: Vec<u64> = (0..limit)
+            .map(|_| {
+                if bidi {
+                    net.a.conn.open_bi().unwrap()
+                } else {
+                    net.a.conn.open_uni().unwrap()
+                }
+            })
+            .collect();
+        let ended = &ids[usize::from(keep)..];
+        for id in &ids {
+            assert_eq!(net.a.conn.write(*id, &[7]).unwrap(), 1);
+        }
+        for id in ended {
+            net.a.conn.finish(*id).unwrap();
+        }
+        let mut fin_at = 0;
+        let seen = net.run(net.now + 60 * SEC, |n| {
+            if bidi && fin_at < ended.len() && n.b.fin.contains(&ended[fin_at]) {
+                n.b.conn.finish(ended[fin_at]).unwrap();
+                fin_at += 1;
+            }
+            let side = if bidi { &n.a.fin } else { &n.b.fin };
+            ended.iter().all(|id| side.contains(id))
+        });
+        assert!(seen, "the ended streams were not all seen to end");
+        net.run(net.now + SEC, |_| false);
+
+        let mut opened = 0;
+        let done = net.run(net.now + 30 * SEC, |n| {
+            while opened < ended.len() {
+                let r = if bidi { n.a.conn.open_bi() } else { n.a.conn.open_uni() };
+                if r.is_err() {
+                    break;
+                }
+                opened += 1;
+            }
+            opened == ended.len()
+        });
+        assert!(
+            done,
+            "{opened} of {} released places came back for silent opens",
+            ended.len()
+        );
+    });
+}
+
+#[test]
+fn an_opener_that_opens_its_whole_credit_without_data_gets_every_released_place_back() {
+    silent_opens_after_release(true, false);
+}
+
+#[test]
+fn a_long_lived_stream_does_not_strand_the_credit_of_silent_unidirectional_opens() {
+    silent_opens_after_release(false, true);
 }

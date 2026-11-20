@@ -116,7 +116,7 @@ fn slot_json(s: &SlotView) -> String {
 fn view_json(v: &TableView) -> String {
     let slots: Vec<String> = v.slots.iter().map(slot_json).collect();
     format!(
-        r#"{{"slots":[{}],"rn":[{},{}],"lo":[{},{}],"rl":{},"ll":{},"ext":{},"hw":{},"ad":[{},{},{}],"adp":{},"early":{}}}"#,
+        r#"{{"slots":[{}],"rn":[{},{}],"lo":[{},{}],"rl":{},"ll":{},"ext":{},"hw":{},"ad":[{},{}],"adp":{},"early":{}}}"#,
         slots.join(","),
         v.remote_next[0],
         v.remote_next[1],
@@ -128,7 +128,6 @@ fn view_json(v: &TableView) -> String {
         v.high_water,
         v.admit[0],
         v.admit[1],
-        v.admit[2],
         b(v.admit_pend),
         b(v.early)
     )

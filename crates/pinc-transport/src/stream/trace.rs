@@ -81,9 +81,8 @@ pub struct TableView {
     pub ext: u64,
     /// The mark of the slots: one past the highest slot a stream holds; every slot past it is new.
     pub high_water: u64,
-    /// The stream credit: the limit on the streams we may open in all, the limit last advertised, and the streams
-    /// admitted when it was set.
-    pub admit: [u64; 3],
+    /// The stream credit: the limit on the streams we may open in all and the limit last advertised.
+    pub admit: [u64; 2],
     /// A `MAX_STREAMS` frame is waiting to be sent.
     pub admit_pend: bool,
     /// Opens may pass the limit on what we may open, which the peer has not stated yet.

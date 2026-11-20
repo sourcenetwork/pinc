@@ -173,7 +173,6 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
     /// Record the stream credit the handshake gave the peer (the connection may lower it to its own cap).
     pub fn set_advertised(&mut self, streams: u64) {
         self.admit.adv = streams;
-        self.admit.adv_at = 0;
         self.admit.pend = false;
     }
 
