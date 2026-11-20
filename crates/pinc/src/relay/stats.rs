@@ -176,7 +176,7 @@ pub struct Stats {
     pub refused_carriers_full: u64,
     /// Streams refused as accepted because too many carriers were still in their handshake.
     pub refused_handshakes_full: u64,
-    /// Failed accepts.
+    /// Accepted streams the relay could not take: failed accepts, and streams that arrived while it was stopping.
     pub accept_errors: u64,
     /// Datagrams received.
     pub datagrams_in: u64,

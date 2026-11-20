@@ -36,6 +36,8 @@ use crate::keys::{Identity, Prekeys, is_identity};
 
 mod keep;
 mod mesh;
+#[cfg(test)]
+mod tests;
 mod tunnel;
 
 #[cfg(feature = "trace")]
@@ -232,15 +234,22 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
 
     /// Admit an accepted stream, or give it back if too many streams are still in their handshake.
     pub(crate) fn add_conn(&mut self, stream: S, kind: CarrierKind, now: u64) -> Result<usize, S> {
-        if self.handshaking >= self.limits.handshaking || self.stopping {
+        if self.stopping {
+            self.accept_failed();
+            return Err(stream);
+        }
+        if self.handshaking >= self.limits.handshaking {
             self.counters.refused_handshakes_full += 1;
             return Err(stream);
         }
         self.scid += 1;
+        // eight bytes of a counter that is at least one are always a valid connection id
         let Some(scid) = ConnId::new(&self.scid.to_be_bytes()) else {
+            self.accept_failed();
             return Err(stream);
         };
         let Ok(cfg) = session::responder_config(self.local, scid) else {
+            self.counters.protocol_failures += 1;
             return Err(stream);
         };
         let mut conn = Conn::new(
