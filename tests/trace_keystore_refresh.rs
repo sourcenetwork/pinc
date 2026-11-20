@@ -4,6 +4,7 @@
 //! (`keystore_refresh.ndjson`) for the TLA+ trace check (`TraceKeystoreRefresh.tla`): a "run" event has the calls,
 //! every output in hex and how often `fresh` was called; a "ref" event has the first two 32-byte fills of a reference
 //! `Drbg::new(seed)`; an "unseal" event says whether data one store sealed another store (or the same) unsealed.
+//! `Z` is all zeros, the identity of a reseed in the model.
 //!
 //! The test asserts, without the model, against a plain reference generator: a generator store's outputs are the
 //! reference's fills after the sealing key's (a reseed mixes in, a refresh mixes in exactly when `fresh` answered
@@ -47,7 +48,7 @@ fn seed(name: &str) -> [u8; 32] {
 
 fn ent(name: &str) -> [u8; 32] {
     match name {
-        "Z" => [0x5a; 32],
+        "Z" => [0; 32],
         "E1" => [0xe1; 32],
         "E2" => [0xe2; 32],
         _ => unreachable!(),
