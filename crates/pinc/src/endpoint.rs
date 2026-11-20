@@ -644,8 +644,8 @@ impl<H: Hosted, D: Discovery> Endpoint<H, D> {
     ///
     /// A peer whose session has gone quiet (not heard from for over 20 s) is probed first: the session is pinged at
     /// once, and this call returns a sub-session of it when the peer answers, or, when it does not within two of the
-    /// session's probe timeouts, makes its own handshake and closes the quiet session unless a write is in flight on
-    /// it.
+    /// session's probe timeouts, makes its own handshake and closes the quiet session only when nothing is in flight
+    /// on it and it is not kept alive through a relay carrier; otherwise the quiet session ends by its own timeout.
     ///
     /// Dropping the future closes a session that was about to open.
     ///

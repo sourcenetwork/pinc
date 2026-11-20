@@ -11,10 +11,14 @@
 //! dial to it asks first (`QUIET_PROBE`): the dial's slot holds its memory and no connection, and the quiet session
 //! sends one ping at once. As soon as any packet comes back the dial rides the session as a sub-session, with the id it
 //! already gave the application. When the wait (two of the session's probe timeouts, or `EndpointConfig::probe_window`)
-//! runs out unanswered, the dial makes its own handshake in the same slot, to the session's own direct address and then
-//! the addresses the caller gave, and closes the quiet session when it is still the one probed and nothing was in
-//! flight on it. While the probe runs the dial's id holds no session: a write on it fails at once, and closing it ends
-//! the dial. At most [`MAX_WAITERS`] dials probe one session; past that a dial makes its own handshake.
+//! runs out unanswered, the dial makes its own handshake in the same slot, to the caller's first address, the session's
+//! own direct address and then the caller's others, and closes the quiet session only when it is still the one
+//! probed, not a pulse session, still unheard and nothing is in flight on it, which the probe's own unanswered ping
+//! usually prevents: a dead session then ends by its own path timeout. A lapse waits on another protocol's running
+//! handshake to the peer instead of making a second one. While the probe runs the dial's id holds no session: a write
+//! on it fails at once, closing it ends the dial, and it answers `Stats` as a dial that has not connected and keeps
+//! the `FlightPaths`, `FirstResend` and `HoldFlight` it is sent, applied to the connection it gets. At most
+//! [`MAX_WAITERS`] dials probe one session; past that a dial makes its own handshake.
 //!
 //! The extension frame is repeated by the transport until its packet is acknowledged, so the peer may see it twice;
 //! the ids of the opens it accepted are remembered (1024 of them) and a repeat is ignored.

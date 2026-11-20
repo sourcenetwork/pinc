@@ -371,8 +371,20 @@ fn a_dial_after_twenty_seconds_without_hearing_a_peer_that_restarted_makes_a_han
         net.run_for((heard + 21 * SEC_NS).saturating_sub(net.now));
         assert_eq!(net.nodes[a].ep.sessions().count(), 1, "the dead session closed early");
         let marker = net.captured.len();
+        let parent = net.nodes[a].ep.sessions().next().unwrap();
+        let Answer::Stats(st) = net.nodes[a].ep.query(Query::Stats(parent)) else {
+            panic!()
+        };
+        // The bound of the issue: the probe's wait (two probe timeouts of the session), then one handshake.
+        let window = 2 * st.pto;
+        let dial_now = net.now;
         let (child, _) = dial(&mut net, a, b, ALPN_B);
-        net.run_for(3 * SEC_NS);
+        assert!(
+            net.run(dial_now + window + SEC_NS, |n| {
+                n.nodes[a].saw(|e| matches!(e, Event::Connected { session, .. } if *session == child))
+            }),
+            "the dial did not connect within the probe's wait and one handshake"
+        );
         assert!(
             handshake_since(&net, marker),
             "no handshake started for a silent parent"

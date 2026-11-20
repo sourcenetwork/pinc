@@ -37,6 +37,8 @@
 (* time) the connection's PING falls at the plan. Before it the stored     *)
 (* interval was not applied again and TLC found Applied violated there     *)
 (* (the findings).                                                         *)
+(* Not modelled: the override of a session a dial probes (QUIET_PROBE):    *)
+(* its ping is the probe's and its deadline includes now (owed, #105).     *)
 (***************************************************************************)
 EXTENDS Integers, FiniteSets
 CONSTANTS TIMES, ROLES, DIALERS, DIRECTS, WATCH, QU

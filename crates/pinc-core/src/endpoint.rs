@@ -713,7 +713,6 @@ ep_impl! {
         (s.m.in_use && s.m.generation == id.generation() && s.conn.is_some()).then_some(id.slot())
     }
 
-
     /// The session ids of the live sessions, in table order.
     pub fn sessions(&self) -> impl Iterator<Item = SessionId> + '_ {
         self.slots
