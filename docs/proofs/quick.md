@@ -392,6 +392,7 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `KeyRoll_good` | MaxPn 2 -> 1, MaxTime 2 -> 1, Sat 2 -> 1 (one roll in all: Cap0 = Cap1 = 1) |
 | `KeyRoll_stale` | MaxPn 2 -> 1, MaxTime 2 -> 1 |
 | `KeyRoll_two` | MaxPn 2 -> 1 |
+| `KeyRoll_xbroken` | MaxPn 2 -> 1 |
 | `KeystoreSealed` | the alteration symbols Syms (of the blobs of both keys) -> SymsQuick (of the blobs of key k1), the representatives Reps 8 -> RepsQuick 4 (the one-symbol header) |
 | `KeystoreStore` | steps MaxSteps 6 -> 3 (MaxSteps <- MaxStepsQuick) |
 | `Layout` | SmallLen 2100 -> 150, PreN 24 -> 9, Seeds -> SeedsQuick (every family over fewer values, the boundary ones kept) |
