@@ -35,7 +35,9 @@ else
 fi
 jtmp_root=$(mktemp -d)
 trap 'rm -rf "$jtmp_root"' EXIT
-jopts() { printf -- '-XX:MaxRAMPercentage=%s%s -Djava.io.tmpdir=%s' "$HEAP" "$JIT" "$(mktemp -d "$jtmp_root/XXXXXX")"; }
+# A recursive operator of a model recurses on the JVM's stack, and how deep the default megabyte goes depends on the
+# Java version (Padding overflows it on Java 17 and not on 21): every run gets 16 MiB.
+jopts() { printf -- '-Xss16m -XX:MaxRAMPercentage=%s%s -Djava.io.tmpdir=%s' "$HEAP" "$JIT" "$(mktemp -d "$jtmp_root/XXXXXX")"; }
 cfg() { # cfg <config> : the file TLC reads for <config> in this profile
     if [ "$PROFILE" = quick ] && [ -f "proofs/tla/quick/$1.cfg" ]; then echo "proofs/tla/quick/$1.cfg"; else echo "proofs/tla/$1.cfg"; fi
 }
