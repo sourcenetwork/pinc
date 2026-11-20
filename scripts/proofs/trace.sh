@@ -11,8 +11,10 @@ PINC_TRACE_DIR="$dir" cargo test -q -p pinc-tests --features hwenc \
     --test trace_connect_queue --test trace_connect_sleep --test trace_core_backlog --test trace_core_route_index \
     --test trace_ctl --test trace_dag_block --test trace_dag_car --test trace_dag_cid --test trace_dag_sizes \
     --test trace_dgram_queue --test trace_dgram_size --test trace_dtn_request --test trace_dtn_want \
-    --test trace_evqueue --test trace_facade_records --test trace_facade_relay_carriers \
+    --test trace_dial_report \
+    --test trace_evqueue --test trace_facade_gate --test trace_facade_records --test trace_facade_relay_carriers \
     --test trace_facade_relay_keep --test trace_facade_role_clock --test trace_facade_stream \
+    --test trace_facade_turn \
     --test trace_facade_waits --test trace_finish_resend --test trace_frame_refs --test trace_iface \
     --test trace_keystore_refresh --test trace_keystore_template --test trace_lazy --test trace_ledger \
     --test trace_loss_estimate \
@@ -190,6 +192,11 @@ par trace_tlc TraceFacadeState "saved state framing"
 par trace_tlc TraceFacadeBufs "facade buffer pools"
 par trace_tlc TraceFacadeMachines "facade machine pool rule"
 par trace_tlc TraceFacadeEvents "facade topic event queue"
+par trace_tlc TraceFacadeRevoke "facade revoke"
+par trace_tlc TraceFacadeRevokeFull "facade revoke with the revoked set full"
+par trace_tlc TraceFacadeAcpForget "facade access answers per peer"
+par trace_tlc TraceDialReport "dial report"
+par trace_tlc TraceFacadeTurn "facade drive turn"
 par trace_tlc TraceConnectOwnTimer "record publish timer"
 par trace_tlc TraceNodeDue "node deadline cache"
 par trace_tlc TraceKeystoreRefresh "keystore refresh"
