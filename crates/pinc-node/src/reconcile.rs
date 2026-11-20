@@ -280,6 +280,21 @@ where
         }
     }
 
+    /// A dial for the reconcile protocol will never be answered (the node leaves or the peer is revoked): the rounds
+    /// waiting for the peer end cancelled.
+    pub(crate) fn sets_cancelled(&mut self, peer: &NodeId) {
+        let Some(rec) = self.recs.as_deref_mut() else {
+            return;
+        };
+        let (gone, kept): (Vec<Round>, Vec<Round>) = core::mem::take(&mut rec.rounds)
+            .into_iter()
+            .partition(|x| x.peer == *peer && x.active.is_none());
+        rec.rounds = kept;
+        for round in &gone {
+            self.round_fail(round, ReconcileFailure::Cancelled);
+        }
+    }
+
     /// A session of the reconcile protocol ended: its answered streams go and its active rounds retry.
     pub(crate) fn sets_down(&mut self, now: Nanos, session: SessionId, _peer: &NodeId) {
         let Some(rec) = self.recs.as_deref_mut() else {

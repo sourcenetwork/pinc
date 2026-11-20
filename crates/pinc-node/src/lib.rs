@@ -76,6 +76,8 @@ mod events;
 mod hosts;
 mod io;
 mod layer;
+#[cfg(test)]
+mod layer_tests;
 mod node;
 mod portmap;
 #[cfg(feature = "trace")]

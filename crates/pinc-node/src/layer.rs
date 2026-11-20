@@ -159,7 +159,7 @@ where
             return;
         }
         if self.leaving || io.revoked.contains(peer) {
-            self.layer_failed(now, layer, peer);
+            self.layer_lost(now, layer, peer, true);
             return;
         }
         if layer == Layer::Dtn && io.dtn_waits(now, peer) {
@@ -188,10 +188,16 @@ where
         self.io.lconn.remove(&(layer, peer));
         if !self.layer_on(layer) || self.io.revoked.contains(&peer) || self.leaving {
             self.io.shed(session);
+            if !incoming {
+                self.layer_lost(now, layer, &peer, true);
+            }
             return;
         }
         if self.io.lsess.len() >= TABLE_MAX {
             self.io.shed(session);
+            if !incoming {
+                self.layer_lost(now, layer, &peer, false);
+            }
             return;
         }
         if !incoming && self.io.lout.contains_key(&(layer, peer)) {
@@ -221,6 +227,17 @@ where
             Layer::Values => self.values_up(now, session, &peer, incoming),
             Layer::Sets => self.sets_up(now, session, &peer, incoming),
             Layer::Dtn => self.dtn_up(now, session, &peer, incoming),
+        }
+    }
+
+    /// A dial of `layer` to `peer` ends with no session: refused for good (`cancel`: the node leaves or the peer is
+    /// revoked, so a reconcile round ends cancelled) or failed (the layer retries by its own rules).
+    fn layer_lost(&mut self, now: Nanos, layer: Layer, peer: &NodeId, cancel: bool) {
+        if cancel && layer == Layer::Sets {
+            self.io.lconn.remove(&(layer, *peer));
+            self.sets_cancelled(peer);
+        } else {
+            self.layer_failed(now, layer, peer);
         }
     }
 
