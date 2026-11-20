@@ -962,7 +962,7 @@ ep_impl! {
         if s.m.dirty != 0 || !s.m.in_use {
             return;
         }
-        let q = usize::from(s.m.gossip && !s.m.ctrl_pending);
+        let q = s.m.send_queue();
         s.m.dirty = u8::try_from(q + 1).unwrap_or(1);
         s.m.dirty_next = NIL;
         let tail = self.dirty_tail.get(q).copied().unwrap_or(NIL);

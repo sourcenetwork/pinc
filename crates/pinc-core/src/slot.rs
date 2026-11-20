@@ -292,6 +292,12 @@ pub(crate) struct Meta<const NP: usize> {
 }
 
 impl<const NP: usize> Meta<NP> {
+    /// The send queue this session belongs in: 1 for a broadcast session without a sub-session open still to leave,
+    /// 0 for the others.
+    pub(crate) const fn send_queue(&self) -> usize {
+        if self.gossip && !self.ctrl_pending { 1 } else { 0 }
+    }
+
     pub(crate) const EMPTY: Self = Self {
         generation: 0,
         in_use: false,

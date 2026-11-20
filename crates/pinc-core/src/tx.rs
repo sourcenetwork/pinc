@@ -1,13 +1,15 @@
 //! Datagrams out: the send queue, the ledger gate and batching across connections.
 //!
 //! Sessions that may have something to send wait on two queues, ordinary sessions first and broadcast sessions after
-//! them (a broadcast session with a sub-session open still to leave counts as ordinary, so the open keeps its
-//! place). [`Endpoint::poll_transmit`] takes the first session, asks its connection for a datagram, and sends it
-//! through the ledger gate: a datagram the ledger holds back is dropped, which the connection treats as loss (the size
-//! probe is the exception: it is not built for a path whose address the ledger holds).
+//! them (a broadcast session with a sub-session open still to leave counts as ordinary: it moves to the ordinary
+//! queue as soon as the open is queued, so the open keeps its place). [`Endpoint::poll_transmit`] takes the first
+//! session, asks its connection for a datagram, and sends it through the ledger gate: a datagram the ledger holds back
+//! is dropped, which the connection treats as loss (the size probe is the exception: it is not built for a path whose
+//! address the ledger holds).
 //! Between connections the endpoint batches for segmentation offload: after a datagram, the next sessions' datagrams
-//! to the same destination of the same size follow in the same buffer, ending with a shorter one; a datagram for another
-//! destination is kept for the next call. The session just served moves to the back of its queue, so each gets a turn.
+//! to the same destination of the same size follow in the same buffer, ending with a shorter one; a datagram for
+//! another destination is kept for the next call. The session just served moves to the back of the queue its class
+//! names after the send, so each gets a turn and a session whose open has left waits behind the ordinary ones.
 //!
 //! The endpoint's own answers, the rejects it sends to a first message without a session (see `stateless`), go first,
 //! each already charged to the ledger.
@@ -306,13 +308,59 @@ ep_impl! {
         }
     }
 
-    /// Move the first session of queue `q` to its end, so the others get a turn.
+    /// Move the first session of queue `q` to the end of the queue its class names now, so the others get a turn.
     pub(crate) fn dirty_rotate(&mut self, q: usize, now: u64) {
         let Some(h) = self.dirty_head.get(q).copied().filter(|h| *h != NIL) else { return };
-        if self.dirty_head.get(q) == self.dirty_tail.get(q) {
+        if self.dirty_head.get(q) == self.dirty_tail.get(q)
+            && self.slots.get(h as usize).is_some_and(|s| s.m.send_queue() == q)
+        {
             return;
         }
         self.dirty_pop(q);
         self.mark_dirty(h as usize, now);
+    }
+
+    /// Move session `i` from the broadcast queue to the back of the ordinary one when its class became ordinary (a
+    /// sub-session open was queued in it, or it stopped being a broadcast session). A session that became broadcast
+    /// moves at its next turn instead (`dirty_rotate`).
+    // vertexia: walks the broadcast queue (one step per waiting broadcast session), per open or flag change and
+    // never per packet; a previous-link per slot if a node waits on more than a few hundred broadcast sessions.
+    pub(crate) fn dirty_promote(&mut self, i: usize, now: u64) {
+        let Ok(idx) = u32::try_from(i) else { return };
+        let Some(s) = self.slots.get(i) else { return };
+        if s.m.dirty != 2 || s.m.send_queue() != 0 {
+            return;
+        }
+        let next = s.m.dirty_next;
+        let mut prev = NIL;
+        let mut cur = self.dirty_head.get(1).copied().unwrap_or(NIL);
+        for _ in 0..self.slots.len() {
+            if cur == idx || cur == NIL {
+                break;
+            }
+            prev = cur;
+            cur = self.slots.get(cur as usize).map_or(NIL, |s| s.m.dirty_next);
+        }
+        if cur != idx {
+            return;
+        }
+        match self.slots.get_mut(prev as usize) {
+            Some(p) => p.m.dirty_next = next,
+            None => {
+                if let Some(h) = self.dirty_head.get_mut(1) {
+                    *h = next;
+                }
+            }
+        }
+        if self.dirty_tail.get(1) == Some(&idx)
+            && let Some(t) = self.dirty_tail.get_mut(1)
+        {
+            *t = prev;
+        }
+        if let Some(s) = self.slots.get_mut(i) {
+            s.m.dirty = 0;
+            s.m.dirty_next = NIL;
+        }
+        self.mark_dirty(i, now);
     }
 }

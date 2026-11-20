@@ -122,7 +122,7 @@ ep_impl! {
         self.sync_cids(child, true);
         self.sync_ack_every(child);
         // The open leaves in the parent ahead of anything the child sends.
-        let queued = self.queue_sub_open(parent, alpn, cc, cs);
+        let queued = self.queue_sub_open(parent, alpn, cc, cs, now);
         trace!(self, now, Sub { step: 0, parent: parent as u64, child: child as u64 });
         self.settle(parent, now);
         self.settle(child, now);
@@ -163,7 +163,7 @@ ep_impl! {
     }
 
     /// Queue the sub-session open extension in `parent`. Returns whether it was queued.
-    fn queue_sub_open(&mut self, parent: usize, alpn: Alpn, cc: ConnId, cs: ConnId) -> bool {
+    fn queue_sub_open(&mut self, parent: usize, alpn: Alpn, cc: ConnId, cs: ConnId, now: u64) -> bool {
         let mut body = [0u8; 1 + pinc_security::ids::MAX_ALPN_LEN + 2 * CID_LEN];
         let a = alpn.as_bytes();
         let used = 1 + a.len() + 2 * CID_LEN;
@@ -184,7 +184,11 @@ ep_impl! {
             s.m.ctrl_pending = true;
             s.conn.as_mut().map(|c| c.send_extension(ext::SUB_SESSION_OPEN, body.get(..used).unwrap_or_default()))
         });
-        matches!(queued, Some(Ok(())))
+        let ok = matches!(queued, Some(Ok(())));
+        if ok {
+            self.dirty_promote(parent, now);
+        }
+        ok
     }
 
     /// A session of `peer` that is not yet allowed, whatever its role and state, that a dial for another protocol can
@@ -301,7 +305,7 @@ ep_impl! {
             if activated {
                 self.follow_parent_paths(parent, c, now);
             }
-            if activated && self.queue_sub_open(parent, alpn, ids.0, ids.1) {
+            if activated && self.queue_sub_open(parent, alpn, ids.0, ids.1, now) {
                 self.settle(parent, now);
             } else {
                 // It cannot be opened: close it so the application dials again.

@@ -350,6 +350,7 @@ ep_impl! {
                 if let Some(s) = self.slots.get_mut(i) {
                     s.m.gossip = gossip;
                 }
+                self.dirty_promote(i, now);
                 Ok(Value::None)
             }
         }

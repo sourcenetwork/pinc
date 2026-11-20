@@ -11,8 +11,9 @@
 //!
 //! The test asserts what it can itself: no record was lost, a result is one run of equal-size datagrams that fits the
 //! buffer and the segment limit, no session waits twice, every datagram taken from a connection is gated, dropped or
-//! kept, and the datagrams the ledger let out are the datagrams of the result. A second test builds the case of a
-//! lone broadcast session whose open has left, which the module documentation of `tx.rs` and the code disagree on.
+//! kept, and the datagrams the ledger let out are the datagrams of the result. Further tests build the moves
+//! between the two queues: a session served alone whose class changed, and a waiting session whose class became
+//! ordinary.
 #![allow(
     clippy::unwrap_used,
     clippy::indexing_slicing,
@@ -596,69 +597,200 @@ fn trace_tx() {
     });
 }
 
+/// Open a stream on session `s` of node `n` and write `len` bytes to it at the network's time.
+fn write(net: &mut CoreNet, n: usize, s: SessionId, len: usize) {
+    let now = net.now;
+    let Value::Stream(id) = net.nodes[n]
+        .cmd(
+            now,
+            Command::OpenStream {
+                session: s,
+                bidi: false,
+            },
+        )
+        .unwrap()
+        .value
+    else {
+        panic!("no stream")
+    };
+    net.nodes[n]
+        .cmd(
+            now,
+            Command::Write {
+                session: s,
+                stream: id,
+                data: &vec![0x5a; len],
+            },
+        )
+        .unwrap();
+}
+
+/// The sessions waiting in queue `k` of node `n`, first to last.
+fn queue(net: &CoreNet, n: usize, k: usize) -> Vec<usize> {
+    net.nodes[n].ep.trace_dirty(k).collect()
+}
+
+fn set_gossip(net: &mut CoreNet, n: usize, session: SessionId, gossip: bool) {
+    let now = net.now;
+    net.nodes[n].cmd(now, Command::SetGossip { session, gossip }).unwrap();
+}
+
+/// The remote of the next datagram node `n` sends.
+fn next_remote(net: &mut CoreNet, n: usize) -> Option<SocketAddr> {
+    let mut buf = vec![0u8; 1500];
+    let now = net.now;
+    net.nodes[n].ep.poll_transmit(now, &mut buf).map(|t| t.remote)
+}
+
+/// A node with all its queues empty after its sessions settled.
+fn quiet(net: &mut CoreNet, a: usize) {
+    net.run_for(2 * SEC_NS);
+    assert_eq!(queue(net, a, 0), Vec::<usize>::new(), "queue 0 is not empty");
+    assert_eq!(queue(net, a, 1), Vec::<usize>::new(), "queue 1 is not empty");
+}
+
 /// A broadcast session counts as ordinary while a sub-session open waits to leave it, and as broadcast once the open
-/// has left (the module documentation of `tx.rs`): then the session that is ordinary is served before it, whatever
-/// place it kept in the queue.
+/// has left (the module documentation of `tx.rs`): the open puts it in queue 0 ahead of the sub-session it opens, and
+/// once the open has left the ordinary session is served first.
 #[test]
-fn a_lone_broadcast_session_moves_behind_after_its_open() {
+fn a_broadcast_session_moves_behind_after_its_open() {
     big_stack(|| {
         let mut net = CoreNet::new(10 * MS_NS);
         let (a, b, c) = (net.add(1), net.add(2), net.add(3));
         let (s1, _) = net.connect_pair(a, b, ALPN_A, Role::Other);
         let (s2, _) = net.connect_pair(a, c, ALPN_A, Role::Other);
-        net.run_for(2 * SEC_NS);
-        assert!(net.nodes[a].ep.trace_dirty(0).next().is_none(), "queue 0 is not empty");
-        assert!(net.nodes[a].ep.trace_dirty(1).next().is_none(), "queue 1 is not empty");
+        quiet(&mut net, a);
         let now = net.now;
         let (peer1, addr1) = (net.nodes[b].node, net.nodes[b].addr);
         let addr2 = net.nodes[c].addr;
-        net.nodes[a]
-            .cmd(
-                now,
-                Command::SetGossip {
-                    session: s1,
-                    gossip: true,
-                },
-            )
-            .unwrap();
-        net.nodes[a].connect(now, peer1, ALPN_B, addr1, Role::Other).unwrap();
-        let waiting: Vec<usize> = net.nodes[a].ep.trace_dirty(0).collect();
-        assert_eq!(waiting, [s1.slot()], "the open waits in queue 0 behind no one");
-        let write = |net: &mut CoreNet, s: SessionId, n: usize| {
-            let Value::Stream(id) = net.nodes[a]
-                .cmd(
-                    now,
-                    Command::OpenStream {
-                        session: s,
-                        bidi: false,
-                    },
-                )
-                .unwrap()
-                .value
-            else {
-                panic!("no stream")
-            };
-            net.nodes[a]
-                .cmd(
-                    now,
-                    Command::Write {
-                        session: s,
-                        stream: id,
-                        data: &vec![0x5a; n],
-                    },
-                )
-                .unwrap();
-        };
-        write(&mut net, s1, 8000);
-        let mut buf = vec![0u8; 1500];
-        let first = net.nodes[a].ep.poll_transmit(now, &mut buf);
-        assert!(first.is_some(), "the first call served no one");
-        write(&mut net, s2, 3000);
-        let second = net.nodes[a].ep.poll_transmit(now, &mut buf);
+        set_gossip(&mut net, a, s1, true);
+        let rep = net.nodes[a].connect(now, peer1, ALPN_B, addr1, Role::Other).unwrap();
+        let child = net.nodes[a].session(&rep);
         assert_eq!(
-            second.map(|t| t.remote),
+            queue(&net, a, 0),
+            [s1.slot(), child.slot()],
+            "the open waits in queue 0 ahead of the sub-session it opens"
+        );
+        write(&mut net, a, s1, 8000);
+        assert!(next_remote(&mut net, a).is_some(), "the first call served no one");
+        assert!(
+            !queue(&net, a, 0).contains(&s1.slot()) && queue(&net, a, 1).contains(&s1.slot()),
+            "once its open has left the session waits behind the ordinary ones"
+        );
+        write(&mut net, a, s2, 3000);
+        let served: Vec<_> = (0..3).map(|_| next_remote(&mut net, a)).collect();
+        assert!(
+            served.contains(&Some(addr2)),
+            "the ordinary session is served before the broadcast one: {served:?}"
+        );
+    });
+}
+
+/// A session made broadcast while it waits alone in queue 0 is moved behind at its turn: it cannot keep the first
+/// place until it runs dry.
+#[test]
+fn a_lone_session_made_broadcast_moves_behind_at_its_turn() {
+    big_stack(|| {
+        let mut net = CoreNet::new(10 * MS_NS);
+        let (a, b, c) = (net.add(1), net.add(2), net.add(3));
+        let (s1, _) = net.connect_pair(a, b, ALPN_A, Role::Other);
+        let (s2, _) = net.connect_pair(a, c, ALPN_A, Role::Other);
+        quiet(&mut net, a);
+        let (addr1, addr2) = (net.nodes[b].addr, net.nodes[c].addr);
+        set_gossip(&mut net, a, s2, true);
+        write(&mut net, a, s2, 3000);
+        write(&mut net, a, s1, 8000);
+        assert_eq!(queue(&net, a, 0), [s1.slot()]);
+        assert_eq!(queue(&net, a, 1), [s2.slot()]);
+        set_gossip(&mut net, a, s1, true);
+        assert_eq!(
+            queue(&net, a, 0),
+            [s1.slot()],
+            "a session made broadcast keeps its place until its turn"
+        );
+        assert_eq!(next_remote(&mut net, a), Some(addr1));
+        assert!(
+            !queue(&net, a, 0).contains(&s1.slot()),
+            "a broadcast session served alone waits behind once served"
+        );
+        assert!(queue(&net, a, 1).contains(&s1.slot()));
+        assert_eq!(
+            next_remote(&mut net, a),
             Some(addr2),
-            "the session whose open has left is served before the ordinary one"
+            "the other broadcast session gets its turn"
+        );
+    });
+}
+
+/// A broadcast session waiting behind others moves to the ordinary queue when its open is queued, so the open
+/// leaves before the broadcast session that waited ahead of it.
+#[test]
+fn a_broadcast_session_waiting_behind_others_is_promoted_when_its_open_is_queued() {
+    big_stack(|| {
+        let mut net = CoreNet::new(10 * MS_NS);
+        let (a, b, c, d) = (net.add(1), net.add(2), net.add(3), net.add(4));
+        let (sb, _) = net.connect_pair(a, b, ALPN_A, Role::Other);
+        let (sa, _) = net.connect_pair(a, d, ALPN_A, Role::Other);
+        let (so, _) = net.connect_pair(a, c, ALPN_A, Role::Other);
+        quiet(&mut net, a);
+        let now = net.now;
+        let (node_b, addr_b, addr_c) = (net.nodes[b].node, net.nodes[b].addr, net.nodes[c].addr);
+        set_gossip(&mut net, a, sa, true);
+        set_gossip(&mut net, a, sb, true);
+        write(&mut net, a, sa, 3000);
+        write(&mut net, a, sb, 3000);
+        write(&mut net, a, so, 8000);
+        assert_eq!(queue(&net, a, 0), [so.slot()]);
+        assert_eq!(queue(&net, a, 1), [sa.slot(), sb.slot()]);
+        let rep = net.nodes[a].connect(now, node_b, ALPN_B, addr_b, Role::Other).unwrap();
+        let child = net.nodes[a].session(&rep);
+        assert_eq!(
+            queue(&net, a, 0),
+            [so.slot(), sb.slot(), child.slot()],
+            "the open moves its session to the ordinary queue, ahead of the sub-session it opens"
+        );
+        assert_eq!(queue(&net, a, 1), [sa.slot()]);
+        assert_eq!(next_remote(&mut net, a), Some(addr_c));
+        assert_eq!(
+            next_remote(&mut net, a),
+            Some(addr_b),
+            "the open leaves before the broadcast session that waited ahead of it"
+        );
+        assert_eq!(
+            queue(&net, a, 1),
+            [sa.slot(), sb.slot()],
+            "once its open has left the session waits behind again"
+        );
+    });
+}
+
+/// A waiting broadcast session that stops being one moves to the back of the ordinary queue at once.
+#[test]
+fn a_waiting_broadcast_session_made_ordinary_moves_to_the_ordinary_queue() {
+    big_stack(|| {
+        let mut net = CoreNet::new(10 * MS_NS);
+        let (a, b, c) = (net.add(1), net.add(2), net.add(3));
+        let (s1, _) = net.connect_pair(a, b, ALPN_A, Role::Other);
+        let (s2, _) = net.connect_pair(a, c, ALPN_A, Role::Other);
+        quiet(&mut net, a);
+        let (addr1, addr2) = (net.nodes[b].addr, net.nodes[c].addr);
+        set_gossip(&mut net, a, s1, true);
+        write(&mut net, a, s1, 3000);
+        write(&mut net, a, s2, 3000);
+        assert_eq!(queue(&net, a, 0), [s2.slot()]);
+        assert_eq!(queue(&net, a, 1), [s1.slot()]);
+        set_gossip(&mut net, a, s1, false);
+        assert_eq!(
+            queue(&net, a, 0),
+            [s2.slot(), s1.slot()],
+            "a session made ordinary joins the ordinary queue at once"
+        );
+        assert_eq!(queue(&net, a, 1), Vec::<usize>::new());
+        assert_eq!(next_remote(&mut net, a), Some(addr2));
+        assert_eq!(
+            next_remote(&mut net, a),
+            Some(addr1),
+            "the ordinary sessions take turns"
         );
     });
 }
