@@ -278,6 +278,8 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `ExtIn_stay` | PMAX 9 -> 8 |
 | `FacadeAcpForget` | bounded by constraint: behaviours of depth 8 (FacadeAcpForgetQuickBound); one peer and two listed protocols are what it is about The code as built, one peer and two listed protocols taken either way, any hook to start with (the host may edit it). Revoke, unrevoke and admission_changed drop both answers of the peer, a dial to a revoked peer is refused before anything is sent, each session is decided on its own protocol and direction, the endpoint is told whether the peer is allowed any of the questions it is asked about, its own sessions and dials among them, and a dial the gate allows drops a refusal held for its peer. |
 | `FacadeAcpForget_two` | bounded by constraint: behaviours of depth 5 (FacadeAcpForget_twoQuickBound) |
+| `FacadeOpen` | Opens {o1, o2, o3, o4} -> {o1, o2, o3} |
+| `FacadeOpen_nohandoff` | Places 2 -> 1 |
 | `FacadeRecords` | MaxSeq 3 -> 2 |
 | `FacadeRelayCarriers_end` | MAXH 2 -> 1 (one stream accepted in all: a full handshake or carrier table is not reached over the end of a run; the deep FacadeRelayCarriers.cfg reaches them with 3) |
 | `FacadeRelayKeep` | TMAX 3 -> 2, CLOCKS {0, 1, 3} -> {0, 2} (a restart at 0 or later, back in time or ahead), SEQS 2 -> 1 (one record per node, no higher seq), PMAX 3 -> 1 and MBP 2 -> 1 (one packet held; FacadeRelayKeep_mailq keeps the mailbox bounds) |
