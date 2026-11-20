@@ -803,7 +803,8 @@ fn trace_facade_acp() {
     let pr = g.pr();
     assert!(pr.cache[0].is_none() && pr.known[0].is_none(), "both answers ran out");
     acp_line(&mut g, "expire", ",\"peer\":\"p1\"");
-    acp_line(&mut g, "clear", "");
+    // `Clear` (a full table of allows emptied by one more peer) is not reached by this run: it needs KNOWN_MAX live
+    // allows, so no `clear` line is written.
     let out = g.finish("facade_acp.ndjson");
     for (op, n) in [
         ("init", 1),
@@ -817,7 +818,6 @@ fn trace_facade_acp() {
         ("rehook", 2),
         ("expire", 2),
         ("lapse", 1),
-        ("clear", 1),
     ] {
         assert!(count(&out, op) >= n, "{op}: {} of {n}", count(&out, op));
     }
