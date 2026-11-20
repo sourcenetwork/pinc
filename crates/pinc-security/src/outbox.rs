@@ -83,7 +83,10 @@ impl Outbox {
         write: impl FnOnce(&mut Writer<'_>) -> Result<(), WireError>,
     ) -> Result<(), Failure> {
         let mut w = Writer::new(&mut self.msg);
-        write(&mut w).map_err(Failure::BadPayload)?;
+        if let Err(e) = write(&mut w) {
+            self.clear_message();
+            return Err(Failure::BadPayload(e));
+        }
         self.len = w.written().len();
         self.min_len = min_len;
         self.send = true;
@@ -325,5 +328,26 @@ impl OutboxProbe {
             resume_rejected: o.resume_rejected,
             failed: o.failed,
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, reason = "tests assert")]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_failed_build_leaves_nothing_to_send_again() {
+        let mut o = Outbox::new();
+        o.build(3, |w| w.put_slice(&[1, 2, 3])).unwrap();
+        assert_eq!((o.len(), o.send), (3, true));
+        let r = o.build(9, |w| {
+            w.put_u8(7)?;
+            Err(WireError::VarintOverflow)
+        });
+        assert!(matches!(r, Err(Failure::BadPayload(WireError::VarintOverflow))));
+        assert_eq!((o.len(), o.min_len, o.send), (0, 3, false));
+        o.resend();
+        assert!(!o.send, "nothing is left to send again");
     }
 }
