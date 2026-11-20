@@ -27,7 +27,7 @@ use std::net::SocketAddr;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use pinc::relay::{CarrierFns, Peer, Relay as RelayHost};
+use pinc::relay::{CarrierFns, MemStore, Peer, Relay as RelayHost};
 use pinc::{CarrierKind, Endpoint, Error, ErrorKind, Event, Hosted, Relay};
 use pinc_common::{ECHO, eventually, serve_conn, within};
 use smol::channel::{Receiver, Sender, unbounded};
@@ -201,7 +201,12 @@ fn member_with(
 }
 
 /// The endpoint that is the relay and the hub: its members' carriers arrive on `accepted`.
-fn relay_endpoint(net: Rc<Net>, at: SocketAddr, accepted: Receiver<(Pipe, CarrierKind)>) -> Endpoint<impl Hosted> {
+fn relay_endpoint(
+    net: Rc<Net>,
+    at: SocketAddr,
+    accepted: Receiver<(Pipe, CarrierKind)>,
+    store: MemStore,
+) -> Endpoint<impl Hosted> {
     let rx = net.attach(at);
     let n = net;
     let carriers = CarrierFns::new(
@@ -233,7 +238,7 @@ fn relay_endpoint(net: Rc<Net>, at: SocketAddr, accepted: Receiver<(Pipe, Carrie
         .unwrap()
         .hub()
         .local_addr(at)
-        .relay_role(RelayHost::builder(), carriers)
+        .relay_role(RelayHost::builder().store(store), carriers)
         .build(
             async move |buf: &mut [u8]| {
                 let (d, from) = rx.recv().await.map_err(|_| broken())?;
@@ -256,24 +261,34 @@ struct Rig<R: Hosted, A: Hosted, B: Hosted> {
     a: Endpoint<A>,
     b: Endpoint<B>,
     b_carrier_up: Rc<Cell<bool>>,
+    /// The relay endpoint's run: dropping it ends the run, and spawning [`run_task`] again starts the next one.
+    relay_run: RefCell<Option<nuclei::Task<()>>>,
 }
 
-fn drive<H: Hosted + 'static>(ep: &Endpoint<H>) {
+fn run_task<H: Hosted + 'static>(ep: &Endpoint<H>) -> nuclei::Task<()> {
     let ep = ep.clone();
     nuclei::spawn_local(async move {
         let _ = ep.run().await;
     })
-    .detach();
+}
+
+fn drive<H: Hosted + 'static>(ep: &Endpoint<H>) {
+    run_task(ep).detach();
 }
 
 /// The relay and two members that know only it; with `apart` the two members cannot reach each other.
 fn rig(apart: bool) -> Rig<impl Hosted + 'static, impl Hosted + 'static, impl Hosted + 'static> {
+    rig_with(apart, MemStore::new())
+}
+
+/// [`rig`] with the relay's record store given, so a test can read what it holds.
+fn rig_with(apart: bool, store: MemStore) -> Rig<impl Hosted + 'static, impl Hosted + 'static, impl Hosted + 'static> {
     let net = Net::new();
     if apart {
         net.cut(addr(A_ADDR), addr(B_ADDR));
     }
     let (to_relay, accepted) = unbounded();
-    let relay = relay_endpoint(Rc::clone(&net), addr(RELAY_ADDR), accepted);
+    let relay = relay_endpoint(Rc::clone(&net), addr(RELAY_ADDR), accepted, store);
     let known = Relay::new(relay.id())
         .with_udp(addr(RELAY_ADDR))
         .with_tcp(addr(RELAY_ADDR));
@@ -287,7 +302,7 @@ fn rig(apart: bool) -> Rig<impl Hosted + 'static, impl Hosted + 'static, impl Ho
         to_relay,
         Rc::clone(&b_carrier_up),
     );
-    drive(&relay);
+    let relay_run = RefCell::new(Some(run_task(&relay)));
     drive(&a);
     drive(&b);
     let server = b.clone();
@@ -303,6 +318,7 @@ fn rig(apart: bool) -> Rig<impl Hosted + 'static, impl Hosted + 'static, impl Ho
         a,
         b,
         b_carrier_up,
+        relay_run,
     }
 }
 
@@ -531,6 +547,51 @@ async fn mail_held_for_a_member_that_returns_on_an_unvalidated_route_is_handed_o
             s.mailbox.delivered >= 1 && s.mailbox_members == 0
         })
         .await;
+    })
+    .await;
+}
+
+/// A second run of the relay endpoint takes the role as the first left it: the packets held for a sleeping member are
+/// restored once, not once for each run, so a member that returns is handed each of them exactly once.
+#[nuclei::test]
+async fn a_second_run_of_the_relay_endpoint_holds_a_packet_once() {
+    let store = MemStore::new();
+    let rig = rig_with(true, store.clone());
+    within(150, async {
+        both_carriers_open(&rig).await;
+        assert!(rig.b.join(b"relay/topic", &[]).await.unwrap());
+        settle(&rig.relay, 30, "the hub holds B's session", |s| s.hub_sessions >= 1).await;
+        rig.b_carrier_up.set(false);
+        rig.b.suspend().await;
+        settle(&rig.relay, 30, "B's carrier closed", |s| s.carriers == 1).await;
+        // the relay tunnels to a member it heard within the freshness bound (20 s): wait it out so the mail is held
+        nuclei::time::sleep(Duration::from_secs(21)).await;
+        let (a, b_id) = (rig.a.clone(), rig.b.id());
+        nuclei::spawn_local(async move {
+            let _ = a.connect(b_id, ECHO).await;
+        })
+        .detach();
+        settle(&rig.relay, 30, "the relay holds mail for B", |s| s.mailbox_members == 1).await;
+        eventually(30, "the held packets are in the store", || {
+            let store = store.clone();
+            async move { store.mailboxes() == 1 }
+        })
+        .await;
+        let held = rig.relay.relay_stats().unwrap().mailbox.stored;
+        // the run ends and the next one starts on the same endpoint
+        drop(rig.relay_run.borrow_mut().take());
+        *rig.relay_run.borrow_mut() = Some(run_task(&rig.relay));
+        settle(&rig.relay, 60, "A holds a carrier again", |s| s.carriers == 1).await;
+        // B returns from a rebound address (an unvalidated route) and cannot open a carrier
+        rig.net.rebind(addr(B_ADDR), addr(B_MOVED));
+        rig.b.resume(false).await;
+        settle(&rig.relay, 60, "the held mail is handed over", |s| {
+            s.mailbox.delivered >= 1 && s.mailbox_members == 0
+        })
+        .await;
+        let s = rig.relay.relay_stats().unwrap();
+        assert_eq!(s.mailbox.stored, held, "the second run held the packets again: {s:?}");
+        assert!(s.mailbox.delivered <= held, "the second run handed a packet over twice: {s:?}");
     })
     .await;
 }
