@@ -59,7 +59,8 @@ Backoff(F, now, p, hub) == BackoffN(F, Size(F), now, p, hub)
 \* deny_back: a wait of at least DENY_FIRST doubles up to DENY_CAP, else DENY_FIRST
 DenyWait(F, p) ==
     IF F[p] # None /\ Le(DFIRST, F[p][2]) THEN Min(Dbl(F[p][2]), DCAP) ELSE DFIRST
-DenyBack(F, now, p) == LET b == DenyWait(F, p) IN [back |-> b, f |-> SetFailed(F, now, p, b)]
+DenyBackN(F, n, now, p) == LET b == DenyWait(F, p) IN [back |-> b, f |-> SetFailedN(F, n, now, p, b)]
+DenyBack(F, now, p) == DenyBackN(F, Size(F), now, p)
 
 \* the backoff window of dial_peer (and of the frame hand-off): `now < until`
 Window(F, now, p) == F[p] # None /\ Lt(now, F[p][1])
