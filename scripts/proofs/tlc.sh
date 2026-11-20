@@ -399,6 +399,9 @@ par run_tlc streams_lazy_ledger Streams Streams_lazy_ledger
 par run_tlc streams_lazy_two Streams Streams_lazy_two
 par run_tlc streams_lazy_jump Streams Streams_lazy_jump
 par witness_tlc streams_lazy_over_w Streams Streams_lazy_over_w LedgerAlways
+par run_tlc streams_lazy_cap Streams Streams_lazy_cap
+par witness_tlc streams_admit_w Streams Streams_admit_w OverOnlyByFirstDataWhole
+par witness_tlc streams_catchup_w Streams Streams_catchup_w NoCatchUpPastPool
 par witness_tlc streams_stall Streams Streams_stall NoStuckGrant
 par run_tlc streams_live Streams Streams_live
 par run_tlc streams_live_mid Streams Streams_live_mid

@@ -10,15 +10,22 @@
 (*    without holes (read <= contig, the readable bytes are held in the    *)
 (*    pool), the read position never moves back, the stored ranges are     *)
 (*    sorted, disjoint, non-adjacent and at most RR;                       *)
-(*  - POOL_GRANT: the pool is never over its budget; a limit is raised,   *)
-(*    the stream credit raised and a local stream opened only when the     *)
-(*    ledger (the credit granted and not yet received, as Charged counts   *)
-(*    it, with the first charges kept for the credit) fits in the bytes    *)
-(*    the pool has left with them (LedgerOnGrant); an admission inside the *)
-(*    credit never adds to the ledger, one beyond it only within the pool  *)
-(*    (LedgerOnAdmit); the ledger passes the pool, or goes further past    *)
-(*    it, only when a stream carries its first data or another user takes  *)
-(*    chunks (OverOnlyByFirstData); the held chunks lie inside the span    *)
+(*  - POOL_GRANT: the pool is never over its budget; a limit is raised    *)
+(*    only when the ledger (the credit granted and not yet received, as    *)
+(*    Charged counts it, with the first charges kept for the credit) fits  *)
+(*    in the bytes the pool has left with it, and the stream credit raised *)
+(*    past the streams opened and a local stream opened only when the      *)
+(*    admission ledger (each open stream at most one first charge,         *)
+(*    AdmCharge, with the first charges kept for the credit) fits          *)
+(*    (LedgerOnGrant); a raise that reserves nothing catches the credit up *)
+(*    with exactly the streams the peer opened (CatchUpExact); an          *)
+(*    admission inside the credit never changes the ledger, one beyond it  *)
+(*    only within the pool by the admission ledger (LedgerOnAdmit); the    *)
+(*    ledger passes the pool, or goes further past it, only when a stream  *)
+(*    carries its first data, another user takes chunks, or a stream is    *)
+(*    admitted by the admission ledger (OverOnlyByFirstData; the witness   *)
+(*    Streams_admit_w shows the admission case, which the rule before      *)
+(*    8abd9451 did not have); the held chunks lie inside the span          *)
 (*    the credit covers, so a frame inside the counted span never needs    *)
 (*    more chunks than the ledger counted (HeldInSpan, NeedCovered); when  *)
 (*    the pool has no other user and FIRSTK covers the windows the ledger  *)
@@ -302,9 +309,18 @@ NothingAboveMark == /\ T.hw \in 0..N
 \* lower ids its frame opens with it
 NoHeldWithinCredit == \A id \in RemIds : LET L == Locate(T, id) IN
     (Idx(id) >= T.rn[Class(id)] /\ AdmittedN(T) + (Idx(id) - T.rn[Class(id)] + 1) <= T.ad.adv) => L.err # "Exhausted"
-\* an admission (the streams a frame opens, before its data) never takes the ledger past the pool, nor further past it:
-\* inside the credit it adds nothing, beyond it the first charges must fit
+\* the admission ledger: each open stream counted at most one first charge, and the first charges kept for the credit
+AdmLedger(S) == AdmCharge(S) + Resv(S)
+\* an admission (the streams a frame opens, before its data): inside the credit it leaves the ledger as it was (the new
+\* streams' first charges were kept for them); in all it never takes the admission ledger past the pool, nor further
+\* past it (beyond the credit the first charges must fit beside one for each open stream, Streams::windows_fit)
 LedgerOnAdmit == \A id \in RemIds : LET L == Locate(T, id) IN
+    (L.err = "ok" /\ L.t.rl > T.rl) =>
+        /\ AdmLedger(L.t) <= Max(AdmLedger(T), Avail(T))
+        /\ AdmittedN(L.t) <= T.ad.adv => GU(L.t) + Resv(L.t) = GU(T) + Resv(T)
+\* the statement before 8abd9451, which counted the whole ledger beside an admission (Streams_admit_w.cfg shows the
+\* code's rule breaks it)
+LedgerOnAdmitWhole == \A id \in RemIds : LET L == Locate(T, id) IN
     (L.err = "ok" /\ L.t.rl > T.rl) => GU(L.t) + Resv(L.t) <= Max(GU(T) + Resv(T), Avail(T))
 \* a frame inside the span the ledger counts (the whole window of a stream that carried data, the first FIRSTK chunks
 \* of one that has not) needs no more chunks than the ledger counted for its stream
@@ -347,15 +363,31 @@ SizeFollowsOwnRate == [][\A i \in 1..N : (SameInc(i) /\ T'.slots[i].size > T.slo
 \* a limit moves only by at least an eighth of the window
 EighthRule == [][\A i \in 1..N : (SameInc(i) /\ T'.slots[i].limit > T.slots[i].limit) =>
                     T'.slots[i].limit >= T.slots[i].limit + T'.slots[i].size \div 8]_vars
-\* a grant, a raise of the stream credit or a local stream leaves the ledger within the pool
-LedgerOnGrant == [][((\E i \in 1..N : SameInc(i) /\ T'.slots[i].limit > T.slots[i].limit)
-                     \/ T'.ad.adv > T.ad.adv \/ T'.ll > T.ll)
-                    => GU(T') + Resv(T') <= Avail(T')]_vars
-\* the ledger passes the pool, or goes further past it, only when a stream carries its first data or another user of
-\* the pool takes chunks
+\* A grant leaves the ledger within the pool beside the first charges kept for the credit as they stood when it was
+\* made: Consume grants before the step's refresh may raise the credit, every other call after it, so one of the two.
+\* A raise that leaves the peer streams to open, and a local stream, leave the admission ledger within the pool
+\* (8abd9451: Streams::admit_room and windows_fit count each open stream at most one first charge). A raise that does
+\* not is a catch-up (CatchUpExact) and reserves nothing.
+LedgerOnGrant == [][/\ (\E i \in 1..N : SameInc(i) /\ T'.slots[i].limit > T.slots[i].limit)
+                        => GU(T') + Min(Resv(T), Resv(T')) <= Avail(T')
+                    /\ ((T'.ad.adv > T.ad.adv /\ T'.ad.adv > AdmittedN(T')) \/ T'.ll > T.ll)
+                        => AdmLedger(T') <= Avail(T')]_vars
+\* a raise that leaves the peer no stream to open catches the credit up with exactly the streams it opened: it never
+\* gives a stream the pool has no first charge for, and never stops short of a peer that opened past the credit
+CatchUpExact == [][(T'.ad.adv > T.ad.adv /\ CreditLeft(T') = 0) => T'.ad.adv = AdmittedN(T')]_vars
+\* the ledger passes the pool, or goes further past it, only when a stream carries its first data, another user of the
+\* pool takes chunks, or a stream is admitted (a raise of the credit, a peer stream beyond it, a local stream) with the
+\* admission ledger within the pool
 Excess(S) == GU(S) + Resv(S) - Avail(S)
 FirstData == \E i \in 1..N : T'.slots[i].hi > 0 /\ (T.slots[i].hi = 0 \/ T.slots[i].id # T'.slots[i].id)
-OverOnlyByFirstData == [][Excess(T') > Max(Excess(T), 0) => (FirstData \/ T'.ext > T.ext)]_vars
+Admission == T'.ad.adv > T.ad.adv \/ T'.ll > T.ll \/ AdmittedN(T') > Max(T.ad.adv, AdmittedN(T))
+OverOnlyByFirstData == [][Excess(T') > Max(Excess(T), 0)
+                          => (FirstData \/ T'.ext > T.ext \/ (Admission /\ AdmLedger(T') <= Avail(T')))]_vars
+\* the statement before 8abd9451, with no admission case (Streams_admit_w.cfg shows the code's rule breaks it)
+OverOnlyByFirstDataWhole == [][Excess(T') > Max(Excess(T), 0) => (FirstData \/ T'.ext > T.ext)]_vars
+\* reachability witness (Streams_catchup_w.cfg must violate it): a catch-up raise happens while the ledger is past the
+\* pool, the state where the code queues it although no first charge fits, so CatchUpExact and LedgerOnGrant meet it
+NoCatchUpPastPool == [][~(T'.ad.adv > T.ad.adv /\ CreditLeft(T') = 0 /\ Excess(T') > 0)]_vars
 \* a stream asked to stop is given no more window: its limit stays where it was (c3ea10e1; Streams_stop_raise_w.cfg finds
 \* the rule before it). A raise queued before the request still leaves, and is sent again if lost: it gives nothing new
 NoRaiseAfterStop == [][\A i \in 1..N : (SameInc(i) /\ T.slots[i].stop # 0) => T'.slots[i].limit = T.slots[i].limit]_vars

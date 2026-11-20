@@ -220,8 +220,12 @@ def grantOne (p : P) (first : Nat) (T : Tab) (i : Nat) : Tab :=
 def grantRun (p : P) (T : Tab) (first : Nat) : Tab := (List.range p.n).foldl (grantOne p first) T
 /-- `Streams::admit_room`: how many more peer streams could be admitted now. -/
 def freeSlots (T : Tab) : Nat := (T.slots.filter (·.id == none)).length
+/-- `Streams::admitted_charge` (8abd9451): what the open streams count for when one more stream is admitted, for each
+the credit it may still claim but at most one first charge. A window grant counts the whole ledger `gu`; admitting a
+stream asks only that every stream, old and new, has room for a first step. -/
+def admCharge (p : P) (T : Tab) : Nat := (T.slots.map (fun r => min (r.unreceived p) p.firstW)).sum
 def admitRoom (p : P) (T : Tab) : Nat :=
-  min (min (p.capLive - T.rl) (freeSlots T)) (admitFit ((avail p T - gu p T) / p.firstW))
+  min (min (p.capLive - T.rl) (freeSlots T)) (admitFit ((avail p T - admCharge p T) / p.firstW))
 
 /-- `Streams::refresh_admit`: queue a raise of the credit whenever the room grew. A raise is never held back for size:
 the receiver cannot see streams the opener opened and has not written on, so a held raise could strand it. -/
@@ -272,10 +276,10 @@ def allocSlot (p : P) (T : Tab) (id : Nat) : Tab :=
     if lcl then { T1 with ll := T1.ll + 1 } else { T1 with rl := T1.rl + 1 }
 
 /-! ### Admission of peer streams -/
-/-- `Streams::windows_fit`: the first charges of `count` new streams fit beside the credit granted. The one test for a
-peer stream beyond the credit and for a local one. -/
+/-- `Streams::windows_fit`: the first charges of `count` new streams fit beside one first charge for each open stream
+(`admCharge`). The one test for a peer stream beyond the credit and for a local one. -/
 def windowsFit (p : P) (T : Tab) (count : Nat) : Bool :=
-  gu p T + count * p.firstW ≤ avail p T
+  admCharge p T + count * p.firstW ≤ avail p T
 
 /-- `Streams::admits`: under the cap and with slots; inside the credit with no pool test (the new streams take no
 chunk, and the credit kept their first charges), beyond it with their first charges fitting. -/

@@ -41,12 +41,16 @@
 (* The ledger (Unreceived, GU). A receive half counts the chunks its credit *)
 (* may still claim: the first FIRSTK chunks of its window while the stream *)
 (* has carried no data (Charged, FIRST_CHARGE in the code), its whole      *)
-(* window from its first byte on. A window grant, a raise of the stream    *)
-(* credit and a local stream are made only while the ledger with them fits *)
-(* the pool; the first byte of a stream is never refused for the ledger,   *)
-(* so the ledger can pass the pool then (the pool itself never: a frame    *)
-(* takes free chunks or is held back). With FIRSTK at or above the windows *)
-(* this is the rule that charged the whole window at admission.            *)
+(* window from its first byte on. A window grant is made only while the   *)
+(* ledger with it fits the pool. Admitting one more stream (a raise of the *)
+(* stream credit, a peer stream beyond the credit, a local stream) asks    *)
+(* less (8abd9451): that its first charge fits beside one first charge for *)
+(* each open stream (AdmCharge: what each still claims, at most FirstW),   *)
+(* so streams that carry data and stay open do not shut out new ones for   *)
+(* the size of their windows. The ledger can so pass the pool by an        *)
+(* admission, and when a stream first carries data (its first byte is      *)
+(* never refused for the ledger); the pool itself never: a frame takes     *)
+(* free chunks or is held back.                                            *)
 (*                                                                         *)
 (* Local streams. A bidirectional stream this endpoint opens has the receive *)
 (* window the connection advertised, which cannot be smaller, so OpenLocal *)
@@ -57,7 +61,9 @@
 (* in all (T.ad.adv: the handshake value, raised by MAX_STREAMS), keeps the *)
 (* first charges of the streams the opener has not opened yet in the pool  *)
 (* (Resv), and the opener never opens beyond the limit it was given        *)
-(* (T.ad.lim). A raise is sent whenever the room grew: the receiver       *)
+(* (T.ad.lim). The room is counted beside AdmCharge, like WindowsFit. A    *)
+(* raise with no room catches the credit up with a peer that opened past  *)
+(* it and reserves nothing. A raise is sent whenever the room grew: the   *)
 (* cannot see streams the opener opened and has not written on, so a raise *)
 (* held back for size could strand an opener that used all its credit     *)
 (* (RefreshAdmitOld, the eighth rule before it, is for the witness         *)
@@ -91,6 +97,8 @@
 EXTENDS Integers, Sequences, FiniteSets
 
 CONSTANTS CH, RING, RR, N, MAXREM, B, SWC, MSWC, PM, MAXOFF, RETRY, RemIds, LocIds, FIRSTK, RELEASE, PERSTREAM
+\* the table's max_remote is config.max_streams.min(N), and Streams::adopt only lowers it: never more than the slots
+ASSUME MAXREM \in 0..N
 
 Min(a, b) == IF a < b THEN a ELSE b
 Max(a, b) == IF a > b THEN a ELSE b
@@ -217,7 +225,10 @@ GrantFrom(T, i, first) ==
 GrantRun(T, first) == GrantFrom(T, 1, first)
 (* admit_room / refresh_admit (Streams): the streams that could be admitted now, and the raise to queue *)
 FreeSlots(T) == Cardinality({i \in 1..N : T.slots[i].id = -1})
-AdmitRoom(T) == LET fit == Max(Avail(T) - GU(T), 0) \div FirstW
+(* Streams::admitted_charge: what the open streams count for when one more stream is admitted, for each the credit it
+   may still claim but at most one first charge (8abd9451). A window grant counts the whole ledger GU *)
+AdmCharge(T) == LET f[i \in 0..N] == IF i = 0 THEN 0 ELSE f[i - 1] + Min(Unreceived(T.slots[i]), FirstW) IN f[N]
+AdmitRoom(T) == LET fit == Max(Avail(T) - AdmCharge(T), 0) \div FirstW
                 IN Min(Min(Max(CapLive - T.rl, 0), FreeSlots(T)), AdmitFit(fit))
 RefreshAdmit(T) ==
     LET now == AdmittedN(T) + AdmitRoom(T)
@@ -276,9 +287,9 @@ AllocSlot(T, id) ==
     IN IF local THEN [T1 EXCEPT !.ll = @ + 1] ELSE [T1 EXCEPT !.rl = @ + 1]
 
 (* ---- admission of peer streams (Streams::admits, locate) ---- *)
-(* the first charges of k new streams fit beside the credit granted (Streams::windows_fit): the one test for a peer
-   stream beyond the credit and for a local one *)
-WindowsFit(T, k) == GU(T) + k * FirstW <= Avail(T)
+(* the first charges of k new streams fit beside one first charge for each open stream (Streams::windows_fit): the one
+   test for a peer stream beyond the credit and for a local one *)
+WindowsFit(T, k) == AdmCharge(T) + k * FirstW <= Avail(T)
 (* inside the credit no pool test is made: the new streams take no chunk and the credit kept their first charges *)
 Admits(T, c, next, count) ==
     LET free == Cardinality({i \in 1..N : T.slots[i].id = -1})
