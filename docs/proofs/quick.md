@@ -343,6 +343,8 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `HalfOpen_sub` | TMAX 2 -> 0, LENS {0, 1, 2, 3} -> {3} |
 | `HalfOpen_supersede` | TMAX 4 -> 3 |
 | `Handshake` | byte budgets RB 9 -> 4, LB 30 -> 3; bounded by constraint: at most 3 messages sent (HandshakeQuickBound) |
+| `HandshakeConfirm` | MaxT 10 -> 9 |
+| `HandshakeConfirm_nobound` | MaxT 10 -> 9 |
 | `Handshake_kbroken` | byte budgets RB 9 -> 4, LB 30 -> 3; bounded by constraint: at most 3 messages sent and 6 levels (Handshake_kbrokenQuickBound) |
 | `Handshake_late` | byte budgets RB 9 -> 4, LB 30 -> 3; bounded by constraint: behaviours of at most 6 levels (Handshake_lateQuickBound) |
 | `Handshake_pskleak` | byte budgets RB 9 -> 4, LB 30 -> 3; bounded by constraint: behaviours of at most 6 levels (Handshake_pskleakQuickBound) |
