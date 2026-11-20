@@ -4,7 +4,7 @@
 //! (`TraceKeystoreTemplate.tla`).
 //!
 //! The templates are private to the client, so the test reads them off the wire: a recording transport keeps every
-//! command, and after each store call (`open`, `generate`, `seal`) the commands sent since the last call are cut. An
+//! command, and after each store call (`open`, `generate`, `seal`) the commands sent and accepted since the last call are cut. An
 //! event carries the bytes and whether the `tpm2-protocol` library reads exactly that many bytes as a `Tpm2bPublic`.
 //! The three pairs of auth values and the repeated calls show that the bytes depend on neither.
 //!
@@ -47,16 +47,20 @@ fn be32(b: &[u8]) -> u32 {
     u32::from_be_bytes(b[..4].try_into().unwrap())
 }
 
-/// A transport that keeps a copy of every command.
+/// A command and the response code the TPM gave.
+type Sent = (Vec<u8>, u32);
+
+/// A transport that keeps a copy of every command with the response code the TPM gave.
 struct Recorder<T: Transport> {
     inner: T,
-    cmds: Arc<Mutex<Vec<Vec<u8>>>>,
+    cmds: Arc<Mutex<Vec<Sent>>>,
 }
 
 impl<T: Transport> Transport for Recorder<T> {
     fn transmit(&mut self, command: &[u8]) -> io::Result<Vec<u8>> {
-        self.cmds.lock().unwrap().push(command.to_vec());
-        self.inner.transmit(command)
+        let rsp = self.inner.transmit(command)?;
+        self.cmds.lock().unwrap().push((command.to_vec(), be32(&rsp[6..10])));
+        Ok(rsp)
     }
 }
 
@@ -78,9 +82,13 @@ struct Run {
 
 impl Run {
     /// The templates in the commands sent since the last call, which was `op`.
-    fn cut(&mut self, cmds: &Mutex<Vec<Vec<u8>>>, op: &'static str) {
+    fn cut(&mut self, cmds: &Mutex<Vec<Sent>>, op: &'static str) {
         let cmds = cmds.lock().unwrap();
-        for cmd in &cmds[self.cursor..] {
+        for (cmd, rc) in &cmds[self.cursor..] {
+            // A command the TPM refused (no room for an object, sent again after a key was unloaded) is not an event.
+            if *rc != 0 {
+                continue;
+            }
             let cc = be32(&cmd[6..10]);
             if cc != CREATE_PRIMARY && cc != CREATE {
                 continue;
