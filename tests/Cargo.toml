@@ -1803,3 +1803,7 @@ path = "trace_dtn_request.rs"
 [[test]]
 name = "trace_keystore_refresh"
 path = "trace_keystore_refresh.rs"
+
+[[test]]
+name = "trace_node_due"
+path = "trace_node_due.rs"

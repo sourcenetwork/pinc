@@ -109,6 +109,8 @@ pub use dtn_wire::probe as dtn_wire_probe;
 pub use ep::Ep;
 pub use event::{NodeEvent, ReconcileFailure};
 pub use layer::Layer;
+#[cfg(feature = "trace")]
+pub use node::DueProbe;
 pub use node::{Node, StartError};
 pub use pinc_broadcast::IdKey;
 /// The two types [`ServeSource`] is written in, for a host that names its own stream source.

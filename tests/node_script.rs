@@ -44,6 +44,8 @@ pub(crate) struct Script {
     /// The next command arms or disarms a timer of the endpoint: the deadline becomes `next_due`.
     pub(crate) rearm: bool,
     pub(crate) next_due: Option<u64>,
+    /// The datagrams `poll_transmit` hands out, first first.
+    pub(crate) transmits: VecDeque<Transmit>,
 }
 
 impl Port for Script {
@@ -86,10 +88,10 @@ impl Port for Script {
 impl Ep for Script {
     fn handle_datagram(&mut self, _now: u64, _local: SocketAddr, _remote: SocketAddr, _buf: &mut [u8]) {}
     fn poll_transmit(&mut self, _now: u64, _out: &mut [u8]) -> Option<Transmit> {
-        None
+        self.transmits.pop_front()
     }
     fn transmit_waiting(&self) -> bool {
-        !self.exact
+        !self.exact || !self.transmits.is_empty()
     }
     fn poll_event(&mut self) -> Option<Event> {
         self.events.pop_front()

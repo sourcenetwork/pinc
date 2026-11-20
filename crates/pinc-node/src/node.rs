@@ -954,6 +954,10 @@ where
 }
 
 mod broadcast;
+#[cfg(feature = "trace")]
+mod due_probe;
+#[cfg(feature = "trace")]
+pub use due_probe::DueProbe;
 
 #[cfg(test)]
 mod inbound_tests;
