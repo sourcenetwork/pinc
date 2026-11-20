@@ -246,7 +246,7 @@ impl Rig {
         }
     }
 
-    fn relay_poll(&mut self, now: u64) {
+    pub fn relay_poll(&mut self, now: u64) {
         for _ in 0..64 {
             let soft = SoftKeys::<Software> {
                 signer: Some((SecHandle(1), &self.relay_kp)),

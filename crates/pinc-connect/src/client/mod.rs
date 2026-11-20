@@ -45,3 +45,5 @@ pub use conn::{Config, Connectivity, Io, Kind, Notice, RelayCfg};
 pub use drive::Port;
 #[cfg(feature = "trace")]
 pub use flight::FlightProbe;
+#[cfg(feature = "trace")]
+pub use timers::PublishProbe;

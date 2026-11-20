@@ -9,6 +9,23 @@ use super::conn::{Connectivity, Notice};
 use super::netcheck::{HOME_RETRY_NS, HomeStep};
 use crate::relay::rule;
 
+/// What the publish timer reads, for the trace test.
+#[cfg(feature = "trace")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools, reason = "a trace probe")]
+pub struct PublishProbe {
+    /// When the record is asked for next, or `None` when no time is armed.
+    pub next_publish: Option<u64>,
+    /// A record is asked for and no job has taken it yet.
+    pub want: bool,
+    /// A record job is outstanding.
+    pub job: bool,
+    /// A wall clock is known.
+    pub wall: bool,
+    /// A record can be asked for now.
+    pub can: bool,
+}
+
 /// The wait before address discovery starts again after the node's link changed.
 const NETCHECK_DELAY: u64 = 50_000_000;
 
@@ -165,6 +182,19 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
                 .home()
                 .and_then(|h| self.rly.get(h))
                 .is_some_and(|r| r.link.is_open())
+    }
+
+    /// The state the publish timer acts on, for the trace test.
+    #[cfg(feature = "trace")]
+    pub fn trace_publish(&self) -> PublishProbe {
+        let (want, job) = self.sign.record_flags();
+        PublishProbe {
+            next_publish: self.next_publish,
+            want,
+            job,
+            wall: self.sign.wall_ms.is_some(),
+            can: self.can_publish(),
+        }
     }
 
     pub(super) fn me_addr_pub(&self) -> core::net::SocketAddr {

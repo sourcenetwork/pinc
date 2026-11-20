@@ -76,6 +76,15 @@ impl Signing {
         self.record || matches!(&self.job, Some(j) if matches!(j.kind, Kind::Record))
     }
 
+    /// Whether a record is asked for and not yet taken by a job, and whether a record job is outstanding (a probe).
+    #[cfg(feature = "trace")]
+    pub(super) const fn record_flags(&self) -> (bool, bool) {
+        (
+            self.record,
+            matches!(&self.job, Some(j) if matches!(j.kind, Kind::Record)),
+        )
+    }
+
     pub(super) const fn want_record(&mut self) {
         self.record = true;
     }

@@ -1807,3 +1807,7 @@ path = "trace_keystore_refresh.rs"
 [[test]]
 name = "trace_node_due"
 path = "trace_node_due.rs"
+
+[[test]]
+name = "trace_connect_own_timer"
+path = "trace_connect_own_timer.rs"
