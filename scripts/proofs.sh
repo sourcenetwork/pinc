@@ -112,6 +112,12 @@ par() {
 while [ -n "$(jobs -rp)" ]; do wait -n || exit 1; done
 
 echo "-- trace"
+# A trace check passes only if the replay reaches the end of its trace (proofs/tla/TraceEnd.tla); every config says so.
+for c in proofs/tla/Trace*.cfg; do
+    grep -qx 'INVARIANT ReplayAtEnd' "$c" && grep -qx 'POSTCONDITION ReplayEnded' "$c" && continue
+    echo "proofs: $c does not check that the replay reaches the end of the trace; add INVARIANT ReplayAtEnd and POSTCONDITION ReplayEnded" >&2
+    exit 1
+done
 dir=$(mktemp -d)
 trap 'rm -rf "$dir" "$jtmp_root"' EXIT
 trace_tlc() { # trace_tlc <spec> <what> : TLC of the newer era over the recorded ndjson in $dir
