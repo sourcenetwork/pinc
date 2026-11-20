@@ -662,3 +662,36 @@ fn a_probing_dial_answers_stats_and_keeps_the_flight_for_its_lapse() {
         );
     });
 }
+
+/// Two probes of different protocols that lapse together make one handshake: the second waits on the first's, as a
+/// dial does on a peer whose handshake runs.
+#[test]
+fn two_probes_of_different_protocols_that_lapse_together_make_one_handshake() {
+    big_stack(|| {
+        let (mut net, a, b) = silent_parent();
+        let addr_b = net.nodes[b].addr;
+        net.loss = Some(Box::new(move |_, to, _| to == addr_b));
+        let marker = net.captured.len();
+        let (one, _) = dial(&mut net, a, b, ALPN_B);
+        let (two, _) = dial(&mut net, a, b, ALPN_A);
+        assert!(
+            net.run(net.now + 5 * SEC_NS, |n| handshake_since(n, marker)),
+            "the probes never lapsed into a handshake"
+        );
+        net.loss = None;
+        let connected = |n: &mut CoreNet| {
+            [one, two]
+                .iter()
+                .all(|c| n.nodes[a].saw(|e| matches!(e, Event::Connected { session, .. } if session == c)))
+        };
+        assert!(
+            net.run(net.now + 5 * SEC_NS, connected),
+            "the dials did not both connect"
+        );
+        let roots = [one, two]
+            .into_iter()
+            .filter(|c| matches!(net.nodes[a].ep.query(Query::Stats(*c)), Answer::Stats(st) if !st.sub))
+            .count();
+        assert_eq!(roots, 1, "the two lapsed probes made {roots} handshakes");
+    });
+}

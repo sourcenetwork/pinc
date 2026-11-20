@@ -333,6 +333,19 @@ ep_impl! {
             conn.close(&mut env, &mut lent!(self), code::NO_ERROR);
             self.settle(probed, now);
         }
+        // Another protocol's handshake to the peer is running: wait on it instead of making a second one.
+        if let Some(wp) = self.find_waiting_parent(&peer, alpn.as_bytes())
+            && let Ok(parts) = self.wait_parts(wp)
+            && let Some(mem) = self.slots.get_mut(i).and_then(|s| s.mem.take())
+        {
+            trace!(self, now, Sub { step: 7, parent: wp as u64, child: i as u64 });
+            match self.open_sub_wait_over(wp, i, mem, parts, peer, alpn, role, now) {
+                Ok(_) => self.apply_flight(i, now),
+                Err(_) if self.slots.get(i).is_some_and(|s| !s.m.in_use) => self.fail_probe(i, session, now),
+                Err(_) => {}
+            }
+            return;
+        }
         // The addresses the lapse dials: the session's own first, then the dial's, none twice.
         let mut list = [SocketAddr::from(([0, 0, 0, 0], 0)); NP];
         let mut n = 0;
@@ -574,6 +587,14 @@ ep_impl! {
         now: u64,
     ) -> Result<SessionId, CommandError> {
         let alpn = Alpn::new(alpn).ok_or(CommandError::BadAlpn)?;
+        let parts = self.wait_parts(parent)?;
+        let (child, mem) = self.alloc_slot(true, now).ok_or(CommandError::Full)?;
+        self.open_sub_wait_over(parent, child, mem, parts, peer, alpn, role, now)
+    }
+
+    /// What a waiting sub-session over `parent` needs before a slot or its memory is taken: its two connection ids
+    /// and the parent's active path. Nothing is held when it fails.
+    fn wait_parts(&mut self, parent: usize) -> Result<(ConnId, ConnId, PathId), CommandError> {
         let cc = self.random_cid()?;
         let cs = self.random_cid()?;
         let path = self
@@ -582,7 +603,24 @@ ep_impl! {
             .and_then(|s| s.conn.as_ref())
             .and_then(Connection::active_path)
             .ok_or(CommandError::NoRoute)?;
-        let (child, mem) = self.alloc_slot(true, now).ok_or(CommandError::Full)?;
+        Ok((cc, cs, path))
+    }
+
+    /// Build the waiting sub-session of slot `child` over `mem` under session `parent`. This is the body
+    /// [`open_sub_wait`] shares with the lapse of a quiet-parent probe, whose slot and memory already exist.
+    #[inline(never)]
+    #[allow(clippy::too_many_arguments, reason = "the parent, child, their memory and the open's parts, named once")]
+    fn open_sub_wait_over(
+        &mut self,
+        parent: usize,
+        child: usize,
+        mem: pinc_transport::conn::Resources<'a, S, N, C, F>,
+        (cc, cs, path): (ConnId, ConnId, PathId),
+        peer: NodeId,
+        alpn: Alpn,
+        role: Role,
+        now: u64,
+    ) -> Result<SessionId, CommandError> {
         let cfg = self.conn_config(Some(&peer));
         let open = SubWait { alpn, cc, cs, identity: self.identity, path, path_info: PathInfo { interface_mtu: self.cfg.conn.interface_mtu, ..PathInfo::default() } };
         let mut env = env!(self, now);
@@ -601,6 +639,8 @@ ep_impl! {
             s.m.parent = Some(pid);
             s.m.sub = true;
             s.m.waiting = true;
+            // The slot may be a lapsed quiet-parent probe: its probe ends here.
+            s.m.probing = false;
             s.m.optimistic = true;
             s.m.sub_ids = Some((cc, cs));
             s.m.role = role;
