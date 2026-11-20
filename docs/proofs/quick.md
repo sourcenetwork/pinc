@@ -576,6 +576,7 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `Tickets` | ExpVals {1, 2} -> {1}, MaxClock 4 -> 3, Ids {1, 2, 3} -> {1} (the ids are drawn by a server only; NS = 0) |
 | `Tickets_n3` | ExpVals {1, 2} -> {1} (live at now 1, expired at now 2), MaxClock 4 -> 3 (the store fills; the invariants insert into the full store), server-side Ids {1, 2, 3} -> {1} |
 | `Tickets_server` | MaxClock 3 -> 2 (the store fills; the invariants issue into the full store), draw streams of 0..4 -> 0..3 ids (Streams <- StreamsDefQuick), client-side Peers {p1, p2, p3} -> {p1}, Alpns {a1, a2} -> {a1}, Ids {1, 2, 3} -> {1, 2} (a draw still collides with a stored id and a retry still finds a fresh one), ExpVals {1, 2} -> {1} |
+| `Tickets_zero` | MaxClock 4 -> 3 |
 | `Timers` | clock TMAX 5 -> 4, calls KMAX 4 -> 2, component deadlines CD {0, 4} -> {0} |
 | `Transcript` | MaxFields 4 -> 3 |
 | `ValuesPlan` | MaxLen 11 -> 7 |
