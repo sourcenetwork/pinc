@@ -5,8 +5,9 @@
 //! from the start, and so is an address the host dials, even one that wrote first. Each sent datagram counts its size
 //! plus 28 bytes (the IP and UDP headers).
 //!
-//! Invariants: the ledger holds at most [`LEDGER_ENTRIES`] addresses and evicts the one inserted first when full; for
-//! an address that is not validated the bytes charged never exceed three times the bytes received, so a spoofed
+//! Invariants (while an address's byte counts are below 2^64, where they saturate): the ledger holds at most
+//! [`LEDGER_ENTRIES`] addresses and evicts the one inserted first when full; for an address that is not validated the
+//! bytes charged never exceed three times the bytes received, so a spoofed
 //! source gets at most three times what it sent; the address of an evicted entry that is later written to counts as
 //! one we spoke to first, which is the bound the eviction trades for the fixed table.
 
