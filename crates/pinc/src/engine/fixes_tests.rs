@@ -123,3 +123,15 @@ fn a_restore_counts_a_node_the_state_names_twice_once() {
     state.extend_from_slice(&seq);
     assert_eq!(c.restore_state(1, &state).unwrap().addresses, 2);
 }
+
+#[test]
+fn the_listed_streams_are_looked_at_again_when_the_endpoint_dropped_events() {
+    let (mut c, info) = listed_full();
+    // The endpoint reports one dropped event more than the core has seen; the session's streams are gone from it.
+    c.last_dropped = u64::MAX;
+    c.service(u64::MAX / 2, &mut |_| false);
+    assert!(
+        c.sessions.get(&info.id).unwrap().discard.is_empty(),
+        "the listed streams stay"
+    );
+}

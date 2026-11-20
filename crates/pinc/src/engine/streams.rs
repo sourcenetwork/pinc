@@ -1,6 +1,8 @@
 //! Streams the peer opened and streams the application dropped: the accept queues, the stopped streams a session
 //! remembers for their writers, and the list of streams whose bytes are thrown away until they end.
 
+use alloc::vec::Vec;
+
 use pinc_core::{Answer, Command, Query, SessionId, Value};
 use pinc_keystore::KeyStore;
 use pinc_transport::stream::{RecvStatus, StreamId, is_uni};
@@ -65,6 +67,19 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             && let Some(s) = self.sessions.get_mut(&session)
         {
             s.discard.retain(|i| *i != id);
+        }
+    }
+
+    /// Look again at every listed stream: the notice of what arrived on one of them may be among the events the
+    /// endpoint dropped. Runs only when some were, and holds at most one entry per stream slot of each session.
+    pub(super) fn discard_all(&mut self, now: u64) {
+        let listed: Vec<(SessionId, StreamId)> = self
+            .sessions
+            .iter()
+            .flat_map(|(id, s)| s.discard.iter().map(move |stream| (*id, *stream)))
+            .collect();
+        for (session, id) in listed {
+            self.discard_if_dropped(now, session, id);
         }
     }
 

@@ -479,6 +479,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
                 self.last_dropped = dropped;
                 self.standby.trace_all();
                 self.standby.notify_all();
+                self.discard_all(now);
             }
         }
         self.look(now);
