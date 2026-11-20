@@ -210,6 +210,7 @@ ep_impl! {
     /// Append datagrams of other sessions to `first` while they go to the same destination at the same size.
     fn batch(&mut self, now: u64, out: &mut [u8], first: &mut Transmit) {
         let limit = self.cfg.conn.max_gso.max(1);
+        debug_assert!(first.segment_size > 0, "a transmit has a segment size");
         let seg = first.segment_size;
         let mut segments = first.len.div_ceil(seg.max(1));
         while segments < limit && first.len == seg * segments && out.len() > first.len {
@@ -259,7 +260,7 @@ ep_impl! {
             self.settle_core(j, now, false);
             let same_dest = self.path_addrs(tx.path) == Some((first.local, first.remote));
             // A run of segments of the first's size, or one shorter datagram that ends the run, may join.
-            let full = tx.segment_size == seg && tx.len % seg == 0;
+            let full = tx.segment_size == seg && tx.len % seg.max(1) == 0;
             let last = tx.segment_size == tx.len && tx.len < seg;
             if !same_dest || segments + more > limit || !(full || last || tx.segment_size == seg) {
                 // Another destination or size: keep it for the next call.
