@@ -55,13 +55,12 @@ These items are still open; they are listed so nothing is hidden:
   refuses a new peer and never evicts, the backoff window, the 5 s reset, the prune, the shed of a dial the full
   session table has no room for, traced through a real node's duty passes). Not done: the rest of `dial_peer` and
   the host duties as a whole (a trace of the guard beyond the window, the reset and a prune that lets go of an entry
-  needs more of a view of a `Node`), the delay-tolerant layer's own backoff table (`lfailed`), the
-  bound on a deadline that its timer calls do not move (`timers.rs`: counted against its layer and asked again one
-  tick later; tested, not modelled), the
-  silence bound of `bound.rs` (`give_up`, `heal_after`: a pure function, tested, not modelled), and the queue of
-  application events of `io.rs` (8192 places: the node stops taking the endpoint's events while it is nearly full,
-  and a full queue gives up an event the application can recover by reading state before one it cannot; tested,
-  not modelled). The
+  needs more of a view of a `Node`). Since then
+  the delay-tolerant layer's own backoff table (`lfailed`), the bound on a deadline that its timer calls do not move
+  (`timers.rs`), the silence bound of `bound.rs` and the queue of application events of `io.rs` each have a model and
+  a trace check: see `NodeDtnBackoff`, `NodeTimerBound`, `NodeSilence` and `NodeEventQueue` under
+  [Properties](properties.md). The checks of the node that fail or were never run are listed in
+  [#748](https://github.com/sourcenetwork/pinc/issues/748). The
   known limitation of the model is the low-severity behaviour of a full table: a newly failing or shed peer has no
   entry and is redialed at every duty pass.
 - `pinc` address text (`addr.rs`): `FacadeAddr.tla` checks the round trip of the ticket for every value built
@@ -88,17 +87,11 @@ These items are still open; they are listed so nothing is hidden:
   builder puts into a packet (their order, the dropped length of the last STREAM frame, the payload read back), the
   registry of extension frame types with the layer each extension frame reaches (the values layer's own type tests
   are traced only through the endpoint's ring: see the row) and
-  the connection's timers and closing state are proved and traced. Not done yet: the frames each kind of packet
-  carries, read off the
-  code and not modelled (a handshake packet carries a fragment and no frames, and the receiver takes every frame of a
-  1-RTT packet and drops a whole 0-RTT packet that carries a frame only an established session sends: the early
-  buffer's model states the drop with the frames as a fate, and which frames those are is read off the scan), paths
-  and migration beyond the path table (validation by a challenge, the move to the peer's path by its data, `path_lost`,
-  the relay fallback after three timeouts; the table, the paths both roles learn by receiving on them and a dialing
-  side's move to the path of its reply are modelled and traced, see their row; the model found a path held twice
-  there, which the code corrected), and the two-endpoint scenario models. The last two act on the whole `Connection`:
-  a trace of them needs a view of its paths and streams (the timers have theirs, `TimerView`, and `trace_timers` a
-  scripted pair of connections).
+  the connection's timers and closing state are proved and traced. Since then the frames each kind of packet
+  carries (`PacketKind`, `trace_packet_kind`) and path validation and migration (`PathMove`, `trace_path_move`,
+  `trace_path_held`) each have a model and a trace check: see their rows under [Properties](properties.md). Not done
+  yet: the two-endpoint scenario models. They act on the whole `Connection`: a trace of them needs a view of its paths
+  and streams (the timers have theirs, `TimerView`, and `trace_timers` a scripted pair of connections).
   Of the timers, the trace never saw the MTU deadline as the minimum nor the acknowledgement deadline held back by
   the amplification gate (both are in the TLC and Lean checks), and it records connections from the established
   state, from a dial nobody answers or from a dialing side connected to a responder that still waits for its Finish:
@@ -183,16 +176,17 @@ These items are still open; they are listed so nothing is hidden:
   no list fills (the room guards of `ReachR`; a widened push is covered by `Cover`, not by `Exact`), and the sizes of a
   chunk and of a steal are the environment's in both models (their arithmetic is `ValuesSched`). Liveness theorems keep
   an explicit fairness hypothesis, as liveness requires.
-- `pinc-connect`: not proven yet are the sleep and beacon signing jobs of the client (the node's own record and address discovery is proved: candidate list, acceptance of a QADR answer, sequence number, when a record is signed, see "connectivity own record"; the timer path of a record job has no trace, as the trace has no open carrier; the relay side is proved: record store, lookup, expiry, the relay's own record and its republish, see "connectivity record store"), the local duty cycle and radio, the sleep tether in `conn.rs`, `drive.rs`, `carriers.rs` and `signing.rs`, the scenario
+- `pinc-connect`: the sleep and beacon signing jobs of the client, the local duty cycle and radio, the drive, the
+  carriers and the candidates of a flight each have a model and a trace check since (`ConnectSleep`, `ConnectDuty`,
+  `ConnectRadio`, `ConnectDrive`, `ConnectCarriers`, `ConnectFlight` under [Properties](properties.md)). The node's own record and address discovery is proved (candidate list, acceptance of a QADR answer, sequence number, when a record is signed, see "connectivity own record"; the timer path of a record job has no trace, as the trace has no open carrier), and so is the relay side (record store, lookup, expiry, the relay's own record and its republish, see "connectivity record store"). Not proven yet are the sleep tether beyond what those rows state, the scenario
   models (relay path, direct path after punching, fallback after a block, sleep and wake), and liveness under stated
   fairness (the link and client rules have bounded-response checks only). The pending, lookup and netcheck tables
   are model checked and traced, with Lean theorems for their sizes and single decisions only. Of the protected
   carrier (`session.rs`), the handshake machine is an input of the models (its outputs are
   taken from the run; it is proved by itself) and the any-split theorem covers hosts that only read and poll. Of the client rules,
   three statements are not proved in Lean yet: that a splice just seen has age 0, that a thin dial try sends on at most
-  one candidate, and that taking a peer from the pending table clears its entry. The candidates of a flight
-  (`candidates_for`, `flight_relays`), the source address of a tunnel packet and the freshness of a found record are not
-  modelled.
+  one candidate, and that taking a peer from the pending table clears its entry. The source address of a tunnel packet and the freshness of a found record are not
+  modelled, and the thin kind of a running dial has no check ([#748](https://github.com/sourcenetwork/pinc/issues/748)).
 - `pinc-connect`, the protected carrier: three places where the code does not do what `session.rs` documents, found
   while modelling it (the models follow the code; nothing is delivered, opened or sealed after the end in any of
   them). The module says that after the end every later call returns `Closed`, but `answer_soft` returns
@@ -208,7 +202,12 @@ These items are still open; they are listed so nothing is hidden:
   released one, so it wakes the oldest waiting ticket as the module docs of `standby.rs` say; since the fix of
   [#419](https://github.com/sourcenetwork/pinc/issues/419) the release that brings a slot's generation round drops
   the queue's stale entries, so no stale entry names a live slot again and the order is proved of every run of the
-  slab's calls (Lean with 2^32 generations, TLC with 2 and 3); the rule before each fix is kept as a witness. Not
-  proven yet: the rest of the facade (the engine's handling of events,
-  the endpoint, connections and streams, the carriers and the relay role); its async plumbing is assumed of the host
+  slab's calls (Lean with 2^32 generations, TLC with 2 and 3); the rule before each fix is kept as a witness. Since
+  then the facade's buffers, machines, open gate, stream calls, waits, turn, records and saved state, and of the relay
+  role its carriers and what it keeps, each have a model with a trace check or a model-based test (rows under
+  [Properties](properties.md)). Not proven yet: the files that no row or trace names (matched by name, so one may be
+  covered under another row): of the relay role `relay/hub.rs`, `relay/run.rs`, `relay/peers.rs`,
+  `relay/carrier_fns.rs`, `relay/fx.rs`, `relay/limits.rs` and `relay/stats.rs`, the carrier and HTTP I/O
+  (`drive/carrier_io.rs`, `drive/http_io.rs`), `mem.rs`, `host.rs`, `maps.rs`, `body.rs` and `endpoint_topics.rs`; and
+  the items of [#748](https://github.com/sourcenetwork/pinc/issues/748) (the model-based test of opens, `notifyall`); its async plumbing is assumed of the host
   ([#246](https://github.com/sourcenetwork/pinc/issues/246) (c)).
