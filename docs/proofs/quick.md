@@ -430,6 +430,7 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `MembershipSys_w_restart` | MaxSec 100 -> 70 |
 | `MembershipSys_w_restore` | MaxSec 100 -> 60 |
 | `MembershipSys_w_revoked` | MaxSec 60 -> 45 |
+| `MembershipSys_w_suppressed` | MaxSec 100 -> 90 |
 | `MembershipSys_w_susp` | MaxSec 190 -> 50 |
 | `MembershipSys_w_switch` | MaxSec 160 -> 70, Script ScrPrimaryHyst -> ScrPrimaryHystQuick (the drop to 40 ms at 20 s, not 100 s) |
 | `Mtu` | KMAX 5 -> 4 (the drop to the floor takes four calls) |
