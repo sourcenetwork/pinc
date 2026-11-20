@@ -9,7 +9,9 @@
 //! host code is not used.
 //!
 //! The runs are scripted (six dialers for each room, one cut off after its first flight, one that closes at once, one
-//! `Incoming` read twice) and 16 seeded random ones. The test asserts, without the model: the sessions the endpoint
+//! `Incoming` read twice; they end at 60 s, and a dialer whose dial failed dials again, because the retries of dialers
+//! that dialed together are synchronised by the doubling of the handshake timeout, so one room admits one of them per
+//! retry instant and the fifth is admitted only by a second dial) and 16 seeded random ones. The test asserts, without the model: the sessions the endpoint
 //! owes equal the live slots marked owed after every step; a `Reserved` answer always finds a place; a first flight is
 //! refused in every scripted run; every dialer that is not cut off gets its `Incoming`; and `Gone` and `Unreserved`
 //! each occur in the scripted runs. The trace is written to the directory in `PINC_TRACE_DIR` when it is set;
@@ -262,8 +264,17 @@ fn scripted(out: &mut String, tot: &mut Totals, qcap: usize) {
         dial(&mut net, m, hub);
     }
     let mut closed = false;
-    for k in 1..=300u64 {
+    let mut redials = [0usize; 6];
+    for k in 1..=600u64 {
         host.run(&mut net, start + k * 100 * MS_NS);
+        // A dialer whose dial ended dials again (the cut one included: its flights are lost all the same).
+        for (i, &m) in members.iter().enumerate() {
+            let failed = net.nodes[m].count(|e| matches!(e, Event::ConnectFailed { .. }));
+            if failed > redials[i] {
+                redials[i] = failed;
+                dial(&mut net, m, hub);
+            }
+        }
         if !closed
             && let Some(s) = first_session(&net, closer)
             && net.nodes[closer].saw(|e| matches!(e, Event::Connected { .. }))
