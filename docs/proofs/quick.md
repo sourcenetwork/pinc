@@ -254,7 +254,12 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `DtnScenario_spray` | MaxMsgs 2 -> 1, Budget 4 -> 3 |
 | `DtnScenario_tight` | MaxMsgs 2 -> 1, Budget 4 -> 3 |
 | `DtnSeal` | MaxB 2 -> 1 (one bundle; the leak sets over 12 -> 10 items, 86016 -> 5120 states) |
+| `DtnSeal_bothbroken` | MaxB 2 -> 1 |
 | `DtnSeal_decap` | Pays {1, 2} -> {1} |
+| `DtnSeal_kbroken` | MaxB 2 -> 1 |
+| `DtnSeal_nofs` | MaxB 2 -> 1 |
+| `DtnSeal_reuse` | Kps {1, 2} -> {1} |
+| `DtnSeal_xbroken` | MaxB 2 -> 1 |
 | `DtnStore` | N 3 -> 2, Budget 4 -> 2, ByteVals {0,1,2,3,5} -> {1,2}, NowVals {0,1,2} -> {0,1} |
 | `Early` | packets KMAX 5 -> 3; RecvStep -> RecvStepQuick: datagram lengths 1..2 -> {1} |
 | `Early_cap3` | packets KMAX 5 -> 4; RecvStep -> RecvStepQuick: datagram lengths 1..2 -> {1} |
