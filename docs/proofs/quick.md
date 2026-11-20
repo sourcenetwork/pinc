@@ -148,6 +148,19 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `ConnectOwn_nocap` | addresses Addrs {1, 2, 3} -> {1, 2}, cap Cap 2 -> 1, home relays Relays {1, 2} -> {1}, nonces Nonces {1, 2} -> {1}, wall clocks Walls {1, 2} -> {1} |
 | `ConnectOwn_refldup` | addresses Addrs {1, 2, 3} -> {1, 2}, home relays Relays {1, 2} -> {1}, nonces Nonces {1, 2} -> {1}, wall clocks Walls {1, 2} -> {1} |
 | `ConnectOwn_samewall` | MaxCalls 5 -> 4 |
+| `ConnectPack_p_added` | F 3 -> 2 |
+| `ConnectPack_p_bad` | F 3 -> 2 |
+| `ConnectPack_p_batch` | F 3 -> 2 |
+| `ConnectPack_p_batchfin` | F 3 -> 2 |
+| `ConnectPack_p_exact` | F 3 -> 2 |
+| `ConnectPack_p_full` | F 3 -> 2 |
+| `ConnectPack_p_fullfin` | F 3 -> 2 |
+| `ConnectPack_p_long` | F 3 -> 2 |
+| `ConnectPack_p_none` | F 3 -> 2 |
+| `ConnectPack_p_single` | F 3 -> 2 |
+| `ConnectPack_w_batch` | F 3 -> 2 |
+| `ConnectPack_w_count` | F 3 -> 2 |
+| `ConnectPack_w_long` | F 3 -> 2 |
 | `ConnectRecords` | MaxCalls 4 -> 2 |
 | `ConnectRecords_own` | MaxCalls 4 -> 2 |
 | `ConnectRelay` | Depth 6 -> 3, Times {0, 16, 31} -> {0, 31}, window quota cf.Bytes 3 -> 1 (cfQuick), MAX_PEERS and ALIAS_MAX 32 -> 2 and 4 (MAXPEERSQuick, AMQuick: the tables never hold more) |
