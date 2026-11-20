@@ -142,8 +142,12 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `ConnectMailbox_drain` | Times {0, 2, 4} -> {0, 4}, MaxPkt 2 -> 1, B 7 -> 5, plus ConnectMailbox_drainQuickBound (behaviours of at most 3 calls) |
 | `ConnectMailbox_wold` | MaxSeq 3 -> 2 |
 | `ConnectOwn` | home relays Relays {1, 2} -> {1}, nonces Nonces {1, 2} -> {1} |
+| `ConnectOwn_anyfrom` | MaxCalls 5 -> 4 |
+| `ConnectOwn_anynonce` | MaxCalls 5 -> 4 |
+| `ConnectOwn_dup` | MaxCalls 5 -> 4 |
 | `ConnectOwn_nocap` | addresses Addrs {1, 2, 3} -> {1, 2}, cap Cap 2 -> 1, home relays Relays {1, 2} -> {1}, nonces Nonces {1, 2} -> {1}, wall clocks Walls {1, 2} -> {1} |
 | `ConnectOwn_refldup` | addresses Addrs {1, 2, 3} -> {1, 2}, home relays Relays {1, 2} -> {1}, nonces Nonces {1, 2} -> {1}, wall clocks Walls {1, 2} -> {1} |
+| `ConnectOwn_samewall` | MaxCalls 5 -> 4 |
 | `ConnectRecords` | MaxCalls 4 -> 2 |
 | `ConnectRecords_own` | MaxCalls 4 -> 2 |
 | `ConnectRelay` | Depth 6 -> 3, Times {0, 16, 31} -> {0, 31}, window quota cf.Bytes 3 -> 1 (cfQuick), MAX_PEERS and ALIAS_MAX 32 -> 2 and 4 (MAXPEERSQuick, AMQuick: the tables never hold more) |
