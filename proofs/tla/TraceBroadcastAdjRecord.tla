@@ -47,47 +47,66 @@ Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/bcast/adj_record.ndjson")
 Ev == Trace[i]
 Range(s) == {s[j] : j \in 1..Len(s)}
 
+\* The oracle holds the numbers of the lines that signed: a sign line's key, signed bytes and signature as recorded;
+\* a write line's as its record holds them (WriteEv asks that it parses: its signature is its last SigLen(tag) bytes,
+\* the tag byte OrgW + 1 = 33, and the signed bytes the rest, which is Parse's signed and sig). Holding numbers, not
+\* the bytes, keeps each state small: a set of records of signed bytes made every state's fingerprint grow with the
+\* lines before it.
+OrcSigLen(g) == SigLen(Trace[g].b[33])
+OrcSigned(g) == IF Trace[g].op = "sign" THEN Trace[g].signed
+                ELSE SubSeq(Trace[g].b, 1, Len(Trace[g].b) - OrcSigLen(g))
+OrcSig(g) == IF Trace[g].op = "sign" THEN Trace[g].sig
+             ELSE SubSeq(Trace[g].b, Len(Trace[g].b) - OrcSigLen(g) + 1, Len(Trace[g].b))
+
 \* verify: a signature of exactly these signed bytes by a key whose node id is the origin, of the record's
-\* algorithm, and (unless Ed25519, whose id is the key) whose public key is the record's
-Verified(r) == \E g \in orc, kk \in keys :
-    /\ g.signed = r.signed /\ g.sig = r.sig /\ g.k = kk.k
+\* algorithm, and (unless Ed25519, whose id is the key) whose public key is the record's. The conjuncts are those of
+\* \E g, kk : signed /\ sig /\ g's key is kk /\ kk's id, alg and pk; the cheap ones first.
+Verified(r) == \E kk \in keys :
     /\ kk.id = r.origin /\ kk.alg = r.alg /\ (r.alg # 1 => kk.pk = r.pk)
+    /\ \E g \in orc : Trace[g].k = kk.k /\ OrcSig(g) = r.sig /\ OrcSigned(g) = r.signed
 
 Init == i = 1 /\ keys = {} /\ orc = {}
+
+\* What each line must satisfy is checked by LineOK on the state that points at it (the keys and the oracle of the
+\* lines before it); a step only adds the line to the state. TLC evaluates the model's LET values once in a state
+\* predicate but again at each use in a step, which on the written records overflowed the stack.
+SignOK == \E kk \in keys : kk.k = Ev.k /\ Len(Ev.sig) = SigLen(kk.alg)
+
+ParseOK == LET r == R!Parse(Ev.b)
+           IN IF "none" \in DOMAIN Ev THEN ~r.ok
+              ELSE /\ r.ok
+                   /\ r.origin = Ev.origin /\ r.alg = Ev.alg /\ r.pk = Ev.pk /\ r.inc = Ev.inc /\ r.seq = Ev.seq
+                   /\ r.peers = Ev.peers /\ r.sig = Ev.sig /\ Len(r.signed) = Ev.slen
+                   /\ Ev.ver = Verified(r)
+
+\* a node wrote its record: it parses, writes back to itself, names the writer, and holds the given peers
+WriteOK == LET r == R!Parse(Ev.b)
+               G == {g \in Range(Ev.given) : g # r.origin}
+           IN /\ r.ok
+              /\ R!Encode(r) = Ev.b
+              /\ \E kk \in keys : /\ kk.k = Ev.k /\ kk.id = r.origin /\ kk.alg = r.alg
+                                  /\ r.pk = IF r.alg = 1 THEN <<>> ELSE kk.pk
+              /\ IF Cardinality(G) <= AdjMax THEN Range(r.peers) = G
+                 ELSE /\ Len(r.peers) = AdjMax /\ Range(r.peers) \subseteq G
+                      /\ \A a \in Range(r.peers), b \in G \ Range(r.peers) : R!LexLt(a, b)
+
+LineOK == i <= Len(Trace) =>
+              /\ Ev.t = "adj"
+              /\ \/ Ev.op = "key"
+                 \/ Ev.op = "sign" /\ SignOK
+                 \/ Ev.op = "parse" /\ ParseOK
+                 \/ Ev.op = "write" /\ WriteOK
 
 KeyEv == /\ Ev.op = "key"
          /\ keys' = keys \union {[k |-> Ev.k, alg |-> Ev.alg, id |-> Ev.id, pk |-> Ev.pk]}
          /\ UNCHANGED orc
-
-SignEv == /\ Ev.op = "sign"
-          /\ \E kk \in keys : kk.k = Ev.k /\ Len(Ev.sig) = SigLen(kk.alg)
-          /\ orc' = orc \union {[k |-> Ev.k, signed |-> Ev.signed, sig |-> Ev.sig]}
+\* a sign line and a written record are signatures the oracle holds from then on
+SignEv == /\ Ev.op \in {"sign", "write"}
+          /\ orc' = orc \union {i}
           /\ UNCHANGED keys
+ParseEv == Ev.op = "parse" /\ UNCHANGED <<keys, orc>>
 
-ParseEv == /\ Ev.op = "parse"
-           /\ LET r == R!Parse(Ev.b)
-              IN IF "none" \in DOMAIN Ev THEN ~r.ok
-                 ELSE /\ r.ok
-                      /\ r.origin = Ev.origin /\ r.alg = Ev.alg /\ r.pk = Ev.pk /\ r.inc = Ev.inc /\ r.seq = Ev.seq
-                      /\ r.peers = Ev.peers /\ r.sig = Ev.sig /\ Len(r.signed) = Ev.slen
-                      /\ Ev.ver = Verified(r)
-           /\ UNCHANGED <<keys, orc>>
-
-\* a node wrote its record: it parses, writes back to itself, names the writer, and holds the given peers
-WriteEv == /\ Ev.op = "write"
-           /\ LET r == R!Parse(Ev.b)
-                  G == {g \in Range(Ev.given) : g # r.origin}
-              IN /\ r.ok
-                 /\ R!Encode(r) = Ev.b
-                 /\ \E kk \in keys : /\ kk.k = Ev.k /\ kk.id = r.origin /\ kk.alg = r.alg
-                                     /\ r.pk = IF r.alg = 1 THEN <<>> ELSE kk.pk
-                 /\ IF Cardinality(G) <= AdjMax THEN Range(r.peers) = G
-                    ELSE /\ Len(r.peers) = AdjMax /\ Range(r.peers) \subseteq G
-                         /\ \A a \in Range(r.peers), b \in G \ Range(r.peers) : R!LexLt(a, b)
-                 /\ orc' = orc \union {[k |-> Ev.k, signed |-> r.signed, sig |-> r.sig]}
-           /\ UNCHANGED keys
-
-Step == /\ i <= Len(Trace) /\ Ev.t = "adj" /\ (KeyEv \/ SignEv \/ ParseEv \/ WriteEv) /\ i' = i + 1
+Step == /\ i <= Len(Trace) /\ (KeyEv \/ SignEv \/ ParseEv) /\ i' = i + 1
 Finished == i > Len(Trace) /\ UNCHANGED vars
 TNext == Step \/ Finished
 TraceSpec == Init /\ [][TNext]_vars
