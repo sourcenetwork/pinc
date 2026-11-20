@@ -320,8 +320,8 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `Frame_nonminimal` | Strings -> StringsQuick: strings of up to 4 bytes -> 3, ack bytes after the type 5 -> 4 |
 | `Frame_off` | Strings -> StringsQuick: strings of up to 4 bytes -> 3, ack bytes after the type 5 -> 4 |
 | `Frame_sep` | MAXRANGES 3 -> 2 |
-| `HalfOpen` | LIFE = HOLD 2 -> 1 (still a thin node), TMAX 4 -> 2, LENS {0, 1, 2, 3} -> {0, 3} |
-| `HalfOpen_answer` | TMAX 4 -> 3 (an answered session still reaches its end, created + HOLD + 1) |
+| `HalfOpen` | LIFE = HOLD 2 -> 1 (still a thin node), TMAX 4 -> 2, LENS {0, 1, 2, 3} -> {0, 3}, K 2 -> 1 (one session at a time: the cap with a free slot beside it and two holders of an id are reached by HalfOpen_room, _room2, _half and _held) |
+| `HalfOpen_answer` | TMAX 4 -> 3 (an answered session still reaches its end, created + HOLD + 1), K 2 -> 1 (one session at a time: two answered sessions side by side are checked in the deep profile only) |
 | `HalfOpen_flood` | LIFE 2 -> 1, HOLD 2 -> 1 |
 | `HalfOpen_gone` | TMAX 2 -> 0, LENS {0, 1, 2, 3} -> {3} |
 | `HalfOpen_half` | TMAX 1 -> 0 |
