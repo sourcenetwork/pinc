@@ -31,7 +31,7 @@
 mod connect_common;
 
 use core::net::SocketAddr;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use connect_common::{SEC, big_stack, ed, id, nid};
 use pinc_connect::client::dial::LATE_START;
@@ -553,7 +553,7 @@ fn run4(out: &mut Vec<String>) {
 }
 
 /// One seeded session run: a dial and 30 random steps.
-fn seeded(seed: u64, out: &mut Vec<String>) {
+fn seeded(seed: u64, out: &mut Vec<String>, deltas: &mut BTreeSet<i64>) {
     let mut r = Drv::session_run();
     let mut rng = SplitMix64::traced(0xD21E_0000 + seed);
     let hints: Vec<SocketAddr> = if seed % 2 == 0 {
@@ -605,6 +605,7 @@ fn seeded(seed: u64, out: &mut Vec<String>) {
             _ => {
                 let step_us = [100 * MS, 2 * S, -S, 65 * S][(rng.next_u64() % 4) as usize];
                 let off = (r.off + step_us).clamp(-200 * S, 200 * S);
+                deltas.insert(step_us);
                 r.drive(off);
             }
         }
@@ -659,12 +660,34 @@ fn connect_drive_trace() {
         run2(&mut out);
         run3(&mut out);
         run4(&mut out);
+        let mut deltas = BTreeSet::new();
         for seed in 0..40 {
-            seeded(seed, &mut out);
+            let before = out.len();
+            seeded(seed, &mut out, &mut deltas);
+            // every call writes one line: the stub's start, the dial and 30 steps
+            assert_eq!(out.len() - before, 32, "seed {seed}");
         }
         run5(&mut out);
         run6(&mut out);
-        assert!(out.len() > 1500, "the trace holds {} events", out.len());
+        assert_eq!(out.len(), 93 + 40 * 32, "the trace holds {} events", out.len());
+        let seen = |needle: &str| out.iter().any(|l| l.contains(needle));
+        for needle in [
+            r#""holds":true"#,
+            r#""holds":false"#,
+            r#""op":"stats","est":true"#,
+            r#""op":"resume""#,
+            r#""op":"gone""#,
+            r#""hold""#,
+            r#""unhold""#,
+            r#""punch""#,
+        ] {
+            assert!(seen(needle), "no run reached {needle}");
+        }
+        assert_eq!(
+            deltas.into_iter().collect::<Vec<_>>(),
+            [-S, 100 * MS, 2 * S, 65 * S],
+            "the seeded runs did not take every clock step"
+        );
         if let Ok(dir) = std::env::var("PINC_TRACE_DIR") {
             std::fs::write(format!("{dir}/connect_drive.ndjson"), out.join("\n") + "\n").unwrap();
         }
