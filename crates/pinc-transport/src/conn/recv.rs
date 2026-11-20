@@ -520,7 +520,8 @@ conn_impl! {
     }
 
     /// Both ends follow the highest-numbered packet that carries data to the path it came from, and challenge a new
-    /// UDP path in parallel. A path whose local address is gone is never followed.
+    /// UDP path in parallel. A direct path is left for a relay path only by a packet that carries WAKE, and a path
+    /// whose local address is gone is never followed.
     fn follow_peer(&mut self, env: &mut Env<'_, P>, pi: usize, pn: u64, prev_largest: Option<u64>, wake: bool, now: u64) {
         if prev_largest.is_some_and(|l| pn < l) || self.phase != Phase::Connected || pi == self.paths.active {
             return;

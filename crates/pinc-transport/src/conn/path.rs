@@ -11,19 +11,19 @@
 //! small and unpadded: the datagram size is found by the separate probe.
 //!
 //! Both ends follow the peer at once: the highest-numbered packet that carries STREAM, DATAGRAM or WAKE data moves the
-//! active path to the path it came from unless that path's local address is gone (a gone path is never followed), and a
-//! new UDP path is challenged in parallel (a new path gets three times what it sent us until its challenge is
-//! answered). An end that sends through a relay and is challenged on a direct path it has not validated, and has no
-//! challenge out on, answers with its own challenge in the same datagram, so both ends validate the path in one round
-//! trip and the session leaves the relay then (the reference model's responder starts its challenge only when the
-//! peer's candidate list arrives, a hop behind the peer's first challenge, where the address limit then holds it back
-//! until the next probe; a node declared thin keeps that cadence, and an end whose session moved no application data
-//! for 20 s only answers, as the reference model looks for no direct path on an idle session). The active path is
-//! chosen by cost: the smoothed round trip of the path, plus one second for a relay, minus 3 ms for IPv6; a validated
-//! UDP path that was silent for 15 s is left out; from a relay, or from a path whose address is gone, the connection
-//! moves at once, otherwise only for a gain above 5 ms. After three probe timeouts in a row on a direct path the path
-//! is dropped as validated, challenged on the re-join cadence, and the connection falls back to a relay path if it has
-//! one.
+//! active path to the path it came from unless that path's local address is gone (a gone path is never followed), and
+//! only a packet carrying WAKE moves it from a direct path onto a relay path; a new UDP path is challenged in parallel
+//! (a new path gets three times what it sent us until its challenge is answered). An end that sends through a relay and
+//! is challenged on a direct path it has not validated, and has no challenge out on, answers with its own challenge in
+//! the same datagram, so both ends validate the path in one round trip and the session leaves the relay then (the
+//! reference model's responder starts its challenge only when the peer's candidate list arrives, a hop behind the
+//! peer's first challenge, where the address limit then holds it back until the next probe; a node declared thin keeps
+//! that cadence, and an end whose session moved no application data for 20 s only answers, as the reference model looks
+//! for no direct path on an idle session). The active path is chosen by cost: the smoothed round trip of the path, plus
+//! one second for a relay, minus 3 ms for IPv6; a validated UDP path that was silent for 15 s is left out; from a
+//! relay, or from a path whose address is gone, the connection moves at once, otherwise only for a gain above 5 ms.
+//! After three probe timeouts in a row on a direct path the path is dropped as validated, challenged on the re-join
+//! cadence, and the connection falls back to a relay path if it has one.
 //!
 //! A challenge sent to a new or abandoned path follows a cadence that depends on why: a new path is probed 9 times
 //! from `max(33.3 ms, srtt / 8)`, doubling up to 2 s; a path abandoned after probe timeouts is probed at a flat gap
