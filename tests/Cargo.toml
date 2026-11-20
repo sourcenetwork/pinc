@@ -207,6 +207,10 @@ name = "transport_net"
 path = "transport_net.rs"
 
 [[test]]
+name = "transport_net_paths"
+path = "transport_net_paths.rs"
+
+[[test]]
 name = "transport_life"
 path = "transport_life.rs"
 

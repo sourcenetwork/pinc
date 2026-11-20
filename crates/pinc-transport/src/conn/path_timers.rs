@@ -52,7 +52,7 @@ conn_impl! {
                 self.idle_out(env, i);
             }
         }
-        if self.paths.active().is_none_or(|p| p.info.kind == PathKind::Relay) {
+        if self.active_open_to_move() {
             self.choose_path();
         }
         for i in 0..NP {

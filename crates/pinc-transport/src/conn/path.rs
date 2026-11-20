@@ -10,19 +10,19 @@
 //! on the path are acknowledged, its round trip follows the connection's smoothed one. Challenges and responses are
 //! small and unpadded: the datagram size is found by the separate probe.
 //!
-//! Both ends follow the peer at once: the highest-numbered packet that carries STREAM, DATAGRAM or WAKE data moves
-//! the active path to the path it came from, and a new UDP path is challenged in parallel (a new path gets three
-//! times what it sent us until its challenge is answered). An end that sends through a relay and is challenged on
-//! a direct path it has not validated, and has no challenge out on, answers with its own challenge in the same
-//! datagram, so both ends validate the path in one round trip and the session leaves the relay then (the reference
-//! model's responder starts its challenge only when the peer's candidate list arrives, a hop behind the peer's
-//! first challenge, where the address limit then holds it back until the next probe; a node declared thin keeps
-//! that cadence, and an end whose session moved no application data for 20 s only answers, as the reference model
-//! looks for no direct path on an idle session). The active path is chosen by cost: the smoothed round
-//! trip of the path, plus one second for a relay, minus 3 ms for IPv6; a validated UDP path that was silent for 15 s
-//! is left out; from a relay the connection moves at once, otherwise only for a gain above 5 ms. After three
-//! probe timeouts in a row on a direct path the path is dropped as validated, challenged on the re-join cadence, and
-//! the connection falls back to a relay path if it has one.
+//! Both ends follow the peer at once: the highest-numbered packet that carries STREAM, DATAGRAM or WAKE data moves the
+//! active path to the path it came from, and a new UDP path is challenged in parallel (a new path gets three times what
+//! it sent us until its challenge is answered). An end that sends through a relay and is challenged on a direct path it
+//! has not validated, and has no challenge out on, answers with its own challenge in the same datagram, so both ends
+//! validate the path in one round trip and the session leaves the relay then (the reference model's responder starts
+//! its challenge only when the peer's candidate list arrives, a hop behind the peer's first challenge, where the
+//! address limit then holds it back until the next probe; a node declared thin keeps that cadence, and an end whose
+//! session moved no application data for 20 s only answers, as the reference model looks for no direct path on an idle
+//! session). The active path is chosen by cost: the smoothed round trip of the path, plus one second for a relay, minus
+//! 3 ms for IPv6; a validated UDP path that was silent for 15 s is left out; from a relay, or from a path whose address
+//! is gone, the connection moves at once, otherwise only for a gain above 5 ms. After three probe timeouts in a row on
+//! a direct path the path is dropped as validated, challenged on the re-join cadence, and the connection falls back to
+//! a relay path if it has one.
 //!
 //! A challenge sent to a new or abandoned path follows a cadence that depends on why: a new path is probed 9 times
 //! from `max(33.3 ms, srtt / 8)`, doubling up to 2 s; a path abandoned after probe timeouts is probed at a flat gap
@@ -310,6 +310,9 @@ conn_impl! {
                 p.info = info;
             }
             self.sync_kind(i);
+            if self.paths.active().is_none_or(|p| p.gone) {
+                self.choose_path();
+            }
             return Ok(());
         }
         let i = self.new_path_slot(id, info, env.now).ok_or(PathError::TooMany)?;
@@ -321,6 +324,11 @@ conn_impl! {
         }
         if self.phase == Phase::Connected && info.kind != PathKind::Relay {
             self.start_punch(env, i);
+        }
+        // Only a lost active path is left here: a relay added from a relay must not hop to a second relay whose round
+        // trip still reads 0 (see `set_path_info`).
+        if self.paths.active().is_none_or(|p| p.gone) {
+            self.choose_path();
         }
         Ok(())
     }
@@ -545,7 +553,7 @@ conn_impl! {
         {
             p.info = info;
             self.sync_kind(i);
-            if self.paths.active().is_none_or(|p| p.info.kind == PathKind::Relay) {
+            if self.active_open_to_move() {
                 self.choose_path();
             }
             // A path taken for direct that the endpoint names a relay's is valid as every relay path is. It becomes
@@ -559,6 +567,11 @@ conn_impl! {
                 p.amp.validate();
             }
         }
+    }
+
+    /// The active path is one the connection leaves for any better path at once: none, a relay, or gone.
+    pub(super) fn active_open_to_move(&self) -> bool {
+        self.paths.active().is_none_or(|p| p.gone || p.info.kind == PathKind::Relay)
     }
 
     /// Whether a path is validated.
@@ -796,7 +809,7 @@ conn_impl! {
             .map(|(i, _)| i)
     }
 
-    /// Move to the cheapest usable path: at once from a relay, otherwise for a gain above 5 ms.
+    /// Move to the cheapest usable path: at once from a relay or a gone path, otherwise for a gain above 5 ms.
     pub(super) fn choose_path(&mut self) {
         let Some(best) = self.best_path() else { return };
         let (Some(b), cur) = (self.paths.get(best).copied(), self.paths.active().copied()) else { return };
@@ -843,5 +856,4 @@ conn_impl! {
             }
         }
     }
-
 }
