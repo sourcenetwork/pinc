@@ -205,7 +205,7 @@ fn run<H: Hosted + 'static>(
     file: &str,
     case: &MbtCase,
     mk: impl FnOnce(&Wire) -> (pinc::Endpoint<H>, pinc::Endpoint<H>),
-) {
+) -> u64 {
     let mut t = world(case.id, mk);
     let mut task = PEER_BASE + 1000;
     for (n, step) in case.steps.iter().enumerate() {
@@ -260,6 +260,8 @@ fn run<H: Hosted + 'static>(
                 let woke: Vec<usize> = set(arg(1)).into_iter().map(|w| w - 1).collect();
                 t.slots[o] = Slot::Gone;
                 t.settle_timed();
+                // The future is dropped: a wake it got means nothing (FacadeOpen.tla Cancel).
+                t.polled_at[o] = t.count(o);
                 woke
             }
             other => panic!("{}: a call the test does not know: {other}", what()),
@@ -290,18 +292,21 @@ fn run<H: Hosted + 'static>(
             what()
         );
     }
+    case.steps.len() as u64
 }
 
 #[test]
 fn mbt_facade_open() {
     let Some(cases) = mbt_cases("facade_open.ndjson") else {
+        eprintln!("mbt_facade_open: PINC_MBT_DIR is not set, nothing checked (scripts/proofs.sh generates the cases)");
         return;
     };
     let cases = cases.unwrap();
-    let mut n = 0;
+    let head = cases.head.clone();
+    let (mut n, mut steps) = (0u64, 0u64);
     for case in cases {
         let case = case.unwrap();
-        run("facade_open.ndjson", &case, |w| {
+        steps += run("facade_open.ndjson", &case, |w| {
             let a = w.endpoint(SUBJECT.parse().unwrap(), 1, ALPN, Limits::default());
             let p = w.endpoint(
                 PEER.parse().unwrap(),
@@ -316,5 +321,11 @@ fn mbt_facade_open() {
         });
         n += 1;
     }
-    assert!(n > 0, "the case file holds no case");
+    println!("facade_open: {n} cases, {steps} steps");
+    let count = |f: &str| head.get(f).and_then(Json::u64).unwrap();
+    assert_eq!(
+        (n, steps),
+        (count("cases"), count("steps")),
+        "facade_open.ndjson ends early"
+    );
 }
