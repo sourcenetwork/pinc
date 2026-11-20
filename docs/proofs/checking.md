@@ -97,7 +97,10 @@ By `scripts/proofs.sh` (the `== proofs` step of `scripts/gate.sh`):
   operators of `OrphanOps.tla` at the size of the real table (4 entries) with one action per call of the code, whose
   parameters are the call's arguments and its result (`CallHold(t, key, len, ok)`, `CallTake(t, key, out)`,
   `CallExpire(t)`; TLC splits the bounded `\E` of the next-state relation into one action per value, and only the
-  result the operators compute has a successor). TLC writes the whole state graph of a config
+  result the operators compute has a successor). Every parameter is fixed on the state before the call: a guard with
+  two true branches (a disjunction or an `\E`) makes two successors of one call, and a conjunct after the step that
+  rejects a wrong result makes TLC write the rejected successor into the graph as a state past the constraint, so
+  `scripts/mbt.py`, which counts both, fails. TLC writes the whole state graph of a config
   (`-dump dot,actionlabels,constrained`, with the 2026 jar, whose edge labels carry the action's parameters): one
   node per state (the entries and the four counters), one edge per call, and the states past the config's constraint
   as leaves, reached but not left. `scripts/mbt.py` checks that the graph holds every state and every successor TLC

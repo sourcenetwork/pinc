@@ -27,11 +27,17 @@ vars == <<st, waits, woken, free, clock, askedAt, overtaken>>
 M == INSTANCE FacadeOpen WITH Opens <- 1..4, Places <- 2, Fifo <- TRUE, Handoff <- TRUE
 
 Init == M!Init
-\* w: the opens the call wakes (their waker runs, already woken or not), as the model's actions name them
-CallAsk(o, r) == M!Ask(o) /\ st'[o] = r
-CallPoll(o, r, w) == M!Poll(o) /\ st'[o] = r /\ w = (IF r = "open" THEN M!Next2(waits) ELSE {})
-CallRelease(o, w) == M!Release(o) /\ w = (IF waits # <<>> THEN {waits[1]} ELSE {})
-CallCancel(o, w) == M!Cancel(o) /\ w = (IF waits # <<>> /\ waits[1] = o THEN M!Next2(waits) ELSE {})
+\* w: the opens the call wakes (their waker runs, already woken or not), as the model's actions name them. Every
+\* parameter is fixed on the state before the call, ahead of the model's step: TLC (-dump constrained) writes a
+\* successor that a conjunct after the step rejects as a state past the constraint, so a guessed r or w checked after
+\* M!Ask would put a rejected state beside every call. The step still checks r: were AskAnswer or PollAnswer not the
+\* model's answer, the rejected states would be back and scripts/mbt.py would fail on the count of states.
+AskAnswer == IF waits # <<>> \/ free = 0 THEN "wait" ELSE "open"
+PollAnswer(o) == IF waits # <<>> /\ waits[1] = o /\ free > 0 THEN "open" ELSE "wait"
+CallAsk(o, r) == r = AskAnswer /\ M!Ask(o) /\ st'[o] = r
+CallPoll(o, r, w) == r = PollAnswer(o) /\ w = (IF r = "open" THEN M!Next2(waits) ELSE {}) /\ M!Poll(o) /\ st'[o] = r
+CallRelease(o, w) == w = (IF waits # <<>> THEN {waits[1]} ELSE {}) /\ M!Release(o)
+CallCancel(o, w) == w = (IF waits # <<>> /\ waits[1] = o THEN M!Next2(waits) ELSE {}) /\ M!Cancel(o)
 
 Next == \/ \E o \in 1..4, r \in {"open", "wait"} : CallAsk(o, r)
         \/ \E o \in 1..4, r \in {"open", "wait"}, w \in SUBSET (1..4) : CallPoll(o, r, w)
