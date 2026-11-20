@@ -118,7 +118,10 @@ impl Rig<'_> {
         let slots: Vec<String> = want
             .iter()
             .enumerate()
-            .map(|(p, (k, v))| format!("[{p},{k},{v}]"))
+            .map(|(p, (k, v))| {
+                let slot = s.trace_slot(p).unwrap();
+                format!("[{slot},{k},{v}]")
+            })
             .collect();
         let core = format!(
             r#"{{"len":{len},"slots":[{}],"first":{},"last":{}"#,
