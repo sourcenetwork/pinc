@@ -110,7 +110,8 @@ where
                 self.io.emit(NodeEvent::Endpoint(ev));
             }
             Event::ConnectFailed { node, .. } => {
-                self.layer_failed(now, layer, &node.bytes);
+                let cancel = self.leaving || self.io.revoked.contains(&node.bytes);
+                self.layer_lost(now, layer, &node.bytes, cancel);
                 self.io.emit(NodeEvent::Endpoint(ev));
             }
             Event::Closed { session, .. } => {

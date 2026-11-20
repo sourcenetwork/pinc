@@ -16,13 +16,14 @@ use core::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use pinc_broadcast::{IdKey, Limits};
 use pinc_connect::client::{Config as ConnCfg, RelayCfg};
-use pinc_core::SessionId;
+use pinc_core::{ConnectFailure, Event, SessionId};
 use pinc_crypto::{Drbg, IdentityAlg, Keypair, Software};
-use pinc_security::{Env, KeyHandle, LocalIdentity, PrekeyPolicy, SoftPrekeys};
+use pinc_security::{Alpn, Env, KeyHandle, LocalIdentity, PrekeyPolicy, SoftPrekeys};
 
 use crate::apps::{Apps, Enabled, NoDtn, NoIndex, NoValues, SetsApp};
 use crate::config::{Config, HUB_ALPN, SETS_ALPN, TABLE_MAX};
 use crate::event::{NodeEvent, ReconcileFailure};
+use crate::reconcile::ATTEMPTS;
 use crate::io::tests::{DIALED, Stub};
 use crate::layer::{LSess, Layer};
 use crate::node::Node;
@@ -183,6 +184,31 @@ fn a_round_whose_session_is_shed_for_a_revoked_peer_ends_cancelled() {
         assert_eq!(node.io.ep.dials[0].1, SETS_ALPN);
         node.revoke(S, &peer).unwrap();
         node.layer_up(S, Layer::Sets, SessionId(DIALED), peer, false);
+        node.settle(S);
+        assert_eq!(failures(&mut node), [ReconcileFailure::Cancelled]);
+        assert_eq!(node.sets_running(), 0);
+    });
+}
+
+#[test]
+fn a_dial_that_fails_after_the_peer_was_revoked_ends_the_round_cancelled() {
+    big(|| {
+        let mut node = node();
+        let peer = hub().bytes;
+        node.sets_start(S, &peer, SET).unwrap();
+        let failed = || Event::ConnectFailed {
+            session: None,
+            node: hub(),
+            alpn: Alpn::new(SETS_ALPN).unwrap(),
+            reason: ConnectFailure::Timeout,
+        };
+        for _ in 0..ATTEMPTS - 1 {
+            node.on_layer_event(S, Layer::Sets, failed());
+            node.settle(S);
+            assert!(failures(&mut node).is_empty(), "an attempt that failed retries");
+        }
+        node.revoke(S, &peer).unwrap();
+        node.on_layer_event(S, Layer::Sets, failed());
         node.settle(S);
         assert_eq!(failures(&mut node), [ReconcileFailure::Cancelled]);
         assert_eq!(node.sets_running(), 0);
