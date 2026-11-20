@@ -110,7 +110,8 @@ impl<H: Hosted, R: Rendezvous> Endpoint<H, Records<R>> {
         if stored.is_some() || !self.has_relays() {
             return Ok(stored);
         }
-        self.relay_record(node).await
+        let relayed = self.relay_record(node).await?;
+        Ok(self.0.discovery.note(node, relayed))
     }
 }
 

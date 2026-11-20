@@ -13,8 +13,10 @@
 //! [`lookup`](crate::Endpoint::lookup). The store is the host's: an in-process table for tests, and the node's home
 //! relay once the connectivity client runs under the facade.
 //!
-//! Invariants: the known records are verified, each is the newest of its node seen so far (a lower sequence number
-//! never replaces a higher one), and there are at most [`KNOWN_MAX`]; a borrow of the table lasts one call and is
+//! Invariants: the known records are verified, each is the newest of its node seen while it was held (a lower sequence
+//! number never replaces a higher one), and there are at most [`KNOWN_MAX`]; past that one held record is forgotten,
+//! and that node's next lookup takes what the store holds (a stale record there costs one failed dial, never a wrong
+//! node); a borrow of the table lasts one call and is
 //! never held across an await.
 
 use alloc::vec::Vec;
@@ -80,7 +82,7 @@ pub(crate) fn newest(known: Option<&PeerRecord>, fetched: Option<PeerRecord>) ->
 /// Keep `record` as the newest of `node`, forgetting one other peer's record first if the table is at [`KNOWN_MAX`].
 fn remember(known: &mut Map<NodeId, PeerRecord>, node: NodeId, record: PeerRecord) {
     if known.len() >= KNOWN_MAX && !known.contains_key(&node) {
-        // Full: forget one record; that peer's next lookup takes whatever the store holds.
+        // Full: forget one record, an arbitrary peer's; that peer's next lookup takes whatever the store holds.
         let evict = known.keys().next().copied();
         if let Some(k) = evict {
             known.remove(&k);
@@ -129,6 +131,11 @@ impl<R: Rendezvous> Records<R> {
             .fetch(node)
             .await
             .and_then(|b| PeerRecord::verified(node, &b));
+        self.note(node, fetched)
+    }
+
+    /// Keep `fetched` if it is newer than what is known of `node`; the newest known record.
+    pub(crate) fn note(&self, node: &NodeId, fetched: Option<PeerRecord>) -> Option<PeerRecord> {
         let mut table = self.known.try_borrow_mut().ok()?;
         let Some(known) = table.as_mut() else {
             return fetched;
@@ -219,6 +226,17 @@ mod tests {
         fn fetch(&self, _node: &NodeId) -> impl Future<Output = Option<Vec<u8>>> {
             core::future::ready(None)
         }
+    }
+
+    #[test]
+    fn a_record_a_relay_found_is_not_replaced_by_an_older_one_from_the_store() {
+        let records = Records::new(Empty);
+        let secrets: &'static [u64; 7] = &[1, 2, 3, 4, 5, 6, 7];
+        records.seed_maps(5, secrets);
+        // The record a relay answered is kept; an older one the store answers later does not replace it.
+        assert_eq!(records.note(&node(1), Some(record(1, 5))).map(|r| r.seq), Some(5));
+        assert_eq!(records.note(&node(1), Some(record(1, 3))).map(|r| r.seq), Some(5));
+        assert_eq!(records.note(&node(1), None).map(|r| r.seq), Some(5));
     }
 
     #[test]
