@@ -1,6 +1,6 @@
 ----------------------- MODULE FacadeRelayCarriersOps -----------------------
 (***************************************************************************)
-(* The carriers of a node that carries the relay role, step for step:     *)
+(* The carriers of a node that carries the relay role, step for step:      *)
 (* crates/pinc/src/relay/part.rs Part::poll (an accept, completions, the   *)
 (* reads and writes to start, the streams to close), Part::end, and the    *)
 (* parts of relay/state.rs it calls (want_accept, complete, add_conn,      *)
@@ -13,18 +13,20 @@
 (* A conn (a slot of Core.conns): on (Some), id, h (the host's stream),    *)
 (* node (0 while in its handshake), sid (its machine session), rd and wr   *)
 (* (a read or write out), off (the write buffer was partly written: the    *)
-(* next write goes on from the offset), q (units queued, Conn.backlog),    *)
-(* wb (units in the write buffer), dy (the Closed reason, "" while alive), *)
-(* kind, dl (handshake deadline), rx (last read). A read's bytes are       *)
-(* abstracted by what they make the core do: "hello" (a handshake        *)
-(* message), "open" (the handshake ends for a node), "frame" (a frame of  *)
-(* an open session), "junk" (a protocol failure), "zero" (end of stream   *)
-(* or an error), and whether they queue a reply. A unit is one sealed      *)
-(* frame.                                                                  *)
+(* next write goes on from the offset), q (units queued), wb (units in the *)
+(* write buffer), un (Conn.unsent in units, rounded up: what the write in  *)
+(* flight has not written yet; Conn.backlog is q + un, fix R5), dy (the    *)
+(* Closed reason, "" while alive), kind, dl (handshake deadline), rx (last *)
+(* read). A read's bytes are abstracted by what they make the core do:     *)
+(* "hello" (a handshake message), "open" (the handshake ends for a node),  *)
+(* "frame" (a frame of an open session), "junk" (a protocol failure),      *)
+(* "zero" (end of stream or an error), and whether they queue a reply. A   *)
+(* unit is one sealed frame; a member's pings and their answers (Conn.ctl, *)
+(* one pong at most) are not modelled.                                     *)
 (*                                                                         *)
-(* The host's operations out are a set of [k, id, slot, h]: an accept is  *)
+(* The host's operations out are a set of [k, id, slot, h]: an accept is   *)
 (* [k "acc", id 0, slot 0, h 0] (Tag::new(0)); a read or write carries the *)
-(* tag of its conn (id << 16 | slot).                                       *)
+(* tag of its conn (id << 16 | slot).                                      *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
 
@@ -38,7 +40,7 @@ CONSTANTS HS,    \* Limits.handshaking
           NODES  \* the member nodes
 
 NoConn == [on |-> FALSE, id |-> 0, h |-> 0, node |-> 0, sid |-> 0, rd |-> FALSE, wr |-> FALSE, off |-> FALSE,
-           q |-> 0, wb |-> 0, dy |-> "", kind |-> "tcp", dl |-> 0, rx |-> 0]
+           q |-> 0, wb |-> 0, un |-> 0, dy |-> "", kind |-> "tcp", dl |-> 0, rx |-> 0]
 Cnt0 == [opened |-> 0, closed |-> 0, full |-> 0, hsfull |-> 0, proto |-> 0, slow |-> 0, tout |-> 0, accerr |-> 0]
 
 \* the whole: the core c, the host's operations o, how often each stream was closed (ends), the streams dropped
@@ -72,9 +74,10 @@ Dying(m, k, why) ==
               [] why \in {"idle", "hstime"} -> Count(m1, "tout")
               [] OTHER -> m1
 
-\* state.rs send_frame, conn.rs push: a unit queued, or the conn closed as slow past the backlog; slow is the answer
-\* push gives (computed from units here, read from the counters in the trace)
-SlowAt(m, k) == m.c.cs[k].q + 1 > BL
+\* state.rs send_frame, conn.rs push: a unit queued, or the conn closed as slow when the queue and the write in flight
+\* (backlog) would pass the limit; slow is the answer push gives (computed from units here, read from the counters in
+\* the trace)
+SlowAt(m, k) == m.c.cs[k].q + m.c.cs[k].un + 1 > BL
 Push(m, k, slow) ==
     IF ~m.c.cs[k].on \/ m.c.cs[k].dy # "" THEN m
     ELSE IF slow THEN Dying(m, k, "slow")
@@ -86,30 +89,29 @@ Place(m, x) ==
     THEN LET k == Last(m.c.free) IN [m EXCEPT !.c.free = Front(@), !.c.cs[k] = x, !.c.next = @ + 1]
     ELSE [m EXCEPT !.c.cs = Append(@, x), !.c.next = @ + 1]
 
-\* state.rs add_conn: the accepted stream h is placed, or given back and closed (Tag 0) when the handshake table is
-\* full or the relay is stopping; both refusals count refused_handshakes_full
+\* state.rs add_conn: the accepted stream h is placed, or given back and closed (Tag 0): while the relay is stopping
+\* counted as an accept error, when the handshake table is full as refused_handshakes_full (fix R11; mis records a
+\* full-table count with room left). A session config the relay cannot build is an accept error too; it cannot
+\* happen with the constant carrier names and is not modelled.
 AddConn(m, h, kind, now, late) ==
-    IF m.c.hs >= HS \/ m.c.stop
+    IF m.c.stop THEN Close(Count(m, "accerr"), h, late)
+    ELSE IF m.c.hs >= HS
     THEN [Close(Count(m, "hsfull"), h, late) EXCEPT !.mis = @ \/ m.c.hs < HS]
     ELSE LET x == [NoConn EXCEPT !.on = TRUE, !.id = m.c.next + 1, !.h = h, !.kind = kind, !.dl = now + HSD,
                                  !.rx = now]
          IN [Place(m, x) EXCEPT !.c.hs = @ + 1]
 
-\* the first live conn of node n with session sid (close_session's scan)
-ConnOf(m, n, sid) == {k \in Live(m) : m.c.cs[k].node = n /\ m.c.cs[k].sid = sid}
-CloseSession(m, n, sid, why) ==
-    IF ConnOf(m, n, sid) = {} THEN m
-    ELSE Dying(m, CHOOSE k \in ConnOf(m, n, sid) : \A j \in ConnOf(m, n, sid) : k <= j, why)
-
 \* state.rs on_open for a member conn (access admits every node): refused when a new node finds the session table
-\* full; else the machine opens a session, and an older session of the node is closed as replaced
+\* full; else the machine opens a session and the node's entry names the new conn; the conn the entry held before, if
+\* it is another one with a session, is closed as replaced by its slot (fix R13: no scan). The machine's close of the
+\* replaced session then reaches close_session, which finds the node's entry naming the new session and does nothing.
 OnOpen(m, k, n) ==
     IF m.c.by[n] = 0 /\ Sessions(m) >= CAP THEN Dying(Count(m, "full"), k, "full")
-    ELSE LET old == m.c.cur[n]
-             m1 == IF old # 0 THEN CloseSession(m, n, old, "replaced") ELSE m
-             sid == m1.c.nsid + 1
-         IN [m1 EXCEPT !.c.nsid = sid, !.c.cur[n] = sid, !.c.cs[k].node = n, !.c.cs[k].sid = sid,
-                       !.c.hs = @ - 1, !.c.by[n] = k, !.c.cnt.opened = @ + 1]
+    ELSE LET old == m.c.by[n]
+             sid == m.c.nsid + 1
+             m1 == [m EXCEPT !.c.nsid = sid, !.c.cur[n] = sid, !.c.cs[k].node = n, !.c.cs[k].sid = sid,
+                             !.c.hs = @ - 1, !.c.by[n] = k, !.c.cnt.opened = @ + 1]
+         IN IF old # 0 /\ old # k /\ m.c.cs[old].on /\ m.c.cs[old].sid # 0 THEN Dying(m1, old, "replaced") ELSE m1
 
 \* state.rs on_read with outcome x (a read of n > 0 bytes also sets last_rx); the buffer goes back. reply: the
 \* bytes made the core queue a frame on this conn (a handshake answer, a reply to a frame)
@@ -125,16 +127,18 @@ OnRead(m, k, x, n, reply, slow, now) ==
                 [] OTHER -> Dying(m1, k, "proto")
     IN IF reply /\ x \in {"hello", "open", "frame"} THEN Push(m2, k, slow) ELSE m2
 
-\* state.rs on_write with outcome x: all of the buffer written, part of it, or none (the peer is gone)
-OnWrite(m, k, x) ==
+\* state.rs on_write with outcome x: all of the buffer written, part of it (u: the units it has not written, rounded
+\* up, at most what was unsent), or none (the peer is gone)
+OnWrite(m, k, x, u) ==
     LET m0 == [m EXCEPT !.c.cs[k].wr = FALSE]
-    IN CASE x = "all" -> [m0 EXCEPT !.c.cs[k].wb = 0, !.c.cs[k].off = FALSE]
-         [] x = "part" -> [m0 EXCEPT !.c.cs[k].off = TRUE]
+    IN CASE x = "all" -> [m0 EXCEPT !.c.cs[k].wb = 0, !.c.cs[k].un = 0, !.c.cs[k].off = FALSE]
+         [] x = "part" -> [m0 EXCEPT !.c.cs[k].off = TRUE, !.c.cs[k].un = IF u < @ THEN u ELSE @]
          [] OTHER -> Dying(m0, k, "peer")
 
 \* state.rs complete: an accept; a read or write applied only while its tag names the same conn (slot_of)
 Matches(m, op) == op.slot \in Slots(m) /\ m.c.cs[op.slot].on /\ m.c.cs[op.slot].id = op.id
-\* to: the bytes also carried a frame for node to (0: none), queued on its conn, slow there by tslow
+\* to: the bytes also carried a frame for node to (0: none), queued on its conn, slow there by tslow; for a write, n is
+\* the u of OnWrite
 Fwd(m, to, tslow) == IF to # 0 /\ m.c.by[to] # 0 THEN Push(m, m.c.by[to], tslow) ELSE m
 Complete(m, op, x, n, kind, reply, slow, to, tslow, now, late) ==
     LET m0 == [m EXCEPT !.o = @ \ {op}] IN
@@ -143,11 +147,11 @@ Complete(m, op, x, n, kind, reply, slow, to, tslow, now, late) ==
          ELSE [Count(m0, "accerr") EXCEPT !.c.acc = FALSE, !.c.pause = now + PAUSE]
     ELSE IF ~Matches(m0, op) THEN [m0 EXCEPT !.late = TRUE]
     ELSE IF op.k = "rd" THEN Fwd(OnRead(m0, op.slot, x, n, reply, slow, now), to, tslow)
-    ELSE OnWrite(m0, op.slot, x)
+    ELSE OnWrite(m0, op.slot, x, n)
 
 \* conn.rs take_read and take_write for one live conn that is not dying: a read when none is out; a write when
-\* none is out and the buffer was partly written (from its offset) or units are queued (TCP takes them all,
-\* WebSocket one frame)
+\* none is out and the buffer was partly written (from its offset, unsent as it was) or units are queued (TCP takes
+\* them all, WebSocket one frame; all of them unsent)
 Submit1(m, k) ==
     LET x == m.c.cs[k]
         rd == ~x.rd
@@ -158,6 +162,7 @@ Submit1(m, k) ==
                  !.c.cs[k].wr = @ \/ wr,
                  !.c.cs[k].q = @ - (IF wr THEN take ELSE 0),
                  !.c.cs[k].wb = IF wr /\ ~x.off THEN take ELSE @,
+                 !.c.cs[k].un = IF wr /\ ~x.off THEN take ELSE @,
                  !.o = @ \cup (IF rd THEN {[k |-> "rd", id |-> t.id, slot |-> k, h |-> x.h]} ELSE {})
                          \cup (IF wr THEN {[k |-> "wr", id |-> t.id, slot |-> k, h |-> x.h]} ELSE {})]
 
@@ -219,11 +224,11 @@ RECURSIVE DieFrom(_, _, _)
 DieFrom(m, k, why) == IF k > Len(m.c.cs) THEN m ELSE DieFrom(Dying(m, k, why), k + 1, why)
 Stop(m) == DieFrom([m EXCEPT !.c.stop = TRUE], 1, "shutdown")
 
-\* Part::end: abort_all finishes every conn and drops its stream (no close); stopping is cleared, accept_out is not;
-\* Carriers::ended abandons every operation out
+\* Part::end: abort_all finishes every conn and drops its stream (no close); stopping and accept_out are cleared (fix
+\* R2: the next run asks for its accept again); Carriers::ended abandons every operation out
 RECURSIVE DropFrom(_, _)
 DropFrom(m, k) ==
     IF k > Len(m.c.cs) THEN m
     ELSE DropFrom(IF m.c.cs[k].on THEN [Finish(m, k, FALSE) EXCEPT !.drop = @ \cup {m.c.cs[k].h}] ELSE m, k + 1)
-End(m) == [DropFrom(Stop(m), 1) EXCEPT !.c.stop = FALSE, !.o = {}]
+End(m) == [DropFrom(Stop(m), 1) EXCEPT !.c.stop = FALSE, !.c.acc = FALSE, !.o = {}]
 =============================================================================

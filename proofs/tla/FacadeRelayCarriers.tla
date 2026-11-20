@@ -1,6 +1,6 @@
 ------------------------- MODULE FacadeRelayCarriers -------------------------
 (***************************************************************************)
-(* The carriers of a node that carries the relay role: the streams its    *)
+(* The carriers of a node that carries the relay role: the streams its     *)
 (* host accepts, reads, writes and closes for it through the Carriers      *)
 (* trait, and what the role keeps of each (relay/part.rs Part::poll,       *)
 (* Part::stop, Part::end; relay/state.rs; relay/conn.rs; relay/carriers.rs *)
@@ -8,7 +8,7 @@
 (* poll for an Endpoint that carries the role. The operators are in        *)
 (* FacadeRelayCarriersOps.tla.                                             *)
 (*                                                                         *)
-(* The networks. The poll is the same code on every node that carries the *)
+(* The networks. The poll is the same code on every node that carries the  *)
 (* role: an ordinary node in a network with no relay binary, a node        *)
 (* deployed from the relay binary where those are the only relays, and     *)
 (* both in a mixed network. A member's carrier is TCP or WebSocket (kind;  *)
@@ -23,28 +23,33 @@
 (*                                                                         *)
 (* Environment: the host hands back at most one completion per poll (the   *)
 (* code takes up to BUDGET; one at a time is one of its schedules); with   *)
-(* LATE it may hand back an operation of a stream after the role closed   *)
-(* that stream (Carriers::close abandons them, a queued one may still     *)
+(* LATE it may hand back an operation of a stream after the role closed    *)
+(* that stream (Carriers::close abandons them, a queued one may still      *)
 (* come); a member's frames for another member arrive as Forward; the      *)
 (* clock moves on one unit at a time and the host runs the timers at       *)
 (* least once per unit (the role asks for them every CHECK_NS). The        *)
 (* machine's sessions do not end on their own here (session time is not    *)
-(* modelled), and the first timer pings every open member (next_ping is 0); *)
-(* the next ping is CLIENT_PING_NS later, past TMAX.                       *)
+(* modelled), and the first timer pings every open member (next_ping is    *)
+(* 0); the next ping is CLIENT_PING_NS later, past TMAX.                   *)
 (*                                                                         *)
 (* Checked:                                                                *)
 (*  - OwnedOps: a read or a write is out on a live conn exactly when the   *)
-(*    conn says so (one of each at most, conn.rs);                        *)
-(*  - AcceptMatch: accept_out is set exactly when an accept is out;        *)
+(*    conn says so (one of each at most, conn.rs);                         *)
+(*  - AcceptMatch: accept_out is set exactly when an accept is out, across *)
+(*    the end of a run too (fix R2);                                       *)
 (*  - ClosedOnce, LiveOpen (carriers.rs: a stream is closed once, or       *)
-(*    dropped at the end of a run without a close; a live conn's stream    *)
-(*    is neither);                                                         *)
+(*    dropped at the end of a run without a close; a live conn's stream is *)
+(*    neither);                                                            *)
 (*  - HsCount (handshaking counts the conns in their handshake, at most    *)
 (*    Limits.handshaking), CapBound (sessions at most Limits.carriers),    *)
-(*    BacklogBound (limits.rs write_backlog: at most BL units queued; the  *)
-(*    write buffer holds at most BL more), ByNode;                         *)
+(*    BacklogBound (limits.rs write_backlog: the units queued and the      *)
+(*    units of the write in flight not yet written are at most BL, fix     *)
+(*    R5), ByNode;                                                         *)
 (*  - HandshakeBound (limits.rs: a handshake ends by handshake_ns, a       *)
-(*    silent carrier is closed after idle_ns, to the CHECK_NS).            *)
+(*    silent carrier is closed after idle_ns, to the CHECK_NS);            *)
+(*  - HsFullHonest (stats.rs: refused_handshakes_full counts only a full   *)
+(*    handshake table; a refusal while stopping is an accept error, fix    *)
+(*    R11).                                                                *)
 (***************************************************************************)
 EXTENDS FacadeRelayCarriersOps
 
@@ -74,8 +79,9 @@ PollA ==
                  /\ reply => x \in {"hello", "open", "frame"}
                  /\ m' = Poll(m, now, [NoDone EXCEPT !.op = op, !.x = x, !.n = n, !.reply = reply,
                                                      !.slow = SlowOf(op)], LATE)
-            \/ op.k = "wr" /\ \E x \in {"all", "part", "zero"} :
-                 m' = Poll(m, now, [NoDone EXCEPT !.op = op, !.x = x], LATE)
+            \/ op.k = "wr" /\ \E x \in {"all", "part", "zero"}, u \in 1..BL :
+                 /\ x # "part" => u = 1
+                 /\ m' = Poll(m, now, [NoDone EXCEPT !.op = op, !.x = x, !.n = u], LATE)
     /\ UNCHANGED <<now, ticked, ends>>
 
 \* a frame of another member for node n is queued on its conn
@@ -137,7 +143,7 @@ HsCount == m.c.hs = Cardinality({k \in Live(m) : m.c.cs[k].node = 0}) /\ m.c.hs 
 
 CapBound == Sessions(m) <= CAP
 
-BacklogBound == \A k \in Slots(m) : m.c.cs[k].q <= BL /\ m.c.cs[k].wb <= BL
+BacklogBound == \A k \in Slots(m) : m.c.cs[k].q + m.c.cs[k].un <= BL /\ m.c.cs[k].wb <= BL
 
 ByNode == \A n \in NODES :
               /\ m.c.by[n] # 0 => m.c.by[n] \in Live(m) /\ m.c.cs[m.c.by[n]].node = n
@@ -148,7 +154,8 @@ HandshakeBound == ticked => \A k \in Live(m) :
                       m.c.cs[k].dy = "" => /\ m.c.cs[k].node = 0 => now < m.c.cs[k].dl
                                            /\ now - m.c.cs[k].rx < IDL
 
-\* the stats count a refusal as a full handshake table only when it was full (stats.rs refused_handshakes_full)
+\* the stats count a refusal as a full handshake table only when it was full (stats.rs refused_handshakes_full; a
+\* refusal while stopping is an accept error, fix R11)
 HsFullHonest == ~m.mis
 
 \* witnesses: each must be violated

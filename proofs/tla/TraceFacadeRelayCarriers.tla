@@ -56,7 +56,10 @@ PollEv ==
     /\ E.done.k # "none" => OpOf(E.done) \in m.o
     /\ \E reply, slow, tslow \in BOOLEAN :
          LET d == IF E.done.k = "none" THEN NoDone
-                  ELSE [op |-> OpOf(E.done), x |-> E.done.x, n |-> E.done.n, kind |-> E.done.kind,
+                  \* a write written in part leaves one unit unsent here: the test cannot see the bytes left, and
+                  \* the slow closes are read from the counters, so the units unsent pin nothing in the trace
+                  ELSE [op |-> OpOf(E.done), x |-> E.done.x, n |-> IF E.done.k = "wr" THEN 1 ELSE E.done.n,
+                        kind |-> E.done.kind,
                         reply |-> reply, slow |-> slow, to |-> E.done.to, tslow |-> tslow]
              m1 == Poll(m, E.now, d, TRUE)
          IN /\ {Conn(x) : x \in New(m1, "rd")} = Rng(E.rd)
