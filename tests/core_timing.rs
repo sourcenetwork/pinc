@@ -131,6 +131,70 @@ fn a_dialers_own_frame_arms_the_five_second_keepalive_of_a_quiet_session() {
     assert!(early.windows(2).all(|g| (g[1] - g[0] - 5.0).abs() < 0.5), "{dialer:?}");
 }
 
+/// A quiet dialer that hears its peer on a direct path and answers in the same instant pings 14 s after that instant,
+/// not 14 s plus the time since its send before.
+#[test]
+fn a_keepalive_planned_from_a_receive_answered_at_once_leaves_on_time() {
+    big_stack(|| {
+        let mut net = CoreNet::new(10 * MS_NS);
+        let (a, b) = (net.add(1), net.add(2));
+        let (_, sb) = net.connect_pair(a, b, ALPN_A, Role::Hub);
+        net.nodes[b]
+            .cmd(
+                net.now,
+                Command::SetRole {
+                    session: sb,
+                    role: Role::Member,
+                },
+            )
+            .unwrap();
+        net.run_for(30 * S);
+        let mark = net.nodes[a].sent.len();
+        let end = net.now + 20 * S;
+        assert!(
+            net.run(end, |n| n.nodes[a].sent.len() > mark),
+            "the dialer sent nothing for 20 s"
+        );
+        net.run_for(7 * S);
+        let now = net.now;
+        let last = net.nodes[a].sent.last().unwrap().0;
+        assert!(now - last >= 5 * S, "the dialer sent too recently for the case");
+        for _ in 0..4 {
+            net.nodes[b]
+                .cmd(
+                    now,
+                    Command::SendDatagram {
+                        session: sb,
+                        data: &[7u8; 16],
+                    },
+                )
+                .unwrap();
+            net.pump(b);
+        }
+        let heard = now + 10 * MS_NS;
+        let mark = net.nodes[a].sent.len();
+        net.run_for(30 * S);
+        let after: Vec<u64> = net.nodes[a].sent[mark..].iter().map(|s| s.0).collect();
+        assert_eq!(
+            after.first(),
+            Some(&heard),
+            "the dialer did not answer in the instant it heard"
+        );
+        assert!(
+            net.nodes[b]
+                .sent
+                .iter()
+                .all(|s| s.0 <= now || s.0 >= heard + pinc_core::DIRECT_SILENCE),
+            "the member sent again, so the case is not built"
+        );
+        let next = after.iter().copied().find(|t| *t > heard);
+        assert!(
+            next.is_some_and(|t| t.abs_diff(heard + pinc_core::DIRECT_SILENCE) <= 100 * MS_NS),
+            "the keepalive left at {next:?}, not 14 s after the instant the dialer heard and answered ({heard})"
+        );
+    });
+}
+
 #[test]
 fn a_plain_session_pings_every_five_seconds_then_stops_and_lapses() {
     big_stack(|| {

@@ -5,7 +5,7 @@
 //!
 //! A line carries what `settle_core` read (the role, the side, whether the path is direct, the last send, the last
 //! receive, the last application data, the end of the quiet period, the flight, the pulse flag), what the plan decided
-//! (the ping and the review moment), whether the plan changed and the interval then handed to the connection, and what
+//! (the ping and the review moment), whether the plan changed and the interval handed to the connection (at every settle), and what
 //! the deadline was made of (the connection's own timer, the least standby ping, the access recheck, the end of an
 //! unauthenticated life, the due flag, the deadline). A `u64` is written as four 16-bit limbs, least significant first
 //! (TLC cannot read a number above 2^31), an absent value as `[]`. The session is named by its id with the scenario and
@@ -15,7 +15,8 @@
 //! window, written to, then idling out; a pulse handed to the layer above; a resume's quiet period; a close; and 16
 //! seeded random runs of every command that moves an input. The test checks by itself that no record was dropped, that
 //! every role, both sides, a pulse and a due ping, a quiet period and a plan with no ping were seen, that the deadline
-//! is the least of its parts and that a ping is due exactly when it is at or before now in a pulse. The plan and the
+//! is the least of its parts, that a ping is due exactly when it is at or before now in a pulse and that the interval
+//! handed ends at the plan's ping. The plan and the
 //! interval the connection holds are checked by `TraceSettle.tla`.
 #![allow(
     clippy::unwrap_used,
@@ -365,9 +366,14 @@ fn check(scenario: u64, r: &SettleRecord) {
         r.pulse && r.ping_at.is_some_and(|p| p <= r.now),
         "scenario {scenario}: pulse_due is not 'a ping at or before now in a pulse': {r:?}"
     );
-    assert!(
-        r.changed || r.interval.is_none(),
-        "scenario {scenario}: an interval with no change: {r:?}"
+    assert_eq!(
+        r.interval,
+        if r.pulse {
+            None
+        } else {
+            r.ping_at.map(|p| p.saturating_sub(r.last_tx))
+        },
+        "scenario {scenario}: the connection was not handed the interval that ends at the plan's ping: {r:?}"
     );
 }
 

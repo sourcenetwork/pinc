@@ -64,7 +64,8 @@ pub struct SettleRecord {
     pub review_at: Option<u64>,
     /// The plan differed from the one the session held.
     pub changed: bool,
-    /// When the plan changed, the interval handed to the connection; `None` when it did not.
+    /// The interval handed to the connection at every settle; `None` when the plan has no ping or the keepalive is the
+    /// layer above's.
     pub interval: Option<u64>,
     /// The connection's own deadline, as the session's deadline used it.
     pub own: u64,
@@ -160,6 +161,58 @@ ep_impl! {
         {
             self.ekk.remove(&peer);
         }
+        // The keepalive is handed over before the connection's deadline is read below, since its PING timer is part of
+        // that deadline, and at every settle, since the interval counts from the last send, which moves while the plan
+        // may not.
+        #[cfg(feature = "trace")]
+        let mut rec: Option<SettleRecord> = None;
+        let plan = if !conn.is_closed() && conn.is_connected() {
+            let direct = !conn.active_is_relay();
+            let in_flight = conn.recovery().packets_in_flight() > 0;
+            let plan = Inputs {
+                role: slot.m.role,
+                dialer: slot.m.client,
+                direct,
+                now,
+                last_tx: slot.m.last_tx,
+                last_rx: slot.m.last_rx,
+                last_app: slot.m.last_app,
+                quiet_until: self.quiet_until,
+                in_flight,
+            }
+            .plan();
+            let interval = if slot.m.pulse { None } else { plan.ping_at.map(|p| p.saturating_sub(slot.m.last_tx)) };
+            conn.set_keepalive(interval);
+            #[cfg(feature = "trace")]
+            {
+                rec = Some(SettleRecord {
+                    now,
+                    session: crate::SessionId::new(i, slot.m.generation).0,
+                    role: slot.m.role,
+                    dialer: slot.m.client,
+                    direct,
+                    last_tx: slot.m.last_tx,
+                    last_rx: slot.m.last_rx,
+                    last_app: slot.m.last_app,
+                    quiet_until: self.quiet_until,
+                    in_flight,
+                    pulse: slot.m.pulse,
+                    ping_at: plan.ping_at,
+                    review_at: plan.review_at,
+                    changed: plan != slot.m.plan,
+                    interval,
+                    own: 0,
+                    standby: None,
+                    acp: None,
+                    end: None,
+                    pulse_due: false,
+                    deadline: None,
+                });
+            }
+            Some(plan)
+        } else {
+            None
+        };
         // The connection's own deadline, asked once: nothing below changes it but the node's round trips.
         let Some(mut own) = conn.poll_timeout() else {
             self.free_slot(i, now);
@@ -192,36 +245,10 @@ ep_impl! {
             }
         };
         #[cfg(feature = "trace")]
-        let mut rec: Option<SettleRecord> = None;
-        #[cfg(feature = "trace")]
         let mut standby: Option<u64> = None;
-        if !closing && conn.is_connected() {
-            let direct = !conn.active_is_relay();
-            let in_flight = conn.recovery().packets_in_flight() > 0;
-            let plan = Inputs {
-                role: slot.m.role,
-                dialer: slot.m.client,
-                direct,
-                now,
-                last_tx: slot.m.last_tx,
-                last_rx: slot.m.last_rx,
-                last_app: slot.m.last_app,
-                quiet_until: self.quiet_until,
-                in_flight,
-            }
-            .plan();
-            let changed = plan != slot.m.plan;
-            #[cfg(feature = "trace")]
-            let mut handed = None;
-            if changed {
+        if let Some(plan) = plan {
+            if plan != slot.m.plan {
                 slot.m.plan = plan;
-                let interval = plan.ping_at.map(|p| p.saturating_sub(slot.m.last_tx));
-                let interval = if slot.m.pulse { None } else { interval };
-                conn.set_keepalive(interval);
-                #[cfg(feature = "trace")]
-                {
-                    handed = interval;
-                }
                 trace!(self, now, Keepalive {
                     slot: i as u64,
                     ping_at: plan.ping_at.unwrap_or(u64::MAX),
@@ -249,30 +276,11 @@ ep_impl! {
             }
             note(slot.m.acp_recheck);
             #[cfg(feature = "trace")]
-            {
-                rec = Some(SettleRecord {
-                    now,
-                    session: crate::SessionId::new(i, slot.m.generation).0,
-                    role: slot.m.role,
-                    dialer: slot.m.client,
-                    direct,
-                    last_tx: slot.m.last_tx,
-                    last_rx: slot.m.last_rx,
-                    last_app: slot.m.last_app,
-                    quiet_until: self.quiet_until,
-                    in_flight,
-                    pulse: slot.m.pulse,
-                    ping_at: plan.ping_at,
-                    review_at: plan.review_at,
-                    changed,
-                    interval: handed,
-                    own,
-                    standby,
-                    acp: slot.m.acp_recheck,
-                    end: None,
-                    pulse_due: slot.m.pulse_due,
-                    deadline: None,
-                });
+            if let Some(r) = rec.as_mut() {
+                r.own = own;
+                r.standby = standby;
+                r.acp = slot.m.acp_recheck;
+                r.pulse_due = slot.m.pulse_due;
             }
         }
         #[cfg(feature = "trace")]
