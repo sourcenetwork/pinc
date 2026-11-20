@@ -11,7 +11,8 @@ The client side of `pinc-connect` as total functions over unbounded `Nat`, step 
 An address is a natural, a relay is its position in the configuration (0-based here), `udp[k]` its configured UDP
 address (0: it takes none), a nonce is a natural (an `Option`: the code's nonce `[0; 8]` is as good as any). The home
 relay and the reachability class are inputs of `record_job` (`client/conn.rs` computes them: `ConnectClient.lean`).
-Time is in nanoseconds, as in the code; `wall` is the wall clock of the last tick that had one, in milliseconds, and
+Time is in nanoseconds, as in the code; `wall` is the wall clock of the last tick, none if it had none (fix K8), in
+milliseconds, and
 `last` the sequence number of the last record built (`last_seq`, raised by `restore_record_seq`).
 
 Seams, stated: the signature is the host's (a job is signed or it fails: `signed` takes the outcome); the carrier is a
@@ -110,11 +111,11 @@ def reflList (cf : Cf) (s : St) : List Nat := (s.refl.filterMap id).foldl (addNe
 /-- `Connectivity::candidates`: the reflexive addresses first, then the local ones not yet there, up to `cap`. -/
 def cands (cf : Cf) (s : St) : List Nat := s.loc.foldl (addNew cf.cap) (reflList cf s)
 
-/-- `tick`: the wall clock is taken when it is given one. -/
+/-- `tick`: the wall clock is the one given, none without one (fix K8: a clock an earlier tick gave is not kept). -/
 def tick (s : St) (w : Option Nat) : St :=
   match w with
   | some x => { s with wall := some x }
-  | none => s
+  | none => { s with wall := none }
 
 /-- The number of a record built at the wall clock `w` after the one numbered `last`: the clock, or one above the last
 when the clock did not move past it (`wall_ms.max(last_seq.saturating_add(1))`). -/

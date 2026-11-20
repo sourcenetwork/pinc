@@ -14,7 +14,9 @@
 (*   record   a record is wanted (Signing::record)                         *)
 (*   beacon   a beacon is wanted (Signing::beacon)                         *)
 (*   job      the outstanding request: [k |-> "none", "record", "beacon"  *)
-(*            or "sleep", r |-> its relay (0 for none and beacon)]         *)
+(*            or "sleep", r |-> its relay (0 for none and beacon), c |->   *)
+(*            cancelled (Job::cancelled: a sleep notice no longer wanted, *)
+(*            still asked for; its answer is dropped)]                     *)
 (*   susp     Signing::suspending                                          *)
 (*   closeAt  Signing::close_at (K.never for none)                         *)
 (*   wall     the layer has a wall clock (Signing::wall_ms is some)        *)
@@ -44,7 +46,8 @@ EXTENDS Integers, FiniteSets, Sequences
 SatAdd(a, b, K) == IF a >= K.tmax - b THEN K.tmax ELSE a + b
 MinOf(S) == CHOOSE x \in S : \A y \in S : x <= y
 
-NoJob == [k |-> "none", r |-> 0]
+NoJob == [k |-> "none", r |-> 0, c |-> FALSE]
+Job(k, r) == [k |-> k, r |-> r, c |-> FALSE]
 NewS(relays, K) == [sleep |-> {}, record |-> FALSE, beacon |-> FALSE, job |-> NoJob, susp |-> FALSE,
                     closeAt |-> K.never, wall |-> FALSE, pub |-> K.never, lk |-> [x \in relays |-> "down"]]
 NoOut == [udp |-> <<>>, pub |-> 0, bcn |-> 0, fails |-> 0, closes |-> {}]
@@ -56,12 +59,12 @@ RecordWanted(s) == s.record \/ s.job.k = "record"
 StartJobs(W, now, rj, bj, K) ==
     IF W.s.job.k # "none" \/ ~W.s.wall THEN W
     ELSE IF W.s.sleep # {} THEN
-        LET r == MinOf(W.s.sleep) IN [W EXCEPT !.s.sleep = @ \ {r}, !.s.job = [k |-> "sleep", r |-> r]]
+        LET r == MinOf(W.s.sleep) IN [W EXCEPT !.s.sleep = @ \ {r}, !.s.job = Job("sleep", r)]
     ELSE IF W.s.record THEN
-        IF rj THEN [W EXCEPT !.s.record = FALSE, !.s.job = [k |-> "record", r |-> K.home]]
+        IF rj THEN [W EXCEPT !.s.record = FALSE, !.s.job = Job("record", K.home)]
         ELSE [W EXCEPT !.s.record = FALSE, !.s.pub = SatAdd(now, K.retry, K)]
     ELSE IF W.s.beacon THEN
-        [W EXCEPT !.s.beacon = FALSE, !.s.job = IF bj THEN [k |-> "beacon", r |-> 0] ELSE NoJob]
+        [W EXCEPT !.s.beacon = FALSE, !.s.job = IF bj THEN Job("beacon", 0) ELSE NoJob]
     ELSE W
 
 (* maybe_close_for_suspend: every notice answered, the carriers close one tick later *)
@@ -76,18 +79,20 @@ CloseForSuspend(W, now, K) ==
         [W EXCEPT !.s.closeAt = K.never, !.s.susp = FALSE, !.s.lk = [x \in DOMAIN @ |-> "down"], !.o.closes = @ \cup open]
     ELSE W
 
-(* complete: a signature of the right length was given for the job j *)
+(* complete: a signature of the right length was given for the job j; a cancelled sleep notice sends nothing (its
+   answer is consumed: nothing sent, nothing failed) *)
 Complete(W, j, now, K) ==
     CASE j.k = "record" ->
             IF W.s.lk[j.r] = "open" THEN [W EXCEPT !.o.pub = @ + 1, !.s.pub = SatAdd(now, K.repub, K)]
             ELSE [W EXCEPT !.s.pub = now]
       [] j.k = "beacon" -> [W EXCEPT !.o.bcn = @ + 1]
       [] j.k = "sleep" ->
-            IF j.r \in K.udp THEN [W EXCEPT !.o.udp = @ \o <<j.r, j.r>>] ELSE W
+            IF j.c THEN W ELSE IF j.r \in K.udp THEN [W EXCEPT !.o.udp = @ \o <<j.r, j.r>>] ELSE W
       [] OTHER -> W
 
-(* the complete call answers false only for a sleep notice to a relay with no UDP address (a suspension never owes one) *)
-Completes(j, K) == j.k # "sleep" \/ j.r \in K.udp
+(* the complete call answers false only for a sleep notice, not cancelled, to a relay with no UDP address (a suspension
+   never owes one) *)
+Completes(j, K) == j.k # "sleep" \/ j.c \/ j.r \in K.udp
 
 (* sign_response: ok is a signature of the identity's length; anything else is refused *)
 SignResponse(W, now, ok, rj, bj, K) ==
@@ -113,18 +118,25 @@ DriveStep(W, now, w, pw, rj, bj, rj2, bj2, bc, K) ==
     LET W1 == TickStep(W, now, w, pw, rj, bj, K)
     IN StartJobs(IF bc THEN [W1 EXCEPT !.s.beacon = TRUE] ELSE W1, now, rj2, bj2, K)
 
+(* An outstanding sleep notice is cancelled (kept, its answer dropped) *)
+CancelSleep(j) == IF j.k = "sleep" THEN [j EXCEPT !.c = TRUE] ELSE j
+
 (* suspend: a notice is owed to every relay with a UDP address and an open link; a close armed by an earlier
-   suspend is dropped (fix K7), so the carriers close only after these notices *)
+   suspend is dropped (fix K7), so the carriers close only after these notices; a notice of an earlier suspension
+   still asked for is cancelled (the new suspension's notice replaces it: without this a relay owed by both gets the
+   old notice and the new one, four datagrams) *)
 SuspendStep(W, now, rj, bj, K) ==
     LET owed == {x \in K.udp \cap DOMAIN W.s.lk : W.s.lk[x] = "open"}
-        W1 == [W EXCEPT !.s.wall = TRUE, !.s.sleep = owed, !.s.susp = TRUE, !.s.closeAt = K.never]
+        W1 == [W EXCEPT !.s.wall = TRUE, !.s.sleep = owed, !.s.susp = TRUE, !.s.closeAt = K.never,
+                        !.s.job = CancelSleep(@)]
     IN MaybeClose(StartJobs(W1, now, rj, bj, K), now, K)
 
-(* resume: the suspension is cancelled, an outstanding sleep job dropped; the mapped addresses refreshed may want a
-   record (wr); no job is started *)
+(* resume: the suspension is cancelled; an outstanding sleep job is kept and its answer dropped (K6 as revised: the
+   host still answers the request it was given, and that answer must not land on the next job); the mapped addresses
+   refreshed may want a record (wr); no job is started *)
 ResumeStep(W, wr, K) ==
     [W EXCEPT !.s.sleep = {}, !.s.susp = FALSE, !.s.closeAt = K.never,
-              !.s.job = IF @.k = "sleep" THEN NoJob ELSE @, !.s.record = @ \/ wr]
+              !.s.job = CancelSleep(@), !.s.record = @ \/ wr]
 
 (* the carrier of relay x changed its state st ("open", "dialing", "down"); the home carrier opening
    (carrier_open) makes the record due now *)

@@ -3,12 +3,13 @@
 (* Model check of the node's own record and address discovery, over the    *)
 (* operators of ConnectOwnOps.tla. The steps are set_local, a round of     *)
 (* probes, an answer (from any address, with any nonce), a restart of the  *)
-(* probe state, a tick with a wall clock, a restored last number           *)
+(* probe state, a tick with or without a wall clock (without one the node  *)
+(* has none until the next: fix K8), a restored last number                *)
 (* (restore_record_seq) and the signing of the record (record_job). The    *)
-(* wall clock is the host's: with Strict it rises by at least a            *)
-(* millisecond between ticks, without it it may repeat or step back (a     *)
-(* clock that was set back); with Spaced a record is built only once the   *)
-(* clock passed the last record's number.                                  *)
+(* wall clock is the host's: with Strict a tick's clock is at least a      *)
+(* millisecond above the node's current one, without it it may repeat or   *)
+(* step back (a clock that was set back); with Spaced a record is built    *)
+(* only once the clock passed the last record's number.                    *)
 (*                                                                         *)
 (* Properties (Lean: Pinc/ConnectOwnThm.lean):                             *)
 (*  CandCap      the record lists at most cap addresses (MAX_ADDRS)        *)
@@ -93,7 +94,8 @@ DoAnswer == \E from \in {U1, U2, 99}, n \in Nonces, a \in Addrs :
              /\ obs' = Ob(from, n, o.took, k, IF k = 0 THEN 0 ELSE S.probe[k])
        /\ UNCHANGED job
 
-DoTick == \E w \in Walls : /\ (Strict => w > S.wall) /\ S' = Tick(S, w) /\ UNCHANGED <<job, obs>>
+\* w = 0: a tick without a wall clock
+DoTick == \E w \in Walls \cup {0} : /\ (Strict /\ w # 0 => w > S.wall) /\ S' = Tick(S, w) /\ UNCHANGED <<job, obs>>
 
 DoRestore == \E n \in Walls : /\ S' = RestoreSeq(S, n) /\ UNCHANGED <<job, obs>>
 

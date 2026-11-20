@@ -22,7 +22,7 @@
 (*                      beacon                                             *)
 (*  NoticesNotIdle      notices owed always have a request outstanding     *)
 (*                      (the host asks after any call)                     *)
-(*  NoWallNoJob         without a wall clock nothing is signed             *)
+(*  NoWallNoSign        no signature starts without a wall clock           *)
 (*  RefusedNotSent      a refused or failed signature sends nothing and is *)
 (*                      reported as SignFailed                              *)
 (*  SleepNotRetried     a failed sleep notice is not asked again           *)
@@ -30,12 +30,18 @@
 (*  NoticeTwice         each relay owed a notice gets it twice over UDP,  *)
 (*                      and no other relay gets one                        *)
 (*  CloseOnlySuspended  a resume cancels the close of a suspension         *)
-(* Witness (TLC must violate): ConnectSleep_w_close (NoCloseAfterNotice: a *)
-(* close for suspension after a notice was sent). Checks of the fixes      *)
-(* (passing once they land): ConnectSleep_twice (CloseAfterNotices with a  *)
-(* second suspend, K7), ConnectSleep_w_wall (NoWallNoSign, K8) and         *)
+(* A job started with a wall clock is still answered and used after a    *)
+(* tick without one (K8: the clock is forgotten, the job's bytes were made *)
+(* with the clock of its start).                                           *)
+(* Witnesses (TLC must violate): ConnectSleep_w_close (NoCloseAfterNotice: *)
+(* a close for suspension after a notice was sent), ConnectSleep_w_cancel  *)
+(* (NoCancelled: a cancelled sleep notice is outstanding). Checks of the   *)
+(* fixes (passing once they land): ConnectSleep_twice (CloseAfterNotices   *)
+(* with a second suspend, K7), ConnectSleep_w_wall (NoWallNoSign, K8),     *)
 (* ConnectSleep_w_behind (NotBehindRecord, the rule restated by K9, with   *)
-(* PriorityOrder).                                                         *)
+(* PriorityOrder) and ConnectSleep_resume (NoticeTwice, CloseAfterNotices, *)
+(* SleepNotRetried over resume and a second suspend with a notice asked    *)
+(* for: K6 as revised, Job::cancelled).                                    *)
 (***************************************************************************)
 EXTENDS ConnectSleepOps, TLC
 
@@ -51,7 +57,8 @@ Init == /\ s = NewS(Relays, K) /\ owed = {} /\ sent = [x \in Relays |-> 0] /\ fa
         /\ badSusp = FALSE /\ reach = FALSE
 
 Count(sq, x) == Cardinality({k \in 1..Len(sq) : sq[k] = x})
-SleepJob(t) == IF t.job.k = "sleep" THEN {t.job.r} ELSE {}
+\* the relay of the outstanding sleep notice, if it is still wanted (a cancelled one is owed to nobody)
+SleepJob(t) == IF t.job.k = "sleep" /\ ~t.job.c THEN {t.job.r} ELSE {}
 
 (* the ghosts after the call W, made at now; tk: a tick or drive; ans: an answer; started: the call started a job *)
 Post(W, now, tk, nowall, started, sus, res) ==
@@ -86,7 +93,8 @@ Answer == \E now \in Times, ok \in BOOLEAN, rj \in BOOLEAN, bj \in BOOLEAN :
     /\ LET W == SignResponse(W0(s), now, ok, rj, bj, K)
            j == s.job
        IN /\ Post(W, now, FALSE, FALSE, W.s.job.k # "none", FALSE, FALSE)
-          /\ failed' = IF ~ok /\ j.k = "sleep" THEN failed \cup {j.r} ELSE failed
+          \* a cancelled notice is not owed, so its failure raises no retry question
+          /\ failed' = IF ~ok /\ j.k = "sleep" /\ ~j.c THEN failed \cup {j.r} ELSE failed
           /\ badRefuse' = (badRefuse \/ (~ok /\ (W.o.udp # <<>> \/ W.o.pub > 0 \/ W.o.bcn > 0 \/ W.o.fails # 1)))
           \* a record wanted again meanwhile (set_hints) is new work and may start at once
           /\ badRetry' = (badRetry \/ (~ok /\ j.k = "record" /\ ~s.record /\ now < TMax
@@ -119,7 +127,6 @@ Spec == Init /\ [][Next]_vars
 CloseAfterNotices == ~badClose
 PriorityOrder == ~badPrio
 NoticesNotIdle == s.job.k = "none" => s.sleep = {}
-NoWallNoJob == ~s.wall => s.job.k = "none"
 RefusedNotSent == ~badRefuse
 SleepNotRetried == failed \cap (s.sleep \cup SleepJob(s)) = {}
 RecordRetry == ~badRetry
@@ -133,6 +140,7 @@ CloseOnlySuspended == ~badSusp
 NotBehindRecord == [][(s'.sleep # {} /\ s'.job.k = "record") => s.job = s'.job]_vars
 NoWallNoSign == ~badWall
 NoCloseAfterNotice == ~reach
+NoCancelled == ~(s.job.k = "sleep" /\ s.job.c)
 
 \* the link states of the configs
 LinksOpenDown == {"open", "down"}
