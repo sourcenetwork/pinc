@@ -36,5 +36,5 @@ EXTENDS NodeSets
 
 Complete == /\ Inv
             /\ st.next \in 0..NSTARTS
-            /\ \A e \in st.ends : e.why \in {"done", "protocol", "unknownset", "exhausted"}
+            /\ \A e \in st.ends : e.why \in {"done", "protocol", "unknownset", "exhausted", "cancelled"}
 =============================================================================

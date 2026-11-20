@@ -11,7 +11,9 @@ par witness_tlc node_sets_exhausted NodeSets NodeSets_exhausted NeverExhausted
 par witness_tlc node_sets_respfull NodeSets NodeSets_respfull RespNotFull
 par witness_tlc node_sets_sat NodeSets NodeSets_sat NeverSat
 par run_tlc node_sets_way NodeSets NodeSets_way
-par witness_tlc node_sets_cancel NodeSets NodeSets_cancel CancelledDoc
+par run_tlc node_sets_cancel NodeSets NodeSets_cancel
+par witness_tlc node_sets_w_full NodeSets NodeSets_w_full NeverFull
+par witness_tlc node_sets_w_samecall NodeSets NodeSets_w_samecall FullOnce
 par run_tlc node_values NodeValues NodeValues
 par witness_tlc node_values_busy NodeValues NodeValues_busy NeverBusy
 par witness_tlc node_values_super NodeValues NodeValues_super NeverSuper
