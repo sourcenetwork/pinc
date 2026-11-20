@@ -19,7 +19,7 @@ use pinc_connect::relay::datagram::Datagram;
 use pinc_core::{
     Command, CommandError, Event, Events, NodeStats, PeerInfo, Reply, Role, SessionId, SessionStats, Value,
 };
-use pinc_crypto::{Drbg, Software};
+use pinc_crypto::{Drbg, NodeId, Software};
 use pinc_security::{Alpn, ConnId, Env};
 use pinc_tests::Host;
 
@@ -32,6 +32,10 @@ struct Stub {
     now: u64,
     retx: u64,
     next: u64,
+    /// The highest session number of a dial in handshake (the hub is session 1).
+    dials: u64,
+    /// Whether the dials have ended: the endpoint knows none of them.
+    gone: bool,
     /// The addresses of every `FlightPaths`, by session.
     lists: Vec<(SessionId, Vec<SocketAddr>)>,
 }
@@ -63,7 +67,7 @@ impl Port for Stub {
             handshake_retransmits: self.retx,
             ..Default::default()
         };
-        (session.0 == 1 || session.0 == 2).then(|| SessionStats {
+        (session.0 == 1 || ((2..=self.dials).contains(&session.0) && !self.gone)).then(|| SessionStats {
             session,
             node: None,
             alpn: None,
@@ -137,78 +141,88 @@ impl Port for Stub {
     }
 }
 
+/// A node whose home relay is the hub, up after its address discovery: the layer, the stub endpoint, the random
+/// source, the time, the hub's id and the other relay's id.
+fn home_up() -> (Box<Connectivity<Software, 2, 4>>, Stub, Drbg, u64, NodeId, NodeId) {
+    let host = Box::new(Host::new(0x41, "192.168.1.2:4433".parse().unwrap(), 1000 * SEC));
+    let (hub, other) = (id(&ed(0x77)), id(&ed(0x78)));
+    let hub_udp: SocketAddr = "203.0.113.10:4433".parse().unwrap();
+    let local: SocketAddr = "192.168.1.2:4433".parse().unwrap();
+    let mut relays = [None; 2];
+    relays[0] = Some(RelayCfg {
+        id: other,
+        udp: Some("203.0.113.11:4433".parse().unwrap()),
+        tcp: None,
+        ws: None,
+    });
+    relays[1] = Some(RelayCfg {
+        id: hub,
+        udp: Some(hub_udp),
+        tcp: Some("203.0.113.10:443".parse().unwrap()),
+        ws: None,
+    });
+    let cfg = Config {
+        me: host.identity.node_id(),
+        identity: host.identity,
+        relays,
+        phone: false,
+        restarted: false,
+        start: 1000 * SEC,
+        v6: false,
+        keep_learn: false,
+    };
+    let mut conn: Box<Connectivity<Software, 2, 4>> =
+        Box::new(Connectivity::new(cfg, host.prekey_info.clone(), Software, 7));
+    conn.set_local(&[local]);
+    let mut ep = Stub {
+        route: (local, hub_udp),
+        now: 1000 * SEC,
+        retx: 0,
+        next: 0,
+        dials: 2,
+        gone: false,
+        lists: Vec::new(),
+    };
+    let mut drbg = Drbg::new(&[0x62; 32]);
+    let mut buf = vec![0u8; 2048];
+    let mut t = 1000 * SEC + SEC;
+    // The hub answers the address discovery and becomes the home relay.
+    while conn.home() != Some(1) && t < 1000 * SEC + 3 * SEC {
+        t += 50 * MS;
+        let mut env = Env {
+            provider: &Software,
+            now: t,
+            drbg: &mut drbg,
+        };
+        conn.drive(t, &mut ep, &mut env, None);
+        while let Some((_, to, n)) = conn.poll_udp_from(&mut buf) {
+            if to == hub_udp
+                && let Ok(Datagram::Qad { nonce }) = Datagram::decode(&buf[..n])
+            {
+                let mut out = [0u8; 64];
+                let m = Datagram::Qadr {
+                    nonce,
+                    addr: "198.51.100.7:4433".parse().unwrap(),
+                }
+                .encode(&mut out)
+                .unwrap();
+                conn.handle_udp(t + 20 * MS, hub_udp, &out[..m]);
+            }
+        }
+    }
+    assert_eq!(conn.home(), Some(1), "the hub became the home relay");
+    ep.now = t;
+    (conn, ep, drbg, t, hub, other)
+}
+
 /// `RELAY_FWD` lasts until the handshake is done. A dial with a cached allow reports `Connected` at once, before its
 /// handshake; the answer to its lookup then names the peer's relay, and our home relay stays in the flight, because the
 /// peer may answer on the copy that came through it.
 #[test]
 fn an_early_connected_keeps_the_home_relay_in_the_flight_of_a_dial_without_a_record() {
     big_stack(|| {
-        let host = Box::new(Host::new(0x41, "192.168.1.2:4433".parse().unwrap(), 1000 * SEC));
-        let (hub, other) = (id(&ed(0x77)), id(&ed(0x78)));
+        let (mut conn, mut ep, mut drbg, mut t, hub, other) = home_up();
         let hub_udp: SocketAddr = "203.0.113.10:4433".parse().unwrap();
-        let local: SocketAddr = "192.168.1.2:4433".parse().unwrap();
-        let mut relays = [None; 2];
-        relays[0] = Some(RelayCfg {
-            id: other,
-            udp: Some("203.0.113.11:4433".parse().unwrap()),
-            tcp: None,
-            ws: None,
-        });
-        relays[1] = Some(RelayCfg {
-            id: hub,
-            udp: Some(hub_udp),
-            tcp: Some("203.0.113.10:443".parse().unwrap()),
-            ws: None,
-        });
-        let cfg = Config {
-            me: host.identity.node_id(),
-            identity: host.identity,
-            relays,
-            phone: false,
-            restarted: false,
-            start: 1000 * SEC,
-            v6: false,
-            keep_learn: false,
-        };
-        let mut conn: Box<Connectivity<Software, 2, 4>> =
-            Box::new(Connectivity::new(cfg, host.prekey_info.clone(), Software, 7));
-        conn.set_local(&[local]);
-        let mut ep = Stub {
-            route: (local, hub_udp),
-            now: 1000 * SEC,
-            retx: 0,
-            next: 0,
-            lists: Vec::new(),
-        };
-        let mut drbg = Drbg::new(&[0x62; 32]);
-        let mut buf = vec![0u8; 2048];
-        let mut t = 1000 * SEC + SEC;
-        // The hub answers the address discovery and becomes the home relay.
-        while conn.home() != Some(1) && t < 1000 * SEC + 3 * SEC {
-            t += 50 * MS;
-            let mut env = Env {
-                provider: &Software,
-                now: t,
-                drbg: &mut drbg,
-            };
-            conn.drive(t, &mut ep, &mut env, None);
-            while let Some((_, to, n)) = conn.poll_udp_from(&mut buf) {
-                if to == hub_udp
-                    && let Ok(Datagram::Qad { nonce }) = Datagram::decode(&buf[..n])
-                {
-                    let mut out = [0u8; 64];
-                    let m = Datagram::Qadr {
-                        nonce,
-                        addr: "198.51.100.7:4433".parse().unwrap(),
-                    }
-                    .encode(&mut out)
-                    .unwrap();
-                    conn.handle_udp(t + 20 * MS, hub_udp, &out[..m]);
-                }
-            }
-        }
-        assert_eq!(conn.home(), Some(1), "the hub became the home relay");
-        ep.now = t;
         // Session 1 (the hub, established in the stub) comes first, so the dial below is session 2, in its handshake.
         conn.dial(t, &mut ep, hub, b"pinc/hub", Role::Hub, &[hub_udp]).unwrap();
         let peer_kp = ed(0x79);
@@ -254,5 +268,31 @@ fn an_early_connected_keeps_the_home_relay_in_the_flight_of_a_dial_without_a_rec
             list.contains(&conn.path_addr(1, &peer)),
             "our home relay stays in the flight until the handshake is done: {list:?}"
         );
+    });
+}
+
+/// A pending dial that ended drops its lookup, however many end in one drive (the table holds as many as there are
+/// lookups, not eight).
+#[test]
+fn twelve_dials_that_end_in_one_drive_all_drop_their_lookups() {
+    big_stack(|| {
+        let (mut conn, mut ep, mut drbg, mut t, hub, _) = home_up();
+        let hub_udp: SocketAddr = "203.0.113.10:4433".parse().unwrap();
+        conn.dial(t, &mut ep, hub, b"pinc/hub", Role::Hub, &[hub_udp]).unwrap();
+        for tag in 0..12u8 {
+            conn.dial(t, &mut ep, id(&ed(0xa0 + tag)), b"app/1", Role::Other, &[])
+                .unwrap();
+        }
+        ep.dials = 13;
+        assert_eq!(conn.lookups_outstanding(), 12, "a lookup for each pending dial");
+        ep.gone = true;
+        t += 10 * MS;
+        let mut env = Env {
+            provider: &Software,
+            now: t,
+            drbg: &mut drbg,
+        };
+        conn.drive(t, &mut ep, &mut env, None);
+        assert_eq!(conn.lookups_outstanding(), 0, "a dial that ended kept its lookup");
     });
 }

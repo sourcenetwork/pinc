@@ -26,7 +26,7 @@ use pinc_crypto::{NodeId, Provider};
 use pinc_security::{ConnId, Env};
 use pinc_transport::stream::StreamSource;
 
-use super::conn::{Connectivity, LOCAL_PEERS, SESSIONS};
+use super::conn::{Connectivity, LOCAL_PEERS, LOOKUPS, SESSIONS};
 use super::dial::Cand;
 use super::punch::Born;
 use super::punch::{self, Puncher, Step, View};
@@ -293,7 +293,7 @@ drive_impl! {
         }
         self.tick(now, env, wall_ms);
         // DIAL_PRUNE: pending dials keep only the sessions still in handshake; a dial that ended drops its lookup.
-        let mut dropped = [None; 8];
+        let mut dropped = [None; LOOKUPS];
         let mut nd = 0;
         self.pending.prune(
             |id| ep.stats(id).is_some_and(|s| !s.established),
@@ -308,8 +308,8 @@ drive_impl! {
             self.lookups.answered(&p);
         }
         // A pending dial whose lookup is gone asks again.
-        let peers: [Option<NodeId>; 8] = {
-            let mut a = [None; 8];
+        let peers: [Option<NodeId>; LOOKUPS] = {
+            let mut a = [None; LOOKUPS];
             for (d, p) in a.iter_mut().zip(self.pending.peers()) {
                 *d = Some(p);
             }
