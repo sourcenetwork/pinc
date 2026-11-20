@@ -1,8 +1,6 @@
 # Proofs: being closed
 
 These items are still open; they are listed so nothing is hidden:
-- `pinc-wire` and `pinc-dag`: the models of the canonical DAG-CBOR codec (with the reader and the writer) and of
-  CIDs, blocks and CAR files run only in the deep profile (`just proofs-deep`).
 - `pinc-crypto` and `pinc-keystore`: the labels of `pinc-broadcast` are private constants, so they are not in the label registry or its trace; the zeroization statement covers the named buffers of the crate, not the copies a dependency makes of a scalar passed by value; the TPM store is traced against a software TPM only, and a refused flush after a failed `ReadPublic` in `generate` leaks the handle without an error; the TPM refuses an object auth value longer than the digest of its name algorithm (32 bytes), which the client reports as the TPM's code. The TPM client's resend of a command answered `TPM_RC_RETRY`, `TPM_RC_YIELDED` or `TPM_RC_TESTING` is checked
   at the trace level (the same bytes sent again, at most 8 sends; the store's programs are checked on the commands
   that took effect); the typed error after the last resend is covered by unit tests, not by the TPM model.

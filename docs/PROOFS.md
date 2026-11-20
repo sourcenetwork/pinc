@@ -7,8 +7,7 @@ trace check or model-based test of the code): `pinc-security`, `pinc-wire`, `pin
 `pinc-reconcile` and `pinc-dtn`. `pinc-crypto`, `pinc-keystore`, `pinc-membership`, `pinc-connect`, `pinc-transport`,
 `pinc-values`, `pinc-broadcast`, `pinc-core` and `pinc-node` are proven except for the items under
 [Being closed](proofs/closing.md). The facade `pinc` is proven in part: the files of it that no model covers are
-named there. The models of the DAG-CBOR codec and of blocks, CAR
-files and CIDs run only in the deep profile. A model that is known to state an older rule than the code is listed in
+named there. A model that is known to state an older rule than the code is listed in
 [#601](https://github.com/sourcenetwork/pinc/issues/601) until it is corrected: a green check of such a model says
 nothing about the rule that changed.
 Run everything with `just proofs` (the quick profile) or `just proofs-deep` (the full bounds).
