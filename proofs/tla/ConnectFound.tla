@@ -6,7 +6,9 @@
 (* interleaving of answers (every peer of PEERS, sequence of SEQS and home *)
 (* of HOMES, stored at the clock), forgets and the clock moving on to      *)
 (* TMAX, at a ring of N slots (FOUND, 8 in the code) and a lifetime of TTL *)
-(* ticks (FOUND_TTL). OLD = TRUE answers with the rule before 6bd2f4db.    *)
+(* ticks (FOUND_TTL). The two earlier rules: OLD = TRUE answers with the   *)
+(* rule before 6bd2f4db, NOFREE = TRUE (with OLD = FALSE) with the rule of *)
+(* 6bd2f4db (a peer not held always takes the slot at `next`).             *)
 (*                                                                         *)
 (* `want` is the documented rule apart from the ring: for each peer, the   *)
 (* entry with the highest sequence answered for it since its entry was     *)
@@ -25,28 +27,37 @@
 (*    changes nothing of the cache (the entry, its time, `next`);          *)
 (*  - HeldNoEvict: an answer for a held peer leaves `next` and every other *)
 (*    peer's entry as they are;                                            *)
+(*  - NoEvictWhileFree: an entry of another peer goes only when no slot is *)
+(*    empty;                                                               *)
 (*  - EvictAtNext: an entry goes only by a forget of its peer or by an     *)
-(*    answer for a peer not held, and then it is the entry in the slot at  *)
-(*    `next`. The ring's order is the order of first answers, not of use   *)
-(*    or age: rewriting a held peer does not move it, so the entry that    *)
-(*    goes is the one at `next`, which may have been answered last, and it *)
-(*    goes even when another slot is empty (witness NoEvictWhileFree).     *)
+(*    answer for a peer not held on a full ring, and then it is the entry  *)
+(*    in the slot at `next`;                                               *)
+(*  - NextOnlyWhenFull: `next` moves only on a full ring.                  *)
+(* The order in which entries go: on a full ring the slot at `next` is     *)
+(* taken and `next` moves on by one, so slots are given up in index order  *)
+(* round the ring from `next`, whatever the age or use of their entries.   *)
+(* While no slot was ever emptied this is the order in which the entries   *)
+(* first took their slots; a slot emptied by a forget is filled by the     *)
+(* next new peer (the lowest empty slot) without moving `next`, so that    *)
+(* peer goes when `next` reaches the slot's index, possibly before entries *)
+(* answered long before it, and possibly soon after its answer.            *)
 (* Witnesses (TLC must violate them):                                      *)
 (*  - with OLD: OneSlot (ConnectFound_w_old_slot.cfg) and Newest           *)
 (*    (ConnectFound_w_old_newest.cfg), what 6bd2f4db fixed;                *)
+(*  - with NOFREE: NoEvictWhileFree (ConnectFound_w_free.cfg), what the    *)
+(*    lowest-empty-slot rule fixed: an answer for a peer not held evicted  *)
+(*    another peer's entry while a slot emptied by a forget was free;      *)
 (*  - NotLowerKept (an answer with a lower sequence was kept out),         *)
-(*    NotStale (`found` gives an entry `found_fresh` does not), so those   *)
-(*    cases are reached;                                                   *)
-(*  - NoEvictWhileFree (ConnectFound_w_free.cfg): a FINDING, an answer for *)
-(*    a peer not held evicts another peer's entry while a slot is empty;   *)
-(*    only `forget_found` empties a slot, and nothing in the tree calls it *)
-(*    yet.                                                                 *)
+(*    NotStale (`found` gives an entry `found_fresh` does not), NoEviction *)
+(*    (an entry goes on a full ring), NotFillHole (on a ring with one      *)
+(*    empty slot, not the one at `next`, a new peer takes it), so those    *)
+(*    cases are reached.                                                   *)
 (***************************************************************************)
 EXTENDS Integers, FiniteSets, TLC
 
-CONSTANTS N, PEERS, SEQS, HOMES, TTL, TMAX, OLD
+CONSTANTS N, PEERS, SEQS, HOMES, TTL, TMAX, OLD, NOFREE
 
-ASSUME N >= 1 /\ TTL >= 1 /\ OLD \in BOOLEAN /\ 0 \notin PEERS
+ASSUME N >= 1 /\ TTL >= 1 /\ OLD \in BOOLEAN /\ NOFREE \in BOOLEAN /\ 0 \notin PEERS
 
 VARIABLES c, clock, want, ev
 vars == <<c, clock, want, ev>>
@@ -61,9 +72,12 @@ Init == c = C0 /\ clock = 0 /\ want = [p \in PEERS |-> NONE] /\ ev = Ev0
    replaces it *)
 Want(w, p, q, h, t) == IF w.e /\ q < w.seq THEN w ELSE Ent(p, q, h, t)
 
+Rule(cc, p, q, h, t) ==
+    IF OLD THEN AnswerOld(cc, p, q, h, t) ELSE IF NOFREE THEN AnswerNoFree(cc, p, q, h, t) ELSE Answer(cc, p, q, h, t)
+
 AnswerA ==
     \E p \in PEERS, q \in SEQS, h \in HOMES :
-        LET c2 == IF OLD THEN AnswerOld(c, p, q, h, clock) ELSE Answer(c, p, q, h, clock)
+        LET c2 == Rule(c, p, q, h, clock)
         IN /\ c' = c2
            /\ want' = [x \in PEERS |-> IF x = p THEN Want(want[p], p, q, h, clock)
                                        ELSE IF Held(c2, x) = {} THEN NONE ELSE want[x]]
@@ -100,20 +114,27 @@ Newest == \A p \in PEERS : Found(c, p) = want[p]
 FreshTTL == \A p \in PEERS, n \in 0..(TMAX + TTL) :
                FoundFresh(c, n, p) = IF want[p].e /\ n < want[p].t + TTL THEN want[p] ELSE NONE
 
+(* an answer step in which another peer's entry went *)
+Evicts == ev'.op = "answer" /\ \E x \in PEERS : Found(c, x).e /\ ~Found(c', x).e
+
 LowerKeeps == [][(ev'.op = "answer" /\ Found(c, ev'.p).e /\ ev'.q < Found(c, ev'.p).seq) => c' = c]_vars
 
 HeldNoEvict == [][(ev'.op = "answer" /\ Held(c, ev'.p) # {})
                   => (c'.next = c.next /\ \A x \in PEERS \ {ev'.p} : Found(c', x) = Found(c, x))]_vars
 
+NoEvictWhileFree == [][Evicts => Empty(c) = {}]_vars
+
 EvictAtNext == [][\A x \in PEERS : (Found(c, x).e /\ ~Found(c', x).e)
                     => \/ ev'.op = "forget" /\ ev'.p = x
-                       \/ ev'.op = "answer" /\ Held(c, ev'.p) = {} /\ Names(c.ring, c.next + 1, x)]_vars
+                       \/ /\ ev'.op = "answer" /\ Held(c, ev'.p) = {} /\ Empty(c) = {}
+                          /\ Names(c.ring, c.next + 1, x)]_vars
+
+NextOnlyWhenFull == [][c'.next # c.next => Empty(c) = {}]_vars
 
 \* reachability witnesses
 NotLowerKept == ~(ev.op = "answer" /\ Found(c, ev.p).e /\ ev.q < Found(c, ev.p).seq)
 NotStale == ~(\E p \in PEERS : Found(c, p).e /\ ~FoundFresh(c, clock, p).e)
-
-\* FINDING witness: eviction is by ring position, not by room
-NoEvictWhileFree == [][(ev'.op = "answer" /\ \E x \in PEERS : Found(c, x).e /\ ~Found(c', x).e)
-                       => \A k \in Slots : c.ring[k].e]_vars
+NoEviction == [][~Evicts]_vars
+NotFillHole == [][~(/\ ev'.op = "answer" /\ Held(c, ev'.p) = {}
+                     /\ Cardinality(Empty(c)) = 1 /\ Least(Empty(c)) # c.next + 1)]_vars
 =============================================================================
