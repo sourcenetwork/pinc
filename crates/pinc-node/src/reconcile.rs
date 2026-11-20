@@ -4,8 +4,8 @@
 //! opens a stream on its reconcile session to the peer and writes the first message; the responder, which the peer's
 //! stream creates, answers on the same stream, and every message is answered by one message until the exchange ends,
 //! however many messages the difference needs. The initiator learns the exact difference, and the node reports it as
-//! one event. A reset stream, a closed session or a full table of dials retries the whole round (a full table after one retry
-//! period), at most [`ATTEMPTS`] times.
+//! one event. A reset stream, a closed session or a full table of dials retries the whole round (a full table after one
+//! retry period), at most [`ATTEMPTS`] times.
 //!
 //! The sets are the host's ([`SetsApp`](crate::SetsApp)); a session reads a set by its index and the set must not
 //! change while a round over it runs.

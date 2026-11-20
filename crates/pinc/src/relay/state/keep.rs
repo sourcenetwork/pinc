@@ -482,8 +482,8 @@ mod tests {
         assert_eq!(core.counters.store_errors, 1, "the lost mark was not counted");
     }
 
-    /// A store that holds more mailboxes than the table has room for does not make the marks pass it, and the marks lost
-    /// are counted.
+    /// A store that holds more mailboxes than the table has room for does not make the marks pass it, and the marks
+    /// lost are counted.
     #[test]
     fn the_restore_marks_mailboxes_up_to_the_table_and_counts_the_rest() {
         let mut core = core();

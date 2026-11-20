@@ -5,11 +5,12 @@
 //!
 //! A line carries what `settle_core` read (the role, the side, whether the path is direct, the last send, the last
 //! receive, the last application data, the end of the quiet period, the flight, the pulse flag), what the plan decided
-//! (the ping and the review moment), whether the plan changed and the interval handed to the connection (at every settle), and what
-//! the deadline was made of (the connection's own timer, the least standby ping, the access recheck, the end of an
-//! unauthenticated life, the due flag, the deadline). A `u64` is written as four 16-bit limbs, least significant first
-//! (TLC cannot read a number above 2^31), an absent value as `[]`. The session is named by its id with the scenario and
-//! the node in the top byte (`scenario * 4 + node`), so ids of different endpoints and scenarios never meet.
+//! (the ping and the review moment), whether the plan changed and the interval handed to the connection (at every
+//! settle), and what the deadline was made of (the connection's own timer, the least standby ping, the access recheck,
+//! the end of an unauthenticated life, the due flag, the deadline). A `u64` is written as four 16-bit limbs, least
+//! significant first (TLC cannot read a number above 2^31), an absent value as `[]`. The session is named by its id
+//! with the scenario and the node in the top byte (`scenario * 4 + node`), so ids of different endpoints and scenarios
+//! never meet.
 //!
 //! The scenarios: a hub session watched by a member (silence, then writes every 7 s); a plain session past the 90 s
 //! window, written to, then idling out; a pulse handed to the layer above; a resume's quiet period; a close; and 16

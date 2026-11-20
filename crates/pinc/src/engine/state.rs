@@ -166,8 +166,8 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
         if let Some(seq) = seq {
             self.node.restore_record_seq(seq);
         }
-        // Every address is offered (`|` does not short-circuit); a node counts once if the book kept one of them, however
-        // many entries of the state name it. The set holds at most one key per entry of the state.
+        // Every address is offered (`|` does not short-circuit); a node counts once if the book kept one of them,
+        // however many entries of the state name it. The set holds at most one key per entry of the state.
         let mut counted = BTreeSet::new();
         for (node, addrs) in book {
             if addrs.iter().fold(false, |kept, a| self.add_address(node, *a) | kept) {

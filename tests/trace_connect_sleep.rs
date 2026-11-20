@@ -5,11 +5,11 @@
 //!
 //! After every call the test reads the signing job the layer waits on (a sleep notice, a record or a beacon), the
 //! datagrams it queued (the sleep notices, the beacons), the `SignFailed` notices and the carrier closes it asked of
-//! the host. On its own it asserts that a refused signature raises exactly one `SignFailed` (none for a notice no longer wanted) and sends nothing, that
-//! sleep notices go out in pairs and only when a notice was signed, and (in the fixed runs) that no close follows a
-//! resume and that a suspension closes only after its notice was answered. Where the code differs from its
-//! documentation (a second suspend, a notice behind a record job, a tick without a wall clock) the trace records what
-//! the code does and the order is not asserted.
+//! the host. On its own it asserts that a refused signature raises exactly one `SignFailed` (none for a notice no
+//! longer wanted) and sends nothing, that sleep notices go out in pairs and only when a notice was signed, and (in the
+//! fixed runs) that no close follows a resume and that a suspension closes only after its notice was answered. Where
+//! the code differs from its documentation (a second suspend, a notice behind a record job, a tick without a wall
+//! clock) the trace records what the code does and the order is not asserted.
 //! The trace is written to the directory in `PINC_TRACE_DIR` when it is set; otherwise nothing is written.
 #![allow(
     clippy::unwrap_used,

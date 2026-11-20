@@ -108,8 +108,8 @@ impl<S> Conn<S> {
         self.q.len() - self.qpos + self.unsent
     }
 
-    /// Queue the answer to a WebSocket ping. It replaces an answer still waiting: a peer may answer only the most recent
-    /// ping (RFC 6455, 5.5.3), so the answers waiting are one frame, whatever the peer sends.
+    /// Queue the answer to a WebSocket ping. It replaces an answer still waiting: a peer may answer only the most
+    /// recent ping (RFC 6455, 5.5.3), so the answers waiting are one frame, whatever the peer sends.
     pub(crate) fn push_pong(&mut self, frame: &[u8]) {
         self.ctl.clear();
         self.ctl.extend_from_slice(frame);

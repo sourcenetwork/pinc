@@ -9,10 +9,10 @@
 //!
 //! Invariants: the role is borrowed only inside a call and never across an await or a call of a host closure; the part
 //! is given the relay clock (nanoseconds since the Unix epoch) and the endpoint its own, the driver counting the
-//! relay's from the wall clock at the endpoint's start, so it is wall time whatever the wall clock read then; a wall clock that
-//! goes back across a restart lengthens what the store kept by up to the step back, which the node cannot know; the
-//! in-flight operations of the host's carriers live in the future of `run`, so a role is driven by one `run` at a time
-//! and ends when it ends (a later `run` takes the role as it was left, restored once).
+//! relay's from the wall clock at the endpoint's start, so it is wall time whatever the wall clock read then; a wall
+//! clock that goes back across a restart lengthens what the store kept by up to the step back, which the node cannot
+//! know; the in-flight operations of the host's carriers live in the future of `run`, so a role is driven by one `run`
+//! at a time and ends when it ends (a later `run` takes the role as it was left, restored once).
 
 use alloc::vec::Vec;
 use core::future::{Ready, pending, ready};

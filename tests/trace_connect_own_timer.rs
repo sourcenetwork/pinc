@@ -3,15 +3,15 @@
 //! (`connect_own_timer.ndjson`) for the TLA+ trace check (`TraceConnectOwnTimer.tla`). One line per public call, with
 //! the probe `trace_publish` read before and after it: `{op, now, w, ok, sent, before, after}`.
 //!
-//! The probe reads `next_publish` in milliseconds (the code's `None`, no time armed, as -1; a time of 0 is a time), whether
-//! a record is wanted, a record job is outstanding, a wall clock is known, and whether a record can be asked for now. The
-//! test keeps a plain reference of the rules (a record is asked for when the time is due, none is wanted or outstanding
-//! and the home carrier is open, which disarms the timer; a change sets the time to now; the answer arms the republish
-//! 1800 s on only when nothing armed it meanwhile, retries after 2 s when the signature failed, and publishes at once
-//! when the carrier was gone; a tick with no wall clock keeps the one an earlier tick gave) and requires every call's
-//! outcome to be one the reference allows. A class change while a record job is outstanding is in the trace, and the
-//! answer keeps it. The clock moves in whole milliseconds. The trace is written to the directory in `PINC_TRACE_DIR`
-//! when it is set; otherwise nothing is written.
+//! The probe reads `next_publish` in milliseconds (the code's `None`, no time armed, as -1; a time of 0 is a time),
+//! whether a record is wanted, a record job is outstanding, a wall clock is known, and whether a record can be asked
+//! for now. The test keeps a plain reference of the rules (a record is asked for when the time is due, none is wanted
+//! or outstanding and the home carrier is open, which disarms the timer; a change sets the time to now; the answer arms
+//! the republish 1800 s on only when nothing armed it meanwhile, retries after 2 s when the signature failed, and
+//! publishes at once when the carrier was gone; a tick with no wall clock keeps the one an earlier tick gave) and
+//! requires every call's outcome to be one the reference allows. A class change while a record job is outstanding is in
+//! the trace, and the answer keeps it. The clock moves in whole milliseconds. The trace is written to the directory in
+//! `PINC_TRACE_DIR` when it is set; otherwise nothing is written.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
