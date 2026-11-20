@@ -32,9 +32,6 @@ PINC is a library, not a framework:
   per core.
 - **Hot path:** zero-copy parsing and no heap allocation in steady state are design rules.
 
-> **Status: pre-release.** The protocol crates are built and tested, and their proofs land crate by crate. Open work
-> is tracked in the [issues](https://github.com/sourcenetwork/pinc/issues).
-
 ## Usage
 
 An echo over loopback. The host's whole contribution is the three closures; here they sit on a
@@ -187,7 +184,8 @@ still being closed.
 
 Measured on one build host (AMD EPYC 7R13, 16 cores), PINC and two other peer-to-peer libraries in one quiet window,
 medians of the session of 15 November 2026 at commit `9dd66f05`. The best value of a row is in bold; a row PINC does
-not lead is tracked in [#579](https://github.com/sourcenetwork/pinc/issues/579), which lists every such row, not only these.
+not lead is tracked in [#579](https://github.com/sourcenetwork/pinc/issues/579), which lists every such row, not only
+these.
 
 | | PINC | Library A | Library B |
 |---|---|---|---|
@@ -204,5 +202,5 @@ not lead is tracked in [#579](https://github.com/sourcenetwork/pinc/issues/579),
 | Memory per connection, client and server (KiB) | 177 and 113 | 178 and 120 | **107 and 88** |
 
 The 1% loss row is an 8 MiB transfer; a 64 MiB fetch on the same path runs at 1.16 MiB/s against 0.31 and 0.32
-([#564](https://github.com/sourcenetwork/pinc/issues/564)). `just compare` and the harness print every row under each library's
-name, the ones PINC loses included.
+([#564](https://github.com/sourcenetwork/pinc/issues/564)). `just compare` and the harness print every row under each
+library's name, the ones PINC loses included.
