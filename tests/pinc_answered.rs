@@ -54,13 +54,7 @@ fn stopped_peer(e: &pinc::Error) -> bool {
 async fn a_dial_to_a_running_peer_is_answered_and_so_is_its_redial() {
     within(30, async {
         let (to, _task) = peer!();
-        // A short connect timeout, so the dial's own bound is far inside the test's.
-        let client = pinc_common::bind(
-            pinc_common::builder()
-                .alpn(ECHO)
-                .connect_timeout(Duration::from_secs(3)),
-        )
-        .await;
+        let client = pinc_common::client().await;
         let first = client.connect(to.clone(), ECHO).await.unwrap();
         first.answered().await.unwrap();
         assert!(first.is_answered());
@@ -123,7 +117,13 @@ async fn a_protocol_opened_over_a_session_is_answered_once_the_peer_answers() {
 async fn a_dial_to_a_peer_that_stopped_is_handed_over_but_never_answered() {
     within(30, async {
         let (to, task) = peer!();
-        let client = pinc_common::client().await;
+        // A short connect timeout, so the dial's own bound is far inside the test's.
+        let client = pinc_common::bind(
+            pinc_common::builder()
+                .alpn(ECHO)
+                .connect_timeout(Duration::from_secs(3)),
+        )
+        .await;
         let first = client.connect(to.clone(), ECHO).await.unwrap();
         echo_once(&first).await;
         first.close(0).await;
