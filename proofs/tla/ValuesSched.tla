@@ -154,41 +154,39 @@ BestP(a1, p, j) == CandP(a1, p, j) /\ \A c \in Provs : CandP(a1, p, c) =>
                       (EtaP(a1, c) < EtaP(a1, j) \/ (EtaP(a1, c) = EtaP(a1, j) /\ c >= j))
 
 (* ---- top_up(p) with target tgt ---- *)
+(* Each value is bound with `\E x \in {e}` rather than a LET: TLC evaluates a LET of an action again at every use,
+   and here the uses nest (a1 in hasV, v, m, the eta and sp), which made the liveness checks of FairSpec, which
+   evaluate this action on every step, outlast a minute on 85 states. A one-element set is one value. *)
 TopUp(p, tgt) ==
-    LET ap == RetainV(AN, V, a[p])
-        out == TotalL(ap)
-        k == Cardinality(act)
-        want == TailWant(tgt - out, k, TotalL(q))
-        tcr == IF q = <<>> THEN [q |-> q, out |-> <<>>] ELSE TC(V, want, 0, q, <<>>)
-        doSteal == tcr.out = <<>> /\ out = 0
-        a1 == [j \in Provs |-> IF j = p THEN ap ELSE IF j \in act THEN RetainV(AN, V, a[j]) ELSE a[j]]
-        hasV == \E j \in Provs : BestP(a1, p, j)
-        v == IF hasV THEN CHOOSE j \in Provs : BestP(a1, p, j) ELSE 0
-        m == IF hasV THEN TotalL(a1[v]) ELSE 0
-        rqv == IF hasV /\ EtaP(a1, v) < STALLED THEN Rate(v) ELSE 0
-        keep == KeepOf(m, rqv, Rate(p))
-        sp == IF hasV THEN SS(keep, 0, a1[v], <<>>, <<>>) ELSE [head |-> <<>>, tail |-> <<>>]
-    IN /\ st = "running" /\ striped /\ p \in act
-       /\ IF out >= tgt \div 2
-          THEN \* the early return still prunes the provider's list
-               /\ a' = [a EXCEPT ![p] = ap] /\ UNCHANGED <<q, age, since>> /\ last' = [kind |-> "prune"]
-          ELSE IF doSteal
-               THEN IF hasV
-                    THEN LET a2 == [a1 EXCEPT ![v] = ExtendC(AN, <<>>, sp.head)]
-                         IN /\ a' = IF sp.tail = <<>> THEN a2 ELSE [a2 EXCEPT ![p] = ExtendC(AN, a2[p], sp.tail)]
-                            /\ q' = tcr.q
-                            /\ age' = IF sp.tail = <<>> THEN age ELSE [age EXCEPT ![p] = IF CORRECTION THEN 0 ELSE age[p]]
-                            /\ since' = IF TRACK /\ sp.tail # <<>> THEN [since EXCEPT ![p] = 0] ELSE since
-                            /\ last' = [kind |-> "steal", from |-> v, to |-> p, moved |-> TotalL(sp.tail), before |-> a1[v],
-                                        head |-> sp.head, tail |-> sp.tail, m |-> m, keep |-> keep, thief |-> a1[p],
-                                        victimIdle |-> age[v] >= 2, victimSince |-> since[v], eta |-> EtaP(a1, v), qq |-> q]
-                    ELSE /\ a' = a1 /\ q' = tcr.q /\ UNCHANGED <<age, since>> /\ last' = [kind |-> "nosteal"]
-               ELSE /\ q' = tcr.q
-                    /\ a' = IF tcr.out = <<>> THEN [a EXCEPT ![p] = ap] ELSE [a EXCEPT ![p] = ExtendC(AN, ap, tcr.out)]
-                    /\ age' = IF tcr.out # <<>> /\ out = 0 /\ CORRECTION THEN [age EXCEPT ![p] = 0] ELSE age
-                    /\ since' = IF TRACK /\ tcr.out # <<>> /\ out = 0 THEN [since EXCEPT ![p] = 0] ELSE since
-                    /\ last' = [kind |-> "topup", p |-> p, took |-> tcr.out, qbefore |-> q]
-       /\ UNCHANGED <<V, act, known, st, fail, W, striped>>
+    /\ st = "running" /\ striped /\ p \in act
+    /\ \E ap \in {RetainV(AN, V, a[p])} : \E out \in {TotalL(ap)} :
+       IF out >= tgt \div 2
+       THEN \* the early return still prunes the provider's list
+            /\ a' = [a EXCEPT ![p] = ap] /\ UNCHANGED <<q, age, since>> /\ last' = [kind |-> "prune"]
+       ELSE \E tcr \in {IF q = <<>> THEN [q |-> q, out |-> <<>>]
+                         ELSE TC(V, TailWant(tgt - out, Cardinality(act), TotalL(q)), 0, q, <<>>)} :
+            IF tcr.out = <<>> /\ out = 0
+            THEN \E a1 \in {[j \in Provs |-> IF j = p THEN ap ELSE IF j \in act THEN RetainV(AN, V, a[j]) ELSE a[j]]} :
+                 IF \E j \in Provs : BestP(a1, p, j)
+                 THEN \E v \in {CHOOSE j \in Provs : BestP(a1, p, j)} : \E eta \in {EtaP(a1, v)} :
+                      \E m \in {TotalL(a1[v])} :
+                      \E keep \in {KeepOf(m, IF eta < STALLED THEN Rate(v) ELSE 0, Rate(p))} :
+                      \E sp \in {SS(keep, 0, a1[v], <<>>, <<>>)} :
+                      \E a2 \in {[a1 EXCEPT ![v] = ExtendC(AN, <<>>, sp.head)]} :
+                      /\ a' = IF sp.tail = <<>> THEN a2 ELSE [a2 EXCEPT ![p] = ExtendC(AN, a2[p], sp.tail)]
+                      /\ q' = tcr.q
+                      /\ age' = IF sp.tail = <<>> THEN age ELSE [age EXCEPT ![p] = IF CORRECTION THEN 0 ELSE age[p]]
+                      /\ since' = IF TRACK /\ sp.tail # <<>> THEN [since EXCEPT ![p] = 0] ELSE since
+                      /\ last' = [kind |-> "steal", from |-> v, to |-> p, moved |-> TotalL(sp.tail), before |-> a1[v],
+                                  head |-> sp.head, tail |-> sp.tail, m |-> m, keep |-> keep, thief |-> a1[p],
+                                  victimIdle |-> age[v] >= 2, victimSince |-> since[v], eta |-> eta, qq |-> q]
+                 ELSE /\ a' = a1 /\ q' = tcr.q /\ UNCHANGED <<age, since>> /\ last' = [kind |-> "nosteal"]
+            ELSE /\ q' = tcr.q
+                 /\ a' = IF tcr.out = <<>> THEN [a EXCEPT ![p] = ap] ELSE [a EXCEPT ![p] = ExtendC(AN, ap, tcr.out)]
+                 /\ age' = IF tcr.out # <<>> /\ out = 0 /\ CORRECTION THEN [age EXCEPT ![p] = 0] ELSE age
+                 /\ since' = IF TRACK /\ tcr.out # <<>> /\ out = 0 THEN [since EXCEPT ![p] = 0] ELSE since
+                 /\ last' = [kind |-> "topup", p |-> p, took |-> tcr.out, qbefore |-> q]
+    /\ UNCHANGED <<V, act, known, st, fail, W, striped>>
 
 (* ---- a provider verifies a group of its list ---- *)
 Verify(p, g) ==
