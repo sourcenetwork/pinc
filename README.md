@@ -131,8 +131,8 @@ and close run on 1 MiB of stack and fail on 512 KiB. `Limits::wasm()` is the pre
 | `pinc-portmap` | a UDP port mapping from the home gateway (PCP, NAT-PMP, UPnP-IGD), off unless turned on | yes, heap-free | built, proven |
 | `pinc-table` | fixed tables over one block of bytes made once: sorted slab, array, ring, slot pool; no allocation after setup | yes, heap-free | built, proven |
 | `pinc-membership` | hub roster and member view: leases, probes, incarnations, leave, revocation | yes | built; proven except the items [being closed](docs/proofs/closing.md) |
-| `pinc-values` | verified streaming of values of any size from up to four providers, with resume | yes | built; proven except the items [being closed](docs/proofs/closing.md) and one liveness check that has not finished ([#748](https://github.com/sourcenetwork/pinc/issues/748)) |
-| `pinc-broadcast` | topic broadcast through hubs with origin authentication, replay floors and a bounded log | yes | built; proven except the items [being closed](docs/proofs/closing.md) and one liveness check that has not finished ([#748](https://github.com/sourcenetwork/pinc/issues/748)) |
+| `pinc-values` | verified streaming of values of any size from up to four providers, with resume | yes | built; proven except the items [being closed](docs/proofs/closing.md) |
+| `pinc-broadcast` | topic broadcast through hubs with origin authentication, replay floors and a bounded log | yes | built; proven except the items [being closed](docs/proofs/closing.md) |
 | `pinc-reconcile` | range-based set reconciliation whose cost scales with the difference | yes | built, proven |
 | `pinc-dtn` | bundles sealed to a recipient, erasure coding, custody, copy-limited forwarding | yes | built, proven |
 | `pinc-sim` | deterministic network simulator and scenario suite | no | built |
