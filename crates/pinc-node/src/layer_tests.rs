@@ -19,14 +19,15 @@ use pinc_connect::client::{Config as ConnCfg, RelayCfg};
 use pinc_core::{ConnectFailure, Event, SessionId};
 use pinc_crypto::{Drbg, IdentityAlg, Keypair, Software};
 use pinc_security::{Alpn, Env, KeyHandle, LocalIdentity, PrekeyPolicy, SoftPrekeys};
+use pinc_values::knobs::OPEN_RETRY;
 
 use crate::apps::{Apps, Enabled, NoDtn, NoIndex, NoValues, SetsApp};
 use crate::config::{Config, HUB_ALPN, SETS_ALPN, TABLE_MAX};
 use crate::event::{NodeEvent, ReconcileFailure};
-use crate::reconcile::ATTEMPTS;
 use crate::io::tests::{DIALED, Stub};
 use crate::layer::{LSess, Layer};
 use crate::node::Node;
+use crate::reconcile::ATTEMPTS;
 
 const S: u64 = 1_000_000_000;
 const SET: &[u8] = b"items";
@@ -228,8 +229,30 @@ fn a_round_started_for_a_revoked_peer_ends_cancelled_without_retrying() {
     });
 }
 
+/// The index of the last dial of the reconcile protocol the node made.
+fn last_sets_dial(node: &TNode) -> usize {
+    node.io
+        .ep
+        .dials
+        .iter()
+        .rposition(|d| d.1 == SETS_ALPN)
+        .expect("a dial of the reconcile protocol")
+}
+
+fn sets_dials(node: &TNode) -> usize {
+    node.io.ep.dials.iter().filter(|d| d.1 == SETS_ALPN).count()
+}
+
+fn fill_lconn(node: &mut TNode) {
+    for i in 0..TABLE_MAX as u64 {
+        let mut other = [0u8; 32];
+        other[..8].copy_from_slice(&i.to_le_bytes());
+        node.io.lconn.insert((Layer::Values, other));
+    }
+}
+
 #[test]
-fn a_round_whose_session_the_full_table_sheds_retries_and_ends_exhausted() {
+fn a_round_whose_session_the_full_table_sheds_spends_an_attempt_and_dials_again_after_the_period() {
     big(|| {
         let mut node = node();
         let peer = hub().bytes;
@@ -247,20 +270,85 @@ fn a_round_whose_session_the_full_table_sheds_retries_and_ends_exhausted() {
             );
         }
         node.sets_start(S, &peer, SET).unwrap();
-        let mut seen = Vec::new();
-        for _ in 0..8 {
-            let Some(last) = node.io.ep.dials.len().checked_sub(1) else {
-                break;
-            };
-            node.layer_up(S, Layer::Sets, SessionId(DIALED + last as u64), peer, false);
-            node.settle(S);
-            seen = failures(&mut node);
-            if !seen.is_empty() {
+        for k in 0..u64::from(ATTEMPTS) {
+            let t = S + k * OPEN_RETRY;
+            let dials = sets_dials(&node);
+            node.layer_up(
+                t,
+                Layer::Sets,
+                SessionId(DIALED + last_sets_dial(&node) as u64),
+                peer,
+                false,
+            );
+            node.settle(t);
+            if k + 1 == u64::from(ATTEMPTS) {
+                assert_eq!(failures(&mut node), [ReconcileFailure::Exhausted]);
+                assert_eq!(node.sets_running(), 0);
                 break;
             }
+            assert!(failures(&mut node).is_empty(), "no event while attempts remain ({k})");
+            assert_eq!(node.sets_running(), 1);
+            node.handle_timeout(t + OPEN_RETRY - 1);
+            assert_eq!(sets_dials(&node), dials, "the round waits for the period ({k})");
+            node.handle_timeout(t + OPEN_RETRY);
+            assert_eq!(
+                sets_dials(&node),
+                dials + 1,
+                "the round dials again after the period ({k})"
+            );
         }
-        assert_eq!(seen, [ReconcileFailure::Exhausted]);
-        assert_eq!(node.sets_running(), 0);
+    });
+}
+
+#[test]
+fn a_round_on_a_table_that_stays_full_spends_one_attempt_per_retry_period_and_ends_exhausted() {
+    big(|| {
+        let mut node = node();
+        let peer = hub().bytes;
+        fill_lconn(&mut node);
+        node.sets_start(S, &peer, SET).unwrap();
+        assert_eq!(sets_dials(&node), 0, "a dial that cannot be recorded is not sent");
+        assert!(
+            failures(&mut node).is_empty(),
+            "one attempt is spent and no event has come"
+        );
+        assert_eq!(node.sets_running(), 1);
+        for k in 1..u64::from(ATTEMPTS) {
+            node.handle_timeout(S + k * OPEN_RETRY - 1);
+            assert_eq!(node.sets_running(), 1, "the round waits for the period ({k})");
+            assert!(failures(&mut node).is_empty(), "the dial after the wait ends no round");
+            node.handle_timeout(S + k * OPEN_RETRY);
+            if k + 1 == u64::from(ATTEMPTS) {
+                assert_eq!(failures(&mut node), [ReconcileFailure::Exhausted]);
+                assert_eq!(node.sets_running(), 0);
+            } else {
+                assert!(failures(&mut node).is_empty(), "the attempt {k} ends no round");
+                assert_eq!(node.sets_running(), 1);
+            }
+        }
+        assert_eq!(sets_dials(&node), 0);
+    });
+}
+
+#[test]
+fn a_round_whose_table_frees_before_the_retry_period_ends_dials_at_that_time() {
+    big(|| {
+        let mut node = node();
+        let peer = hub().bytes;
+        fill_lconn(&mut node);
+        node.sets_start(S, &peer, SET).unwrap();
+        assert_eq!(sets_dials(&node), 0);
+        node.io.lconn.clear();
+        node.handle_timeout(S + OPEN_RETRY - 1);
+        assert_eq!(sets_dials(&node), 0, "the round waits for its retry period");
+        node.handle_timeout(S + OPEN_RETRY);
+        assert_eq!(sets_dials(&node), 1, "the round dials at the retry time");
+        let id = SessionId(DIALED + last_sets_dial(&node) as u64);
+        node.layer_up(S + OPEN_RETRY, Layer::Sets, id, peer, false);
+        node.settle(S + OPEN_RETRY);
+        assert!(node.io.lsess.contains_key(&id));
+        assert!(failures(&mut node).is_empty(), "the dial ends no round");
+        assert_eq!(node.sets_running(), 1);
     });
 }
 

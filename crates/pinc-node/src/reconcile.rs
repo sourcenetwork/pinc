@@ -4,7 +4,8 @@
 //! opens a stream on its reconcile session to the peer and writes the first message; the responder, which the peer's
 //! stream creates, answers on the same stream, and every message is answered by one message until the exchange ends,
 //! however many messages the difference needs. The initiator learns the exact difference, and the node reports it as
-//! one event. A reset stream or a closed session retries the whole round, at most [`ATTEMPTS`] times.
+//! one event. A reset stream, a closed session or a full table of dials retries the whole round (a full table after one retry
+//! period), at most [`ATTEMPTS`] times.
 //!
 //! The sets are the host's ([`SetsApp`](crate::SetsApp)); a session reads a set by its index and the set must not
 //! change while a round over it runs.
@@ -255,8 +256,9 @@ where
         }
     }
 
-    /// A dial for the reconcile protocol failed: the rounds waiting for the peer count it as an attempt.
-    pub(crate) fn sets_failed(&mut self, now: Nanos, peer: &NodeId) {
+    /// A dial for the reconcile protocol failed: the rounds waiting for the peer count it as an attempt. With `wait`
+    /// (a table was full) the next attempt comes after the retry period, not in this call.
+    pub(crate) fn sets_failed(&mut self, now: Nanos, peer: &NodeId, wait: bool) {
         let waiting: Vec<u32> = self
             .recs
             .as_deref()
@@ -276,7 +278,7 @@ where
             {
                 r.attempt += 1;
             }
-            self.round_retry(now, id);
+            self.round_retry(now, id, wait);
         }
     }
 
@@ -315,7 +317,7 @@ where
             {
                 r.active = None;
             }
-            self.round_retry(now, id);
+            self.round_retry(now, id, false);
         }
     }
 
@@ -389,7 +391,7 @@ where
                 self.round_fail(&r, ReconcileFailure::UnknownSet);
             }
         } else {
-            self.round_retry(now, id);
+            self.round_retry(now, id, false);
         }
     }
 
@@ -412,7 +414,7 @@ where
         let Some(stream) = self.io.open_stream_at(session, crate::config::SETS_URGENCY) else {
             // No stream credit now (a session reported before its handshake ends has none until the peer's limits
             // arrive): the attempt waits and is tried again, as a refused open of the values layer is. It is not
-            // counted: only a reset stream or a closed session spends an attempt.
+            // counted: only a reset stream, a closed session or a full table spends an attempt.
             round.open_at = Some(now.saturating_add(OPEN_RETRY));
             self.round_put(round);
             return;
@@ -462,8 +464,8 @@ where
         }
     }
 
-    /// Try the round again, or fail it when the attempts are spent.
-    fn round_retry(&mut self, now: Nanos, id: u32) {
+    /// Try the round again (after the retry period when `wait`), or fail it when the attempts are spent.
+    fn round_retry(&mut self, now: Nanos, id: u32, wait: bool) {
         let Some(round) = self.recs.as_deref_mut().and_then(|r| r.take(id)) else {
             return;
         };
@@ -475,6 +477,11 @@ where
         self.round_abort(&round, PROTOCOL);
         let mut round = round;
         round.active = None;
+        if wait {
+            round.open_at = Some(now.saturating_add(OPEN_RETRY));
+            self.round_put(round);
+            return;
+        }
         self.round_put(round);
         self.round_begin(now, id);
     }

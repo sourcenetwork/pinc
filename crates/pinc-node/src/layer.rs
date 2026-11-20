@@ -177,7 +177,7 @@ where
         }
         if io.lconn.len() >= TABLE_MAX {
             // No room to record the dial: sending it would let the next call send it again.
-            self.layer_lost(now, layer, peer, false);
+            self.layer_unrecorded(now, layer, peer);
             return;
         }
         let id = io.full_id(peer);
@@ -209,7 +209,7 @@ where
         if self.io.lsess.len() >= TABLE_MAX {
             self.io.shed(session);
             if !incoming {
-                self.layer_lost(now, layer, &peer, false);
+                self.layer_unrecorded(now, layer, &peer);
             }
             return;
         }
@@ -254,12 +254,23 @@ where
         }
     }
 
+    /// A dial of `layer` could not be recorded because a table is full: a reconcile round counts an attempt and dials
+    /// again after its retry period, any other layer learns of a failed dial.
+    fn layer_unrecorded(&mut self, now: Nanos, layer: Layer, peer: &NodeId) {
+        if layer == Layer::Sets {
+            self.io.lconn.remove(&(layer, *peer));
+            self.sets_failed(now, peer, true);
+        } else {
+            self.layer_failed(now, layer, peer);
+        }
+    }
+
     /// A dial of `layer` failed or was refused: the layer learns of it, and a delay-tolerant redial waits.
     pub(crate) fn layer_failed(&mut self, now: Nanos, layer: Layer, peer: &NodeId) {
         self.io.lconn.remove(&(layer, *peer));
         match layer {
             Layer::Values => self.values_failed(now, peer),
-            Layer::Sets => self.sets_failed(now, peer),
+            Layer::Sets => self.sets_failed(now, peer, false),
             Layer::Dtn => {
                 let at = self.io.dtn_failed(now, peer);
                 if let Some(d) = self.dtn.as_deref_mut() {
