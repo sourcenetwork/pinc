@@ -455,11 +455,13 @@ impl Rec {
         self.line("ext", &format!(r#","n":{count}"#), "");
     }
 
-    /// The reset frame taken, lost, taken again, acknowledged twice, taken again (none).
+    /// The reset frame taken, lost, taken again, acknowledged twice, taken again (none). A reset after every byte and
+    /// the end were acknowledged queues no frame (the stream is over), so there is none to lose.
     fn after_reset(&mut self) {
-        self.takectl();
-        self.ctllost();
-        self.takectl();
+        if self.takectl().is_some() {
+            self.ctllost();
+            self.takectl();
+        }
         self.ctlacked();
         self.ctlacked();
         assert!(self.takectl().is_none(), "a reset frame after its acknowledgement");
