@@ -6,12 +6,14 @@
 (*                                                                         *)
 (* The Rust test tests/trace_facade_role_clock.rs builds Endpoints on a    *)
 (* platform whose wall clock it sets and whose monotonic clock it moves by *)
-(* hand, with a store that keeps one member's packets at chosen arrival   *)
+(* hand, with a store that keeps one member's packets at chosen arrival    *)
 (* times. For each wall clock: whether the build is refused; then runs of  *)
-(* the endpoint at chosen times since the start, each until its restore    *)
-(* is done, with the count of packets the role's mailbox took so far       *)
-(* (Stats.mailbox.stored). Each count must be the one the operators of     *)
-(* FacadeRoleClockOps.tla give at the relay clock of that run.             *)
+(* the endpoint at chosen times since the start, each until its role is    *)
+(* serving, with the count of packets the role's mailbox took so far       *)
+(* (Stats.mailbox.stored) and the store's loads. Each count must be the    *)
+(* one the operators of FacadeRoleClockOps.tla give at the relay clock of  *)
+(* that run; a later run of the same endpoint loads and restores nothing   *)
+(* (Role::restored).                                                       *)
 (*                                                                         *)
 (* Times are milliseconds; the test's times are whole milliseconds, so the *)
 (* code's comparisons in nanoseconds have the same answers. Needs the TLA+ *)
@@ -20,8 +22,8 @@
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
 CONSTANTS T0, MAX, AGE
-VARIABLES i, ok, off, kept, stored
-vars == <<i, ok, off, kept, stored>>
+VARIABLES i, ok, org, kept, stored, done
+vars == <<i, ok, org, kept, stored, done>>
 INSTANCE FacadeRoleClockOps
 
 Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/role-clock.ndjson")
@@ -31,17 +33,19 @@ Rng(f) == {f[j] : j \in DOMAIN f}
 \* a new endpoint: built unless the wall clock is unknown
 BuildEv == /\ E.op = "build"
            /\ E.ok = (E.w # 0)
-           /\ ok' = E.ok /\ off' = Offset(E.w) /\ kept' = Rng(E.kept) /\ stored' = 0
+           /\ ok' = E.ok /\ org' = Origin(E.w) /\ kept' = Rng(E.kept) /\ stored' = 0 /\ done' = FALSE
 
-\* a run at el since the start restores the store: the mailbox takes the packets live at the relay clock
+\* the first run at el since the start restores the store: the mailbox takes the packets live at the relay clock; a
+\* later run takes nothing and does not load
 RunEv == /\ E.op = "run" /\ ok
-         /\ stored' = stored + Cardinality(Taken(kept, RelayNow(off, E.el)))
-         /\ E.stored = stored'
-         /\ UNCHANGED <<ok, off, kept>>
+         /\ stored' = IF done THEN stored ELSE stored + Cardinality(Taken(kept, RelayNow(org, E.el)))
+         /\ E.stored = stored' /\ E.loads = 1
+         /\ done' = TRUE
+         /\ UNCHANGED <<ok, org, kept>>
 
-EndEv == E.op = "end" /\ UNCHANGED <<ok, off, kept, stored>>
+EndEv == E.op = "end" /\ UNCHANGED <<ok, org, kept, stored, done>>
 
-Init == i = 1 /\ ok = FALSE /\ off = 0 /\ kept = {} /\ stored = 0
+Init == i = 1 /\ ok = FALSE /\ org = 0 /\ kept = {} /\ stored = 0 /\ done = FALSE
 Step == /\ i <= Len(Trace)
         /\ \/ BuildEv \/ RunEv \/ EndEv
         /\ i' = i + 1
