@@ -1823,3 +1823,7 @@ path = "trace_node_due.rs"
 [[test]]
 name = "trace_connect_own_timer"
 path = "trace_connect_own_timer.rs"
+
+[[test]]
+name = "trace_facade_gate"
+path = "trace_facade_gate.rs"

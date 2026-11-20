@@ -144,6 +144,15 @@ impl Known {
         self.0.insert(node.bytes, (alpn, dir, until));
     }
 
+    /// The allow remembered for `node` that has not run out at `now`, as a probe reads it.
+    #[cfg(feature = "trace")]
+    pub(crate) fn peek(&self, now: u64, node: &NodeId) -> Option<(Alpn, Direction)> {
+        self.0
+            .get(&node.bytes)
+            .filter(|&&(_, _, until)| now < until)
+            .map(|&(a, d, _)| (a, d))
+    }
+
     /// Drop what is remembered for `node`.
     pub(crate) fn forget(&mut self, node: &[u8; 32]) {
         self.0.remove(node);

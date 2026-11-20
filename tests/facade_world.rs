@@ -27,7 +27,7 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Wake, Waker};
 
-use pinc::{Endpoint, Hosted, Limits, Pinc, Platform};
+use pinc::{Admission, AllowAll, Endpoint, Hosted, Limits, Pinc, Platform};
 use pinc_tests::SplitMix64;
 
 /// The subject's address.
@@ -70,6 +70,9 @@ struct Net {
     inbox: HashMap<SocketAddr, VecDeque<(Vec<u8>, SocketAddr)>>,
     rx: HashMap<SocketAddr, Waker>,
     known: HashSet<SocketAddr>,
+    /// Pairs whose packets are dropped on the way, and addresses that are down (nothing reaches them).
+    cut: HashSet<(SocketAddr, SocketAddr)>,
+    down: HashSet<SocketAddr>,
 }
 
 /// The wire, the clock and the timers the endpoints sleep on.
@@ -94,15 +97,48 @@ impl Wire {
 
     /// An endpoint at `addr` from the key seed `[seed; 32]`, serving `alpn`.
     pub fn endpoint(&self, addr: SocketAddr, seed: u8, alpn: &[u8], limits: Limits) -> Endpoint<impl Hosted + use<>> {
+        self.endpoint_with(addr, seed, &[alpn], limits, AllowAll)
+    }
+
+    /// As [`Wire::endpoint`], serving every protocol of `alpns` and asking `hook` about each session.
+    pub fn endpoint_with<A: Admission + 'static>(
+        &self,
+        addr: SocketAddr,
+        seed: u8,
+        alpns: &[&[u8]],
+        limits: Limits,
+        hook: A,
+    ) -> Endpoint<impl Hosted + use<A>> {
+        self.endpoint_timed(addr, seed, alpns, limits, hook, None)
+    }
+
+    /// As [`Wire::endpoint_with`], with the dial timeout `connect_timeout` instead of the default when it is set.
+    pub fn endpoint_timed<A: Admission + 'static>(
+        &self,
+        addr: SocketAddr,
+        seed: u8,
+        alpns: &[&[u8]],
+        limits: Limits,
+        hook: A,
+        connect_timeout: Option<std::time::Duration>,
+    ) -> Endpoint<impl Hosted + use<A>> {
         self.net.borrow_mut().known.insert(addr);
         let (net_r, net_s) = (Rc::clone(&self.net), Rc::clone(&self.net));
         let (timers, virt) = (Rc::clone(&self.timers), self.virt.clone());
-        Pinc::builder_on(self.virt.clone())
-            .seed(&[seed; 32])
-            .unwrap()
-            .alpn(alpn)
+        let builder = alpns
+            .iter()
+            .fold(
+                Pinc::builder_on(self.virt.clone()).seed(&[seed; 32]).unwrap(),
+                |b, a| b.alpn(*a),
+            )
             .local_addr(addr)
             .limits(limits)
+            .acp(hook);
+        let builder = match connect_timeout {
+            Some(t) => builder.connect_timeout(t),
+            None => builder,
+        };
+        builder
             .build(
                 async move |buf: &mut [u8]| -> pinc::Result<(usize, SocketAddr)> {
                     poll_fn(|cx| {
@@ -137,13 +173,41 @@ impl Wire {
             .unwrap()
     }
 
+    /// Drop the packets of `from` to `to` from now on (`on`), or no longer.
+    pub fn cut(&self, from: SocketAddr, to: SocketAddr, on: bool) {
+        let mut n = self.net.borrow_mut();
+        if on {
+            n.cut.insert((from, to));
+        } else {
+            n.cut.remove(&(from, to));
+        }
+    }
+
+    /// Take `addr` down (`on`): what it had received is gone and nothing reaches it, or bring it back.
+    pub fn down(&self, addr: SocketAddr, on: bool) {
+        let mut n = self.net.borrow_mut();
+        if on {
+            n.down.insert(addr);
+            n.inbox.remove(&addr);
+            n.rx.remove(&addr);
+        } else {
+            n.down.remove(&addr);
+        }
+    }
+
+    /// The packets in flight and those waiting in an inbox (for a failure message).
+    pub fn queued(&self) -> (usize, usize) {
+        let n = self.net.borrow();
+        (n.outbox.len(), n.inbox.values().map(VecDeque::len).sum())
+    }
+
     /// Move every packet to its receiver's inbox; the packets and the wakers of the receives that waited for them.
     /// A packet to an address no endpoint has is dropped.
     pub fn deliver(&self) -> (usize, Vec<Waker>) {
         let mut n = self.net.borrow_mut();
         let (mut moved, mut wakers) = (0, Vec::new());
         while let Some((from, to, bytes)) = n.outbox.pop_front() {
-            if !n.known.contains(&to) {
+            if !n.known.contains(&to) || n.down.contains(&to) || n.cut.contains(&(from, to)) {
                 continue;
             }
             moved += 1;

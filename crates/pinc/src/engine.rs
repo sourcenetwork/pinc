@@ -53,6 +53,8 @@ mod streams;
 #[allow(clippy::unwrap_used, reason = "tests assert")]
 mod taken_tests;
 mod topics;
+#[cfg(feature = "trace")]
+pub(crate) mod trace_gate;
 pub(crate) mod waits_probe;
 pub use state::Restored;
 

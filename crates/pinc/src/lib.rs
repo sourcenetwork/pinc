@@ -122,6 +122,8 @@ pub use endpoint::{
     Admission, AllowAll, BatchBuilt, Builder, Built, Direction, Discovery, Endpoint, IoBuilt, LOOKUP_WAIT, NoDiscovery,
     Pinc,
 };
+#[cfg(feature = "trace")]
+pub use engine::trace_gate::GateProbe;
 pub use engine::{Admit, BUSY, DENIED, REVOKED_MAX, Restored};
 pub use error::{Error, ErrorKind, Result};
 pub use event::{Event, MessageId};

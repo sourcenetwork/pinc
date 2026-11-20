@@ -53,6 +53,8 @@ mod map_keys_tests;
 mod portmap;
 mod records;
 mod role;
+#[cfg(feature = "trace")]
+mod trace_gate;
 
 pub use discovery::{Discovery, NoDiscovery};
 
