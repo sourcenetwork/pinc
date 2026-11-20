@@ -270,8 +270,8 @@ pub(crate) const QUEUE: usize = 640;
 #[cfg(not(feature = "alloc"))]
 pub(crate) const QUEUE: usize = 256;
 /// Events that cannot be recovered and may be queued at once besides one `Opened`, one `Reset` and one `Stopped` per
-/// stream slot and one validated and one failed event per path: connected, key request, tickets, ready, asleep, awake, wake
-/// unanswered, closed, and one undeliverable event per extension frame held or queued at once (8 held, 16 queued).
+/// stream slot and one validated and one failed event per path: connected, key request, tickets, ready, asleep, awake,
+/// wake unanswered, closed, and one undeliverable event per extension frame held or queued at once (8 held, 16 queued).
 pub(crate) const FIXED_EVENTS: usize = 8 + super::ctl::EXT_SLOTS + super::ctl::EXT_QUEUED;
 
 /// Whether `streams` stream slots and `paths` paths leave room for every unrecoverable event: with the repeats of

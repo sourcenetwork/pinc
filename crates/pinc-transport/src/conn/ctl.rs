@@ -555,9 +555,9 @@ pub(super) mod trace {
         }
 
         /// `apply` of an `Event::Acked` with one `FrameRef::Control { kind, id }`; when `ctl.tickets` is then
-        /// `None`, the generation kept becomes 0. `kind` is `"sc"`, `"ext"`, `"tk"` or `"rd"`. Returns whether the stream layer was handed the frame: for
-        /// `"sc"`, whether `id` was in the table before the call; false for the others (and for any other kind, which
-        /// changes nothing).
+        /// `None`, the generation kept becomes 0. `kind` is `"sc"`, `"ext"`, `"tk"` or `"rd"`. Returns whether the
+        /// stream layer was handed the frame: for `"sc"`, whether `id` was in the table before the call; false for the
+        /// others (and for any other kind, which changes nothing).
         pub fn ack(&mut self, kind: &str, id: u64) -> bool {
             self.report(kind, id, |frames| Event::Acked {
                 pn: 0,
