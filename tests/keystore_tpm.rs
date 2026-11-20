@@ -7,7 +7,7 @@ use pinc_keystore::tpm::{SimTransport, TpmClient, Transport};
 use pinc_keystore::{KeyHandle, KeyStore, KeyStoreError, TpmConfig, TpmStore};
 use pinc_tests::{SplitMix64, Swtpm};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 const PERSISTENT_KEY: u32 = 0x8101_0001;
 /// The order of the P-256 group, big-endian.
@@ -373,4 +373,41 @@ fn a_full_tpm_with_nothing_to_unload_is_a_typed_error() {
     store.client_mut().flush_context(b).unwrap();
     let msg = KeyStoreError::TpmFull.to_string();
     assert!(msg.len() < 100 && !msg.contains("TPM2_"), "{msg}");
+}
+
+/// Runs every command on the TPM, but answers a link error for a `FlushContext` once armed.
+struct LoseFlushAnswer<T: Transport>(T, Arc<AtomicBool>);
+
+impl<T: Transport> Transport for LoseFlushAnswer<T> {
+    fn transmit(&mut self, command: &[u8]) -> std::io::Result<Vec<u8>> {
+        let rsp = self.0.transmit(command)?;
+        if command.get(6..10) == Some(&0x165u32.to_be_bytes()[..]) && self.1.swap(false, Ordering::Relaxed) {
+            return Err(std::io::Error::other("answer lost"));
+        }
+        Ok(rsp)
+    }
+}
+
+#[test]
+fn a_lost_flush_answer_after_persist_does_not_make_two_keys_one_object() {
+    let tpm = Swtpm::start();
+    let armed = Arc::new(AtomicBool::new(false));
+    let mut store = TpmStore::open(
+        LoseFlushAnswer(SimTransport::connect(("127.0.0.1", tpm.port)).unwrap(), armed.clone()),
+        TpmConfig::new(),
+    )
+    .unwrap();
+    let k1 = store.generate(IdentityAlg::EcdsaP256).unwrap();
+    let k2 = store.generate(IdentityAlg::EcdsaP256).unwrap();
+    armed.store(true, Ordering::Relaxed);
+    assert!(matches!(
+        store.persist(&k1, PERSISTENT_KEY),
+        Err(KeyStoreError::Transport(_))
+    ));
+    let k3 = store.generate(IdentityAlg::EcdsaP256).unwrap();
+    for (name, k) in [("k1", &k1), ("k2", &k2), ("k3", &k3)] {
+        let (alg, pk) = store.public(k).unwrap();
+        let sig = store.sign(k, b"own key").unwrap();
+        verify(alg, &pk, b"own key", sig.as_bytes()).unwrap_or_else(|e| panic!("{name} signed with another key: {e}"));
+    }
 }
