@@ -11,7 +11,9 @@
 //! client's own retry decides when to ask again.
 //!
 //! Every stream an exchange opens is given to the host's `close` exactly once, whichever way the exchange ends (its
-//! answer, the client giving it up, a dropped write), and a running close finishes before the next exchange opens.
+//! answer, the client giving it up, a dropped write), and a running close finishes before the next exchange opens. A
+//! close that is running when the driver changes is dropped with the driver that ran it: its stream is then dropped,
+//! which ends it as the host's stream type does, and the next exchange may open at once.
 //!
 //! Invariants: at most one exchange runs at a time; an answer is read up to [`pinc_portmap::MAX_RESPONSE`] bytes and no
 //! further; a stream that fails ends the exchange with no answer.
