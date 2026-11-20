@@ -99,17 +99,22 @@ impl<const Q: usize, const C: usize> PackedQueue<Q, C> {
         Ok(())
     }
 
-    /// Push, dropping the oldest entries until it fits. Returns how many were dropped.
-    fn push_drop_oldest(&mut self, pool: &mut BufferPool<'_>, data: &[u8]) -> Result<usize, QueueError> {
-        let mut dropped = 0;
+    /// Push, dropping the oldest entries until it fits; every entry dropped is added to `dropped`, also when the push
+    /// is refused in the end.
+    fn push_drop_oldest(
+        &mut self,
+        pool: &mut BufferPool<'_>,
+        data: &[u8],
+        dropped: &mut u64,
+    ) -> Result<(), QueueError> {
         loop {
             match self.push(pool, data) {
-                Ok(()) => return Ok(dropped),
+                Ok(()) => return Ok(()),
                 Err(QueueError::TooLarge) => return Err(QueueError::TooLarge),
                 Err(e) if self.len == 0 => return Err(e),
                 Err(_) => {
                     self.pop(pool);
-                    dropped += 1;
+                    *dropped += 1;
                 }
             }
         }
@@ -223,13 +228,13 @@ impl<const Q: usize, const C: usize> Datagrams<Q, C> {
         if data.len() > max_size {
             return Err(DatagramError::TooLarge { max_size });
         }
-        match self.send.push_drop_oldest(pool, data) {
-            Ok(dropped) => {
-                self.send_dropped += dropped as u64;
-                Ok(())
-            }
+        match self.send.push_drop_oldest(pool, data, &mut self.send_dropped) {
+            Ok(()) => Ok(()),
             Err(QueueError::TooLarge) => Err(DatagramError::TooLarge { max_size: CHUNK_SIZE }),
-            Err(_) => Err(DatagramError::Exhausted),
+            Err(_) => {
+                self.send_dropped += 1;
+                Err(DatagramError::Exhausted)
+            }
         }
     }
 
@@ -246,9 +251,8 @@ impl<const Q: usize, const C: usize> Datagrams<Q, C> {
     /// A DATAGRAM frame arrived: queue it for the application, dropping the oldest unread ones if the queue is full.
     /// A datagram that cannot be stored at all is counted as dropped.
     pub fn on_datagram_frame(&mut self, pool: &mut BufferPool<'_>, data: &[u8]) {
-        match self.recv.push_drop_oldest(pool, data) {
-            Ok(dropped) => self.recv_dropped += dropped as u64,
-            Err(_) => self.recv_dropped += 1,
+        if self.recv.push_drop_oldest(pool, data, &mut self.recv_dropped).is_err() {
+            self.recv_dropped += 1;
         }
     }
 
@@ -340,5 +344,33 @@ impl EarlyData {
     /// Drop every held packet: the connection closed, whatever the reason.
     pub fn clear(&mut self, pool: &mut BufferPool<'_>) {
         self.queue.clear(pool);
+    }
+}
+
+#[cfg(all(test, feature = "alloc"))]
+#[allow(clippy::unwrap_used, reason = "tests assert")]
+mod tests {
+    use super::*;
+
+    /// A pool whose budget fell below its use refuses the new datagram after the queue gave up its old ones: every
+    /// one of them, and the refused one, is counted.
+    #[test]
+    fn drops_are_counted_when_the_pool_refuses_after_making_room() {
+        let data = [7u8; CHUNK_SIZE / 2 + 1];
+        let mut pool = BufferPool::new_boxed(4);
+        let mut q: Datagrams = Datagrams::new();
+        for _ in 0..2 {
+            q.send_datagram(&mut pool, &data, CHUNK_SIZE).unwrap();
+            q.on_datagram_frame(&mut pool, &data);
+        }
+        assert_eq!(pool.used_chunks(), 4);
+        pool.set_budget_bytes(0);
+        assert_eq!(
+            q.send_datagram(&mut pool, &data, CHUNK_SIZE),
+            Err(DatagramError::Exhausted)
+        );
+        assert_eq!(q.send_dropped(), 3, "two popped and the refused one");
+        q.on_datagram_frame(&mut pool, &data);
+        assert_eq!(q.recv_dropped(), 3, "two popped and the refused one");
     }
 }
