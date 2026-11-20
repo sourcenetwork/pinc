@@ -150,18 +150,26 @@ Init == S = Fresh
 Finish(T, f) ==
     [Final(T, f) EXCEPT !.tasks = <<>>, !.pd = NoPd, !.dr = 0, !.rx = [p \in Provs |-> NoStreams]]
 
+(* TLC evaluates an operator's argument and a LET value again at each use inside a step, and the liveness checks
+   evaluate the fair actions on every state and every step: a state or a set used more than once is bound once, as
+   the one element of a set (UNION {F(x) : x \in {e}} is F(e) for a set F, CHOOSE over a one-element set is its
+   element, \E x \in {e} : P(x) is P(e)), as in ValuesSched.tla *)
+
 (* ---- request (sched.rs request / open_request) ---- *)
-ReqOut(T, p, useAsg, only) ==
+ReqOutOf(T, p, need) ==
     IF ~T.conn[p]
     THEN {IF T.dial[p] THEN T ELSE [T EXCEPT !.dial[p] = TRUE, !.askedEv = T.askedEv \/ ~T.inP[p]]}
-    ELSE LET need == (IF useAsg THEN T.asg[p] ELSE only) \ T.ver
-         IN IF need = {} THEN {T}
-            ELSE LET failT == [T EXCEPT !.retry[p] = TRUE]
-                 IN IF Cardinality(Streams(T, p)) >= SPP THEN {failT}
-                    ELSE {[T EXCEPT !.rx[p][SlotFree(T, p)] = NewStream(need), !.reqd = T.reqd \cup need,
-                                    !.askedEv = T.askedEv \/ ~T.inP[p],
-                                    !.ss = IF T.lastp THEN T.ss ELSE 0, !.lastp = TRUE]}
-                         \cup (IF CanBusy /\ T.fb > 0 THEN {[failT EXCEPT !.fb = T.fb - 1]} ELSE {})
+    ELSE IF need = {} THEN {T}
+         ELSE LET failT == [T EXCEPT !.retry[p] = TRUE]
+              IN IF Cardinality(Streams(T, p)) >= SPP THEN {failT}
+                 ELSE {[T EXCEPT !.rx[p][SlotFree(T, p)] = NewStream(need), !.reqd = T.reqd \cup need,
+                                 !.askedEv = T.askedEv \/ ~T.inP[p],
+                                 !.ss = IF T.lastp THEN T.ss ELSE 0, !.lastp = TRUE]}
+                      \cup (IF CanBusy /\ T.fb > 0 THEN {[failT EXCEPT !.fb = T.fb - 1]} ELSE {})
+
+\* the groups asked for: the provider's assigned ones (useAsg) or only, less the verified ones
+ReqOut(T0, p, useAsg, only) ==
+    UNION {UNION {ReqOutOf(T, p, need) : need \in {(IF useAsg THEN T.asg[p] ELSE only) \ T.ver}} : T \in {T0}}
 
 (* the thief takes the stolen tail: assigned, its idle clock restarts, requested *)
 ReqOutFor(T, p, tail) ==
@@ -176,7 +184,7 @@ StealFrom(Tr, p, v, keep) ==
     UNION {(IF Rest(Tr, v, keep) = {} THEN {Tw} ELSE ReqOutFor([Tw EXCEPT !.stolen = TRUE], p, Rest(Tr, v, keep)))
            : Tw \in ReqOut([Tr EXCEPT !.asg[v] = HeadOf(Tr, v, keep), !.rx[v] = NoStreams], v, TRUE, {})}
 
-StealOut(Tr, p) ==
+StealOutOf(Tr, p) ==
     LET vs == {u \in Provs \ {p} : Tr.inA[u] /\ Miss(Tr, u) # {}}
         idle == {u \in vs : Tr.lpa[u] >= IDLE}
         rate == {u \in vs \ idle : Cardinality(Miss(Tr, u)) >= SMIN}
@@ -186,6 +194,8 @@ StealOut(Tr, p) ==
         \* a rate victim has a positive rate and at least SMIN groups, so the group-rounded cut keeps one group or more
         keeps(v) == IF v \in idle THEN {0} ELSE 1..Cardinality(Miss(Tr, v))
     IN none \cup UNION {UNION {StealFrom(Tr, p, v, k) : k \in keeps(v)} : v \in from}
+
+StealOut(T, p) == UNION {StealOutOf(Tr, p) : Tr \in {T}}
 
 (* ---- top-up (sched.rs top_up) ---- *)
 TakeChunk(T0, p, out, chunk) ==
@@ -199,17 +209,21 @@ MinChunk(out, nq) ==
     LET m == IF out = 0 THEN MinT ELSE (IF MinT \div 2 < 1 THEN 1 ELSE MinT \div 2)
     IN IF nq < m THEN nq ELSE m
 
+\* T0 the state with the provider's verified groups dropped from its share, out the groups it still holds, qv the
+\* unverified queue
+TopUpOf(T0, p, out, qv) ==
+    IF Cardinality(Streams(T0, p)) >= SPP THEN {T0}
+    ELSE (IF out > 0 THEN {T0} ELSE {})
+         \cup (IF qv # {}
+               THEN UNION {TakeChunk(T0, p, out, c)
+                           : c \in {FirstK(qv, k) : k \in MinChunk(out, Cardinality(qv))..Cardinality(qv)}}
+               ELSE IF out = 0 /\ T0.conn[p] THEN StealOut([T0 EXCEPT !.queue = {}], p)
+                    ELSE {[T0 EXCEPT !.queue = {}]})
+
 TopUpOut(T, p) ==
     IF ~T.striped \/ T.run # "run" \/ ~T.inA[p] THEN {T}
-    ELSE LET T0 == [T EXCEPT !.asg[p] = T.asg[p] \ T.ver]
-             out == Cardinality(T0.asg[p])
-             qv == T0.queue \ T0.ver
-         IN IF Cardinality(Streams(T0, p)) >= SPP THEN {T0}
-            ELSE (IF out > 0 THEN {T0} ELSE {})
-                 \cup (IF qv # {}
-                       THEN UNION {TakeChunk(T0, p, out, FirstK(qv, k)) : k \in MinChunk(out, Cardinality(qv))..Cardinality(qv)}
-                       ELSE IF out = 0 /\ T0.conn[p] THEN StealOut([T0 EXCEPT !.queue = {}], p)
-                            ELSE {[T0 EXCEPT !.queue = {}]})
+    ELSE UNION {TopUpOf(T0, p, Cardinality(T0.asg[p]), T0.queue \ T0.ver)
+                : T0 \in {[T EXCEPT !.asg[p] = T.asg[p] \ T.ver]}}
 
 (* ---- check_done ---- *)
 ChkOut(T) ==
@@ -218,22 +232,26 @@ ChkOut(T) ==
                 : U \in (IF T.hd >= 0 THEN {ReleaseHd(T), T} ELSE {T})}
 
 (* ---- eviction (sched.rs evict) ---- *)
+\* T2 the state with the provider evicted (and every candidate active again when none was left), share the
+\* groups it still missed
+EvictOf(T2in, share) ==
+    CHOOSE out \in {LET rest == {q \in Provs : T2.inA[q]}
+                    IN IF rest = {} THEN Finish(T2, "EveryProviderLied")
+                       ELSE [T2 EXCEPT !.queue = T2.queue \cup share,
+                                       !.tasks = [i \in 1..Cardinality(rest) |-> <<"top", Ascending(rest)[i]>>]]
+                    : T2 \in {T2in}} : TRUE
+
 EvictOut(T, p) ==
-    LET share == T.asg[p] \ T.ver
-        T1 == [T EXCEPT !.rx[p] = NoStreams, !.inP[p] = FALSE, !.inA[p] = FALSE, !.retry[p] = FALSE,
-                        !.asg[p] = {}, !.lpa[p] = 0, !.lied = T.lied \cup {p}, !.dr = 0]
-        T2 == IF \A q \in Provs : ~T1.inA[q] THEN [T1 EXCEPT !.inA = T1.inP] ELSE T1
-        rest == {q \in Provs : T2.inA[q]}
-    IN IF rest = {} THEN Finish(T2, "EveryProviderLied")
-       ELSE [T2 EXCEPT !.queue = T2.queue \cup share,
-                       !.tasks = [i \in 1..Cardinality(rest) |-> <<"top", Ascending(rest)[i]>>]]
+    CHOOSE out \in {EvictOf(IF \A q \in Provs : ~T1.inA[q] THEN [T1 EXCEPT !.inA = T1.inP] ELSE T1, T.asg[p] \ T.ver)
+                    : T1 \in {[T EXCEPT !.rx[p] = NoStreams, !.inP[p] = FALSE, !.inA[p] = FALSE, !.retry[p] = FALSE,
+                                        !.asg[p] = {}, !.lpa[p] = 0, !.lied = T.lied \cup {p}, !.dr = 0]}} : TRUE
 
 (* ---- the call tasks ---- *)
 Task ==
     /\ S.tasks # <<>> /\ S.pd.on = FALSE
-    /\ LET t == Head(S.tasks)
-           T0 == [S EXCEPT !.tasks = Tail(S.tasks)]
-       IN \/ /\ t[1] = "top" /\ S' \in TopUpOut(T0, t[2])
+    /\ LET t == Head(S.tasks) IN
+       \E T0 \in {[S EXCEPT !.tasks = Tail(S.tasks)]} :
+          \/ /\ t[1] = "top" /\ S' \in TopUpOut(T0, t[2])
           \/ /\ t[1] = "chk" /\ S' \in ChkOut(T0)
           \/ /\ t[1] = "rs"
              /\ S' = IF T0.run = "run" /\ NoOwnStream(T0, t[2]) THEN [T0 EXCEPT !.retry[t[2]] = TRUE] ELSE T0
@@ -268,9 +286,9 @@ DialOkG(p) == External /\ S.inP[p] /\ S.dial[p] /\ S.up[p]
 
 DialOk(p) ==
     /\ DialOkG(p)
-    /\ LET T == [S EXCEPT !.dial[p] = FALSE, !.conn[p] = TRUE]
-           Up(U) == IF U.inA[p] /\ U.striped /\ ~OldConn THEN [U EXCEPT !.tasks = <<<<"top", p>>>>] ELSE U
-       IN S' \in IF T.inA[p] THEN {Up(U) : U \in ReqOut(T, p, TRUE, {})} ELSE {T}
+    /\ LET Up(U) == IF U.inA[p] /\ U.striped /\ ~OldConn THEN [U EXCEPT !.tasks = <<<<"top", p>>>>] ELSE U
+       IN \E T \in {[S EXCEPT !.dial[p] = FALSE, !.conn[p] = TRUE]} :
+             S' \in IF T.inA[p] THEN {Up(U) : U \in ReqOut(T, p, TRUE, {})} ELSE {T}
 
 DialFail(p) ==
     /\ External /\ S.inP[p] /\ S.dial[p]
@@ -289,13 +307,15 @@ Down(p) == \* p becomes unreachable: its session closes and dials fail until it 
 Back(p) == External /\ ~S.up[p] /\ S' = [S EXCEPT !.up[p] = TRUE]
 
 (* ---- try_ahead: the group g of the stream is held, a covering proof is cached, the group is not stored ---- *)
-TryAhead(T, p, s, g) ==
+TryAheadOf(T, p, s, g) ==
     LET st == T.rx[p][s]
     IN IF Proofs /\ st.on /\ IsHeld(st.fr[g]) /\ st.pf[g] # 0 /\ g \notin T.ver
        THEN IF st.pf[g] = 1 /\ KindOf(st.fr[g]) # "j"
             THEN {[T EXCEPT !.pd = [on |-> TRUE, p |-> p, s |-> s, g |-> g, ahead |-> TRUE, c |-> "true", step |-> "w"]]}
             ELSE {EvictOut(T, p)}   \* the proof and the bytes, both from p, do not hash to the root
        ELSE {T}
+
+TryAhead(T0, p, s, g) == UNION {TryAheadOf(T, p, s, g) : T \in {T0}}
 
 (* ---- the server side of a stream (the adversary, or an honest provider) ---- *)
 SendG(p, s, g) ==
@@ -367,8 +387,8 @@ Drain(p, s) ==
        IF st.on /\ Pend(st) # {} /\ IsHeld(st.fr[Min(Pend(st))])
        THEN LET g == Min(Pend(st))
                 k == KindOf(st.fr[g])
-                T0 == [S EXCEPT !.lastp = TRUE, !.ss = 0]
-            IN IF k = "b" THEN S' = EvictOut(T0, p)
+            IN \E T0 \in {[S EXCEPT !.lastp = TRUE, !.ss = 0]} :
+               IF k = "b" THEN S' = EvictOut(T0, p)
                ELSE IF g \in S.ver /\ st.fr[g] # "kg" THEN S' = [T0 EXCEPT !.rx[p][s].fr[g] = "c"]
                ELSE IF g \in S.ver /\ DupFix THEN \* stored by another stream while this one was inside the group: accounted, not announced again
                     S' = [T0 EXCEPT !.rx[p][s].fr[g] = "c", !.dupN = 1, !.lpa[p] = 0,
@@ -388,18 +408,17 @@ Commit ==
     /\ S.run = "run" /\ S.pd.on /\ S.pd.step = "c" /\ S.tasks = <<>>
     /\ LET d == S.pd
            g == d.g
-           T0 == [S EXCEPT !.ver = S.ver \cup {g}, !.pd = NoPd, !.aheadN = IF d.ahead THEN 1 ELSE S.aheadN]
-           T1 == IF ~T0.rel /\ g = Head0 THEN [T0 EXCEPT !.hd = g] ELSE Readable(T0, g)
-           T2 == [T1 EXCEPT !.lpa[d.p] = 0,
-                            !.tasks = IF T1.striped THEN <<<<"top", d.p>>, <<"chk">>>> ELSE <<<<"chk">>>>]
-       IN \/ S' = T2
+       IN \E T0 \in {[S EXCEPT !.ver = S.ver \cup {g}, !.pd = NoPd, !.aheadN = IF d.ahead THEN 1 ELSE S.aheadN]} :
+          \E T1 \in {IF ~T0.rel /\ g = Head0 THEN [T0 EXCEPT !.hd = g] ELSE Readable(T0, g)} :
+          \/ S' = [T1 EXCEPT !.lpa[d.p] = 0,
+                             !.tasks = IF T1.striped THEN <<<<"top", d.p>>, <<"chk">>>> ELSE <<<<"chk">>>>]
           \/ StoreFail /\ S' = Finish([S EXCEPT !.pd = NoPd], "Store")
 
 (* ---- the timers of the machine ---- *)
 Fire(p) == \* a retry is due
     /\ External /\ S.retry[p] /\ S.inP[p]
-    /\ LET T == [S EXCEPT !.retry[p] = FALSE]
-       IN S' \in IF NoOwnStream(T, p) \/ ~T.conn[p] THEN ReqOut(T, p, TRUE, {}) ELSE {T}
+    /\ \E T \in {[S EXCEPT !.retry[p] = FALSE]} :
+          S' \in IF NoOwnStream(T, p) \/ ~T.conn[p] THEN ReqOut(T, p, TRUE, {}) ELSE {T}
 
 TwFire ==
     /\ External /\ S.striped /\ S.tw
@@ -456,13 +475,23 @@ HonestSteps(p) ==
 
 (* Micro-steps of a call (Task, Write, Commit, Drain) are enabled until taken, so weak fairness. The external
    events of the host (a timer that is due, a frame of an answering provider, a provider that comes back) are
-   enabled only between calls; they are strongly fair: an event that is possible again and again is processed. *)
+   enabled only between calls; they are strongly fair: an event that is possible again and again is processed.
+   Strong fairness of an action that no reachable state enables is TRUE, and TLC's liveness check grows with each
+   one, so those are left out by the constants: TwFire needs striped (set only with more than one listed provider),
+   StallRedial needs SW > 0, Release needs a running fetch (StartBegin finishes at once when nothing is wanted),
+   DeadlineFire needs HasDl, Fire(p) and HonestSteps(p) need inP[p] (set only for a listed provider), and Back(p) of
+   an answering provider needs it down, which Down does only with a fault to spend (fb starts at Faults) *)
 Fairness ==
     /\ WF_S(Task) /\ WF_S(Write) /\ WF_S(Commit) /\ WF_S(Start)
     /\ WF_S(\E p \in Provs, s \in Slots : Drain(p, s))
-    /\ SF_S(Tick) /\ SF_S(TwFire) /\ SF_S(StallRedial) /\ SF_S(Release) /\ SF_S(DeadlineFire)
-    /\ \A p \in Provs : SF_S(Fire(p))
-    /\ \A p \in Fair : SF_S(HonestSteps(p)) /\ SF_S(Back(p))
+    /\ SF_S(Tick)
+    /\ \A x \in (IF Cardinality(Listed) > 1 THEN {0} ELSE {}) : SF_S(TwFire)
+    /\ \A x \in (IF SW > 0 THEN {0} ELSE {}) : SF_S(StallRedial)
+    /\ \A x \in (IF Want # {} THEN {0} ELSE {}) : SF_S(Release)
+    /\ \A x \in (IF HasDl THEN {0} ELSE {}) : SF_S(DeadlineFire)
+    /\ \A p \in Provs \cap Listed : SF_S(Fire(p))
+    /\ \A p \in Fair \cap Listed : SF_S(HonestSteps(p))
+    /\ \A p \in (IF Faults > 0 THEN Fair ELSE {}) : SF_S(Back(p))
 
 Spec == Init /\ [][Next]_S /\ Fairness
 SafeSpec == Init /\ [][Next]_S
