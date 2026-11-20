@@ -522,3 +522,41 @@ fn a_replayed_packet_does_not_make_a_dead_parent_carry_a_dial() {
         );
     });
 }
+
+/// Seven dials probe one quiet session and ride it on a 1 MiB stack: the resolution of the probes nests at most
+/// twice, whatever their number. Measured unoptimised (`just unoptimised`, where the frames are largest): one probe
+/// needs under 1 MiB, seven nested probes abort at 1 MiB and still fit 2 MiB, so 1 MiB is the stack that tells them
+/// apart.
+#[test]
+fn seven_probes_of_one_session_ride_it_on_a_one_mebibyte_stack() {
+    std::thread::Builder::new()
+        .stack_size(1 << 20)
+        .spawn(|| {
+            let (mut net, a, b) = silent_parent();
+            let children: Vec<SessionId> = (0..7)
+                .map(|_| {
+                    let (child, rep) = dial(&mut net, a, b, ALPN_B);
+                    assert!(!rep.events.any(is_connected), "a dial did not probe");
+                    child
+                })
+                .collect();
+            let connected = |n: &mut CoreNet| {
+                children
+                    .iter()
+                    .all(|c| n.nodes[a].saw(|e| matches!(e, Event::Connected { session, .. } if session == c)))
+            };
+            assert!(
+                net.run(net.now + 3 * SEC_NS, connected),
+                "the probes did not all connect"
+            );
+            for c in &children {
+                let Answer::Stats(st) = net.nodes[a].ep.query(Query::Stats(*c)) else {
+                    panic!("a ridden probe has no session");
+                };
+                assert!(st.sub, "a probe made a root instead of riding the session");
+            }
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}

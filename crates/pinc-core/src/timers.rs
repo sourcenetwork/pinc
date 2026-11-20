@@ -157,10 +157,7 @@ ep_impl! {
         if self.slots.get(i).is_some_and(|s| {
             s.m.in_use && s.m.probed_until > now && now.saturating_sub(s.m.last_rx) < crate::sub::PARENT_RX
         }) {
-            loop {
-                let Some(w) = self.probes_of(i).next() else { break };
-                self.resolve_probe(w, now);
-            }
+            self.ride_probes(i, now);
         }
         let Some(slot) = self.slots.get_mut(i) else { return };
         if !slot.m.in_use {
@@ -385,9 +382,13 @@ ep_impl! {
         }
         // A quiet-parent probe holds no connection: at its end it rides the probed session or makes its own
         // handshake (QUIET_PROBE).
-        if self.slots.get(i).is_some_and(|s| s.m.probing) {
+        if let Some((pidx, pgen)) = self.slots.get(i).filter(|s| s.m.probing).map(|s| (s.m.probe_parent as usize, s.m.probe_of_gen)) {
             if now >= self.slots.get(i).map_or(0, |s| s.m.probe_until) {
                 self.resolve_probe(i, now);
+                // A mark of 0 means a nested `ride_probes` already resolved every probe of the parent.
+                if self.slots.get(pidx).is_some_and(|s| s.m.in_use && s.m.generation == pgen && s.m.probed_until != 0) {
+                    self.recompute_probed(pidx, now);
+                }
             }
             return;
         }

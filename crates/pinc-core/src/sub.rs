@@ -256,10 +256,25 @@ ep_impl! {
         Ok(self.session_id(i))
     }
 
+    /// A packet came back on session `parent` while dials probe it: every probe resolves now (a ride, or a lapse
+    /// when it cannot ride). The probed mark is taken first: the settle each ride makes of its parent then does
+    /// not resolve the rest inside itself, so the frames of `open_sub_over` nest at most twice whatever the number
+    /// of probes. The loop is bounded by [`MAX_WAITERS`], which [`find_quiet_parent`] admits; a probe left past it
+    /// (unreachable) lapses on its own timer.
+    pub(crate) fn ride_probes(&mut self, parent: usize, now: u64) {
+        if let Some(s) = self.slots.get_mut(parent) {
+            s.m.probed_until = 0;
+        }
+        for _ in 0..MAX_WAITERS {
+            let Some(w) = self.probes_of(parent).next() else { break };
+            self.resolve_probe(w, now);
+        }
+    }
+
     /// The probe of slot `i` reached its end: ride the parent when one qualifies (the dial's sub-session is built
     /// here from the memory the probe stashed, and the id the application holds is the id that connects), else
     /// lapse into the dial's own handshake on the addresses the dial gave and close the probed session as dead
-    /// when nothing was in flight on it.
+    /// when nothing was in flight on it. The caller recomputes the probed mark of the parent afterwards.
     // Out of line, as `free_slot`: a whole connection moves here.
     #[inline(never)]
     pub(crate) fn resolve_probe(&mut self, i: usize, now: u64) {
@@ -286,9 +301,6 @@ ep_impl! {
                 && self.slots.get(i).is_some_and(|s| !s.m.in_use)
             {
                 self.fail_probe(i, session, now);
-            }
-            if same {
-                self.recompute_probed(probed, now);
             }
             return;
         }
@@ -318,9 +330,6 @@ ep_impl! {
             let mut env = env!(self, now);
             conn.close(&mut env, &mut lent!(self), code::NO_ERROR);
             self.settle(probed, now);
-        }
-        if same {
-            self.recompute_probed(probed, now);
         }
         // The addresses the lapse dials: the session's own first, then the dial's, none twice.
         let mut list = [SocketAddr::from(([0, 0, 0, 0], 0)); NP];
@@ -403,7 +412,7 @@ ep_impl! {
 
     /// Mark the probed session of a new probe so its next ping is due at once, and recompute the mark when the
     /// probes of `parent` end: with none left, the session's keepalive returns to its own schedule.
-    fn recompute_probed(&mut self, parent: usize, now: u64) {
+    pub(crate) fn recompute_probed(&mut self, parent: usize, now: u64) {
         let until = self.probes_of(parent).filter_map(|w| self.slots.get(w).map(|s| s.m.probe_until)).max();
         if let Some(s) = self.slots.get_mut(parent).filter(|s| s.m.in_use) {
             s.m.probed_until = until.unwrap_or(0);
