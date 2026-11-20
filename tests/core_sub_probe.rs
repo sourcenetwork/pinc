@@ -610,3 +610,55 @@ fn a_probe_of_a_pulse_session_that_lapses_leaves_the_session_up() {
         assert!(r.is_ok(), "the pulse session does not take a stream: {:?}", r.err());
     });
 }
+
+/// A dial probing its quiet parent answers `Stats` as a dial that has not started its handshake (the connectivity
+/// client reads `None` as "the session is gone" and drops it), and keeps the `FlightPaths`, `FirstResend` and
+/// `HoldFlight` it is sent: the lapse's handshake flies to the address of the flight.
+#[test]
+fn a_probing_dial_answers_stats_and_keeps_the_flight_for_its_lapse() {
+    big_stack(|| {
+        let (mut net, a, b) = silent_parent();
+        let addr_b = net.nodes[b].addr;
+        net.loss = Some(Box::new(move |_, to, _| to == addr_b));
+        let (child, _) = dial(&mut net, a, b, ALPN_B);
+        let Answer::Stats(st) = net.nodes[a].ep.query(Query::Stats(child)) else {
+            panic!("a probing dial answers no stats");
+        };
+        assert!(
+            !st.established && st.dialer,
+            "a probing dial is a dial that has not connected"
+        );
+        let x: SocketAddr = ([192, 0, 2, 77], 4433).into();
+        let now = net.now;
+        let flight = [
+            Command::FlightPaths {
+                session: child,
+                addrs: &[x],
+                skip_primary: false,
+            },
+            Command::FirstResend {
+                session: child,
+                delay: 0,
+            },
+            Command::HoldFlight {
+                session: child,
+                hold: false,
+            },
+        ];
+        for cmd in flight {
+            let r = net.nodes[a].cmd(now, cmd);
+            assert!(r.is_ok(), "a flight command on a probing dial failed: {:?}", r.err());
+        }
+        let addr_a = net.nodes[a].addr;
+        let marker = net.captured.len();
+        let to_x = |n: &mut CoreNet| {
+            n.captured[marker..]
+                .iter()
+                .any(|(f, t, d)| *f == addr_a && *t == x && d[0] & 0x80 != 0)
+        };
+        assert!(
+            net.run(now + 5 * SEC_NS, to_x),
+            "the lapse never flew to the address of the flight"
+        );
+    });
+}

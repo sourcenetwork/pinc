@@ -301,9 +301,17 @@ pub(crate) struct Meta<const NP: usize> {
     /// Whether the probed session had nothing in flight when the probe started: only then is it closed as dead
     /// when the probe lapses.
     pub(crate) probe_quiet: bool,
-    /// The addresses the dial that probes gave: the lapse makes the dial's own handshake to these when the
-    /// probed session has none left to read.
+    /// The addresses the dial that probes gave: `[0]` the caller's first routable address, `[1..]` its other routable
+    /// ones, replaced by the latest `FlightPaths` (`probe_fanout`). The lapse makes the dial's own handshake to these.
     pub(crate) dial_addrs: [Option<core::net::SocketAddr>; NP],
+    /// `dial_addrs[1..]` holds a `FlightPaths` list, applied as the flight's fan-out when the dial gets its connection.
+    pub(crate) probe_fanout: bool,
+    /// The latest `FlightPaths` of a probing dial left the dial's first address out of the flight.
+    pub(crate) probe_skip_primary: bool,
+    /// The latest `FirstResend` delay (ns) of a probing dial, applied from the moment its connection exists.
+    pub(crate) probe_resend: Option<u64>,
+    /// The latest `HoldFlight` of a probing dial.
+    pub(crate) probe_hold: bool,
     /// On the probed session: the latest end of a probe waiting for its answer (0 for none). While it stands the
     /// session's next ping is due at once, so the probe learns whether the peer lives.
     pub(crate) probed_until: u64,
@@ -379,6 +387,10 @@ impl<const NP: usize> Meta<NP> {
         probe_until: 0,
         probe_quiet: false,
         dial_addrs: [None; NP],
+        probe_fanout: false,
+        probe_skip_primary: false,
+        probe_resend: None,
+        probe_hold: false,
         probed_until: 0,
         probed_ping_for: 0,
     };

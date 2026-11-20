@@ -39,6 +39,7 @@ use pinc_transport::conn::{Connection, PathId, PathInfo, SubOpen, SubWait, code}
 use pinc_transport::frame::ext;
 
 use crate::api::{CommandError, ConnectFailure, Event, SessionId};
+use crate::commands::relay_first;
 use crate::endpoint::{CID_LEN, env, ep_impl, lent};
 use crate::keepalive::Role;
 use crate::slot::{NIL, State};
@@ -296,10 +297,10 @@ ep_impl! {
             trace!(self, now, Sub { step: 4, parent: parent as u64, child: i as u64 });
             // A failed construction retired the slot with its memory; an open that could not be queued is undone
             // by the redial of `open_sub_over`, which reports the dial.
-            if self.open_sub_over(parent, i, mem, parts, peer, alpn, role, now).is_err()
-                && self.slots.get(i).is_some_and(|s| !s.m.in_use)
-            {
-                self.fail_probe(i, session, now);
+            match self.open_sub_over(parent, i, mem, parts, peer, alpn, role, now) {
+                Ok(_) => self.apply_flight(i, now),
+                Err(_) if self.slots.get(i).is_some_and(|s| !s.m.in_use) => self.fail_probe(i, session, now),
+                Err(_) => {}
             }
             return;
         }
@@ -355,8 +356,56 @@ ep_impl! {
             self.fail_probe(i, session, now);
             return;
         };
-        if self.dial_fresh(i, mem, now, peer, alpn, &prekey, list, role, first, local).is_err() {
-            self.fail_probe(i, session, now);
+        match self.dial_fresh(i, mem, now, peer, alpn, &prekey, list, role, first, local) {
+            Ok(()) => self.apply_flight(i, now),
+            Err(_) => self.fail_probe(i, session, now),
+        }
+    }
+
+    /// Apply to the connection slot `i` just got the flight commands its dial was sent while it probed, as the
+    /// commands would have hit a live id: the latest `FlightPaths`, the `FirstResend` delay (relative to now, the
+    /// moment the connection exists) and a `HoldFlight`. A refusal is ignored, as the connectivity client ignores
+    /// the refusal of the same commands.
+    fn apply_flight(&mut self, i: usize, now: u64) {
+        let Some(s) = self.slots.get_mut(i) else { return };
+        let (fanout, skip) = (core::mem::take(&mut s.m.probe_fanout), core::mem::take(&mut s.m.probe_skip_primary));
+        let (resend, hold) = (s.m.probe_resend.take(), core::mem::take(&mut s.m.probe_hold));
+        let mut buf = [SocketAddr::from(([0, 0, 0, 0], 0)); NP];
+        let mut n = 0;
+        if fanout {
+            for (d, a) in buf.iter_mut().zip(s.m.dial_addrs.iter().skip(1).flatten()) {
+                *d = *a;
+                n += 1;
+            }
+            let _ = self.flight_paths(i, buf.get(..n).unwrap_or_default(), skip, now);
+        }
+        if let Some(d) = resend {
+            let _ = self.first_resend(i, d, now);
+        }
+        if hold {
+            let _ = self.hold_flight(i, true, now);
+        }
+    }
+
+    /// The slot of `id` while its dial probes a quiet parent (`QUIET_PROBE`).
+    pub(crate) fn probe_slot(&self, id: SessionId) -> Option<usize> {
+        self.slot_of_any(id).filter(|i| self.slots.get(*i).is_some_and(|s| s.m.probing))
+    }
+
+    /// Keep the latest `FlightPaths` of probing dial `i`: its routable addresses, relay first, replace
+    /// `dial_addrs[1..]` (the connectivity client gives `Connect` one address, and names the full current set at
+    /// each `FlightPaths`, so the latest is exact), to be applied when the dial gets its connection.
+    pub(crate) fn keep_flight_paths(&mut self, i: usize, addrs: &[SocketAddr], skip_primary: bool) {
+        let mut kept: [Option<SocketAddr>; NP] = [None; NP];
+        for (d, a) in kept.iter_mut().skip(1).zip(relay_first(addrs).filter(|a| self.route_for(a).is_some())) {
+            *d = Some(*a);
+        }
+        if let Some(s) = self.slots.get_mut(i) {
+            for (d, k) in s.m.dial_addrs.iter_mut().zip(kept).skip(1) {
+                *d = k;
+            }
+            s.m.probe_fanout = true;
+            s.m.probe_skip_primary = skip_primary;
         }
     }
 

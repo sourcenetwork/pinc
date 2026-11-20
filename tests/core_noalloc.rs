@@ -170,6 +170,37 @@ fn a_quiet_parent_probe_rides_lapses_and_ends_without_allocating() {
         net.loss = Some(Box::new(move |f, _, _| f == to));
         meter_endpoint_calls(true);
         let lapsed = probe(&mut net);
+        // The connectivity client's flight commands on the probing id are kept for the lapse.
+        let now = net.now;
+        let x: std::net::SocketAddr = ([192, 0, 2, 77], 4433).into();
+        net.nodes[0]
+            .cmd(
+                now,
+                Command::FlightPaths {
+                    session: lapsed,
+                    addrs: &[x],
+                    skip_primary: false,
+                },
+            )
+            .unwrap();
+        net.nodes[0]
+            .cmd(
+                now,
+                Command::FirstResend {
+                    session: lapsed,
+                    delay: 0,
+                },
+            )
+            .unwrap();
+        net.nodes[0]
+            .cmd(
+                now,
+                Command::HoldFlight {
+                    session: lapsed,
+                    hold: false,
+                },
+            )
+            .unwrap();
         net.run_for(3 * SEC_NS);
         meter_endpoint_calls(false);
         net.loss = None;
