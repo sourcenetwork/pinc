@@ -31,6 +31,8 @@ Places(ss) == DOMAIN ss
 Tracked(ss) == {ss[k][1] : k \in {j \in Places(ss) : On(ss[j])}}
 Recount(ss) == Cardinality({k \in Places(ss) : On(ss[k]) /\ ss[k][2]})
 
+\* An empty slot is guarded with => rather than \/: in a step TLC tries every disjunct, and the flag of an empty slot
+\* cannot be read.
 Read(v) == /\ v.held = Recount(v.slots)
            /\ v.has = (v.held > 0)
 
@@ -44,12 +46,11 @@ SetEv == LET ss == Ev0.v.slots
             /\ slots' = ss
 OtherEv == LET ss == Ev0.v.slots
            IN /\ Ev0.op \in {"init", "add", "remove", "drive"}
-              /\ (Ev0.op = "init" => \A k \in Places(ss) : ~On(ss[k]) \/ ~ss[k][2])
+              /\ (Ev0.op = "init" => \A k \in Places(ss) : On(ss[k]) => ~ss[k][2])
               /\ (Ev0.op # "init" => /\ DOMAIN ss = Places(slots)
                                      /\ \A k \in Places(ss) :
                                           \/ ss[k] = slots[k]
-                                          \/ ~On(ss[k])
-                                          \/ (ss[k][2] = FALSE /\ ss[k][1] \notin Tracked(slots)))
+                                          \/ (On(ss[k]) => (ss[k][2] = FALSE /\ ss[k][1] \notin Tracked(slots))))
               /\ slots' = ss
 
 Init == i = 1 /\ slots = <<>>
