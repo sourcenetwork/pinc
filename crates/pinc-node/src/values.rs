@@ -105,30 +105,13 @@ pub(crate) struct VSess<'a, E: Ep, St: Store> {
     owner: Owner,
 }
 
-/// Abandon a stream of the endpoint in both directions: reset it, ask the peer to stop sending on it and forget it.
-/// The one way a stream is refused or given up, whether the layer holds it or not.
-fn abandon_real<E: Ep, St: Store>(io: &mut Io<E, St>, session: SessionId, stream: StreamId, code: u64) {
-    // A refused reset leaves the stream to the peer's reset or the session's end.
-    let _ = io.cmd(Command::Reset {
-        session,
-        stream,
-        error: code,
-    });
-    let _ = io.cmd(Command::StopSending {
-        session,
-        stream,
-        error: code,
-    });
-    io.drop_strm(session, stream);
-}
-
 impl<E: Ep, St: Store> VSess<'_, E, St> {
     /// Abandon a stream in both directions and forget it.
     fn abandon(&mut self, lid: u64, code: u64) {
         let Some(s) = self.net.drop_stream(lid) else {
             return;
         };
-        abandon_real(self.io, s.session(), s.stream(), code);
+        self.io.abandon_with(s.session(), s.stream(), code);
     }
 }
 
@@ -558,7 +541,7 @@ where
             .and_then(|p| v.net.add(session, stream, Owner::Serve, p).map(|lid| (lid, p)))
         else {
             let code = pinc_values::knobs::code::BUSY;
-            abandon_real(&mut self.io, session, stream, code);
+            self.io.abandon_with(session, stream, code);
             // The stream was never added, so the trace carries the transport's stream id, not a layer number.
             if let Some(v) = self.vals.as_deref_mut() {
                 v.sink.fetch = 0;

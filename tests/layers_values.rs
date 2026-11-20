@@ -753,3 +753,55 @@ fn a_burst_for_a_relay_carrier_is_held_and_sent_not_lost() {
         assert_eq!((t.ptos, t.packets_lost), (0, 0), "nothing of the first burst was lost");
     });
 }
+
+/// A provider refuses every request for a value it does not provide, and the fetch asks it again every 500 ms on the
+/// same session for 20 s. Each refused request gives the requester its place in the provider's stream limit back, so
+/// a second fetch on that session, of a value the provider holds, opens its streams and completes at once.
+#[test]
+fn requests_a_provider_refuses_leave_its_session_able_to_open_streams() {
+    big(|| {
+        let seed = 291u64;
+        let mut w = LWorld::build_with(seed, 2, 3, 8_000_000, false, values_on);
+        let m = w.members.clone();
+        let held = data(seed, 64 << 10);
+        let root = w.provide(m[1], held.clone());
+        // Member 2 provides this one; member 1 is asked for it and refuses.
+        let absent = data(seed + 1, 64 << 10);
+        let other = w.provide(m[2], absent.clone());
+        for (at, r, len, deadline) in [
+            (secs(30), other, absent.len(), secs(55)),
+            (secs(50), root, held.len(), secs(53)),
+        ] {
+            w.sim.command(
+                at,
+                m[0],
+                NCmd::ValuesFetch {
+                    root: r,
+                    length: len as u64,
+                    ranges: vec![],
+                    providers: ids(&w, &m[1..2]),
+                    deadline: Some(deadline),
+                },
+            );
+        }
+        w.run(secs(56));
+        let done = w
+            .node_events(m[0])
+            .iter()
+            .any(|(t, e)| matches!(e, NodeEvent::ValueComplete { fetch: 2 }) && *t < secs(53));
+        assert!(
+            done,
+            "the fetch of the held value did not complete after 20 s of refused requests"
+        );
+        assert_eq!(
+            w.apps(m[0]).values.fetched(&root, held.len() as u64),
+            Some(held),
+            "the bytes in the store are the value"
+        );
+        assert_eq!(
+            fails(&w, m[0]),
+            1,
+            "the fetch of the value member 1 does not provide ends at its deadline"
+        );
+    });
+}

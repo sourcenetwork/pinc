@@ -97,6 +97,7 @@ where
     /// Handle an endpoint event of a layer's session. Lifecycle events also reach the application; nothing else of a
     /// layer's session does.
     pub(crate) fn on_layer_event(&mut self, now: Nanos, layer: Layer, ev: Event) {
+        let reset = matches!(ev, Event::StreamReset { .. });
         match ev {
             Event::Connected { session, node, .. } => {
                 self.io.learn_alg(&node);
@@ -133,6 +134,10 @@ where
                     Layer::Values => self.values_stream_gone(now, session, stream, error),
                     Layer::Sets => self.sets_stream_gone(now, session, stream, error),
                     Layer::Dtn => self.dtn_stream_gone(session, stream),
+                }
+                // Reading the reset end lets the endpoint free the stream: the layer has nothing more to read on it.
+                if reset {
+                    let _ = self.io.consume(session, stream, 0);
                 }
             }
             // A layer opens its streams on its own ticks and has no use for datagrams.
