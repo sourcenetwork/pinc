@@ -578,6 +578,13 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `Tickets_server` | MaxClock 3 -> 2 (the store fills; the invariants issue into the full store), draw streams of 0..4 -> 0..3 ids (Streams <- StreamsDefQuick), client-side Peers {p1, p2, p3} -> {p1}, Alpns {a1, a2} -> {a1}, Ids {1, 2, 3} -> {1, 2} (a draw still collides with a stored id and a retry still finds a fresh one), ExpVals {1, 2} -> {1} |
 | `Tickets_zero` | MaxClock 4 -> 3 |
 | `Timers` | clock TMAX 5 -> 4, calls KMAX 4 -> 2, component deadlines CD {0, 4} -> {0} |
+| `Timers_carrier` | TMAX 5 -> 4 |
+| `Timers_close` | TMAX 5 -> 4 |
+| `Timers_nofresh` | TMAX 5 -> 4 |
+| `Timers_noheard` | TMAX 5 -> 4 |
+| `Timers_norelay` | TMAX 5 -> 4 |
+| `Timers_nounconf` | TMAX 5 -> 4 |
+| `Timers_nowake` | TMAX 5 -> 4 |
 | `Transcript` | MaxFields 4 -> 3 |
 | `ValuesPlan` | MaxLen 11 -> 7 |
 | `ValuesPlanProofs` | MaxF 48 -> 4, LNs 6 -> 5 (4097 groups dropped), PfTos {0, 8G, l, l+5G} -> {0, 8G, l}, Offs {0, l/2, l, l+3G} -> {0, l/2, l+3G}, Wins {0, 64, 400} -> {0, 400} |
