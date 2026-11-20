@@ -302,6 +302,10 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `FacadeTurn_wrap` | bounded by constraint: the owner starts at most once (FacadeTurn_wrapQuickBound), STARTS = 6 kept for the other future |
 | `FacadeTurn_wrapfew` | STARTS 4 -> 2 |
 | `FacadeTurn_wrapkeep` | GENS 3 -> 2 |
+| `FinishResend` | FIRES 6 -> 5 |
+| `FinishResend_fixed` | FIRES 6 -> 5 |
+| `FinishResend_nocap` | FIRES 6 -> 5 |
+| `FinishResend_pto` | FIRES 6 -> 5 |
 | `Frame` | the frames: Frames (545) -> FramesQuick (177), the 130-byte payload in 7 frames instead of 81 |
 | `FramePack` | Normal -> NormalQuick (41472 -> 544 normal cases: every source together, every switch apart), Other -> OtherQuick (rooms {24, 40, 64} -> {24, 64}, ACKs 3 -> 2, streams 4 -> 3) |
 | `FramePack_modes` | Normal -> NormalQuick (41472 -> 544 normal cases: every source together, every switch apart), Other -> OtherQuick (rooms {24, 40, 64} -> {24, 64}, ACKs 3 -> 2, streams 4 -> 3) |
