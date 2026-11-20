@@ -142,6 +142,12 @@ impl<H: Hosted> Shared<H> {
         carried
     }
 
+    /// Whether the role restored the store and serves, for the `trace_role_serving` probe.
+    #[cfg(feature = "trace")]
+    pub(crate) fn role_serving(&self) -> bool {
+        self.role_ready.get()
+    }
+
     /// The next datagram the relay itself sends: its remote, its length in `buf` and its segment size.
     pub(super) fn role_outgoing(&self, buf: &mut [u8]) -> Option<(SocketAddr, usize, usize)> {
         if !self.role_ready.get() {

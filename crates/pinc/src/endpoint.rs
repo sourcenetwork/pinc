@@ -834,6 +834,14 @@ impl<H: Hosted, D: Discovery> Endpoint<H, D> {
         self.0.shared.now()
     }
 
+    /// Whether the relay role has restored the store and serves, as a probe (with the `trace` feature, which the tests
+    /// enable).
+    #[cfg(feature = "trace")]
+    #[doc(hidden)]
+    pub fn trace_role_serving(&self) -> bool {
+        self.0.shared.role_serving()
+    }
+
     /// The platform instant of the endpoint time `at`, as a probe (with the `trace` feature, which the tests enable).
     #[cfg(feature = "trace")]
     #[doc(hidden)]

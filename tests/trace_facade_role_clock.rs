@@ -4,8 +4,9 @@
 //! A case builds an endpoint with the relay role on a fake platform whose wall clock is `w` and whose monotonic clock the
 //! test moves, over a store that always hands back one record that does not verify and some held packets; the endpoint is
 //! run, the restore is waited for (the store's `remove` is called), the run is dropped, the clock moves, and it is run
-//! again. The packets that survive the restore are the ones that are young by the relay's own clock. Nothing is written
-//! when `PINC_TRACE_DIR` is unset.
+//! again. The second run loads and restores nothing (the role holds what the store kept), so it is waited for until the
+//! role serves, and the store has been told to forget the record once. The packets that survive the restore are the
+//! ones that are young by the relay's own clock. Nothing is written when `PINC_TRACE_DIR` is unset.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -67,6 +68,7 @@ impl Platform for Fake {
 struct Inner {
     kept: Kept,
     removes: Cell<u32>,
+    loads: Cell<u32>,
 }
 
 /// A store that hands back the same `Kept` every time and counts the records it is told to forget.
@@ -75,6 +77,7 @@ struct RecStore(Rc<Inner>);
 
 impl Store for RecStore {
     async fn load(&self) -> pinc::Result<Kept> {
+        self.0.loads.set(self.0.loads.get() + 1);
         Ok(self.0.kept.clone())
     }
 
@@ -190,6 +193,17 @@ async fn wait_removes(store: &RecStore, n: u32) {
     }
 }
 
+/// Wait, within 10 s of real time, until the endpoint's relay role serves.
+async fn wait_serving(ep: &Endpoint<impl Hosted>) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut pause = 1;
+    while !ep.trace_role_serving() {
+        assert!(Instant::now() < deadline, "the role did not serve within the deadline");
+        nuclei::time::sleep(Duration::from_millis(pause)).await;
+        pause = (pause * 2).min(64);
+    }
+}
+
 /// One case: a wall clock `w` (ms) and the step (ms) the clock moves between the two runs.
 async fn case(out: &mut String, w: u64, step: u64) {
     let fake = Fake {
@@ -199,6 +213,7 @@ async fn case(out: &mut String, w: u64, step: u64) {
     let store = RecStore(Rc::new(Inner {
         kept: kept(w),
         removes: Cell::new(0),
+        loads: Cell::new(0),
     }));
     let kept_list: Vec<String> = arrivals(w).iter().map(u64::to_string).collect();
     let built = build(fake.clone(), store.clone()).await;
@@ -229,20 +244,28 @@ async fn case(out: &mut String, w: u64, step: u64) {
     let task = spawn(&ep);
     wait_removes(&store, 1).await;
     let first = stored(&ep);
-    let _ = writeln!(out, "{{\"op\":\"run\",\"el\":0,\"stored\":{first}}}");
-    if w >= 10_000 {
-        let want = arrivals(w).iter().filter(|a| w.saturating_sub(**a) < 1000).count() as u64;
-        assert_eq!(
-            first, want,
-            "the packets restored are not the young ones by the wall clock"
-        );
-    }
+    let _ = writeln!(
+        out,
+        "{{\"op\":\"run\",\"el\":0,\"stored\":{first},\"loads\":{}}}",
+        store.0.loads.get()
+    );
+    let want = arrivals(w).iter().filter(|a| w.saturating_sub(**a) < 1000).count() as u64;
+    assert_eq!(
+        first, want,
+        "the packets restored are not the young ones by the wall clock"
+    );
     drop(task);
     let _ = writeln!(out, "{{\"op\":\"end\"}}");
     fake.now.set(fake.now.get() + step * 1_000_000);
     let task = spawn(&ep);
-    wait_removes(&store, 2).await;
-    let _ = writeln!(out, "{{\"op\":\"run\",\"el\":{step},\"stored\":{}}}", stored(&ep));
+    wait_serving(&ep).await;
+    assert_eq!(store.0.removes.get(), 1, "a second run restored the store again");
+    let _ = writeln!(
+        out,
+        "{{\"op\":\"run\",\"el\":{step},\"stored\":{},\"loads\":{}}}",
+        stored(&ep),
+        store.0.loads.get()
+    );
     drop(task);
     let _ = writeln!(out, "{{\"op\":\"end\"}}");
 }
