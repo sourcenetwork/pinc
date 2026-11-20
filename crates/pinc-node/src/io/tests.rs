@@ -31,10 +31,22 @@ use crate::ep::Ep;
 use crate::event::NodeEvent;
 use crate::trace::{Body, NodeTrace};
 
+/// The first session id the stub gives a dial, and the first stream id it gives an open.
+pub(crate) const DIALED: u64 = 1 << 40;
+const OPENED: u64 = 1 << 32;
+
 /// An endpoint that accepts no stream bytes and counts what it was asked.
 #[derive(Default)]
-struct Stub {
-    closes: usize,
+pub(crate) struct Stub {
+    pub(crate) closes: usize,
+    /// The nodes dialed, with the protocol id of each.
+    pub(crate) dials: Vec<(pinc_crypto::NodeId, Vec<u8>)>,
+    pub(crate) opens: u64,
+    /// Streams reset and streams told to stop sending.
+    pub(crate) resets: usize,
+    pub(crate) stops: usize,
+    /// The next urgency setting is refused.
+    pub(crate) fail_urgency: bool,
 }
 
 impl Port for Stub {
@@ -46,6 +58,23 @@ impl Port for Stub {
                 self.closes += 1;
                 Value::None
             }
+            Command::Connect { node, alpn, .. } => {
+                self.dials.push((node, alpn.to_vec()));
+                Value::Session(SessionId(DIALED + self.dials.len() as u64 - 1))
+            }
+            Command::OpenStream { .. } => {
+                self.opens += 1;
+                Value::Stream(OPENED + self.opens)
+            }
+            Command::Reset { .. } => {
+                self.resets += 1;
+                Value::None
+            }
+            Command::StopSending { .. } => {
+                self.stops += 1;
+                Value::None
+            }
+            Command::SetUrgency { .. } if self.fail_urgency => return Err(CommandError::NoSession),
             _ => Value::None,
         };
         Ok(Reply {
@@ -310,4 +339,32 @@ fn a_relayed_probe_the_full_queue_cannot_take_is_refused_and_the_queue_stays_bou
     assert_eq!(io.probes.len(), taken);
     assert!(!host(&mut io).send(&PEER, Route::Via([9; 32]), b"probe"));
     assert_eq!(io.probes.len(), taken, "a refused probe is not queued");
+}
+
+#[test]
+fn a_stream_the_full_table_cannot_record_is_reset_and_not_left_open() {
+    let mut io = io();
+    for i in 0..crate::config::TABLE_MAX as u64 {
+        io.register_stream(SESSION, i);
+    }
+    assert_eq!(io.try_open_stream(SESSION), Err(false));
+    assert_eq!(
+        (io.ep.opens, io.ep.resets, io.ep.stops),
+        (1, 1, 1),
+        "the opened stream is ended"
+    );
+    assert_eq!(io.strm.len(), crate::config::TABLE_MAX);
+}
+
+#[test]
+fn a_stream_whose_urgency_the_endpoint_refuses_is_reset_and_not_left_open() {
+    let mut io = io();
+    io.ep.fail_urgency = true;
+    assert_eq!(io.try_open_stream_at(SESSION, 3), Err(false));
+    assert_eq!(
+        (io.ep.opens, io.ep.resets, io.ep.stops),
+        (1, 1, 1),
+        "the opened stream is ended"
+    );
+    assert!(io.strm.is_empty());
 }

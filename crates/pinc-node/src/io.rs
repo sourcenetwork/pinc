@@ -370,7 +370,12 @@ impl<E: Ep, St: Store> Io<E, St> {
         match self.cmd(Command::OpenStream { session, bidi: true }) {
             Ok(Value::Stream(s)) => {
                 self.register_stream(session, s);
-                self.strm.contains_key(&(session, s)).then_some(s).ok_or(false)
+                if self.strm.contains_key(&(session, s)) {
+                    return Ok(s);
+                }
+                // The table is full: a stream the node does not record would stay open and spend the peer's credit.
+                self.abandon(session, s);
+                Err(false)
             }
             Err(CommandError::Stream(StreamError::Exhausted | StreamError::StreamLimit)) => Err(true),
             _ => Err(false),
@@ -391,7 +396,7 @@ impl<E: Ep, St: Store> Io<E, St> {
             urgency,
         };
         if self.cmd(set).is_err() {
-            self.drop_strm(session, s);
+            self.abandon(session, s);
             return Err(false);
         }
         Ok(s)
@@ -589,6 +594,25 @@ impl<E: Ep, St: Store> Io<E, St> {
         self.queue.remove(peer);
     }
 
+    /// Give up a stream: reset both halves with code 1 and forget it.
+    pub(crate) fn abandon(&mut self, session: SessionId, stream: StreamId) {
+        for c in [
+            Command::Reset {
+                session,
+                stream,
+                error: 1,
+            },
+            Command::StopSending {
+                session,
+                stream,
+                error: 1,
+            },
+        ] {
+            let _ = self.cmd(c);
+        }
+        self.drop_strm(session, stream);
+    }
+
     /// Forget a stream and what it held.
     pub(crate) fn drop_strm(&mut self, session: SessionId, stream: StreamId) {
         self.strm.remove(&(session, stream));
@@ -751,4 +775,4 @@ impl<E: Ep, St: Store> Io<E, St> {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

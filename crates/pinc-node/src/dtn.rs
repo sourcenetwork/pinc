@@ -819,17 +819,7 @@ where
                 }
             }
             Some(Stop::Break) => {
-                let _ = self.io.cmd(Command::Reset {
-                    session,
-                    stream,
-                    error: 1,
-                });
-                let _ = self.io.cmd(Command::StopSending {
-                    session,
-                    stream,
-                    error: 1,
-                });
-                self.io.drop_strm(session, stream);
+                self.io.abandon(session, stream);
             }
             Some(Stop::Refuse(bundle, why)) => {
                 // A refused transfer may have brought symbols in: the partial keeps them across a restart too.
