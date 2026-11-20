@@ -58,7 +58,6 @@ pub(crate) struct Outcome {
     pub(crate) rekey_answer_lost: bool,
     /// A REKEY request was lost.
     pub(crate) rekey_request_lost: bool,
-    pub(crate) tickets_acked: bool,
     pub(crate) lost_packets: u32,
     pub(crate) acked_packets: u32,
     /// Acknowledged packets that count toward the loss average (every one but repair packets).
@@ -77,6 +76,9 @@ pub(crate) struct Ctl {
     pub(crate) ready: bool,
     pub(crate) tickets: Option<TicketBatch>,
     pub(crate) tickets_pending: bool,
+    /// Which batch `tickets` is: a frame carries it, so an answer about an older batch leaves a newer one alone.
+    // vertexia: a u32 generation; an answer 2^32 batches late would match, far past the recovery window.
+    tickets_gen: u32,
     pub(crate) ext: [Option<ExtSlot>; EXT_SLOTS],
     next_ext: u64,
 }
@@ -89,6 +91,7 @@ impl Ctl {
             ready: false,
             tickets: None,
             tickets_pending: false,
+            tickets_gen: 0,
             ext: [const { None }; EXT_SLOTS],
             next_ext: 1,
         }
@@ -143,7 +146,10 @@ impl Ctl {
             && put(&Frame::NewTickets(batch))
         {
             self.tickets_pending = false;
-            let _ = refs.push(FrameRef::Control { kind: K_TICKETS, id: 0 });
+            let _ = refs.push(FrameRef::Control {
+                kind: K_TICKETS,
+                id: u64::from(self.tickets_gen),
+            });
             return true;
         }
         false
@@ -163,22 +169,31 @@ impl Ctl {
         true
     }
 
-    /// Hold a new ticket batch to send.
+    /// Hold a new ticket batch to send; it replaces one not yet acknowledged.
     pub(crate) const fn hold_tickets(&mut self, batch: TicketBatch) {
         self.tickets = Some(batch);
         self.tickets_pending = true;
+        self.tickets_gen = self.tickets_gen.wrapping_add(1);
+    }
+
+    /// A packet carrying batch `id` was acknowledged: the batch is done unless a newer one replaced it.
+    pub(crate) fn tickets_acked(&mut self, id: u64) {
+        if id == u64::from(self.tickets_gen) {
+            self.tickets = None;
+            self.tickets_pending = false;
+        }
+    }
+
+    /// A packet carrying batch `id` was lost or not sent: send the batch again unless a newer one replaced it.
+    pub(crate) fn tickets_lost(&mut self, id: u64) {
+        if id == u64::from(self.tickets_gen) {
+            self.tickets_pending = self.tickets.is_some();
+        }
     }
 
     /// Owe the peer a READY.
     pub(crate) const fn owe_ready(&mut self) {
         self.ready = true;
-    }
-
-    /// The part of an event batch's outcome that touches the control state: the peer has the tickets.
-    pub(crate) const fn on_outcome(&mut self, out: &Outcome) {
-        if out.tickets_acked {
-            self.tickets_pending = false;
-        }
     }
 
     /// Empty extension slot `slot` and give its chunk back to `pool`.
@@ -257,7 +272,7 @@ pub(crate) fn apply<S: StreamSource, const N: usize, const C: usize>(
                     FrameRef::Stream { id, offset, len, fin } => {
                         streams.on_acked(pool, id, offset, u64::from(len), fin);
                     }
-                    FrameRef::Control { kind, id } => acked(kind, id, streams, pool, ctl, out),
+                    FrameRef::Control { kind, id } => acked(kind, id, streams, pool, ctl),
                 }
             }
         }
@@ -267,7 +282,7 @@ pub(crate) fn apply<S: StreamSource, const N: usize, const C: usize>(
                     FrameRef::Stream { id, offset, len, fin } => {
                         streams.on_late_acked(pool, id, offset, u64::from(len), fin);
                     }
-                    FrameRef::Control { kind, id } => acked(kind, id, streams, pool, ctl, out),
+                    FrameRef::Control { kind, id } => acked(kind, id, streams, pool, ctl),
                 }
             }
         }
@@ -302,7 +317,6 @@ fn acked<S: StreamSource, const N: usize, const C: usize>(
     streams: &mut Streams<S, N, C>,
     pool: &mut BufferPool<'_>,
     ctl: &mut Ctl,
-    out: &mut Outcome,
 ) {
     match kind {
         K_STREAM_CTL => {
@@ -315,11 +329,7 @@ fn acked<S: StreamSource, const N: usize, const C: usize>(
                 Ctl::free_ext(s, pool);
             }
         }
-        K_TICKETS => {
-            ctl.tickets = None;
-            ctl.tickets_pending = false;
-            out.tickets_acked = true;
-        }
+        K_TICKETS => ctl.tickets_acked(id),
         _ => {}
     }
 }
@@ -349,7 +359,7 @@ fn lost<S: StreamSource, const N: usize, const C: usize>(
                 out.rekey_request_lost = true;
             }
         }
-        K_TICKETS => ctl.tickets_pending = ctl.tickets.is_some(),
+        K_TICKETS => ctl.tickets_lost(id),
         K_READY => ctl.ready = true,
         _ => {}
     }
@@ -388,6 +398,8 @@ pub(super) mod trace {
         pub tk: u64,
         /// `tickets_pending`.
         pub tp: bool,
+        /// The id the frame reference of the batch held carries.
+        pub tg: u64,
         /// `pool.used_chunks()`.
         pub used: usize,
     }
@@ -511,14 +523,20 @@ pub(super) mod trace {
         }
 
         /// `Ctl::fill_tickets` with the real `put`, as `conn/send.rs` puts the batch in a packet: when
-        /// `tickets_pending` and a batch is held and fits, return the generation held; else `None`.
-        pub fn send_tickets(&mut self) -> Option<u64> {
+        /// `tickets_pending` and a batch is held and fits, return the id of the frame reference and the generation
+        /// held; else `None`.
+        pub fn send_tickets(&mut self) -> Option<(u64, u64)> {
             let mut refs = self.refs();
             let mut pos = 0;
             let packet = &mut self.packet;
-            self.ctl
-                .fill_tickets(&mut refs, |f| put(packet, &mut pos, f))
-                .then_some(self.generation)
+            if !self.ctl.fill_tickets(&mut refs, |f| put(packet, &mut pos, f)) {
+                return None;
+            }
+            let id = refs.iter().skip(self.refs_held).find_map(|r| match *r {
+                FrameRef::Control { id, .. } => Some(id),
+                FrameRef::Stream { .. } => None,
+            })?;
+            Some((id, self.generation))
         }
 
         /// As `conn/drive.rs`: `Ctl::owe_ready`.
@@ -534,9 +552,8 @@ pub(super) mod trace {
             self.ctl.fill_ready(&mut refs, |f| put(packet, &mut pos, f))
         }
 
-        /// `apply` of an `Event::Acked` with one `FrameRef::Control { kind, id }`, then the glue of `conn/recv.rs`
-        /// (`tickets_acked` clears `tickets_pending`); when `ctl.tickets` is then `None`, the generation kept becomes
-        /// 0. `kind` is `"sc"`, `"ext"`, `"tk"` or `"rd"`. Returns whether the stream layer was handed the frame: for
+        /// `apply` of an `Event::Acked` with one `FrameRef::Control { kind, id }`; when `ctl.tickets` is then
+        /// `None`, the generation kept becomes 0. `kind` is `"sc"`, `"ext"`, `"tk"` or `"rd"`. Returns whether the stream layer was handed the frame: for
         /// `"sc"`, whether `id` was in the table before the call; false for the others (and for any other kind, which
         /// changes nothing).
         pub fn ack(&mut self, kind: &str, id: u64) -> bool {
@@ -582,7 +599,6 @@ pub(super) mod trace {
                 &mut self.ctl,
                 &mut out,
             );
-            self.ctl.on_outcome(&out);
             if self.ctl.tickets.is_none() {
                 self.generation = 0;
             }
@@ -605,6 +621,7 @@ pub(super) mod trace {
                 ready: self.ctl.ready,
                 tk: if self.ctl.tickets.is_some() { self.generation } else { 0 },
                 tp: self.ctl.tickets_pending,
+                tg: u64::from(self.ctl.tickets_gen),
                 used: self.pool.used_chunks(),
             }
         }
@@ -656,5 +673,74 @@ mod tests {
         ctl.release_ext(&mut pool);
         assert_eq!(pool.used_chunks(), 0);
         assert!(ctl.ext.iter().all(Option::is_none));
+    }
+
+    /// One NEW_TICKETS packet's frame references, with the batch sent (as `conn/send.rs` puts it in a packet).
+    fn send_tickets(ctl: &mut Ctl) -> FrameRefs {
+        let mut refs = FrameRefs::new();
+        assert!(ctl.fill_tickets(&mut refs, |_| true));
+        refs
+    }
+
+    /// Report the packet of `refs` as acknowledged (`lost` false) or lost to every layer, as the recovery events do.
+    fn report(ctl: &mut Ctl, refs: &FrameRefs, lost: bool) {
+        use crate::stream::{Config, NoSource};
+        let mut pool = BufferPool::new_boxed(1);
+        let mut streams: Streams<NoSource, 4, 16> = Streams::new(&Config::new(false), &pool);
+        let mut out = Outcome::default();
+        let ev = if lost {
+            Event::Lost {
+                pn: 0,
+                size: 0,
+                frames: refs,
+                requeue: true,
+                mtu_probe: false,
+            }
+        } else {
+            Event::Acked {
+                pn: 0,
+                size: 0,
+                frames: refs,
+                mtu_probe: false,
+                repair: false,
+                path: 0,
+            }
+        };
+        apply(&ev, &mut streams, &mut pool, ctl, &mut out);
+    }
+
+    /// The acknowledgement or the loss of the packet that carried an older ticket batch leaves a newer batch held and
+    /// owed; only the packet of the newest batch finishes it or sends it again.
+    #[test]
+    fn a_newer_ticket_batch_survives_the_acknowledgement_of_an_older_one() {
+        let mut ctl = Ctl::new();
+        ctl.hold_tickets(TicketBatch::new());
+        let a = send_tickets(&mut ctl);
+        assert!(!ctl.tickets_pending);
+        ctl.hold_tickets(TicketBatch::new());
+        report(&mut ctl, &a, false);
+        assert!(
+            ctl.tickets.is_some() && ctl.tickets_pending,
+            "the acknowledgement of batch A dropped batch B"
+        );
+        let b = send_tickets(&mut ctl);
+        report(&mut ctl, &a, false);
+        assert!(
+            ctl.tickets.is_some(),
+            "a second acknowledgement of batch A dropped batch B"
+        );
+        report(&mut ctl, &a, true);
+        assert!(!ctl.tickets_pending, "the loss of batch A's packet sent batch B again");
+        report(&mut ctl, &b, true);
+        assert!(
+            ctl.tickets_pending,
+            "the loss of batch B's packet did not send it again"
+        );
+        let b = send_tickets(&mut ctl);
+        report(&mut ctl, &b, false);
+        assert!(
+            ctl.tickets.is_none() && !ctl.tickets_pending,
+            "batch B stays after its acknowledgement"
+        );
     }
 }

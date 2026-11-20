@@ -618,7 +618,7 @@ conn_impl! {
                     self.keys.request_lost();
                 }
             }
-            K_TICKETS => self.ctl.tickets_pending = self.ctl.tickets.is_some(),
+            K_TICKETS => self.ctl.tickets_lost(id),
             K_READY => self.ctl.ready = true,
             _ => {}
         }

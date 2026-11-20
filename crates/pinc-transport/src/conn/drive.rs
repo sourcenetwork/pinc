@@ -198,8 +198,7 @@ conn_impl! {
                     }
                     self.sess_amp.validate();
                     if !est.resumed && !est.tickets.entries().is_empty() {
-                        self.ctl.tickets = Some(est.tickets);
-                        self.ctl.tickets_pending = true;
+                        self.ctl.hold_tickets(est.tickets);
                     }
                 }
                 if !self.apply_peer_credit(&est) {

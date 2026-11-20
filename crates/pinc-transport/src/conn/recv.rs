@@ -687,7 +687,6 @@ conn_impl! {
                 self.confirm_dcid(slot, pn);
             }
         }
-        self.ctl.on_outcome(&out);
         if out.rekey_answer_lost {
             self.keys.requeue_answer();
         }

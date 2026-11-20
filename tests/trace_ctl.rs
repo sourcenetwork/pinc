@@ -10,11 +10,11 @@
 //!
 //! The test asserts the rules itself (a held frame owns one chunk, keys are distinct and below their counters, a
 //! full table refuses, `hold` refuses for the three reasons and only them, a reference is handed to the stream layer
-//! exactly when its key was in the table), so it is meaningful without the proof tools. It does not assert what the
-//! acknowledgement of an older ticket batch does: the code differs from the documented intent there, and the trace
-//! check replays both rules. The model's packet always has room, so the calls that find no room or no frame reference
-//! left are in `a_frame_without_room_stays_owed`, which records nothing. The trace is written to `PINC_TRACE_DIR` when
-//! it is set.
+//! exactly when its key was in the table, an answer about an older ticket batch leaves the newer batch as it was), so
+//! it is meaningful without the proof tools. Every ticket frame names its batch, and the trace writes the batch an
+//! acknowledged or lost frame carried as `g`. The model's packet always has room, so the calls that find no room or no
+//! frame reference left are in `a_frame_without_room_stays_owed`, which records nothing. The trace is written to
+//! `PINC_TRACE_DIR` when it is set.
 #![allow(
     clippy::unwrap_used,
     clippy::too_many_lines,
@@ -212,14 +212,23 @@ impl<'a> Run<'a> {
 
     fn send_tickets(&mut self) {
         let r = self.p.send_tickets();
-        if let Some(g) = r {
-            self.flight.push(("tk", 0, g));
+        if let Some((id, g)) = r {
+            self.flight.push(("tk", id, g));
         }
         self.log(&format!(
             r#""op":"send_tickets","ok":{},"g":{}"#,
             r.is_some(),
-            r.unwrap_or(0)
+            r.map_or(0, |(_, g)| g)
         ));
+    }
+
+    /// The id the last frame that carried batch `g` has.
+    fn tk(&self, g: u64) -> u64 {
+        self.flight
+            .iter()
+            .rev()
+            .find(|f| f.0 == "tk" && f.2 == g)
+            .map_or(0, |f| f.1)
     }
 
     fn send_ready(&mut self) {
@@ -257,6 +266,13 @@ impl<'a> Run<'a> {
             assert!(!handed);
         }
         self.seen.older_batch_acked |= !late && k == "tk" && g < before.tk;
+        if k == "tk" && id != before.tg {
+            assert_eq!(
+                self.check().tk,
+                before.tk,
+                "the acknowledgement of an older batch changed the batch held"
+            );
+        }
         let op = if late { "late_ack" } else { "ack" };
         self.log(&format!(r#""op":"{op}","k":"{k}","id":{id},"g":{g},"handed":{handed}"#));
     }
@@ -282,11 +298,13 @@ impl<'a> Run<'a> {
             "rd" => assert!(after.ready, "a lost READY is not asked for again"),
             _ => assert_eq!(
                 after.tp,
-                before.tk != 0,
-                "lost tickets are not pending exactly when a batch is held"
+                if id == before.tg { before.tk != 0 } else { before.tp },
+                "lost tickets are pending exactly when they are the newest batch and a batch is held"
             ),
         }
-        self.log(&format!(r#""op":"lose","k":"{k}","id":{id},"handed":{handed}"#));
+        // The batch the lost frame carried, 0 for a frame of another kind.
+        let g = self.flight.iter().find(|f| f.0 == k && f.1 == id).map_or(0, |f| f.2);
+        self.log(&format!(r#""op":"lose","k":"{k}","id":{id},"g":{g},"handed":{handed}"#));
     }
 
     /// Report a reference of the list (the `i`-th), or track when there is none.
@@ -368,15 +386,19 @@ fn scripted(out: &mut String, seen: &mut Seen) {
     r.issue(1);
     r.send_tickets();
     r.send_tickets();
-    r.lose("tk", 0);
+    let a = r.tk(1);
+    r.lose("tk", a);
     r.send_tickets();
-    r.ack(false, "tk", 0, 1);
+    r.ack(false, "tk", a, 1);
     r.issue(2);
     r.send_tickets();
+    let b = r.tk(2);
     r.issue(3);
-    r.ack(false, "tk", 0, 2);
+    r.ack(false, "tk", b, 2);
+    r.lose("tk", b);
     r.send_tickets();
-    r.ack(true, "tk", 0, 3);
+    let c = r.tk(3);
+    r.ack(true, "tk", c, 3);
     r.send_ready();
     r.build_ready();
     r.build_ready();
@@ -478,7 +500,7 @@ fn a_frame_without_room_stays_owed() {
     }
     p.set_room(1500);
     p.set_refs(0);
-    assert!(p.build_ready() && p.send_tickets() == Some(1) && p.send_ext(0).is_some());
+    assert!(p.build_ready() && p.send_tickets().map(|(_, g)| g) == Some(1) && p.send_ext(0).is_some());
     let after = p.view();
     assert!(
         !after.ready && !after.tp && after.ext.iter().flatten().all(|e| !e.1),
