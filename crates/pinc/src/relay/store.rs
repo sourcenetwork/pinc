@@ -35,6 +35,9 @@ pub struct Kept {
 }
 
 /// Storage for what the relay keeps. Methods take `&self`: an implementation keeps its own interior state.
+///
+/// A write may be repeated (a failed one is tried again, and one in flight when a run ends is tried again in the
+/// next), so every write must be idempotent: `remove` of a node the store does not hold is `Ok`.
 pub trait Store {
     /// Everything stored so far.
     fn load(&self) -> impl Future<Output = Result<Kept>>;

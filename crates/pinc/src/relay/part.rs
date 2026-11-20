@@ -253,14 +253,14 @@ impl<C: Carriers, K: KeyStore, St: Store, A: Access> Part<C, K, St, A> {
 
     /// The write taken last finished, `ok` if the store kept it. A failure is counted and reported as an event, and the
     /// write is tried again, by the part's clock as of the last [`Part::poll`] or [`Part::handle_timeout`]: within one
-    /// second of the failure, and never more often than once a second while the store fails.
+    /// second of the failure, behind the writes not tried yet, and never more often than once a second while the store
+    /// fails. A write that keeps failing is given up after a bounded number of tries and counted once more.
     pub fn store_written(&mut self, ok: bool) {
         let mark = self.writing.take();
         if !ok {
-            self.core.store_failed();
-            if let Some(mark) = mark {
-                self.core.requeue(mark);
-                self.core.retry_after(self.core.now_hint());
+            match mark {
+                Some(mark) => self.core.write_failed(mark, self.core.now_hint()),
+                None => self.core.store_failed(),
             }
         }
     }
@@ -356,7 +356,9 @@ mod tests {
     use core::pin::pin;
     use core::task::Waker;
 
-    use pinc_crypto::{IdentityAlg, NodeId};
+    use pinc_connect::record::{self, Reach, RecordFields};
+    use pinc_connect::relay::rule::RECORD_TTL_NS;
+    use pinc_crypto::{IdentityAlg, Keypair, NodeId};
 
     use super::*;
     use crate::error::Error;
@@ -530,6 +532,175 @@ mod tests {
         assert!(
             p.restored(),
             "a second run would restore into a machine that holds it all"
+        );
+    }
+
+    /// A store that refuses to remove one node and logs every write: the kind, the node and whether it was taken.
+    #[derive(Clone)]
+    struct Picky {
+        bad: NodeId,
+        log: Rc<RefCell<Vec<(char, NodeId, bool)>>>,
+    }
+
+    impl Picky {
+        fn note(&self, kind: char, node: &NodeId, ok: bool) -> crate::Result<()> {
+            self.log.borrow_mut().push((kind, *node, ok));
+            if ok {
+                Ok(())
+            } else {
+                Err(Error::config("the store failed"))
+            }
+        }
+
+        fn count(&self, kind: char, node: &NodeId) -> u64 {
+            let n = self.log.borrow().iter().filter(|e| e.0 == kind && e.1 == *node).count();
+            u64::try_from(n).unwrap()
+        }
+    }
+
+    #[allow(clippy::unused_async_trait_impl, reason = "the test store never waits")]
+    impl Store for Picky {
+        async fn load(&self) -> crate::Result<Kept> {
+            Ok(Kept::default())
+        }
+
+        async fn put(&self, node: &NodeId, _: &[u8], _: u64) -> crate::Result<()> {
+            self.note('P', node, true)
+        }
+
+        async fn remove(&self, node: &NodeId) -> crate::Result<()> {
+            self.note('R', node, *node != self.bad)
+        }
+
+        async fn put_mailbox(&self, node: &NodeId, _: &[u8]) -> crate::Result<()> {
+            self.note('M', node, true)
+        }
+    }
+
+    fn picky_part(bad: NodeId) -> (Part<Mock, SoftwareStore, Picky>, Picky) {
+        let store = Picky {
+            bad,
+            log: Rc::default(),
+        };
+        let p = Relay::builder()
+            .identity(Identity::from_seed_with(&[7; 32], &[0; 32]).unwrap())
+            .store(store.clone())
+            .build_part(Mock(Rc::default()), T0)
+            .unwrap();
+        (p, store)
+    }
+
+    /// A record signed by a fresh key: its node and bytes.
+    fn signed(tag: u8) -> (NodeId, Vec<u8>) {
+        let kp = Keypair::from_seed(IdentityAlg::Ed25519, &[tag; 32]).unwrap();
+        let mut out = vec![0u8; record::MAX_RECORD_LEN];
+        let fields = RecordFields {
+            home: kp.node_id(),
+            seq: 1,
+            reach: Reach::UdpBlocked,
+            addrs: &[],
+            hints: &[],
+        };
+        let n = record::sign(&kp, &fields, &mut out).unwrap();
+        out.truncate(n);
+        (kp.node_id(), out)
+    }
+
+    /// The part at `at`: every write due is run and reported.
+    fn pump(p: &mut Part<Mock, SoftwareStore, Picky>, at: u64) {
+        p.handle_timeout(at);
+        while let Some(w) = p.next_store_write() {
+            p.store_written(done(w.run()).is_ok());
+        }
+    }
+
+    /// The tries a failing write gets; pinned here so that changing the bound is a decision.
+    const TRIES: u64 = 8;
+
+    #[test]
+    fn a_write_that_keeps_failing_does_not_hold_back_the_others() {
+        let bad = NodeId {
+            alg: IdentityAlg::Ed25519,
+            bytes: [9; 32],
+        };
+        let (mut p, store) = picky_part(bad);
+        let (a, rec) = signed(1);
+        p.restore(
+            T0,
+            &Kept {
+                records: vec![crate::relay::store::KeptRecord {
+                    bytes: rec,
+                    received: T0,
+                }],
+                mailboxes: Vec::new(),
+            },
+        );
+        p.core.requeue(Mark::Remove(bad));
+        pump(&mut p, T0);
+        p.core.requeue(Mark::Put(a));
+        let member = NodeId {
+            alg: IdentityAlg::Ed25519,
+            bytes: [5; 32],
+        };
+        p.core.requeue(Mark::Mail(member));
+        for i in 1..=2 * TRIES {
+            pump(&mut p, T0 + i * SEC);
+        }
+        assert_eq!(
+            store.count('P', &a),
+            1,
+            "the record was not written behind the failing removal"
+        );
+        assert_eq!(
+            store.count('M', &member),
+            1,
+            "the packets were not written behind the failing removal"
+        );
+        assert_eq!(
+            store.count('R', &bad),
+            TRIES,
+            "the failing write was not tried a bounded number of times"
+        );
+        assert_eq!(
+            p.stats().store_errors,
+            TRIES + 1,
+            "every failure and the write given up are counted"
+        );
+    }
+
+    /// A `Put` given back when the run ends, for a record that expired meanwhile, is not written, and does not make the
+    /// next sweep remove the record from the store a second time.
+    #[test]
+    fn a_put_given_back_for_an_expired_record_leaves_one_removal() {
+        let (mut p, store) = picky_part(NodeId {
+            alg: IdentityAlg::Ed25519,
+            bytes: [9; 32],
+        });
+        let (a, rec) = signed(1);
+        p.restore(
+            T0,
+            &Kept {
+                records: vec![crate::relay::store::KeptRecord {
+                    bytes: rec,
+                    received: T0,
+                }],
+                mailboxes: Vec::new(),
+            },
+        );
+        p.core.requeue(Mark::Put(a));
+        let w = p.next_store_write().expect("the record is owed");
+        let expired = T0 + RECORD_TTL_NS + SEC;
+        p.handle_timeout(expired);
+        drop(w);
+        p.end(expired);
+        for i in 0..4 {
+            pump(&mut p, expired + i * SEC);
+        }
+        assert_eq!(store.count('P', &a), 0, "a record past its lifetime was written");
+        assert_eq!(
+            store.count('R', &a),
+            1,
+            "the record was removed from the store more than once"
         );
     }
 }

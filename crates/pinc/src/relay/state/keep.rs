@@ -6,15 +6,16 @@
 //! lifetime is removed from the store; a record and a packet come back with the time they arrived, so what is left of
 //! their lifetime is the same after a restart.
 //!
-//! A write that fails or is dropped with its run is marked again, and tried again after `RETRY_NS`; a failure of the
-//! store is counted and reported, and a mark the table has no room for counts as one.
+//! A write that fails or is dropped with its run is marked again, and a failed one is tried again after `RETRY_NS`,
+//! behind the marks not tried yet and up to `MAX_TRIES` times; a failure of the store is counted and reported, a write
+//! given up counts once more, and so does a mark the table has no room for.
 //!
 //! Invariants: the nodes marked are at most twice the record table for records kept, twice for records removed, and
 //! four times the mailbox member table; a packet
 //! is written with its arrival time and restored oldest first; nothing past its lifetime is restored. A wall clock that
 //! goes back across a restart lengthens what the store kept by up to the step back: the node cannot know it.
 
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, VecDeque};
 use alloc::vec::Vec;
 
 use pinc_connect::carrier::NODE_ID_LEN;
@@ -44,6 +45,11 @@ pub(super) struct Keep {
     next_sweep: Option<u64>,
     /// Not before this time is a failed write tried again; zero when none failed.
     retry_at: u64,
+    /// Writes that failed, oldest first, with the tries so far: served after every mark not yet tried, at most
+    /// [`FAILED`].
+    failed: VecDeque<(Mark, u8)>,
+    /// The tries so far of the write taken last: zero for a mark not tried before.
+    tries: u8,
     /// Restoring: the machine reports what it restores, which is already in the store.
     restoring: bool,
 }
@@ -64,8 +70,18 @@ impl Keep {
 /// How long after a failed write the next is tried.
 const RETRY_NS: u64 = 1_000_000_000;
 
+/// How many times a write is tried before it is given up and counted: with [`RETRY_NS`] that is about eight seconds,
+/// long enough for a store that stumbled and not so long that a write the store will never take keeps being served.
+/// What was given up is written again the next time its node changes, and the store drops a record past its lifetime
+/// at the next start.
+const MAX_TRIES: u8 = 8;
+
+/// How many failed writes wait to be tried again; one past it is given up and counted like one tried [`MAX_TRIES`]
+/// times.
+const FAILED: usize = 64;
+
 /// What a write is about, kept while it is out so a failure or a dropped run can mark the node again.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Mark {
     /// A record was kept.
     Put(NodeId),
@@ -176,10 +192,19 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
         }
     }
 
-    /// A write that was taken did not finish: mark its node again.
+    /// A write that was taken did not finish with the run: mark its node again, behind the ones not tried if it had
+    /// failed before.
     pub(crate) fn requeue(&mut self, mark: Mark) {
+        let tries = core::mem::take(&mut self.keep.tries);
+        if tries > 0 && self.keep.failed.len() < FAILED {
+            self.keep.failed.push_front((mark, tries));
+            return;
+        }
         match mark {
-            Mark::Put(n) => self.note_record(n),
+            // `held` already has the node unless a sweep took it out: it is not put back for a record that is gone
+            Mark::Put(n) => {
+                self.keep.records.insert(node_key(&n), n);
+            }
             Mark::Remove(n) => {
                 if !Keep::mark_removed(&mut self.keep.removed, n) {
                     self.store_failed();
@@ -189,9 +214,17 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
         }
     }
 
-    /// The store refused a write at `now`: the next one waits for [`RETRY_NS`].
-    pub(crate) const fn retry_after(&mut self, now: u64) {
+    /// The store refused a write at `now`: it is counted, tried again after [`RETRY_NS`] behind the marks not tried
+    /// yet, and given up (counted once more) after [`MAX_TRIES`] tries.
+    pub(crate) fn write_failed(&mut self, mark: Mark, now: u64) {
+        let tries = core::mem::take(&mut self.keep.tries).saturating_add(1);
         self.keep.retry_at = now.saturating_add(RETRY_NS);
+        self.store_failed();
+        if tries >= MAX_TRIES || self.keep.failed.len() >= FAILED {
+            self.store_failed();
+        } else if !self.keep.failed.iter().any(|(m, _)| *m == mark) {
+            self.keep.failed.push_back((mark, tries));
+        }
     }
 
     /// When a write held back by a failure may be tried again, or the end of time.
@@ -203,22 +236,47 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
         }
     }
 
-    /// The next write to the store, if any.
+    /// The next write to the store, if any: a mark not tried yet first, then the oldest failed one.
     pub(crate) fn next_job(&mut self) -> Option<Job> {
         if self.last_now < self.keep.retry_at {
             return None;
         }
+        self.keep.tries = 0;
         if let Some((_, n)) = self.keep.removed.pop_first() {
             return Some(Job::Remove(n));
         }
         while let Some((_, n)) = self.keep.records.pop_first() {
-            if let Some(received) = self.sm.record_received(&n)
-                && let Some(rec) = self.sm.lookup(received, &n)
-            {
-                return Some(Job::Put(n, rec.to_vec(), received));
+            if let Some(job) = self.put_job(n) {
+                return Some(job);
             }
         }
-        let n = self.keep.mail.pop()?;
+        if let Some(n) = self.keep.mail.pop() {
+            return Some(self.mail_job(n));
+        }
+        while let Some((mark, tries)) = self.keep.failed.pop_front() {
+            let job = match mark {
+                Mark::Put(n) => self.put_job(n),
+                // a record that came back since is written over, not removed
+                Mark::Remove(n) => self.sm.record_received(&n).is_none().then_some(Job::Remove(n)),
+                Mark::Mail(n) => Some(self.mail_job(n)),
+            };
+            if job.is_some() {
+                self.keep.tries = tries;
+                return job;
+            }
+        }
+        None
+    }
+
+    /// The write of the record held for `n`, if the machine still holds it.
+    fn put_job(&self, n: NodeId) -> Option<Job> {
+        let received = self.sm.record_received(&n)?;
+        let rec = self.sm.lookup(received, &n)?;
+        Some(Job::Put(n, rec.to_vec(), received))
+    }
+
+    /// The write of the packets held for `n` now.
+    fn mail_job(&self, n: NodeId) -> Job {
         let mut blob = Vec::new();
         let mut buf = [0u8; MAX_PACKET_LEN];
         let mut i = 0;
@@ -226,7 +284,7 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
             encode(&mut blob, &d.src, d.flag, at, buf.get(..d.len).unwrap_or_default());
             i += 1;
         }
-        Some(Job::Mail(n, blob))
+        Job::Mail(n, blob)
     }
 
     /// Put back what the store kept. A record or packet past its lifetime is not restored, and a record is removed from
