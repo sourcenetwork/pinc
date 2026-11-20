@@ -2,7 +2,8 @@
 //!
 //! Invariants: every private key and the sealing key are zeroized when the store is dropped or the key is removed;
 //! randomness comes from the operating system (`new`, with `std`) or from a generator the host seeds (`from_entropy`);
-//! the sealing key exists only in memory, so data sealed by one store value cannot be unsealed by another.
+//! the sealing key exists only in memory, so data sealed by one store value cannot be unsealed by another,
+//! unless both were built from the same entropy.
 
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
