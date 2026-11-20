@@ -1,19 +1,25 @@
 # CI runs the gate (`just gate`) through the same justfile recipes as a local run, split into jobs that run side by
-# side: the static checks, the tests, the stack and harness tests, and the quick proofs. `just proofs-deep` (every
-# model over its full bounds, hours of processor time) is not part of the gate and does not run here.
+# side: the static checks, the tests, the stack and harness tests, and the quick proofs. A pull request runs the
+# first three. The quick proofs take about two hours on a two-core runner, so they run on every push to master, every
+# night and by hand, not on a pull request: a broken proof shows after it lands. `just proofs-deep` (every model over
+# its full bounds, hours of processor time) is not part of the gate and does not run here.
 name: ci
 
 on:
   push:
     branches: [master]
   pull_request:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # A newer push replaces a pull request's run; a run on master is left to finish, so its proofs are not cut short.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -78,6 +84,7 @@ jobs:
 
   proofs:
     name: quick proofs
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     steps:
