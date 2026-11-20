@@ -290,6 +290,8 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `FacadeRevoke_failopen` | Peers {p1, p2} -> {p1} |
 | `FacadeRevoke_nobackstop` | Peers {p1, p2} -> {p1}, Slots {1, 2} -> {1} |
 | `FacadeStandby` | tickets held LIVE 3 -> 2, handed out AMAX 7 -> 4 |
+| `FacadeStandby_nogen` | AMAX 3 -> 2 |
+| `FacadeStandby_oldest` | AMAX 4 -> 3 |
 | `FacadeStandby_wrap` | wakers W {1, 2} -> {1} |
 | `FacadeTurn` | F {1, 2, 3} -> {1, 2} |
 | `FacadeTurn_live` | F {1, 2, 3} -> {1, 2} |
