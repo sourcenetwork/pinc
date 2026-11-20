@@ -317,6 +317,17 @@ where
             {
                 r.active = None;
             }
+            let gone = self
+                .recs
+                .as_deref()
+                .and_then(|r| r.rounds.iter().find(|x| x.id == id))
+                .is_some_and(|x| self.peer_gone(&x.peer));
+            if gone {
+                if let Some(round) = self.recs.as_deref_mut().and_then(|r| r.take(id)) {
+                    self.round_fail(&round, ReconcileFailure::Cancelled);
+                }
+                continue;
+            }
             self.round_retry(now, id, false);
         }
     }

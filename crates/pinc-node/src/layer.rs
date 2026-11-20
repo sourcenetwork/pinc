@@ -110,7 +110,7 @@ where
                 self.io.emit(NodeEvent::Endpoint(ev));
             }
             Event::ConnectFailed { node, .. } => {
-                let cancel = self.leaving || self.io.revoked.contains(&node.bytes);
+                let cancel = self.peer_gone(&node.bytes);
                 self.layer_lost(now, layer, &node.bytes, cancel);
                 self.io.emit(NodeEvent::Endpoint(ev));
             }
@@ -241,6 +241,12 @@ where
             Layer::Sets => self.sets_up(now, session, &peer, incoming),
             Layer::Dtn => self.dtn_up(now, session, &peer, incoming),
         }
+    }
+
+    /// Whether nothing more is wanted of `peer`: the node leaves or the peer is revoked, so a reconcile round with it
+    /// ends cancelled.
+    pub(crate) fn peer_gone(&self, peer: &NodeId) -> bool {
+        self.leaving || self.io.revoked.contains(peer)
     }
 
     /// A dial of `layer` to `peer` ends with no session: refused for good (`cancel`: the node leaves or the peer is

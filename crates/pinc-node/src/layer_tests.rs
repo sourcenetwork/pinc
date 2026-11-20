@@ -217,6 +217,35 @@ fn a_dial_that_fails_after_the_peer_was_revoked_ends_the_round_cancelled() {
 }
 
 #[test]
+fn a_round_whose_session_closes_after_the_peer_was_revoked_ends_cancelled() {
+    big(|| {
+        let mut node = node();
+        let peer = hub().bytes;
+        node.sets_start(S, &peer, SET).unwrap();
+        let failed = || Event::ConnectFailed {
+            session: None,
+            node: hub(),
+            alpn: Alpn::new(SETS_ALPN).unwrap(),
+            reason: ConnectFailure::Timeout,
+        };
+        for _ in 0..ATTEMPTS - 1 {
+            node.on_layer_event(S, Layer::Sets, failed());
+            node.settle(S);
+            assert!(failures(&mut node).is_empty(), "an attempt that failed retries");
+        }
+        let session = SessionId(DIALED + last_sets_dial(&node) as u64);
+        node.layer_up(S, Layer::Sets, session, peer, false);
+        node.settle(S);
+        assert!(failures(&mut node).is_empty(), "the session coming up ends no round");
+        node.revoke(S, &peer).unwrap();
+        node.layer_closed(S, session);
+        node.settle(S);
+        assert_eq!(failures(&mut node), [ReconcileFailure::Cancelled]);
+        assert_eq!(node.sets_running(), 0);
+    });
+}
+
+#[test]
 fn a_round_started_for_a_revoked_peer_ends_cancelled_without_retrying() {
     big(|| {
         let mut node = node();
