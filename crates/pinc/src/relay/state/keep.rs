@@ -375,7 +375,11 @@ mod tests {
         for i in 0..=u16::try_from(2 * RECORDS).unwrap() {
             core.requeue(Mark::Remove(nid(i)));
         }
-        assert!(core.keep.removed.len() <= 2 * RECORDS, "{} removals kept", core.keep.removed.len());
+        assert!(
+            core.keep.removed.len() <= 2 * RECORDS,
+            "{} removals kept",
+            core.keep.removed.len()
+        );
         assert_eq!(core.counters.store_errors, 1, "the lost removal was not counted");
     }
 
@@ -396,7 +400,11 @@ mod tests {
             if let Some(job) = core.next_job() {
                 core.requeue(job.mark());
             }
-            assert!(core.keep.removed.len() <= 2 * RECORDS, "{} removals kept", core.keep.removed.len());
+            assert!(
+                core.keep.removed.len() <= 2 * RECORDS,
+                "{} removals kept",
+                core.keep.removed.len()
+            );
         }
         assert!(core.counters.store_errors >= 1, "the lost removals were not counted");
     }

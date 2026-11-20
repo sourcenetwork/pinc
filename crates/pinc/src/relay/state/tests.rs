@@ -63,6 +63,10 @@ fn nine_pings_in_one_read_leave_one_answer_and_an_open_carrier() {
     let (buf, from) = c.take_write(None).unwrap();
     let mut pong = [0u8; 2 + 125];
     let n = ws::encode(Opcode::Pong, &[8; 125], None, &mut pong).unwrap();
-    assert_eq!((&buf[from..], from), (&pong[..n], 0), "the answer is not the latest ping's alone");
+    assert_eq!(
+        (&buf[from..], from),
+        (&pong[..n], 0),
+        "the answer is not the latest ping's alone"
+    );
     assert_eq!(core.counters.slow_closed, 0);
 }

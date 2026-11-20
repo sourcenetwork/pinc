@@ -738,11 +738,7 @@ mod tests {
             }
             assert_eq!(ws_fill(&mut s), Ok(false));
         }
-        assert!(
-            reads < 1000,
-            "still reading with {} bytes of answers waiting",
-            s.pongs
-        );
+        assert!(reads < 1000, "still reading with {} bytes of answers waiting", s.pongs);
         assert!(
             s.out.len() <= OUT_CAP + 3 * IN_CAP,
             "{} bytes of answers waiting",

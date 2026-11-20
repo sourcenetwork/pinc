@@ -671,7 +671,10 @@ mod tests {
         let wall = 3 * SEC;
         let ep = rolled(wall);
         let due = ep.0.shared.role().unwrap().due(wall).unwrap();
-        assert!((wall..=wall + SEC).contains(&due), "the role's first deadline is {due}, not near {wall}");
+        assert!(
+            (wall..=wall + SEC).contains(&due),
+            "the role's first deadline is {due}, not near {wall}"
+        );
     }
 
     /// A datagram for a member that the endpoint hands over before the role restored its mailbox is taken and counted
@@ -682,7 +685,10 @@ mod tests {
         let sh = &ep.0.shared;
         let to = pinc_core::relay_addr(false, 0, 1);
         let mut core = sh.lock().unwrap();
-        assert!(sh.role_carries(&mut core, T0, &to, b"x", 1), "the datagram was left to the socket");
+        assert!(
+            sh.role_carries(&mut core, T0, &to, b"x", 1),
+            "the datagram was left to the socket"
+        );
         drop(core);
         assert!(sh.role_outgoing(&mut [0u8; 1500]).is_none());
         assert_eq!(ep.relay_stats().unwrap().hub_dropped, 1, "the drop was not counted");

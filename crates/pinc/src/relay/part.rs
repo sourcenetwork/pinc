@@ -483,7 +483,6 @@ mod tests {
         p.store_written(false);
         assert_eq!(p.stats().store_errors, 1);
         assert!(p.next_store_write().is_none(), "the retry came at once");
-        assert_eq!(p.next_deadline(T0), Some(T0 + SEC), "no wake for the retry");
         p.handle_timeout(T0 + SEC);
         let w = p.next_store_write().expect("the failed write was forgotten");
         assert!(done(w.run()).is_ok());

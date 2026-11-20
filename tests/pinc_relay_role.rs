@@ -591,7 +591,10 @@ async fn a_second_run_of_the_relay_endpoint_holds_a_packet_once() {
         .await;
         let s = rig.relay.relay_stats().unwrap();
         assert_eq!(s.mailbox.stored, held, "the second run held the packets again: {s:?}");
-        assert!(s.mailbox.delivered <= held, "the second run handed a packet over twice: {s:?}");
+        assert!(
+            s.mailbox.delivered <= held,
+            "the second run handed a packet over twice: {s:?}"
+        );
     })
     .await;
 }
@@ -621,13 +624,22 @@ async fn a_member_whose_direct_session_closed_is_sent_to_on_its_carrier_at_once(
         drive(&m1);
         assert!(rig.a.join(b"relay/topic", &[]).await.unwrap());
         assert!(m1.join(b"relay/topic", &[]).await.unwrap());
-        settle(&rig.relay, 30, "the hub holds both sessions of node 1", |s| s.hub_sessions >= 2).await;
+        settle(&rig.relay, 30, "the hub holds both sessions of node 1", |s| {
+            s.hub_sessions >= 2
+        })
+        .await;
         m1.suspend().await;
-        settle(&rig.relay, 30, "the direct session is released", |s| s.hub_sessions == 1).await;
+        settle(&rig.relay, 30, "the direct session is released", |s| {
+            s.hub_sessions == 1
+        })
+        .await;
         let before = rig.relay.relay_stats().unwrap().datagrams_dropped;
         let _conn = echo(&rig).await;
         let s = rig.relay.relay_stats().unwrap();
-        assert_eq!(s.datagrams_dropped, before, "a datagram went to the closed direct address: {s:?}");
+        assert_eq!(
+            s.datagrams_dropped, before,
+            "a datagram went to the closed direct address: {s:?}"
+        );
     })
     .await;
 }

@@ -476,7 +476,10 @@ mod tests {
             t.addr_of(&nid(i));
         }
         assert!(core.tunnel(T0, &first, b"x"), "a relay path address is the relay's");
-        assert_eq!(core.counters.hub_dropped, 1, "the datagram went to the slot's new holder");
+        assert_eq!(
+            core.counters.hub_dropped, 1,
+            "the datagram went to the slot's new holder"
+        );
     }
 
     /// A pulse that does not fit the queue is counted as dropped.
