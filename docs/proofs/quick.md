@@ -544,13 +544,19 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `Rx_wide` | SENTN 3 -> 1, CONFN 2 -> 1, HOR 300 -> 0 (KMAX 4 kept: four packets overflow CAP 3) |
 | `Streams` | HOR 3 -> 1, LMAX 2 -> 1, MAXOFF 8 -> 5, DT 1 -> 0, Next -> NextQuick (Next without its stuttering steps, the same behaviours); one byte of data and one grant (limit 4 -> 5); no window grows: that needs 3 bytes read in one round trip (HOR 3) |
 | `Streams_cap` | Next -> NextQuick (no stuttering calls, the same behaviours); bounded by constraint: behaviours of at most 5 levels (Streams_capQuickBound) |
+| `Streams_cap_w` | B 5 -> 4 |
 | `Streams_caps` | HOR 2 -> 1, Next -> NextQuick (Next without its stuttering steps) |
 | `Streams_early` | Next -> NextQuick (no stuttering calls, the same behaviours); bounded by constraint: behaviours of at most 5 levels (Streams_earlyQuickBound) |
 | `Streams_early_ctl` | Next -> NextQuick (Next without its stuttering steps), OpenBound kept; bounded by constraint: behaviours of at most 5 levels (Streams_early_ctlQuickBound) |
+| `Streams_early_ctl_w` | B 4 -> 3 |
+| `Streams_early_rel` | B 4 -> 3 |
+| `Streams_early_w` | B 4 -> 3 |
 | `Streams_ext` | HOR 2 -> 1, LMAX 2 -> 1, MAXOFF 6 -> 5, EXTMAX 3 -> 2, DT 1 -> 0, Next -> NextQuick (Next without its stuttering steps) |
 | `Streams_held` | HOR 2 -> 1, MAXOFF 12 -> 5, DT 1 -> 0, Next -> NextQuick (Next without its stuttering steps) |
 | `Streams_held_w` | HOR 2 -> 1, MAXOFF 8 -> 5, Next -> NextQuick (Next without its stuttering steps, the same behaviours) (stream 4 held back while stream 0 holds the one slot, admitted once it is freed) |
 | `Streams_lazy_ledger` | HOR 3 -> 1, LMAX 2 -> 1, MAXOFF 12 -> 5, DT 1 -> 0, Next -> NextQuick (Next without its stuttering steps, the same behaviours); one byte of data and one grant (limit 4 -> 5); no window grows: that needs 3 bytes read in one round trip (HOR 3) |
+| `Streams_lazy_over_w` | MAXOFF 4 -> 3 |
+| `Streams_lazy_two` | MAXOFF 4 -> 3, MAXREM 2 -> 1 |
 | `Streams_ledger` | HOR 3 -> 1, LMAX 2 -> 1, MAXOFF 12 -> 5, DT 1 -> 0, Next -> NextQuick (Next without its stuttering steps, the same behaviours); one byte of data and one grant (limit 4 -> 5); no window grows: that needs 3 bytes read in one round trip (HOR 3) |
 | `Streams_live` | HOR 4 -> 1, LMAX 2 -> 1, MAXOFF 12 -> 5, DT 1 -> 0, Next -> NextQuick (Next without its stuttering steps, the same behaviours) |
 | `Streams_live_ext` | HOR 2 -> 1, LMAX 2 -> 1, MAXOFF 6 -> 5, EXTMAX 2 -> 1, DT 1 -> 0 (one byte of data and one grant; the clock is held, as HOR 1 lets no window grow from the meter); SWC 2 -> 1 (the initial window within HOR 1, so a reader can drain it and be Blocked at its limit) |
@@ -558,10 +564,15 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `Streams_local` | MAXOFF 6 -> 4, Next -> NextQuick (Next without its stuttering steps); bounded by constraint: behaviours of at most 4 levels (Streams_localQuickBound) |
 | `Streams_local_ctl` | MAXOFF 6 -> 5, Next -> NextQuick (Next without its stuttering steps, the same behaviours) |
 | `Streams_mark` | Next -> NextQuick (Next without its stuttering steps); bounded by constraint: behaviours of at most 5 levels (Streams_markQuickBound) |
+| `Streams_mark_w` | MAXREM 2 -> 1 |
+| `Streams_meter` | MSWC 4 -> 2, MAXREM 2 -> 1 |
 | `Streams_meter_w` | B 4 -> 3, Next -> NextQuick (Next without its stuttering steps, the same behaviours) (stream 4 still takes twice the connection's rate) RED for METER (#159): one meter for the whole connection, as before the fix. Stream 0 reads its byte, and a round trip later its meter closes an epoch at a rate of 1; stream 4 then reads its first byte and, having drained nothing it could measure yet, takes twice the connection's rate (2) as its window where its own rate asks for the initial window (1). With sixteen streams on a real path the windows together asked the pool for sixteen times the credit the connection moved, so most grants were deferred and the last streams crawled at one window per round trip. TLC must find a violation of SizeFollowsOwnRate. |
 | `Streams_release` | Next -> NextQuick (Next without its stuttering steps); bounded by constraint: behaviours of at most 5 levels (Streams_releaseQuickBound) |
+| `Streams_released_w` | B 5 -> 4 |
 | `Streams_stall` | HOR 4 -> 1, LMAX 2 -> 1, MAXOFF 12 -> 5, DT 1 -> 0, Next -> NextQuick (Next without its stuttering steps, the same behaviours) (a grant deferred while the other users hold 2 or more chunks is still found stuck) |
 | `Streams_stop` | HOR 3 -> 2, LMAX 2 -> 1, MAXOFF 4 -> 3 (frames of one byte ending by offset 2: one window read and raised once still, to 3), Next -> NextQuick (Next without its stuttering steps, the same behaviours) |
+| `Streams_two` | MAXOFF 4 -> 3, MAXREM 2 -> 1 |
+| `Streams_two_w` | MAXOFF 4 -> 3 |
 | `Tickets` | ExpVals {1, 2} -> {1}, MaxClock 4 -> 3, Ids {1, 2, 3} -> {1} (the ids are drawn by a server only; NS = 0) |
 | `Tickets_n3` | ExpVals {1, 2} -> {1} (live at now 1, expired at now 2), MaxClock 4 -> 3 (the store fills; the invariants insert into the full store), server-side Ids {1, 2, 3} -> {1} |
 | `Tickets_server` | MaxClock 3 -> 2 (the store fills; the invariants issue into the full store), draw streams of 0..4 -> 0..3 ids (Streams <- StreamsDefQuick), client-side Peers {p1, p2, p3} -> {p1}, Alpns {a1, a2} -> {a1}, Ids {1, 2, 3} -> {1, 2} (a draw still collides with a stored id and a retry still finds a fresh one), ExpVals {1, 2} -> {1} |
