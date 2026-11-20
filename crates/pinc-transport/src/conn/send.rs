@@ -785,7 +785,7 @@ conn_impl! {
 
     /// The streams' control frames: window and stream credit, resets and stop requests.
     fn fill_stream_control(&mut self, payload: &mut [u8], pos: &mut usize, out: &mut Filled) {
-        self.streams.regrant(&self.pool);
+        self.streams.regrant(&mut self.pool);
         while out.refs.len() < MAX_FRAME_REFS && payload.len().saturating_sub(*pos) >= MIN_ROOM {
             let Some(cf) = self.streams.pending_control() else { break };
             let Some(key) = self.ctl.track(cf) else {

@@ -119,6 +119,16 @@ par run_tlc credit_w2 Credit Credit_w2
 par run_tlc credit Credit Credit
 par run_tlc transcript Transcript Transcript
 par run_tlc amp Amp Amp
+par run_tlc chunk_store ChunkStore ChunkStore
+par run_tlc chunk_store_big ChunkStore ChunkStore_big
+par witness_tlc chunk_store_floorpool ChunkStore ChunkStore_floorpool NoneRefused
+par witness_tlc chunk_store_noclear ChunkStore ChunkStore_noclear NoForeignBytes
+par witness_tlc chunk_store_norescheck ChunkStore ChunkStore_norescheck UsedWithinRes
+par witness_live_tlc chunk_store_unbacked ChunkStore ChunkStore_unbacked
+par witness_live_tlc chunk_store_hoard ChunkStore ChunkStore_hoard
+par witness_live_tlc chunk_store_norelease ChunkStore ChunkStore_norelease
+par witness_live_tlc chunk_store_nowake ChunkStore ChunkStore_nowake
+par witness_live_tlc chunk_store_shortwant ChunkStore ChunkStore_shortwant
 par run_tlc padding Padding Padding
 par run_tlc_deep varint Varint Varint
 par run_tlc_deep rekeycodec RekeyCodec RekeyCodec

@@ -66,9 +66,11 @@ macro_rules! define {
 
         impl AnyEp {
             /// The endpoint of the smallest rung that holds `connections` sessions, with ten connection id entries per
-            /// session `pool_chunks` chunks for each and an arena of `spill_slots` spill slots; `None` above the ladder. It is not generic, so it is compiled
+            /// session, `pool_chunks` chunks for each from a store of `store_chunks`, and an arena of `spill_slots` spill
+            /// slots; `None` above the ladder. It is not generic, so it is compiled
             /// once, here, and optimised whatever the host's types: no host's build keeps a copy of a slot on the stack.
             #[inline(never)]
+            #[allow(clippy::too_many_arguments, reason = "the endpoint's identity, its config and the sizes of its three memories")]
             pub(crate) fn new(
                 connections: usize,
                 now: u64,
@@ -76,11 +78,12 @@ macro_rules! define {
                 identity: LocalIdentity,
                 cfg: EndpointConfig,
                 pool_chunks: usize,
+                store_chunks: usize,
                 spill_slots: usize,
             ) -> Option<Self> {
                 match connections {
                     $(n if n <= $k => Some(Self::$v({
-                        let mut ep = Ep::<$k, { $k * 10 }>::new_owned(now, Software, drbg, identity, cfg, pool_chunks, spill_slots);
+                        let mut ep = Ep::<$k, { $k * 10 }>::new_owned(now, Software, drbg, identity, cfg, pool_chunks, store_chunks, spill_slots);
                         MACHINES.with(|m| ep.share_machines(m));
                         ep
                     })),)+

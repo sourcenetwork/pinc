@@ -353,7 +353,7 @@ impl Run<'_> {
         let srtt = [0u64, 10, 20][self.below(3) as usize];
         let mut n = 0usize;
         let (pick, part) = (self.below(4), 1 + self.below(64) as usize);
-        if let Some(chunk) = self.t.read_chunk(&self.pool, id) {
+        if let Some(chunk) = self.t.read_chunk(self.pool.mem(), id) {
             let s = self.slot(id).unwrap();
             let sh = self.shadow.get(&id);
             for (i, byte) in chunk.iter().enumerate() {
@@ -651,7 +651,7 @@ impl Run<'_> {
             }
         } else if let Some(c) = self.hog.pop() {
             self.pool.free_chunk(c);
-            self.t.regrant(&self.pool);
+            self.t.regrant(&mut self.pool);
         }
         let ext = self.view().ext;
         self.log(&format!(r#""op":"ext","ext":{ext}"#));

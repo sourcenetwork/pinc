@@ -33,7 +33,7 @@ fn measure(chunks: usize) -> (u16, usize, u64) {
     let done = net.run(t0 + 120 * SEC, |n| {
         let before = ids.len();
         while ids.len() < STREAMS {
-            match n.a.conn.open_bi() {
+            match n.a.open_bi() {
                 Ok(id) => ids.push(id),
                 Err(_) => break,
             }
@@ -41,7 +41,7 @@ fn measure(chunks: usize) -> (u16, usize, u64) {
         // Every open stream gets its 64 KiB as the send buffer takes it, then its end.
         for (k, id) in ids.iter().enumerate() {
             while sent[k] < LEN {
-                let m = n.a.conn.write(*id, &data[sent[k]..]).unwrap();
+                let m = n.a.write(*id, &data[sent[k]..]).unwrap();
                 if m == 0 {
                     break;
                 }

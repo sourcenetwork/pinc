@@ -249,11 +249,12 @@ conn_impl! {
         cfg: Config,
         open: SubOpen<'_>,
         res: Resources<'a, S, N, C, F>,
+        lent: &mut super::Lent<'_, 'a>,
         env: &mut Env<'_, P>,
     ) -> Result<Self, Failure> {
         let SubOpen { client, parent, alpn, cc, cs, identity, path, path_info } = open;
-        let mut c = Self::sub_shell(client, cfg, alpn, cc, cs, &identity, path, path_info, res, env)?;
-        c.establish_sub(env, parent, alpn);
+        let mut c = Self::sub_shell(client, cfg, alpn, cc, cs, &identity, path, path_info, res, lent, env)?;
+        c.with_lent(lent, |c| c.establish_sub(env, parent, alpn));
         Ok(c)
     }
 
@@ -266,10 +267,11 @@ conn_impl! {
         cfg: Config,
         open: SubWait,
         res: Resources<'a, S, N, C, F>,
+        lent: &mut super::Lent<'_, 'a>,
         env: &mut Env<'_, P>,
     ) -> Result<Self, Failure> {
         let SubWait { alpn, cc, cs, identity, path, path_info } = open;
-        let mut c = Self::sub_shell(true, cfg, alpn, cc, cs, &identity, path, path_info, res, env)?;
+        let mut c = Self::sub_shell(true, cfg, alpn, cc, cs, &identity, path, path_info, res, lent, env)?;
         // The peer's record is not known yet; the application may still open a stream and queue its first bytes, which
         // wait for the keys. The parent's record replaces this when the sub-session opens.
         c.peer_credit = CreditRecord::new(PENDING_WINDOW, PENDING_STREAMS, 0);
@@ -323,11 +325,17 @@ conn_impl! {
     ///
     /// # Errors
     /// [`Failure::InvalidParameter`] if the connection is not a pending sub-session.
-    pub fn activate_sub(&mut self, env: &mut Env<'_, P>, parent: &Established, alpn: Alpn) -> Result<(), Failure> {
+    pub fn activate_sub(
+        &mut self,
+        env: &mut Env<'_, P>,
+        lent: &mut super::Lent<'_, 'a>,
+        parent: &Established,
+        alpn: Alpn,
+    ) -> Result<(), Failure> {
         if !self.client || self.phase != Phase::Handshaking || self.cids.first_remote().is_none() {
             return Err(Failure::InvalidParameter);
         }
-        self.establish_sub(env, parent, alpn);
+        self.with_lent(lent, |c| c.establish_sub(env, parent, alpn));
         Ok(())
     }
 
@@ -342,13 +350,14 @@ conn_impl! {
         path: PathId,
         path_info: PathInfo,
         mut res: Resources<'a, S, N, C, F>,
+        lent: &mut super::Lent<'_, 'a>,
         env: &mut Env<'_, P>,
     ) -> Result<Self, Failure> {
         let (first_local, first_remote) = if client { (cc, cs) } else { (cs, cc) };
-        let local = Self::advertise(&cfg, &mut res.streams, &res.pool);
+        let local = Self::advertise(&cfg, &mut res.streams, res.pool.mem_in(lent.store));
         let alpns = AlpnList::new(&[alpn.as_bytes()]).ok_or(Failure::InvalidParameter)?;
         let shell = Machine::Server(Responder::new(ResponderConfig::new(*identity, first_local, alpns)));
-        let mut c = Self::base(client, cfg, res, shell, first_local, ConnId::default(), env.now, local)?;
+        let mut c = Self::base(client, cfg, res, lent, shell, first_local, ConnId::default(), env.now, local)?;
         c.cids.set_first_remote(first_remote);
         c.new_path_slot(path, path_info, env.now);
         if let Some(p) = c.paths.active_mut() {

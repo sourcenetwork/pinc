@@ -30,6 +30,7 @@ use pinc_transport::conn::{
 use pinc_transport::recovery::LossEstimate;
 use pinc_transport::stream::pool::BufferPool;
 use pinc_transport::stream::spill::SpillArena;
+use pinc_transport::stream::store::ChunkStore;
 use pinc_transport::stream::{self, NoSource, Streams};
 
 const ALPN: &[u8] = b"pinc/1";
@@ -166,6 +167,9 @@ struct Rig<'a> {
     /// Each side's spill arena, the endpoint default of 128 slots, lent to every call that can spill.
     spa: SpillArena<'a>,
     spb: SpillArena<'a>,
+    /// Each side's chunk store: empty, as each pool has memory of its own.
+    sta: ChunkStore,
+    stb: ChunkStore,
     stores: Box<ResponderStores<4, 16>>,
     now: u64,
     rng: u64,
@@ -208,6 +212,10 @@ impl<'a> Rig<'a> {
                 path_info: PathInfo::default(),
             },
             a_store.resources(),
+            &mut Lent {
+                spill: &mut SpillArena::default(),
+                store: &mut ChunkStore::default(),
+            },
             &mut env_a,
         )
         .unwrap();
@@ -225,6 +233,10 @@ impl<'a> Rig<'a> {
                 ticket_lifetime_s: 86_400,
             },
             b_store.resources(),
+            &mut Lent {
+                spill: &mut SpillArena::default(),
+                store: &mut ChunkStore::default(),
+            },
             &mut env_b,
         )
         .unwrap();
@@ -245,6 +257,8 @@ impl<'a> Rig<'a> {
             },
             spa: SpillArena::new_boxed(128),
             spb: SpillArena::new_boxed(128),
+            sta: ChunkStore::default(),
+            stb: ChunkStore::default(),
             stores: Box::default(),
             now: 1_000_000_000_000,
             rng: 0x9E37_79B9_7F4A_7C15,
@@ -266,13 +280,16 @@ impl<'a> Rig<'a> {
     /// Serve the handshake's key requests on both sides.
     fn serve_keys(&mut self) {
         for is_a in [true, false] {
-            let (conn, side) = if is_a {
-                (&mut self.a, &mut self.sa)
+            let (conn, side, spill, store) = if is_a {
+                (&mut self.a, &mut self.sa, &mut self.spa, &mut self.sta)
             } else {
-                (&mut self.b, &mut self.sb)
+                (&mut self.b, &mut self.sb, &mut self.spb, &mut self.stb)
             };
             let mut want = false;
-            while let Some(ev) = conn.poll_event() {
+            while let Some(ev) = conn.poll_event(Lent {
+                spill: &mut *spill,
+                store: &mut *store,
+            }) {
                 want |= matches!(ev, Event::KeyRequest(_));
             }
             if want {
@@ -285,7 +302,10 @@ impl<'a> Rig<'a> {
                     now: self.now,
                     drbg: &mut side.drbg,
                 };
-                while conn.answer_soft(&mut env, &soft).unwrap_or(false) {}
+                while conn
+                    .answer_soft(&mut env, &mut Lent { spill, store }, &soft)
+                    .unwrap_or(false)
+                {}
             }
         }
     }
@@ -303,8 +323,14 @@ impl<'a> Rig<'a> {
                     now: self.now,
                     drbg: &mut self.sa.drbg,
                 };
-                self.a
-                    .poll_transmit(&mut env, &mut Lent { spill: &mut self.spa }, &mut self.abuf)
+                self.a.poll_transmit(
+                    &mut env,
+                    &mut Lent {
+                        spill: &mut self.spa,
+                        store: &mut self.sta,
+                    },
+                    &mut self.abuf,
+                )
             };
             *send += t.elapsed();
             let Some(tx) = tx else { break };
@@ -322,7 +348,10 @@ impl<'a> Rig<'a> {
             self.b
                 .handle_datagram_with(
                     &mut env,
-                    &mut Lent { spill: &mut self.spb },
+                    &mut Lent {
+                        spill: &mut self.spb,
+                        store: &mut self.stb,
+                    },
                     &mut self.stores,
                     PathId(2),
                     &mut self.abuf[..tx.len],
@@ -337,8 +366,14 @@ impl<'a> Rig<'a> {
                     now: self.now,
                     drbg: &mut self.sb.drbg,
                 };
-                self.b
-                    .poll_transmit(&mut env, &mut Lent { spill: &mut self.spb }, &mut self.bbuf)
+                self.b.poll_transmit(
+                    &mut env,
+                    &mut Lent {
+                        spill: &mut self.spb,
+                        store: &mut self.stb,
+                    },
+                    &mut self.bbuf,
+                )
             };
             let Some(tx) = tx else { break };
             moved = true;
@@ -354,16 +389,19 @@ impl<'a> Rig<'a> {
             self.a
                 .handle_datagram(
                     &mut env,
-                    &mut Lent { spill: &mut self.spa },
+                    &mut Lent {
+                        spill: &mut self.spa,
+                        store: &mut self.sta,
+                    },
                     PathId(1),
                     &mut self.bbuf[..tx.len],
                 )
                 .ok();
         }
         self.serve_keys();
-        for (conn, side, spill) in [
-            (&mut self.a, &mut self.sa, &mut self.spa),
-            (&mut self.b, &mut self.sb, &mut self.spb),
+        for (conn, side, spill, store) in [
+            (&mut self.a, &mut self.sa, &mut self.spa, &mut self.sta),
+            (&mut self.b, &mut self.sb, &mut self.spb, &mut self.stb),
         ] {
             if conn.poll_timeout().is_some_and(|t| t <= self.now) {
                 let mut env = Env {
@@ -371,7 +409,7 @@ impl<'a> Rig<'a> {
                     now: self.now,
                     drbg: &mut side.drbg,
                 };
-                conn.handle_timeout(&mut env, &mut Lent { spill });
+                conn.handle_timeout(&mut env, &mut Lent { spill, store });
             }
         }
         moved
@@ -390,12 +428,28 @@ impl<'a> Rig<'a> {
 
     /// Move `bytes` from `a` to `b` on a new unidirectional stream and drain it.
     fn transfer(&mut self, bytes: usize, chunk: &[u8], send: &mut Duration, recv: &mut Duration) {
-        let id = self.a.open_uni().unwrap();
+        let id = self
+            .a
+            .open_uni(&mut Lent {
+                spill: &mut self.spa,
+                store: &mut self.sta,
+            })
+            .unwrap();
         let (mut off, mut got, mut finished) = (0usize, 0usize, false);
         while got < bytes {
             while off < bytes {
                 let want = chunk.len().min(bytes - off);
-                let k = self.a.write(id, &chunk[..want]).unwrap();
+                let k = self
+                    .a
+                    .write(
+                        &mut Lent {
+                            spill: &mut self.spa,
+                            store: &mut self.sta,
+                        },
+                        id,
+                        &chunk[..want],
+                    )
+                    .unwrap();
                 if k == 0 {
                     break;
                 }
@@ -411,11 +465,19 @@ impl<'a> Rig<'a> {
                 now: self.now,
                 drbg: &mut self.sb.drbg,
             };
-            while let Some(c) = self.b.read_chunk(id) {
+            while let Some(c) = self.b.read_chunk(&self.stb, id) {
                 let n = c.len();
                 got += n;
                 self.b
-                    .consume(&mut env, &mut Lent { spill: &mut self.spb }, id, n)
+                    .consume(
+                        &mut env,
+                        &mut Lent {
+                            spill: &mut self.spb,
+                            store: &mut self.stb,
+                        },
+                        id,
+                        n,
+                    )
                     .unwrap();
             }
         }
@@ -450,16 +512,31 @@ fn bench_handshake(c: &mut Criterion) {
             |(mut sa, mut sb)| {
                 let mut rig = Rig::new(&mut sa, &mut sb, true, 0);
                 rig.connect();
-                let id = rig.a.open_bi().unwrap();
-                rig.a.write(id, b"x").unwrap();
+                let id = rig
+                    .a
+                    .open_bi(&mut Lent {
+                        spill: &mut rig.spa,
+                        store: &mut rig.sta,
+                    })
+                    .unwrap();
+                rig.a
+                    .write(
+                        &mut Lent {
+                            spill: &mut rig.spa,
+                            store: &mut rig.sta,
+                        },
+                        id,
+                        b"x",
+                    )
+                    .unwrap();
                 let (mut s, mut r) = (Duration::ZERO, Duration::ZERO);
                 for _ in 0..100 {
                     rig.round(&mut s, &mut r);
-                    if rig.b.read_chunk(id).is_some() {
+                    if rig.b.read_chunk(&rig.stb, id).is_some() {
                         break;
                     }
                 }
-                assert!(rig.b.read_chunk(id).is_some());
+                assert!(rig.b.read_chunk(&rig.stb, id).is_some());
             },
             BatchSize::PerIteration,
         );

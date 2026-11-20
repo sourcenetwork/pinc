@@ -43,9 +43,9 @@ fn a_stream_waiting_for_the_pacer_arms_its_timer() {
         let mut w = World::new(IdentityAlg::Ed25519);
         let (mut sa, mut sb) = (Store::new(true), Store::new(false));
         let mut net = quiet_pair(&mut w, &mut sa, &mut sb);
-        let id = net.a.conn.open_bi().unwrap();
+        let id = net.a.open_bi().unwrap();
         let data = pattern(200_000, 1);
-        assert!(net.a.conn.write(id, &data).unwrap() > 100_000);
+        assert!(net.a.write(id, &data).unwrap() > 100_000);
         let now = net.now;
         let sent = drain(&mut net, now);
         let pace = net.a.conn.recovery().pacer().next_release(now);
@@ -66,7 +66,7 @@ fn a_datagram_waiting_for_the_pacer_arms_its_timer() {
         let (mut sa, mut sb) = (Store::new(true), Store::new(false));
         let mut net = quiet_pair(&mut w, &mut sa, &mut sb);
         for _ in 0..40 {
-            net.a.conn.send_datagram(&[9u8; 1200]).unwrap();
+            net.a.conn.send_datagram(lent!(net.a), &[9u8; 1200]).unwrap();
         }
         let now = net.now;
         let sent = drain(&mut net, now);
@@ -88,9 +88,9 @@ fn a_poll_inside_the_pacing_gap_with_nothing_waiting_arms_no_timer() {
             let mut w = World::new(IdentityAlg::Ed25519);
             let (mut sa, mut sb) = (Store::new(true), Store::new(false));
             let mut net = quiet_pair(&mut w, &mut sa, &mut sb);
-            let id = net.a.conn.open_bi().unwrap();
+            let id = net.a.open_bi().unwrap();
             let data = pattern(size, 2);
-            assert_eq!(net.a.conn.write(id, &data).unwrap(), size);
+            assert_eq!(net.a.write(id, &data).unwrap(), size);
             let now = net.now;
             drain(&mut net, now);
             let pace = net.a.conn.recovery().pacer().next_release(now);
@@ -130,7 +130,7 @@ fn slow_requests(conc: usize, total: usize) -> (usize, u64) {
     let done = net.run(net.now + 600 * SEC, |n| {
         let ready: Vec<u64> = n.b.fin.iter().copied().filter(|id| !replied.contains(id)).collect();
         for id in ready {
-            assert_eq!(n.b.conn.write(id, &resp).unwrap(), resp.len());
+            assert_eq!(n.b.write(id, &resp).unwrap(), resp.len());
             n.b.conn.finish(id).unwrap();
             replied.insert(id);
         }
@@ -145,8 +145,8 @@ fn slow_requests(conc: usize, total: usize) -> (usize, u64) {
             !over
         });
         while live.len() < conc && started < total {
-            let Ok(id) = n.a.conn.open_bi() else { break };
-            assert_eq!(n.a.conn.write(id, &req).unwrap(), req.len());
+            let Ok(id) = n.a.open_bi() else { break };
+            assert_eq!(n.a.write(id, &req).unwrap(), req.len());
             n.a.conn.finish(id).unwrap();
             live.push((id, now));
             started += 1;

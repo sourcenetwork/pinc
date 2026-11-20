@@ -45,6 +45,7 @@ pub mod datagram;
 pub mod pool;
 mod ranges;
 pub mod spill;
+pub mod store;
 #[cfg(feature = "trace")]
 pub mod trace;
 

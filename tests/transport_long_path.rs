@@ -29,7 +29,7 @@ fn transfer(bps: u64, rtt_ms: u64, streams: usize, each: usize, limits: pinc::Li
     let mut net = setup(&mut w, &mut sa, &mut sb, Link::new(7, link));
     assert!(net.connect(net.now + 10 * SEC), "{:?}", net.rx_drops);
     let data = pattern(each, 9);
-    let ids: Vec<u64> = (0..streams).map(|_| net.a.conn.open_bi().unwrap()).collect();
+    let ids: Vec<u64> = (0..streams).map(|_| net.a.open_bi().unwrap()).collect();
     let mut off = vec![0usize; streams];
     let mut ended = vec![false; streams];
     let start = net.now;
@@ -37,7 +37,7 @@ fn transfer(bps: u64, rtt_ms: u64, streams: usize, each: usize, limits: pinc::Li
         for (k, id) in ids.iter().enumerate() {
             while off[k] < data.len() {
                 let end = (off[k] + 256 * 1024).min(data.len());
-                let w = n.a.conn.write(*id, &data[off[k]..end]).unwrap();
+                let w = n.a.write(*id, &data[off[k]..end]).unwrap();
                 if w == 0 {
                     break;
                 }

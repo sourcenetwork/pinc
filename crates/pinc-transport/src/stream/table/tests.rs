@@ -116,7 +116,7 @@ fn a_peer_stream_whose_place_was_given_back_stays_under_the_mark_until_it_is_ack
     // Three requests on streams of the peer (a client: ids 0, 4, 8), each read and answered.
     for id in [0u64, 4, 8] {
         t.on_stream_frame(&mut pool, id, 0, &[7; 20], true).unwrap();
-        while let Some(k) = t.read_chunk(&pool, id).map(<[u8]>::len) {
+        while let Some(k) = t.read_chunk(pool.mem(), id).map(<[u8]>::len) {
             t.consume(&mut pool, id, k, 0, 0).unwrap();
         }
         t.consume(&mut pool, id, 0, 0, 0).unwrap();
@@ -261,7 +261,7 @@ fn a_window_follows_the_rate_of_its_own_stream() {
     const KIB: u64 = 1024;
     const SRTT: u64 = 1_000;
     fn read(t: &mut Streams<NoSource, 72, 65>, pool: &mut BufferPool<'_>, id: u64, now: u64) {
-        while let Some(k) = t.read_chunk(pool, id).map(<[u8]>::len) {
+        while let Some(k) = t.read_chunk(pool.mem(), id).map(<[u8]>::len) {
             t.consume(pool, id, k, now, SRTT).unwrap();
         }
     }
@@ -313,7 +313,7 @@ fn a_stream_with_more_holes_than_its_inline_ranges_spills_into_one_arena_slot() 
     }
     t.on_stream_frame(&mut pool, 0, 20 * holes, &[], true).unwrap();
     let mut read = 0;
-    while let Some(k) = t.read_chunk(&pool, 0).map(<[u8]>::len) {
+    while let Some(k) = t.read_chunk(pool.mem(), 0).map(<[u8]>::len) {
         t.consume(&mut pool, 0, k, 0, 0).unwrap();
         read += k as u64;
     }
@@ -356,7 +356,7 @@ fn a_stream_whose_spilled_ranges_are_full_refuses_the_next_hole_and_counts_it() 
         Ok(()),
         "filling a hole needs no new range"
     );
-    assert_eq!(t.read_chunk(&pool, 0).map(<[u8]>::len), Some(20));
+    assert_eq!(t.read_chunk(pool.mem(), 0).map(<[u8]>::len), Some(20));
 }
 
 /// A grant deferred for want of pool room goes out when a sibling's read frees the room, though the waiting stream has
@@ -377,7 +377,7 @@ fn a_deferred_grant_goes_out_when_a_sibling_read_frees_room() {
     t.on_stream_frame(&mut pool, 0, 0, &block, false).unwrap();
     let held = [pool.alloc_chunk().unwrap(), pool.alloc_chunk().unwrap()];
     let read = |t: &mut Streams<NoSource, 72, 65>, pool: &mut BufferPool<'_>, id| {
-        while let Some(k) = t.read_chunk(pool, id).map(<[u8]>::len) {
+        while let Some(k) = t.read_chunk(pool.mem(), id).map(<[u8]>::len) {
             t.consume(pool, id, k, 0, 0).unwrap();
         }
     };

@@ -129,11 +129,11 @@ fn full_receive_queue_drops_the_oldest_and_counts() {
         dg.on_datagram_frame(&mut pool, &[i; 10]);
     }
     assert_eq!(dg.recv_dropped(), 2);
-    assert_eq!(dg.recv_datagram(&pool).unwrap(), &[2; 10]);
+    assert_eq!(dg.recv_datagram(pool.mem()).unwrap(), &[2; 10]);
     dg.release(&mut pool);
-    assert_eq!(dg.recv_datagram(&pool).unwrap(), &[3; 10]);
+    assert_eq!(dg.recv_datagram(pool.mem()).unwrap(), &[3; 10]);
     dg.release(&mut pool);
-    assert!(dg.recv_datagram(&pool).is_none());
+    assert!(dg.recv_datagram(pool.mem()).is_none());
     assert_eq!(pool.used_chunks(), 0);
 }
 
@@ -212,7 +212,7 @@ fn datagram_and_early_paths_do_not_allocate() {
             assert_eq!(dg.peek_send(&pool).unwrap().len(), 1000);
             dg.pop_send(&mut pool);
             dg.on_datagram_frame(&mut pool, &payload);
-            assert_eq!(dg.recv_datagram(&pool).unwrap().len(), 1000);
+            assert_eq!(dg.recv_datagram(pool.mem()).unwrap().len(), 1000);
             dg.release(&mut pool);
             assert!(early.push(&mut pool, &payload));
             early.pop(&mut pool);

@@ -17,7 +17,7 @@
 use pinc_crypto::IdentityAlg;
 use pinc_security::{Rekey, TicketBatch, TicketEntry};
 use pinc_tests::*;
-use pinc_transport::conn::{CloseReason, Drop, Lent, PathId};
+use pinc_transport::conn::{CloseReason, Drop, PathId};
 use pinc_transport::frame::{Frame, ext, write_ack};
 use pinc_transport::stream::datagram::DatagramError;
 use pinc_wire::Writer;
@@ -30,8 +30,8 @@ fn connect_with(alg: IdentityAlg) {
         let (mut sa, mut sb) = (Store::new(true), Store::new(false));
         let mut net = setup(&mut w, &mut sa, &mut sb, Link::new(1, Params::new(10 * MS)));
         assert!(net.connect(net.now + 10 * SEC), "{:?} {:?}", net.rx_drops, net.a.log);
-        let id = net.a.conn.open_bi().unwrap();
-        net.a.conn.write(id, b"hello").unwrap();
+        let id = net.a.open_bi().unwrap();
+        net.a.write(id, b"hello").unwrap();
         net.a.conn.finish(id).unwrap();
         assert!(net.run(net.now + 5 * SEC, |n| n.b.fin.contains(&id)));
         assert_eq!(net.b.read[&id], b"hello");
@@ -199,8 +199,8 @@ fn many_concurrent_streams_in_both_directions() {
         // The table keeps half its slots free for the credit it gave, so 32 of the 64 are ours to open. Both ends open far more than the credit of the handshake: the test is about delivery under loss.
         net.a.conn.raise_stream_credit(100);
         net.b.conn.raise_stream_credit(100);
-        let a_ids: Vec<u64> = (0..32).map(|_| net.a.conn.open_bi().unwrap()).collect();
-        let b_ids: Vec<u64> = (0..8).map(|_| net.b.conn.open_uni().unwrap()).collect();
+        let a_ids: Vec<u64> = (0..32).map(|_| net.a.open_bi().unwrap()).collect();
+        let b_ids: Vec<u64> = (0..8).map(|_| net.b.open_uni().unwrap()).collect();
         let a_data: Vec<Vec<u8>> = (0..32).map(|i| pattern(100_000 + i * 1_000, 100 + i as u64)).collect();
         let b_data: Vec<Vec<u8>> = (0..8).map(|i| pattern(60_000 + i * 500, 200 + i as u64)).collect();
         let (mut ao, mut bo) = (vec![0usize; 32], vec![0usize; 8]);
@@ -208,7 +208,7 @@ fn many_concurrent_streams_in_both_directions() {
         let ok = net.run(net.now + 600 * SEC, |n| {
             for (i, id) in a_ids.iter().enumerate() {
                 while ao[i] < a_data[i].len() {
-                    let k = n.a.conn.write(*id, &a_data[i][ao[i]..]).unwrap();
+                    let k = n.a.write(*id, &a_data[i][ao[i]..]).unwrap();
                     if k == 0 {
                         break;
                     }
@@ -221,7 +221,7 @@ fn many_concurrent_streams_in_both_directions() {
             }
             for (i, id) in b_ids.iter().enumerate() {
                 while bo[i] < b_data[i].len() {
-                    let k = n.b.conn.write(*id, &b_data[i][bo[i]..]).unwrap();
+                    let k = n.b.write(*id, &b_data[i][bo[i]..]).unwrap();
                     if k == 0 {
                         break;
                     }
@@ -251,7 +251,7 @@ fn many_concurrent_streams_in_both_directions() {
                 "streams did not all finish: a {missing_a:?} b {missing_b:?} status {:?} {:?} chunk {:?}",
                 net.a.conn.recv_status(3),
                 net.a.conn.recv_status(7),
-                net.a.conn.read_chunk(3).map(<[u8]>::len)
+                net.a.conn.read_chunk(&net.a.store, 3).map(<[u8]>::len)
             );
         }
         for (i, id) in a_ids.iter().enumerate() {
@@ -272,11 +272,11 @@ fn flow_control_limits_a_transfer_until_the_reader_reads() {
         assert!(net.connect(net.now + 10 * SEC));
         net.b.auto_read = false;
         let data = pattern(6 << 20, 33);
-        let id = net.a.conn.open_bi().unwrap();
+        let id = net.a.open_bi().unwrap();
         let mut off = 0;
         net.run(net.now + 5 * SEC, |n| {
             while off < data.len() {
-                let k = n.a.conn.write(id, &data[off..]).unwrap();
+                let k = n.a.write(id, &data[off..]).unwrap();
                 if k == 0 {
                     break;
                 }
@@ -301,7 +301,7 @@ fn flow_control_limits_a_transfer_until_the_reader_reads() {
         let ok = net.run(net.now + 120 * SEC, |n| {
             n.b.read_stream(n.now, id);
             while off < data.len() {
-                let k = n.a.conn.write(id, &data[off..]).unwrap();
+                let k = n.a.write(id, &data[off..]).unwrap();
                 if k == 0 {
                     break;
                 }
@@ -333,13 +333,13 @@ fn datagrams_are_unreliable_and_ordered_per_packet() {
             assert!(net.connect(net.now + 10 * SEC));
             let max = net.a.conn.max_datagram_size();
             assert!(matches!(
-                net.a.conn.send_datagram(&vec![0; max + 1]),
+                net.a.conn.send_datagram(lent!(net.a), &vec![0; max + 1]),
                 Err(DatagramError::TooLarge { .. })
             ));
             for i in 0..200u32 {
                 let mut d = pattern(800, u64::from(i));
                 d[..4].copy_from_slice(&i.to_be_bytes());
-                net.a.conn.send_datagram(&d).unwrap();
+                net.a.conn.send_datagram(lent!(net.a), &d).unwrap();
                 net.run(net.now + MS, |_| false);
             }
             net.run(net.now + 2 * SEC, |_| false);
@@ -371,14 +371,17 @@ fn extension_frames_reach_the_endpoint_layer() {
         let (mut sa, mut sb) = (Store::new(true), Store::new(false));
         let mut net = setup(&mut w, &mut sa, &mut sb, Link::new(43, Params::new(5 * MS)));
         assert!(net.connect(net.now + 10 * SEC));
-        assert!(net.a.conn.send_extension(0x10, b"too low").is_err());
+        assert!(net.a.conn.send_extension(lent!(net.a), 0x10, b"too low").is_err());
         for i in 0..3u8 {
             net.a
                 .conn
-                .send_extension(ext::TEST_FIRST + u64::from(i), &[i; 100])
+                .send_extension(lent!(net.a), ext::TEST_FIRST + u64::from(i), &[i; 100])
                 .unwrap();
         }
-        net.a.conn.send_extension(0x1_0000, b"large type").unwrap();
+        net.a
+            .conn
+            .send_extension(lent!(net.a), 0x1_0000, b"large type")
+            .unwrap();
         net.a.conn.send_ready();
         assert!(net.run(net.now + 2 * SEC, |n| n.b.saw(|r| *r == Rec::Ready)));
         let got: Vec<_> = net
@@ -468,19 +471,10 @@ fn a_reset_drops_the_buffers_of_the_stream() {
         let (mut sa, mut sb) = (Store::new(true), Store::new(false));
         let mut net = setup(&mut w, &mut sa, &mut sb, Link::new(55, Params::new(5 * MS)));
         assert!(net.connect(net.now + 10 * SEC));
-        let id = net.a.conn.open_bi().unwrap();
-        net.a.conn.write(id, &[1; 10_000]).unwrap();
+        let id = net.a.open_bi().unwrap();
+        net.a.write(id, &[1; 10_000]).unwrap();
         net.run(net.now + 100 * MS, |_| false);
-        net.a
-            .conn
-            .reset(
-                &mut Lent {
-                    spill: &mut net.a.spill,
-                },
-                id,
-                77,
-            )
-            .unwrap();
+        net.a.conn.reset(lent!(net.a), id, 77).unwrap();
         assert!(net.run(net.now + 2 * SEC, |n| n.b.saw(|r| *r == Rec::Reset(id, 77))));
     });
 }
@@ -497,8 +491,8 @@ fn rejected_resumption_falls_back_and_sends_early_data_again() {
         let a = w.client(&mut sa, Some(ticket), pinc_security::ClientTickets::new());
         let b = w.server(&mut sb);
         let mut net = Net::new(a, b, Link::new(56, Params::new(10 * MS)), &mut w.stores);
-        let id = net.a.conn.open_bi().unwrap();
-        net.a.conn.write(id, b"sent early, sent again").unwrap();
+        let id = net.a.open_bi().unwrap();
+        net.a.write(id, b"sent early, sent again").unwrap();
         net.a.conn.finish(id).unwrap();
         assert!(net.run(net.now + 20 * SEC, |n| n.b.fin.contains(&id)));
         assert_eq!(net.b.read[&id], b"sent early, sent again");
@@ -546,8 +540,8 @@ fn resumption_delivers_zero_rtt_data() {
         let a = w.client(&mut sa, Some(ticket), pinc_security::ClientTickets::new());
         let b = w.server(&mut sb);
         let mut net = Net::new(a, b, Link::new(7, Params::new(10 * MS)), &mut w.stores);
-        let id = net.a.conn.open_bi().unwrap();
-        net.a.conn.write(id, b"early bytes").unwrap();
+        let id = net.a.open_bi().unwrap();
+        net.a.write(id, b"early bytes").unwrap();
         net.a.conn.finish(id).unwrap();
         // The data arrives with the first flight, one way delay after the start, before the handshake completes.
         let deadline = net.now + 10 * MS + MS / 2;
@@ -572,8 +566,8 @@ fn zero_rtt_with<'a>(w: &'a mut World, sa: &'a mut Store, sb: &'a mut Store, raw
     let b = w.server(sb);
     let mut net = Net::new(a, b, Link::new(7, Params::new(10 * MS)), &mut w.stores);
     net.a.conn.inject_frames(raw);
-    let id = net.a.conn.open_bi().unwrap();
-    net.a.conn.write(id, b"early bytes").unwrap();
+    let id = net.a.open_bi().unwrap();
+    net.a.write(id, b"early bytes").unwrap();
     net.a.conn.finish(id).unwrap();
     let deadline = net.now + 10 * MS + MS / 2;
     net.run(deadline, |n| n.b.fin.contains(&id));
@@ -698,8 +692,8 @@ fn zero_rtt_data_that_overtakes_the_hello_waits_for_its_keys() {
         link.route(PathId(1)).ab.delay_index(1, 5 * MS);
         let mut net = Net::new(a, b, link, &mut w.stores);
         let data = pattern(3000, 1);
-        let id = net.a.conn.open_bi().unwrap();
-        net.a.conn.write(id, &data).unwrap();
+        let id = net.a.open_bi().unwrap();
+        net.a.write(id, &data).unwrap();
         net.a.conn.finish(id).unwrap();
         let t0 = net.now;
         assert!(
@@ -726,14 +720,14 @@ fn an_answer_that_overtakes_the_resume_reply_waits_for_its_keys() {
         // The server's first datagram (the Reply) arrives 5 ms after the answer sent right behind it.
         link.route(PathId(1)).ba.delay_index(1, 5 * MS);
         let mut net = Net::new(a, b, link, &mut w.stores);
-        let id = net.a.conn.open_bi().unwrap();
-        net.a.conn.write(id, b"ping").unwrap();
+        let id = net.a.open_bi().unwrap();
+        net.a.write(id, b"ping").unwrap();
         net.a.conn.finish(id).unwrap();
         let t0 = net.now;
         let mut answered = false;
         let ok = net.run(t0 + 26 * MS, |n| {
             if !answered && n.b.fin.contains(&id) {
-                n.b.conn.write(id, b"pong").unwrap();
+                n.b.write(id, b"pong").unwrap();
                 n.b.conn.finish(id).unwrap();
                 answered = true;
             }
@@ -758,8 +752,8 @@ fn zero_rtt_replay_is_rejected() {
             let a = w.client(&mut sa, Some(ticket), pinc_security::ClientTickets::new());
             let b = w.server(&mut sb);
             let mut net = Net::new(a, b, Link::new(8, Params::new(10 * MS)), &mut w.stores);
-            let id = net.a.conn.open_bi().unwrap();
-            net.a.conn.write(id, b"pay once").unwrap();
+            let id = net.a.open_bi().unwrap();
+            net.a.write(id, b"pay once").unwrap();
             net.a.conn.finish(id).unwrap();
             let rec = first_flight.clone();
             net.on_tx = Some(Box::new(move |is_a, d, now| {
@@ -855,8 +849,8 @@ fn key_answers_may_come_several_polls_later() {
             }
         }
         assert!(net.connect(net.now + 5 * SEC));
-        let id = net.a.conn.open_bi().unwrap();
-        net.a.conn.write(id, b"after slow keys").unwrap();
+        let id = net.a.open_bi().unwrap();
+        net.a.write(id, b"after slow keys").unwrap();
         net.a.conn.finish(id).unwrap();
         assert!(net.run(net.now + 2 * SEC, |n| n.b.fin.contains(&id)));
     });

@@ -135,6 +135,7 @@ ep_impl! {
         if queue {
             self.mark_dirty(i);
         }
+        self.wake_store();
     }
 
     /// The next time [`handle_timeout`](Self::handle_timeout) must run, or `None` when no session has a timer.

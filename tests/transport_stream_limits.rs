@@ -57,7 +57,7 @@ fn a_stream_over_the_cap_is_held_back_until_one_closes() {
     }
     assert_eq!(pool.used_chunks(), used, "a held-back stream stores nothing");
     assert_eq!(t.open_streams(), 2);
-    assert!(t.read_chunk(&pool, 10).is_none());
+    assert!(t.read_chunk(pool.mem(), 10).is_none());
     assert!(drain_control(&mut t).is_empty(), "a held-back stream is not answered");
     // Consuming the last byte of the first stream lets the application see the end, which closes it.
     assert_eq!(read_all(&mut t, &mut pool, 2).len(), 10);
@@ -330,7 +330,7 @@ fn the_opener_stops_at_the_credit_and_resumes_on_a_raise() {
         assert_eq!(read_all(&mut rx, &mut rpool, id).len(), 100);
     }
     assert_eq!(rx.open_streams(), 0);
-    rx.regrant(&rpool);
+    rx.regrant(&mut rpool);
     let raise = std::iter::from_fn(|| rx.pending_control()).find_map(|f| match f {
         ControlFrame::MaxStreams { limit } => Some(limit),
         _ => None,

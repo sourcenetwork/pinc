@@ -11,6 +11,7 @@ use super::{Connection, MIN_MTU, Phase};
 use crate::packet::PN_LEN_WIDE;
 use crate::stream::datagram::DatagramError;
 use crate::stream::spill::SpillArena;
+use crate::stream::store::ChunkStore;
 use crate::stream::{PeerLimits, RecvStatus, StreamError, StreamId, StreamSource};
 
 /// A DATAGRAM frame spends its type and a two-byte length besides the data.
@@ -60,13 +61,17 @@ conn_impl! {
         if self.is_open() { Ok(()) } else { Err(StreamError::UnknownStream) }
     }
 
-    /// The next event, or `None`. Events that carry data borrow it from the connection until the next call.
-    pub fn poll_event(&mut self) -> Option<Event<'_>> {
-        if self.ext_release {
-            self.ext.release(&mut self.pool);
-            self.ext_release = false;
-        }
-        self.notify_open_ready();
+    /// The next event, or `None`. Events that carry data borrow it from the connection and the endpoint's store until
+    /// the next call.
+    pub fn poll_event<'s>(&'s mut self, mut lent: super::Lent<'s, 'a>) -> Option<Event<'s>> {
+        self.with_lent(&mut lent, |c| {
+            if c.ext_release {
+                c.ext.release(&mut c.pool);
+                c.ext_release = false;
+            }
+            c.notify_open_ready();
+        });
+        let store: &'s ChunkStore = lent.store;
         loop {
             let ev = self.events.pop()?;
             return Some(match ev {
@@ -75,7 +80,7 @@ conn_impl! {
                     None => continue,
                 },
                 Ev::Extension => {
-                    let Some(entry) = self.ext.recv_datagram(&self.pool) else { continue };
+                    let Some(entry) = self.ext.recv_datagram(self.pool.mem_in(store)) else { continue };
                     let Ok((ty, n)) = varint::decode(entry) else {
                         self.ext_release = true;
                         continue;
@@ -129,9 +134,9 @@ conn_impl! {
     ///
     /// # Errors
     /// The error an open would return.
-    pub fn open_ready(&self, bidi: bool) -> Result<(), StreamError> {
+    pub fn open_ready(&self, store: &ChunkStore, bidi: bool) -> Result<(), StreamError> {
         self.ensure_open()?;
-        self.streams.can_open(&self.pool, bidi)
+        self.streams.can_open(self.pool.mem_in(store), bidi)
     }
 
     /// Open a bidirectional stream.
@@ -140,18 +145,18 @@ conn_impl! {
     /// [`StreamError::StreamLimit`] at the peer's limit, [`StreamError::TableFull`] when the table has no slot,
     /// [`StreamError::Exhausted`] when the first charge of the stream's receive window does not fit in the buffer pool
     /// yet.
-    pub fn open_bi(&mut self) -> Result<StreamId, StreamError> {
+    pub fn open_bi(&mut self, lent: &mut super::Lent<'_, 'a>) -> Result<StreamId, StreamError> {
         self.ensure_open()?;
-        self.opened(true)
+        self.with_lent(lent, |c| c.opened(true))
     }
 
     /// Open a unidirectional stream.
     ///
     /// # Errors
     /// As [`open_bi`](Self::open_bi).
-    pub fn open_uni(&mut self) -> Result<StreamId, StreamError> {
+    pub fn open_uni(&mut self, lent: &mut super::Lent<'_, 'a>) -> Result<StreamId, StreamError> {
         self.ensure_open()?;
-        self.opened(false)
+        self.with_lent(lent, |c| c.opened(false))
     }
 
     /// Open a stream; a refusal for want of credit or room is remembered, so [`Event::OpenReady`] follows once an open
@@ -172,7 +177,7 @@ conn_impl! {
         }
         for bidi in [false, true] {
             let bit = 1 << u8::from(bidi);
-            if self.open_wait & bit != 0 && self.open_ready(bidi).is_ok() {
+            if self.open_wait & bit != 0 && self.is_open() && self.streams.can_open(self.pool.mem(), bidi).is_ok() {
                 self.open_wait &= !bit;
                 self.events.push(Ev::OpenReady);
             }
@@ -192,10 +197,10 @@ conn_impl! {
     ///
     /// # Errors
     /// The errors of [`Streams::write`](crate::stream::Streams::write).
-    pub fn write(&mut self, id: StreamId, data: &[u8]) -> Result<usize, StreamError> {
+    pub fn write(&mut self, lent: &mut super::Lent<'_, 'a>, id: StreamId, data: &[u8]) -> Result<usize, StreamError> {
         self.ensure_open()?;
         let cap = self.send_buffer_cap();
-        let n = self.streams.write(&mut self.pool, id, data, cap)?;
+        let n = self.with_lent(lent, |c| c.streams.write(&mut c.pool, id, data, cap))?;
         self.life.app_written = true;
         self.life.data_written |= data.len() > CTRL_SMALL;
         Ok(n)
@@ -244,16 +249,22 @@ conn_impl! {
     }
 
     /// The readable bytes of a stream, borrowed from the pool. Release them with [`consume`](Self::consume).
-    pub fn read_chunk(&self, id: StreamId) -> Option<&[u8]> {
-        self.streams.read_chunk(&self.pool, id)
+    pub fn read_chunk<'s>(&'s self, store: &'s ChunkStore, id: StreamId) -> Option<&'s [u8]> {
+        self.streams.read_chunk(self.pool.mem_in(store), id)
     }
 
     /// The stored bytes of a stream from absolute offset `at`, up to the end of the run holding them or of one chunk,
     /// borrowed from the pool. The run may lie beyond a hole, so a host can check bytes as they arrive out of order.
     /// Release bytes only through [`consume`](Self::consume), which moves through the contiguous prefix. `spill` is
     /// the endpoint's arena, read only: a read changes nothing, so it needs no [`Lent`](super::Lent).
-    pub fn read_at(&self, spill: &SpillArena<'_>, id: StreamId, at: u64) -> Option<&[u8]> {
-        self.streams.read_at(&self.pool, spill, id, at)
+    pub fn read_at<'s>(
+        &'s self,
+        spill: &SpillArena<'_>,
+        store: &'s ChunkStore,
+        id: StreamId,
+        at: u64,
+    ) -> Option<&'s [u8]> {
+        self.streams.read_at(self.pool.mem_in(store), spill, id, at)
     }
 
     /// The first run of stored bytes of a stream that reaches past `from`, cut to begin at `from` or later.
@@ -309,10 +320,10 @@ conn_impl! {
     /// # Errors
     /// [`DatagramError::TooLarge`] above [`max_datagram_size`](Self::max_datagram_size), or
     /// [`DatagramError::Exhausted`] when the pool is empty.
-    pub fn send_datagram(&mut self, data: &[u8]) -> Result<(), DatagramError> {
+    pub fn send_datagram(&mut self, lent: &mut super::Lent<'_, 'a>, data: &[u8]) -> Result<(), DatagramError> {
         let max = self.max_datagram_size();
         self.life.app_written = true;
-        self.dgrams.send_datagram(&mut self.pool, data, max)
+        self.with_lent(lent, |c| c.dgrams.send_datagram(&mut c.pool, data, max))
     }
 
     /// The largest body [`send_extension`](Self::send_extension) takes for type `ty` on the active path now: what is
@@ -352,7 +363,7 @@ conn_impl! {
     /// # Errors
     /// [`ExtensionError::BadType`] if `ty` is below 0x40 or not a varint, [`ExtensionError::TooLarge`] if the body
     /// cannot fit one packet, and [`ExtensionError::Exhausted`] when the pool is empty.
-    pub fn send_extension(&mut self, ty: u64, body: &[u8]) -> Result<(), ExtensionError> {
+    pub fn send_extension(&mut self, lent: &mut super::Lent<'_, 'a>, ty: u64, body: &[u8]) -> Result<(), ExtensionError> {
         if ty < crate::frame::EXTENSION_BASE {
             return Err(ExtensionError::BadType);
         }
@@ -370,8 +381,7 @@ conn_impl! {
         b.copy_from_slice(body);
         let used = &*used;
         self.life.app_written = true;
-        self.ext
-            .send_datagram(&mut self.pool, used, EXT_ENTRY_MAX)
+        self.with_lent(lent, |c| c.ext.send_datagram(&mut c.pool, used, EXT_ENTRY_MAX))
             .map_err(|_| ExtensionError::Exhausted)
     }
 
@@ -385,12 +395,12 @@ conn_impl! {
     }
 
     /// The oldest received datagram, borrowed; remove it with [`pop_datagram`](Self::pop_datagram).
-    pub fn recv_datagram(&self) -> Option<&[u8]> {
-        self.dgrams.recv_datagram(&self.pool)
+    pub fn recv_datagram<'s>(&'s self, store: &'s ChunkStore) -> Option<&'s [u8]> {
+        self.dgrams.recv_datagram(self.pool.mem_in(store))
     }
 
     /// Remove the datagram [`recv_datagram`](Self::recv_datagram) returned.
-    pub fn pop_datagram(&mut self) {
-        self.dgrams.release(&mut self.pool);
+    pub fn pop_datagram(&mut self, lent: &mut super::Lent<'_, 'a>) {
+        self.with_lent(lent, |c| c.dgrams.release(&mut c.pool));
     }
 }

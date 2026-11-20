@@ -13,7 +13,6 @@
 use pinc_crypto::IdentityAlg;
 use pinc_security::Env;
 use pinc_tests::*;
-use pinc_transport::conn::Lent;
 
 pinc_tests::install_counting_allocator!();
 
@@ -27,13 +26,7 @@ fn send_a<const F: usize>(net: &mut Net<'_, '_, RING, F>) -> Option<usize> {
         now: net.now,
         drbg: &mut net.a.drbg,
     };
-    let t = net.a.conn.poll_transmit(
-        &mut env,
-        &mut Lent {
-            spill: &mut net.a.spill,
-        },
-        &mut net.buf,
-    )?;
+    let t = net.a.conn.poll_transmit(&mut env, lent!(net.a), &mut net.buf)?;
     net.link.send_a(net.now, t.path, &net.buf[..t.len]);
     Some(t.len)
 }
@@ -59,8 +52,8 @@ fn repair_after_a_poll_with_room(room: Option<usize>) -> Option<usize> {
         let mut w = World::new(IdentityAlg::Ed25519);
         let (mut sa, mut sb) = (Store::new(true), Store::new(false));
         let mut net = net_with_a_repair_pending(&mut w, &mut sa, &mut sb);
-        let id = net.a.conn.open_uni().unwrap();
-        net.a.conn.write(id, &pattern(100, 7)).unwrap();
+        let id = net.a.open_uni().unwrap();
+        net.a.write(id, &pattern(100, 7)).unwrap();
         net.a.conn.finish(id).unwrap();
         assert!(send_a(&mut net).is_some(), "the stream packet leaves");
         assert_eq!(net.a.conn.stats().repairs, 0, "{:?}", net.a.conn.stats());
@@ -114,8 +107,8 @@ fn a_tail_repair_leaves_with_the_next_packet_when_the_sent_ring_had_no_slot() {
         net.buf.truncate(400);
         // Seven packets of one burst: no repair, and one slot of the ring left.
         let big = pattern(2300, 1);
-        let first = net.a.conn.open_uni().unwrap();
-        net.a.conn.write(first, &big).unwrap();
+        let first = net.a.open_uni().unwrap();
+        net.a.write(first, &big).unwrap();
         net.a.conn.finish(first).unwrap();
         let mut sent = 0;
         for _ in 0..200 {
@@ -130,8 +123,8 @@ fn a_tail_repair_leaves_with_the_next_packet_when_the_sent_ring_had_no_slot() {
         assert_eq!(send_a(&mut net), None, "the burst is all sent");
         // One small packet fills the ring, and its repair is pending.
         let small = pattern(100, 7);
-        let second = net.a.conn.open_uni().unwrap();
-        net.a.conn.write(second, &small).unwrap();
+        let second = net.a.open_uni().unwrap();
+        net.a.write(second, &small).unwrap();
         net.a.conn.finish(second).unwrap();
         net.now += 2 * MS;
         assert!(send_a(&mut net).is_some(), "the small packet takes the last slot");

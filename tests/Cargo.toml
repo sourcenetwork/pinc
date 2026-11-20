@@ -582,6 +582,10 @@ name = "core_spill"
 path = "core_spill.rs"
 
 [[test]]
+name = "core_chunk_store"
+path = "core_chunk_store.rs"
+
+[[test]]
 name = "core_garbage"
 path = "core_garbage.rs"
 

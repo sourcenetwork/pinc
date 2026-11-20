@@ -7,7 +7,7 @@
 
 use core::fmt;
 
-use super::pool::{BufferPool, CHUNK_SIZE, Chunk, PoolExhausted};
+use super::pool::{BufferPool, CHUNK_SIZE, Chunk, Mem, PoolExhausted};
 
 /// Why a queue refused an entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -115,13 +115,13 @@ impl<const Q: usize, const C: usize> PackedQueue<Q, C> {
         }
     }
 
-    fn front<'a>(&self, pool: &'a BufferPool<'_>) -> Option<&'a [u8]> {
+    fn front<'a>(&self, mem: Mem<'a, '_>) -> Option<&'a [u8]> {
         if self.len == 0 {
             return None;
         }
         let e = self.entries.get(self.head)?;
         let chunk = self.chunks.get(usize::from(e.slot))?.as_ref()?;
-        pool.bytes(chunk)
+        mem.bytes(chunk)
             .get(usize::from(e.at)..usize::from(e.at) + usize::from(e.len))
     }
 
@@ -235,7 +235,7 @@ impl<const Q: usize, const C: usize> Datagrams<Q, C> {
 
     /// The oldest datagram waiting to be sent. Remove it with [`Datagrams::pop_send`] once it is in a packet.
     pub fn peek_send<'a>(&self, pool: &'a BufferPool<'_>) -> Option<&'a [u8]> {
-        self.send.front(pool)
+        self.send.front(pool.mem())
     }
 
     /// Remove the datagram [`Datagrams::peek_send`] returned.
@@ -253,8 +253,8 @@ impl<const Q: usize, const C: usize> Datagrams<Q, C> {
     }
 
     /// The oldest received datagram. Call [`Datagrams::release`] once it is handled.
-    pub fn recv_datagram<'a>(&self, pool: &'a BufferPool<'_>) -> Option<&'a [u8]> {
-        self.recv.front(pool)
+    pub fn recv_datagram<'a>(&self, mem: Mem<'a, '_>) -> Option<&'a [u8]> {
+        self.recv.front(mem)
     }
 
     /// Remove the datagram [`Datagrams::recv_datagram`] returned.
@@ -324,7 +324,7 @@ impl EarlyData {
 
     /// The oldest held packet.
     pub fn front<'a>(&self, pool: &'a BufferPool<'_>) -> Option<&'a [u8]> {
-        self.queue.front(pool)
+        self.queue.front(pool.mem())
     }
 
     /// Remove the packet [`EarlyData::front`] returned.

@@ -48,6 +48,8 @@ pub const CPK: usize = 8;
 pub const CTK: usize = 16;
 pub const CCT: usize = 8;
 pub const CHUNKS_PER_CONN: usize = 128;
+/// The chunk store of an endpoint that owns its table: the facade's default for `CK` sessions of `CHUNKS_PER_CONN`.
+pub const STORE_CHUNKS: usize = 2 * CK * pinc_transport::stream::store::floor_chunks(CHUNKS_PER_CONN);
 pub const SEC_NS: u64 = 1_000_000_000;
 pub const MS_NS: u64 = 1_000_000;
 
@@ -206,7 +208,7 @@ impl TNode {
         cfg.conn.interface_mtu = mtu;
         let ep_drbg = Drbg::new(&[tag ^ 0xa5; 32]);
         let mut ep = match owned {
-            Some(spill) => Endpoint::new_owned(now, prov, ep_drbg, identity, cfg, CHUNKS_PER_CONN, spill),
+            Some(spill) => Endpoint::new_owned(now, prov, ep_drbg, identity, cfg, CHUNKS_PER_CONN, STORE_CHUNKS, spill),
             None => Box::new(Endpoint::new(now, prov, ep_drbg, identity, cfg, slots())),
         };
         let mut env = Env {

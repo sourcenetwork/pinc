@@ -5,7 +5,7 @@
 //! byte received twice must be identical. Window grants are decided by the table, which owns the pool accounting.
 
 use super::flow::{Meter, Window};
-use super::pool::{BufferPool, CHUNK_SIZE, Ring};
+use super::pool::{BufferPool, CHUNK_SIZE, Mem, Ring};
 use super::ranges::RangeSet;
 use super::spill::SpillArena;
 use super::{FIRST_CHARGE, MAX_OFFSET, RECV_RANGES, RecvStatus, StreamError};
@@ -258,7 +258,9 @@ impl<const C: usize> Recv<C> {
                 }
             }
         }
-        if self.ring.missing(first, last) > pool.available_chunks() {
+        let missing = self.ring.missing(first, last);
+        pool.make_room((missing * CHUNK_SIZE) as u64);
+        if missing > pool.available_chunks() {
             return Err(StreamError::Exhausted);
         }
         self.ranges.insert(pool, lo..end).map_err(|_| StreamError::Fragmented)?;
@@ -268,27 +270,27 @@ impl<const C: usize> Recv<C> {
     }
 
     /// The contiguous readable bytes at the read position, up to the end of their chunk.
-    pub(super) fn read_chunk<'a>(&self, pool: &'a BufferPool<'_>) -> Option<&'a [u8]> {
+    pub(super) fn read_chunk<'a>(&self, mem: Mem<'a, '_>) -> Option<&'a [u8]> {
         let avail = self.readable();
         if avail == 0 {
             return None;
         }
         let at = (self.read_off % CHUNK_SIZE as u64) as usize;
         let len = (avail as usize).min(CHUNK_SIZE - at);
-        self.ring.span(pool, self.read_off / CHUNK_SIZE as u64, at, len)
+        self.ring.span(mem, self.read_off / CHUNK_SIZE as u64, at, len)
     }
 
     /// The stored bytes from absolute offset `at`, to the end of the stored run holding it or of its chunk; the run
     /// may lie beyond a hole. `None` below the read position, past a reset, or where nothing is stored.
     /// `arena` is the endpoint's, which holds the received ranges if they spilled.
-    pub(super) fn read_at<'a>(&self, pool: &'a BufferPool<'_>, arena: &SpillArena<'_>, at: u64) -> Option<&'a [u8]> {
+    pub(super) fn read_at<'a>(&self, mem: Mem<'a, '_>, arena: &SpillArena<'_>, at: u64) -> Option<&'a [u8]> {
         if self.reset.is_some() || at < self.read_off {
             return None;
         }
         let run = self.ranges.containing(arena, at)?;
         let chunk = CHUNK_SIZE as u64;
         let len = usize::try_from((run.end - at).min(chunk - at % chunk)).ok()?;
-        self.ring.span(pool, at / chunk, (at % chunk) as usize, len)
+        self.ring.span(mem, at / chunk, (at % chunk) as usize, len)
     }
 
     /// The first stored run that reaches past `from`, cut to start at `from` or later.

@@ -147,7 +147,7 @@ fn run(rng: &mut SplitMix64, out: &mut String, run: u32) -> bool {
     let mut net = setup(&mut w, &mut sa, &mut sb, Link::new(run.into(), Params::new(MS)));
     assert!(net.connect(net.now + 10 * SEC), "{:?}", net.rx_drops);
     let mut pair = Pair::from_net(net);
-    let (ia, ib) = (pair.a.conn.open_bi().unwrap(), pair.b.conn.open_bi().unwrap());
+    let (ia, ib) = (pair.a.open_bi().unwrap(), pair.b.open_bi().unwrap());
     pair.settle();
     pair.events.clear();
     pair.pool.clear();
@@ -187,7 +187,7 @@ fn run(rng: &mut SplitMix64, out: &mut String, run: u32) -> bool {
             0..=2 => {
                 let a = rng.next_u64().is_multiple_of(2);
                 let id = if a { ia } else { ib };
-                let _ = pair.node(a).conn.write(id, &data);
+                let _ = pair.node(a).write(id, &data);
                 pair.pump(a);
             }
             3 | 4 => {

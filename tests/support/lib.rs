@@ -139,6 +139,17 @@ macro_rules! install_counting_allocator {
     };
 }
 
+/// The [`Lent`](pinc_transport::conn::Lent) of a test node: `&mut` its arena and its store, borrowed beside its `conn`.
+#[macro_export]
+macro_rules! lent {
+    ($n:expr) => {
+        &mut pinc_transport::conn::Lent {
+            spill: &mut $n.spill,
+            store: &mut $n.store,
+        }
+    };
+}
+
 /// What the allocator counted on the current thread.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct AllocStats {

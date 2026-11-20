@@ -47,10 +47,10 @@ fn the_reader_sees_bytes_at_most_one_chunk_at_a_time() {
     let (mut pool, mut t) = setup(1024, |_| {});
     t.on_stream_frame(&mut pool, 0, 0, &vec![1; 3 * CHUNK_SIZE], false)
         .unwrap();
-    assert_eq!(t.read_chunk(&pool, 0).unwrap().len(), CHUNK_SIZE);
+    assert_eq!(t.read_chunk(pool.mem(), 0).unwrap().len(), CHUNK_SIZE);
     assert_eq!(t.consume(&mut pool, 0, CHUNK_SIZE + 10, 0, 0), Ok(RecvStatus::Open));
     assert_eq!(pool.used_chunks(), 2, "the fully consumed chunk is freed");
-    assert_eq!(t.read_chunk(&pool, 0).unwrap().len(), CHUNK_SIZE - 10);
+    assert_eq!(t.read_chunk(pool.mem(), 0).unwrap().len(), CHUNK_SIZE - 10);
     assert_eq!(
         t.consume(&mut pool, 0, 5 * CHUNK_SIZE, 0, 0),
         Err(StreamError::InvalidConsume)
@@ -61,7 +61,7 @@ fn the_reader_sees_bytes_at_most_one_chunk_at_a_time() {
 fn out_of_order_data_waits_for_the_hole() {
     let (mut pool, mut t) = setup(1024, |_| {});
     t.on_stream_frame(&mut pool, 0, 1000, &[2; 500], false).unwrap();
-    assert!(t.read_chunk(&pool, 0).is_none());
+    assert!(t.read_chunk(pool.mem(), 0).is_none());
     t.on_stream_frame(&mut pool, 0, 0, &[1; 1000], false).unwrap();
     let all = read_all(&mut t, &mut pool, 0);
     assert_eq!(all.len(), 1500);
@@ -196,7 +196,7 @@ fn an_empty_pool_refuses_data_without_storing_any() {
         Err(StreamError::Exhausted)
     );
     assert_eq!(pool.used_chunks(), 3);
-    assert!(t.read_chunk(&pool, 0).is_none());
+    assert!(t.read_chunk(pool.mem(), 0).is_none());
     for c in hog {
         pool.free_chunk(c);
     }
@@ -223,7 +223,7 @@ fn a_grant_waits_for_pool_room_and_is_issued_when_the_pool_gives_it_back() {
     }
     // Room is back (the datagram queues and the early-data buffer give chunks back outside the table): the
     // connection retries before it writes control frames, with nothing left to read.
-    t.regrant(&pool);
+    t.regrant(&mut pool);
     assert_eq!(
         drain_control(&mut t),
         [ControlFrame::MaxStreamData { id: 0, max: 112 * 1024 }]
@@ -388,7 +388,7 @@ fn rate_run(per_srtt: u64) -> u64 {
             .unwrap();
         sent += step;
         let now = k * srtt / per_srtt;
-        while let Some(chunk) = t.read_chunk(&pool, 0) {
+        while let Some(chunk) = t.read_chunk(pool.mem(), 0) {
             let len = chunk.len();
             t.consume(&mut pool, 0, len, now, srtt).unwrap();
         }
@@ -425,7 +425,7 @@ fn a_slowly_consumed_window_does_not_grow() {
         t.on_stream_frame(&mut pool, 0, sent, &[1; 65_536], false).unwrap();
         sent += 65_536;
         now += 10 * rtt;
-        while let Some(chunk) = t.read_chunk(&pool, 0) {
+        while let Some(chunk) = t.read_chunk(pool.mem(), 0) {
             let len = chunk.len();
             t.consume(&mut pool, 0, len, now, rtt).unwrap();
         }

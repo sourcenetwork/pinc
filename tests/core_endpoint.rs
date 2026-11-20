@@ -574,6 +574,7 @@ fn an_owned_endpoint_makes_the_memory_of_a_slot_when_the_slot_is_first_taken() {
             identity(1),
             EndpointConfig::new(7),
             CHUNKS_PER_CONN,
+            STORE_CHUNKS,
             pinc_transport::stream::spill::DEFAULT_SLOTS,
         );
     let mut drbg = Drbg::new(&[4; 32]);

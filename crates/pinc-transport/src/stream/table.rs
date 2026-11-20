@@ -13,7 +13,7 @@
 
 use super::credit::Admit;
 use super::lazy::{Blank, Lazy};
-use super::pool::{BufferPool, CHUNK_SIZE};
+use super::pool::{BufferPool, CHUNK_SIZE, Mem};
 use super::recv::Recv;
 use super::send::Send;
 use super::spill::SpillArena;
@@ -22,6 +22,7 @@ use super::{
     StreamStats, is_uni,
 };
 
+mod ledger;
 mod pick;
 #[cfg(feature = "trace")]
 mod view;
@@ -139,13 +140,13 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
             stalled: false,
         };
         streams.set_peer_limits(&config.peer);
-        streams.set_advertised(streams.admit_cap(pool));
+        streams.set_advertised(streams.admit_cap(pool.mem()));
         streams
     }
 
     /// The streams this table tells the peer it admits at the start: the room an empty table has.
-    pub fn admit_cap(&self, pool: &BufferPool<'_>) -> u64 {
-        if self.admit.on { self.admit_room(pool) } else { 0 }
+    pub fn admit_cap(&self, mem: Mem<'_, '_>) -> u64 {
+        if self.admit.on { self.admit_room(mem) } else { 0 }
     }
 
     /// What the ledger counts for a stream that has carried no data, and keeps for each stream inside the credit: its
@@ -208,7 +209,7 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         self.held_from = 0;
         self.stalled = false;
         self.set_peer_limits(&config.peer);
-        self.set_advertised(self.admit_cap(pool));
+        self.set_advertised(self.admit_cap(pool.mem()));
     }
 
     /// Counters of absorbed events.
@@ -229,10 +230,10 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
     /// Run with the limits the connection advertises to its peer, for a table with no stream open yet: `window` as the
     /// receive window every stream starts with (at most the ceiling the table was made with) and `streams` as the most
     /// peer streams live at once (at most the cap it was made with). The stream credit is derived again from them.
-    pub fn adopt(&mut self, pool: &BufferPool<'_>, window: u64, streams: u64) {
+    pub fn adopt(&mut self, mem: Mem<'_, '_>, window: u64, streams: u64) {
         self.stream_window = window.min(self.max_stream_window);
         self.max_remote = self.max_remote.min(streams);
-        self.set_advertised(self.admit_cap(pool));
+        self.set_advertised(self.admit_cap(mem));
     }
 
     /// The receive window size and advertised limit of a stream.
@@ -380,43 +381,10 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
             };
             *live = live.saturating_sub(1);
         }
-        // The last stream ended: the session is quiet, so its pool lets go of the chunks its busiest moment took.
-        if self.open == 0 {
-            pool.trim();
-        }
+        // A stream ended: a pool over the endpoint's store keeps reserved only what the chunks in use and the promises
+        // still out (the windows granted) need, so other sessions can have the rest. The credit is a soft promise.
+        pool.trim(self.granted_unreceived());
         self.regrant(pool);
-    }
-
-    /// Try the window grants that were deferred for want of pool room again. Every release of pool chunks and every
-    /// change of the credit ledger calls it (the end of `settle`, and the connection before it writes control
-    /// frames, which covers chunks the datagram queues and the early-data buffer gave back), so a grant is never
-    /// left waiting for the application to read something: with nothing readable it never would.
-    // vertexia: one pass of the table per call while a grant is deferred; gate on the pool's free bytes if a long
-    // shortage with many streams shows up in a profile.
-    pub fn regrant(&mut self, pool: &BufferPool<'_>) {
-        self.refresh_admit(pool);
-        if self.stalled {
-            self.grant(pool, N);
-        }
-    }
-
-    /// How many more peer streams could be admitted now, counting the credit already given: the live-stream cap (at
-    /// most half the slots, so the rest stay free for the streams we open) less the live ones, the free slots, and as
-    /// many first charges as [`admit_fit`] allows of those that fit in the pool bytes left beside a first charge for
-    /// each open stream ([`Streams::admitted_charge`]).
-    fn admit_room(&self, pool: &BufferPool<'_>) -> u64 {
-        let free = self.free();
-        let fit = pool.available_bytes().saturating_sub(self.admitted_charge()) / self.first_charge();
-        let cap = self.max_remote.min((N as u64 / 2).max(1));
-        cap.saturating_sub(self.remote_live).min(free).min(admit_fit(fit))
-    }
-
-    /// Queue a raise of the stream credit when the room grew enough (see [`Admit::update`]).
-    // vertexia: one scan of the used slots per call, which the connection makes once per packet it writes; gate on a
-    // changed pool or slot count if a profile shows it with many streams.
-    fn refresh_admit(&mut self, pool: &BufferPool<'_>) {
-        let (admitted, room) = (self.admitted(), self.admit_room(pool));
-        self.admit.update(admitted, room);
     }
 
     fn alloc_slot(&mut self, id: StreamId) -> Result<usize, StreamError> {
@@ -470,52 +438,6 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         core::mem::take(&mut self.released)
     }
 
-    /// The pool bytes reserved for the stream credit given to the peer and not yet used: the first charges of the
-    /// streams it may still open. Window grants and local streams leave them alone.
-    fn reserved(&self) -> u64 {
-        self.admit
-            .adv
-            .saturating_sub(self.admitted())
-            .saturating_mul(self.first_charge())
-    }
-
-    /// The streams the peer may still open inside the credit.
-    fn credit_left(&self) -> u64 {
-        self.admit.adv.saturating_sub(self.admitted())
-    }
-
-    /// What the open streams count for when one more stream is admitted: for each, the credit it may still claim, but
-    /// no more than one first charge. A window grant counts whole windows ([`Streams::granted_unreceived`]); admitting
-    /// a stream asks only that every stream, old and new, has room for a first step, so streams that carry data and
-    /// stay open do not shut out new ones for the size of their windows.
-    fn admitted_charge(&self) -> u64 {
-        let first = self.first_charge();
-        self.slots
-            .written()
-            .iter()
-            .take(self.used())
-            .fold(0, |sum, s| sum.saturating_add(s.recv.unreceived().min(first)))
-    }
-
-    /// Whether the first charges of `streams` new streams fit in the pool bytes left beside a first charge for each
-    /// open stream. The one test for a peer stream beyond the credit and for a local one, so they cannot differ.
-    fn windows_fit(&self, pool: &BufferPool<'_>, streams: u64) -> bool {
-        self.admitted_charge()
-            .saturating_add(streams.saturating_mul(self.first_charge()))
-            <= pool.available_bytes()
-    }
-
-    /// Whether `count` more peer streams can be admitted: under the cap and with slots. Inside the credit no pool test
-    /// is made (a new stream takes no chunk, and the credit kept its first charge), so a frame that opens many skipped
-    /// streams at once is never held back for them; beyond it their first charges must fit beside the credit left.
-    fn admits(&self, pool: &BufferPool<'_>, count: u64) -> bool {
-        let free = self.free();
-        let inside = self.admitted().saturating_add(count) <= self.admit.adv;
-        self.remote_live + count <= self.max_remote
-            && free >= count
-            && (inside || self.windows_fit(pool, count.max(self.credit_left())))
-    }
-
     /// The slot of `id`, opening peer streams implicitly; `None` if it was already closed.
     fn locate(&mut self, pool: &BufferPool<'_>, id: StreamId) -> Result<Option<usize>, StreamError> {
         let (c, index) = (class(id), id >> 2);
@@ -562,14 +484,14 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
     ///
     /// # Errors
     /// The error `open_stream` would return.
-    pub fn can_open(&self, pool: &BufferPool<'_>, bidi: bool) -> Result<(), StreamError> {
+    pub fn can_open(&self, mem: Mem<'_, '_>, bidi: bool) -> Result<(), StreamError> {
         if !self.admit.early && !self.admit.allows(self.local_opened.iter().sum()) {
             return Err(StreamError::StreamLimit);
         }
         // The slot and the first charge of every stream inside the credit given to the peer stay free.
         let left = self.credit_left();
         let free = self.free();
-        if (free > 0 && free <= left) || (bidi && !self.windows_fit(pool, left + 1)) {
+        if (free > 0 && free <= left) || (bidi && !self.windows_fit(mem, left + 1)) {
             return Err(StreamError::Exhausted);
         }
         Ok(())
@@ -586,7 +508,7 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
     /// bidirectional stream's receive window does not fit in the pool beside the credit granted yet; try again once the
     /// application has read or chunks were released.
     pub fn open_stream(&mut self, pool: &BufferPool<'_>, bidi: bool) -> Result<StreamId, StreamError> {
-        self.can_open(pool, bidi)?;
+        self.can_open(pool.mem(), bidi)?;
         let c = usize::from(!bidi);
         let opened = self.local_opened.get(c).copied().unwrap_or(0);
         let id = (opened << 2) | if bidi { 0 } else { 2 } | u64::from(!self.is_client);
@@ -633,10 +555,17 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
             return Err(StreamError::StreamState);
         }
         let Some(i) = self.locate(pool, id)? else { return Ok(()) };
+        // The opening window of a peer stream is stream credit, a soft promise (see `admit_room`); every byte past it
+        // was granted by `grant`, which reserves it.
+        let soft = !self.is_local(id) && offset.saturating_add(data.len() as u64) <= self.stream_window;
         let slot = self.slots.get_mut(i).ok_or(StreamError::UnknownStream)?;
         let result = slot.recv.on_data(pool, offset, data, fin);
         self.stats.range_spills += slot.recv.take_spills();
-        self.stats.held_back += u64::from(result == Err(StreamError::Exhausted));
+        let short = result == Err(StreamError::Exhausted);
+        self.stats.held_back += u64::from(short);
+        if short {
+            pool.note_shortage(soft);
+        }
         self.stats.range_overflows += u64::from(result == Err(StreamError::Fragmented));
         self.settle(pool, i);
         result
@@ -706,21 +635,15 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
     }
 
     /// The contiguous readable bytes of a stream (up to the end of one chunk), borrowed from the pool.
-    pub fn read_chunk<'a>(&self, pool: &'a BufferPool<'_>, id: StreamId) -> Option<&'a [u8]> {
-        self.slot(self.find(id)?)?.recv.read_chunk(pool)
+    pub fn read_chunk<'a>(&self, mem: Mem<'a, '_>, id: StreamId) -> Option<&'a [u8]> {
+        self.slot(self.find(id)?)?.recv.read_chunk(mem)
     }
 
     /// The stored bytes of a stream from absolute offset `at` (up to the end of one chunk), borrowed from the pool.
     /// They may lie beyond a hole: the stream's readable bytes are only the contiguous prefix. `arena` is the
     /// endpoint's spill arena, which holds the stream's received ranges if they spilled.
-    pub fn read_at<'a>(
-        &self,
-        pool: &'a BufferPool<'_>,
-        arena: &SpillArena<'_>,
-        id: StreamId,
-        at: u64,
-    ) -> Option<&'a [u8]> {
-        self.slot(self.find(id)?)?.recv.read_at(pool, arena, at)
+    pub fn read_at<'a>(&self, mem: Mem<'a, '_>, arena: &SpillArena<'_>, id: StreamId, at: u64) -> Option<&'a [u8]> {
+        self.slot(self.find(id)?)?.recv.read_at(mem, arena, at)
     }
 
     /// The first run of stored bytes of a stream that reaches past `from` (and the read position), cut to begin at
@@ -768,47 +691,6 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         self.grant(pool, i);
         self.settle(pool, i);
         Ok(status)
-    }
-
-    /// Move the limit of slot `first`, and of every slot whose grant was deferred, to a window ahead of its read position
-    /// (the window its own reader's rate sized in `consume`). A grant is
-    /// queued only while the credit already granted and not yet received, plus the increase, fits in the pool;
-    /// otherwise the slot stays deferred and is tried again after a later consume.
-    fn grant(&mut self, pool: &BufferPool<'_>, first: usize) {
-        let mut granted: Option<u64> = None;
-        let reserve = self.reserved();
-        for i in 0..self.used() {
-            let Some(slot) = self.slots.written_mut(i) else {
-                continue;
-            };
-            if !slot.recv.open || !(i == first || slot.recv.win.deferred) {
-                continue;
-            }
-            let Some(candidate) = slot.recv.due() else {
-                slot.recv.win.deferred = false;
-                continue;
-            };
-            let sum = *granted.get_or_insert_with(|| self.granted_unreceived());
-            let Some(slot) = self.slots.get_mut(i) else { continue };
-            let demand = sum
-                .saturating_sub(slot.recv.unreceived())
-                .saturating_add(slot.recv.charged_demand(candidate));
-            if demand.saturating_add(reserve) <= pool.available_bytes() {
-                slot.recv.win.limit = candidate;
-                slot.recv.win.pending = true;
-                slot.recv.win.deferred = false;
-                granted = Some(demand);
-            } else {
-                slot.recv.win.deferred = true;
-            }
-            self.refresh(i);
-        }
-        self.stalled = self
-            .slots
-            .written()
-            .iter()
-            .take(self.used())
-            .any(|s| s.recv.win.deferred);
     }
 
     /// Whether the bytes `offset..offset + len` of a stream are acknowledged (an empty range asks about the end
@@ -1000,3 +882,7 @@ mod tests;
 #[cfg(all(test, feature = "alloc"))]
 #[allow(clippy::unwrap_used, reason = "tests assert")]
 mod spill_tests;
+
+#[cfg(all(test, feature = "alloc"))]
+#[allow(clippy::unwrap_used, reason = "tests assert")]
+mod store_tests;

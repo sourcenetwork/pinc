@@ -13,11 +13,12 @@
 //! Per session, every slot of the shape reserves a connection, a stream table of [`STREAMS`] slots (a slot is a few KiB
 //! with a [`RING`] of 257 entries, and is written only when its stream is first used) and a pool of up to
 //! [`Limits::pool_chunks`] chunks of 16 KiB. The stream table and the table of sent packets are reserved memory the
-//! system commits only as it is used. The pool makes a chunk when the session first needs it and keeps it while the
-//! session is busy; when the session's last stream ends it frees its idle chunks, so a quiet session holds
-//! what it uses, on any allocator. A session that moved 64 KiB and went quiet holds about 96 KiB of the client's
-//! memory, and a client endpoint with no session about 620 KiB (`tests/pinc_client_memory.rs` holds them to 112 and 704
-//! KiB). The shape is rounded up to the next capacity of the ladder, which doubles at each step: ask for what you
+//! system commits only as it is used. Every pool takes its chunks from the endpoint's one chunk store
+//! ([`Limits::memory_chunks`]), allocated when the engine starts and committed by the system as chunks are first used,
+//! and gives each back to it as soon as the session returns it: so a quiet session holds no chunk, nothing is
+//! allocated or freed for a stream or a session, and the endpoint's chunk memory stays at the most its sessions held at
+//! once. A session that moved 64 KiB and went quiet holds about 96 KiB of the client's memory, and a client endpoint
+//! with no session about 620 KiB (`tests/pinc_client_memory.rs` holds them to 112 and 704 KiB). The shape is rounded up to the next capacity of the ladder, which doubles at each step: ask for what you
 //! need, not for a round number above it.
 //!
 //! Invariants: the memory of a session returns to its slot when the session ends; the slot table never grows.
@@ -54,9 +55,9 @@ pub struct Limits {
     /// at or above it is reserved when the engine starts; see the module docs for what that costs.
     pub connections: usize,
     /// The 16 KiB chunks one session may hold for its streams and datagrams (8 to 65,535). The default of 1024 is 16 MiB,
-    /// a ceiling: a busy session holds the chunks it came to use and a quiet one (no stream open) only those still in
-    /// use, so thousands of quiet sessions hold little whatever the ceiling. Streams that move data at once are charged
-    /// their whole window, so a path whose bandwidth times round trip is above half the pool needs more.
+    /// a ceiling: a busy session holds the chunks it came to use and a quiet one (no stream open) none, every chunk
+    /// coming from the endpoint's store ([`memory_chunks`](Self::memory_chunks)). Streams that move data at once are
+    /// charged their whole window, so a path whose bandwidth times round trip is above half the pool needs more.
     pub pool_chunks: usize,
     /// The slots of the endpoint's spill arena (0 to 65,536; default 128, 1 MiB): when a stream's ranges (received,
     /// lost or acknowledged) outgrow the few it keeps inline, under scattered loss, they move into one 8 KiB slot until
@@ -65,6 +66,14 @@ pub struct Limits {
     /// received frame that needs one more range is refused and sent again by the peer, and a lost range is widened or
     /// sent again; 0 turns spilling off.
     pub spill_slots: usize,
+    /// The 16 KiB chunks of the endpoint's store, every chunk its sessions may hold together, reserved when the engine
+    /// starts as one allocation the system commits only as chunks are first used, and never given back before the
+    /// engine stops: memory stays at its high-water mark. `None` (the default) is [`default_memory_chunks`] of the
+    /// connections and the pool. Every slot of the endpoint (the rung of [`CAPACITIES`](crate::CAPACITIES) that holds
+    /// the connections) keeps a floor of 8 chunks of it from the start, so it must hold that many for each and no
+    /// session is ever refused; the rest is burst room the sessions that need more than their floor share in turn. A
+    /// full store holds back new windows and writes as a full pool does.
+    pub memory_chunks: Option<usize>,
     /// The receive window a stream starts with, in bytes (default 1,310,720, 1.25 MiB). It grows toward twice what the
     /// stream's own reader drains per round trip, up to half the pool and `(RING - 1) * 16 KiB` (4 MiB): a stream moves at
     /// most one window per round trip. The pool is charged the window of a stream from its first byte, so a raised
@@ -109,6 +118,7 @@ impl Default for Limits {
             connections: 1024,
             pool_chunks: 1024,
             spill_slots: pinc_transport::stream::spill::DEFAULT_SLOTS,
+            memory_chunks: None,
             stream_window: 1_310_720,
             // vertexia: the transport's own default is the reference's 1,310,720 bytes, a figure sized for its test
             // links; at the facade a session of one stream or many would be held to 8.7 MiB/s on a 150 ms path
@@ -126,7 +136,23 @@ impl Default for Limits {
     }
 }
 
+/// The store a node of `connections` sessions of up to `pool_chunks` chunks gets by default: a floor for every slot of
+/// the endpoint (the rung of [`CAPACITIES`](crate::CAPACITIES) that holds the connections), held from the start, and a
+/// floor of burst room for each connection, and one whole pool more, shared by the sessions that need more than their
+/// floor. A whole pool is what one busy session may hold, so a node with few connections moves as fast as a pool of its
+/// own lets it: without it a one-connection client had 16 chunks, 256 KiB, for all its streams, a window of 256 KiB per
+/// round trip. 17,408 chunks, 272 MiB, for the default limits; the system commits only what sessions come to use at once.
+pub const fn default_memory_chunks(connections: usize, pool_chunks: usize) -> usize {
+    (rung(connections) + connections) * pinc_transport::stream::store::floor_chunks(pool_chunks) + pool_chunks
+}
+
 impl Limits {
+    /// The chunks of the endpoint's store these limits give.
+    pub fn store_chunks(&self) -> usize {
+        self.memory_chunks
+            .unwrap_or_else(|| default_memory_chunks(self.connections, self.pool_chunks))
+    }
+
     /// Check the limits against the ceilings.
     ///
     /// # Errors
@@ -135,6 +161,9 @@ impl Limits {
         let ok = (1..=MAX_CONNECTIONS).contains(&self.connections)
             && (8..=65_535).contains(&self.pool_chunks)
             && self.spill_slots <= 65_536
+            && (rung(self.connections) * pinc_transport::stream::store::floor_chunks(self.pool_chunks)
+                ..=u32::MAX as usize)
+                .contains(&self.store_chunks())
             && (16 * 1024..=16 * 1024 * 1024).contains(&self.stream_window)
             && (16 * 1024..=1 << 30).contains(&self.send_window)
             && (1..=STREAMS / 2).contains(&usize::from(self.streams))
@@ -149,6 +178,19 @@ impl Limits {
             Err(Error::config("a limit is out of range"))
         }
     }
+}
+
+/// The capacity of the endpoint built for `connections` sessions: the smallest rung of [`CAPACITIES`] that holds them.
+/// The store keeps a floor for every slot of it.
+const fn rung(connections: usize) -> usize {
+    let mut rest: &[usize] = &crate::CAPACITIES;
+    while let [k, tail @ ..] = rest {
+        if *k >= connections {
+            return *k;
+        }
+        rest = tail;
+    }
+    connections
 }
 
 #[cfg(test)]
@@ -175,5 +217,23 @@ mod tests {
         assert!(limits(1 << 30).check().is_ok());
         assert!(limits(0).check().is_err());
         assert!(limits((1 << 30) + 1).check().is_err());
+    }
+
+    #[test]
+    fn the_default_store_holds_a_whole_pool_beyond_every_floor_however_few_the_connections() {
+        for connections in [1, 2, 3, 1024] {
+            let limits = Limits {
+                connections,
+                ..Limits::default()
+            };
+            let floors = rung(connections) * pinc_transport::stream::store::floor_chunks(limits.pool_chunks);
+            assert!(
+                limits.store_chunks() >= floors + limits.pool_chunks,
+                "{connections} connections: a store of {} chunks leaves one session less than its pool",
+                limits.store_chunks()
+            );
+            assert!(limits.check().is_ok());
+        }
+        assert_eq!(Limits::default().store_chunks(), 17_408);
     }
 }

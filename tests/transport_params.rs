@@ -94,27 +94,30 @@ fn mismatched_configurations_work_both_ways() {
             (32 * 1024, 3, 0)
         );
         assert_eq!(net.a.conn.peer_credit().window_bytes(), 1_310_720);
-        assert!(net.b.conn.send_datagram(b"x").is_err(), "the MCU takes no datagrams");
-        assert!(net.a.conn.send_datagram(b"x").is_ok());
+        assert!(
+            net.b.conn.send_datagram(lent!(net.b), b"x").is_err(),
+            "the MCU takes no datagrams"
+        );
+        assert!(net.a.conn.send_datagram(lent!(net.a), b"x").is_ok());
         // The server may open three streams, no more.
-        let ids: Vec<u64> = (0..3).map(|_| net.b.conn.open_bi().unwrap()).collect();
-        assert_eq!(net.b.conn.open_bi(), Err(StreamError::StreamLimit));
+        let ids: Vec<u64> = (0..3).map(|_| net.b.open_bi().unwrap()).collect();
+        assert_eq!(net.b.open_bi(), Err(StreamError::StreamLimit));
         // One megabyte each way through windows of 32 KiB.
         let up = pattern(1 << 20, 62);
         let down = pattern(1 << 20, 63);
-        let (ua, db) = (net.a.conn.open_bi().unwrap(), ids[0]);
+        let (ua, db) = (net.a.open_bi().unwrap(), ids[0]);
         let (mut uo, mut dofs, mut u_fin, mut d_fin) = (0, 0, false, false);
         let mut max_pool = 0;
         let ok = net.run(net.now + 600 * SEC, |n| {
             while uo < up.len() {
-                let k = n.a.conn.write(ua, &up[uo..]).unwrap();
+                let k = n.a.write(ua, &up[uo..]).unwrap();
                 if k == 0 {
                     break;
                 }
                 uo += k;
             }
             while dofs < down.len() {
-                let k = n.b.conn.write(db, &down[dofs..]).unwrap();
+                let k = n.b.write(db, &down[dofs..]).unwrap();
                 if k == 0 {
                     break;
                 }
@@ -171,9 +174,9 @@ fn zero_rtt_respects_the_limits_the_ticket_remembered() {
         let b = w.server(&mut sb);
         let mut net = Net::new(a, b, Link::new(65, Params::new(10 * MS)), &mut w.stores);
         // Before the handshake finishes, early data is limited to what the server advertised last time.
-        let id = net.a.conn.open_bi().unwrap();
+        let id = net.a.open_bi().unwrap();
         let data = pattern(1 << 20, 66);
-        let accepted = net.a.conn.write(id, &data).unwrap();
+        let accepted = net.a.write(id, &data).unwrap();
         assert!(accepted > 0 && accepted <= 96 * 1024, "early credit is {accepted}");
         let deadline = net.now + 10 * MS + MS / 2;
         net.run(deadline, |_| false);
@@ -185,7 +188,7 @@ fn zero_rtt_respects_the_limits_the_ticket_remembered() {
         let mut finished = false;
         let ok = net.run(net.now + 60 * SEC, |n| {
             while off < data.len() {
-                let k = n.a.conn.write(id, &data[off..]).unwrap();
+                let k = n.a.write(id, &data[off..]).unwrap();
                 if k == 0 {
                     break;
                 }
@@ -209,12 +212,12 @@ fn without_a_ticket_nothing_may_be_sent_before_the_record_arrives() {
         let (mut sa, mut sb) = (Store::new(true), Store::new(false));
         let mut net = setup(&mut w, &mut sa, &mut sb, Link::new(67, Params::new(10 * MS)));
         assert_eq!(
-            net.a.conn.open_bi(),
+            net.a.open_bi(),
             Err(StreamError::StreamLimit),
             "the minimum allows no streams"
         );
         assert_eq!(net.a.conn.peer_credit(), &CreditRecord::NONE);
         assert!(net.connect(net.now + 10 * SEC));
-        assert!(net.a.conn.open_bi().is_ok());
+        assert!(net.a.open_bi().is_ok());
     });
 }

@@ -118,8 +118,8 @@ fn a_colliding_connection_id_is_decided_by_the_packet_authentication() {
         // authentication refuses the packet, and nothing else changes.
         assert!(n1.b.conn.accepts_cid(&shared) && n2.b.conn.accepts_cid(&shared));
         let log = capture(&mut n1);
-        let id = n1.a.conn.open_bi().unwrap();
-        n1.a.conn.write(id, &[9u8; 300]).unwrap();
+        let id = n1.a.open_bi().unwrap();
+        n1.a.write(id, &[9u8; 300]).unwrap();
         n1.run(n1.now + SEC, |_| false);
         let mut dg = log
             .borrow()
@@ -136,8 +136,8 @@ fn a_colliding_connection_id_is_decided_by_the_packet_authentication() {
         assert!(r.is_err(), "another session's packet must not open");
         assert!(n2.b.conn.is_connected());
         assert_eq!(n2.b.conn.stats().packets_received, before.packets_received);
-        let id2 = n2.a.conn.open_bi().unwrap();
-        n2.a.conn.write(id2, b"still fine").unwrap();
+        let id2 = n2.a.open_bi().unwrap();
+        n2.a.write(id2, b"still fine").unwrap();
         n2.a.conn.finish(id2).unwrap();
         assert!(n2.run(n2.now + 5 * SEC, |n| n.b.fin.contains(&id2)));
     });
@@ -168,12 +168,12 @@ fn the_send_buffer_is_bounded_by_the_window_and_the_congestion_window() {
         let mut w = World::new(IdentityAlg::Ed25519);
         let (mut sa, mut sb) = (Store::new(true), Store::new(false));
         let mut net = connected(&mut w, &mut sa, &mut sb, Link::new(4, Params::new(10 * MS)));
-        let id = net.a.conn.open_bi().unwrap();
+        let id = net.a.open_bi().unwrap();
         let data = vec![1u8; 4 << 20];
         // A fresh connection: cwnd 44,000, so max(192 KiB, 1.5 x 44,000) = 192 KiB, below the 1.25 MiB window.
-        let first = net.a.conn.write(id, &data).unwrap();
+        let first = net.a.write(id, &data).unwrap();
         assert_eq!(first, 196_608);
-        assert_eq!(net.a.conn.write(id, &data).unwrap(), 0);
+        assert_eq!(net.a.write(id, &data).unwrap(), 0);
         // Acknowledgements free room and wake the writer.
         assert!(net.run(net.now + 5 * SEC, |n| n.a.saw(|r| *r == Rec::Writable(id))));
     });
@@ -185,13 +185,13 @@ fn streams_are_served_in_order_of_urgency() {
         let mut w = World::new(IdentityAlg::Ed25519);
         let (mut sa, mut sb) = (Store::new(true), Store::new(false));
         let mut net = connected(&mut w, &mut sa, &mut sb, Link::new(5, Params::new(10 * MS)));
-        let (low, high) = (net.a.conn.open_bi().unwrap(), net.a.conn.open_bi().unwrap());
+        let (low, high) = (net.a.open_bi().unwrap(), net.a.open_bi().unwrap());
         net.a.conn.set_urgency(low, 5).unwrap();
         net.a.conn.set_urgency(high, 1).unwrap();
         let data = vec![7u8; 100_000];
         // The less urgent stream is written first; the more urgent one is still served first.
-        net.a.conn.write(low, &data).unwrap();
-        net.a.conn.write(high, &data).unwrap();
+        net.a.write(low, &data).unwrap();
+        net.a.write(high, &data).unwrap();
         net.a.conn.finish(low).unwrap();
         net.a.conn.finish(high).unwrap();
         let order = Rc::new(RefCell::new(Vec::new()));
@@ -215,8 +215,8 @@ fn the_last_stream_frame_of_a_packet_leaves_its_length_out() {
         let mut net = connected(&mut w, &mut sa, &mut sb, Link::new(6, Params::new(10 * MS)));
         net.run(net.now + 3 * SEC, |_| false);
         let log = capture(&mut net);
-        let id = net.a.conn.open_bi().unwrap();
-        net.a.conn.write(id, &[0x42u8; 100]).unwrap();
+        let id = net.a.open_bi().unwrap();
+        net.a.write(id, &[0x42u8; 100]).unwrap();
         net.run(net.now + 200 * MS, |_| false);
         // Short header (1 + 4 id + 2 packet number), then the frame: type, stream id, 100 bytes, then the tag. A
         // length field would take one more byte.
@@ -236,17 +236,25 @@ fn an_extension_frame_is_sent_again_when_its_packet_is_lost() {
         let mut net = connected(&mut w, &mut sa, &mut sb, Link::new(7, Params::new(10 * MS)));
         net.run(net.now + SEC, |_| false);
         net.link.route(PathId(1)).ab.drop_next(1);
-        net.a.conn.send_extension(ext::TEST_FIRST, b"sub open").unwrap();
+        net.a
+            .conn
+            .send_extension(lent!(net.a), ext::TEST_FIRST, b"sub open")
+            .unwrap();
         assert!(net.run(net.now + 10 * SEC, |n| {
             n.b.saw(|r| *r == Rec::Extension(ext::TEST_FIRST, b"sub open".to_vec()))
         }));
         let max = net.a.conn.max_extension_size(0x41);
         assert!(max > 1025, "{max}");
         assert_eq!(
-            net.a.conn.send_extension(ext::TEST_FIRST, &vec![0u8; max + 1]),
+            net.a
+                .conn
+                .send_extension(lent!(net.a), ext::TEST_FIRST, &vec![0u8; max + 1]),
             Err(ExtensionError::TooLarge { max_size: max })
         );
-        assert_eq!(net.a.conn.send_extension(0x10, b"low"), Err(ExtensionError::BadType));
+        assert_eq!(
+            net.a.conn.send_extension(lent!(net.a), 0x10, b"low"),
+            Err(ExtensionError::BadType)
+        );
     });
 }
 
@@ -262,7 +270,7 @@ fn an_extension_frame_near_the_packet_limit_is_delivered_once_under_loss() {
         assert!(max > 1300, "{max}");
         let body: Vec<u8> = (0..max).map(|i| (i % 251) as u8).collect();
         net.link.route(PathId(1)).ab.drop_next(2);
-        net.a.conn.send_extension(ext::TEST_FIRST, &body).unwrap();
+        net.a.conn.send_extension(lent!(net.a), ext::TEST_FIRST, &body).unwrap();
         assert!(net.run(net.now + 10 * SEC, |n| {
             n.b.saw(|r| *r == Rec::Extension(ext::TEST_FIRST, body.clone()))
         }));
@@ -277,7 +285,9 @@ fn an_extension_frame_near_the_packet_limit_is_delivered_once_under_loss() {
         assert_eq!(seen, 1, "delivered {seen} times");
         // One byte more cannot fit the packet.
         assert!(matches!(
-            net.a.conn.send_extension(ext::TEST_FIRST, &vec![0u8; max + 1]),
+            net.a
+                .conn
+                .send_extension(lent!(net.a), ext::TEST_FIRST, &vec![0u8; max + 1]),
             Err(ExtensionError::TooLarge { .. })
         ));
     });
@@ -305,7 +315,10 @@ fn an_extension_frame_that_no_longer_fits_after_the_mtu_falls_is_reported_and_fr
         // A frame as large as the first path takes goes out and is never acknowledged.
         let big = net.a.conn.max_extension_size(0x41);
         net.link.route(PathId(1)).up = false;
-        net.a.conn.send_extension(ext::TEST_FIRST, &vec![7u8; big]).unwrap();
+        net.a
+            .conn
+            .send_extension(lent!(net.a), ext::TEST_FIRST, &vec![7u8; big])
+            .unwrap();
         net.run(net.now + 300 * MS, |_| false);
         // The connection moves to the smaller path: the held frame cannot fit a packet there.
         net.a.conn.set_active(PathId(3)).unwrap();
@@ -314,12 +327,15 @@ fn an_extension_frame_that_no_longer_fits_after_the_mtu_falls_is_reported_and_fr
         net.run(net.now + 10 * MS, |_| false);
         assert!(net.a.saw(|r| *r == Rec::ExtensionUndeliverable(ext::TEST_FIRST, big)));
         assert!(matches!(
-            net.a.conn.send_extension(ext::TEST_FIRST, &vec![0u8; big]),
+            net.a.conn.send_extension(lent!(net.a), ext::TEST_FIRST, &vec![0u8; big]),
             Err(ExtensionError::TooLarge { max_size }) if max_size == max
         ));
         // Every slot is free: eight more frames, each as large as now fits, all arrive once.
         for ty in 0x50..0x58u64 {
-            net.a.conn.send_extension(ty, &vec![ty as u8; max]).unwrap();
+            net.a
+                .conn
+                .send_extension(lent!(net.a), ty, &vec![ty as u8; max])
+                .unwrap();
         }
         assert!(net.run(net.now + 30 * SEC, |n| {
             (0x50..0x58u64).all(|ty| n.b.saw(|r| *r == Rec::Extension(ty, vec![ty as u8; max])))
@@ -356,7 +372,7 @@ fn the_packet_number_is_two_bytes_wide_for_a_window_up_to_40_mb() {
         let (mut sa, mut sb) = (Store::new(true), Store::new(false));
         let mut net = connected(&mut w, &mut sa, &mut sb, Link::new(9, Params::new(5 * MS)));
         let log = capture(&mut net);
-        net.a.conn.send_datagram(b"x").unwrap();
+        net.a.conn.send_datagram(lent!(net.a), b"x").unwrap();
         net.run(net.now + 200 * MS, |_| false);
         let sent = log.borrow();
         let short: Vec<_> = sent.iter().filter(|(is_a, d, _)| *is_a && d[0] & 0x80 == 0).collect();
@@ -408,8 +424,8 @@ fn any_packet_ends_a_sleep_and_data_flows_to_a_sleeping_peer() {
         net.a.with_env(now, pinc_transport::conn::Connection::sleep);
         assert!(net.run(net.now + SEC, |n| n.b.conn.peer_asleep()));
         // Data is not held back for a peer that announced its sleep.
-        let id = net.b.conn.open_bi().unwrap();
-        net.b.conn.write(id, b"for a sleeper").unwrap();
+        let id = net.b.open_bi().unwrap();
+        net.b.write(id, b"for a sleeper").unwrap();
         net.b.conn.finish(id).unwrap();
         net.run(net.now + SEC, |_| false);
         assert!(net.b.conn.stats().packets_sent > 0 && net.b.conn.peer_asleep());
@@ -435,14 +451,14 @@ fn a_lost_wake_does_not_leave_the_connection_suspended() {
         let now = net.now;
         net.a.with_env(now, pinc_transport::conn::Connection::wake);
         net.run(net.now + 10 * MS, |_| false);
-        let id = net.a.conn.open_bi().unwrap();
-        net.a.conn.write(id, b"I am back").unwrap();
+        let id = net.a.open_bi().unwrap();
+        net.a.write(id, b"I am back").unwrap();
         net.a.conn.finish(id).unwrap();
         assert!(net.run(net.now + 10 * SEC, |n| n.b.fin.contains(&id)));
         assert!(!net.b.conn.peer_asleep(), "the data ended the sleep");
         // And B's own data reaches A again.
-        let back = net.b.conn.open_bi().unwrap();
-        net.b.conn.write(back, b"welcome").unwrap();
+        let back = net.b.open_bi().unwrap();
+        net.b.write(back, b"welcome").unwrap();
         net.b.conn.finish(back).unwrap();
         assert!(net.run(net.now + 10 * SEC, |n| n.a.fin.contains(&back)));
     });
@@ -482,8 +498,8 @@ fn a_link_return_sends_wake_and_the_probes_repeat_it_for_3_seconds() {
         net.link.route(PathId(1)).up = false;
         net.run(net.now + 2 * SEC, |_| false);
         net.link.route(PathId(1)).up = true;
-        let id = net.a.conn.open_bi().unwrap();
-        net.a.conn.write(id, &[1u8; 5000]).unwrap();
+        let id = net.a.open_bi().unwrap();
+        net.a.write(id, &[1u8; 5000]).unwrap();
         let log = capture(&mut net);
         let now = net.now;
         net.a.with_env(now, |c, env| c.set_link_down(env, false));
@@ -536,8 +552,8 @@ fn both_ends_follow_a_new_path_at_once_and_challenge_it_in_parallel() {
         let mut net = connected(&mut w, &mut sa, &mut sb, link);
         // A's route 1 now looks to B like a new address: NAT rebinding.
         net.link.rebind(PathId(1), PathId(9));
-        let id = net.a.conn.open_bi().unwrap();
-        net.a.conn.write(id, b"after the rebinding").unwrap();
+        let id = net.a.open_bi().unwrap();
+        net.a.write(id, b"after the rebinding").unwrap();
         net.a.conn.finish(id).unwrap();
         // One trip later B sends on the new path, before any challenge is answered.
         assert!(net.run(net.now + 25 * MS, |n| n.b.conn.active_path() == Some(PathId(9))));
@@ -646,8 +662,8 @@ fn data_after_an_idle_spell_brings_the_slow_rechallenge_forward() {
                 net.run(t0 + 20 * SEC, |_| false);
                 if write_at_20s {
                     // Data of more than 72 bytes after an idle spell: the next challenge goes out now.
-                    let id = net.a.conn.open_bi().unwrap();
-                    net.a.conn.write(id, &[3u8; 100]).unwrap();
+                    let id = net.a.open_bi().unwrap();
+                    net.a.write(id, &[3u8; 100]).unwrap();
                 }
                 net.run(t0 + 28 * SEC, |_| false);
                 net.link.routes[1].ab.sent - base

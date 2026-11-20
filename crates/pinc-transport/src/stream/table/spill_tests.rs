@@ -329,7 +329,7 @@ fn an_empty_arena_refuses_the_frame_fragmented_and_counts_it() {
     );
     assert_eq!((t.stats().range_overflows, pool.spill_refused()), (1, 1));
     assert_eq!(t.on_stream_frame(&mut pool, 0, 0, &[7; 10], false), Ok(()));
-    assert_eq!(t.read_chunk(&pool, 0).map(<[u8]>::len), Some(20));
+    assert_eq!(t.read_chunk(pool.mem(), 0).map(<[u8]>::len), Some(20));
 }
 
 /// A session holds at most half of the arena: with two slots its first spilled stream takes one, its second is

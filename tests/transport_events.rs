@@ -17,7 +17,7 @@ use proptest::prelude::*;
 use pinc_crypto::IdentityAlg;
 use pinc_security::{TicketBatch, TicketEntry};
 use pinc_tests::*;
-use pinc_transport::conn::{Drop, Event, PathId};
+use pinc_transport::conn::{Drop, Event, Lent, PathId};
 use pinc_transport::frame::Frame;
 use pinc_wire::Writer;
 
@@ -102,7 +102,7 @@ proptest! {
             let t = net.now + SEC;
             net.run(t, |_| false);
             // Everything the handshake queued is read first, so the queue starts empty.
-            while net.b.conn.poll_event().is_some() {}
+            while net.b.conn.poll_event(Lent { spill: &mut net.b.spill, store: &mut net.b.store }).is_some() {}
             let now = net.now;
             for (k, fs) in packets.iter().enumerate() {
                 let mut buf = vec![0u8; 9000];
@@ -112,7 +112,7 @@ proptest! {
             let lost = net.b.conn.stats().events_lost;
             let (mut opened, mut reset) = (HashSet::new(), HashSet::new());
             let mut dup = false;
-            while let Some(ev) = net.b.conn.poll_event() {
+            while let Some(ev) = net.b.conn.poll_event(Lent { spill: &mut net.b.spill, store: &mut net.b.store }) {
                 match ev {
                     Event::StreamOpened(id) => dup |= !opened.insert(id),
                     Event::StreamReset { id, .. } => dup |= !reset.insert(id),
@@ -141,8 +141,8 @@ fn gated_pair(f: impl FnOnce(&mut Net<'_, '_, RING>) + Send + 'static) {
 fn a_gated_connection_refuses_data_unacknowledged_and_takes_it_when_the_gate_opens() {
     gated_pair(|net| {
         net.b.conn.set_gated(true);
-        let id = net.a.conn.open_bi().unwrap();
-        net.a.conn.write(id, b"hello").unwrap();
+        let id = net.a.open_bi().unwrap();
+        net.a.write(id, b"hello").unwrap();
         net.a.conn.finish(id).unwrap();
         let t = net.now + 2 * SEC;
         net.run(t, |_| false);
@@ -166,8 +166,8 @@ fn a_gated_connection_still_takes_acknowledgements_and_a_close() {
     gated_pair(|net| {
         // A is gated: B's acknowledgements of A's data (packets with no event frames) still reach it.
         net.a.conn.set_gated(true);
-        let id = net.a.conn.open_bi().unwrap();
-        net.a.conn.write(id, &vec![3u8; 20_000]).unwrap();
+        let id = net.a.open_bi().unwrap();
+        net.a.write(id, &vec![3u8; 20_000]).unwrap();
         net.a.conn.finish(id).unwrap();
         let t = net.now + 3 * SEC;
         assert!(net.run(t, |n| n.b.fin.contains(&id)));
@@ -201,7 +201,10 @@ fn opened_by(net: &mut Net<'_, '_, RING>, pn: u64, frames: &[Frame<'_>]) -> Vec<
         .with_lent(now, |c, env, l| c.inject_payload(env, l, PathId(1), now, pn, &buf[..n]))
         .unwrap();
     let mut opened = Vec::new();
-    while let Some(ev) = net.b.conn.poll_event() {
+    while let Some(ev) = net.b.conn.poll_event(Lent {
+        spill: &mut net.b.spill,
+        store: &mut net.b.store,
+    }) {
         if let Event::StreamOpened(id) = ev {
             opened.push(id);
         }
@@ -222,7 +225,15 @@ fn data(id: u64) -> Frame<'static> {
 #[test]
 fn a_stream_that_arrives_first_opens_every_lower_stream_of_its_kind_with_an_event() {
     gated_pair(|net| {
-        while net.b.conn.poll_event().is_some() {}
+        while net
+            .b
+            .conn
+            .poll_event(Lent {
+                spill: &mut net.b.spill,
+                store: &mut net.b.store,
+            })
+            .is_some()
+        {}
         // The client opened bidirectional streams 0, 4 and 8 and unidirectional 2, 6 and 10; the last of each kind
         // arrives alone: the earlier ones are opened by it and each is reported once.
         assert_eq!(opened_by(net, 5000, &[data(8)]), [0, 4, 8]);
@@ -244,8 +255,8 @@ fn a_stream_that_arrives_first_opens_every_lower_stream_of_its_kind_with_an_even
 #[test]
 fn a_stop_request_resets_the_sender_with_its_code_and_both_sides_hear_it() {
     gated_pair(|net| {
-        let id = net.a.conn.open_bi().unwrap();
-        net.a.conn.write(id, &vec![7u8; 50_000]).unwrap();
+        let id = net.a.open_bi().unwrap();
+        net.a.write(id, &vec![7u8; 50_000]).unwrap();
         let t = net.now + SEC;
         net.run(t, |n| n.b.read.get(&id).is_some_and(|d| !d.is_empty()));
         net.b.conn.stop_sending(id, 77).unwrap();
@@ -260,7 +271,7 @@ fn a_stop_request_resets_the_sender_with_its_code_and_both_sides_hear_it() {
             "the stopper did not see the reset"
         );
         assert_eq!(net.a.log.iter().filter(|r| matches!(r, Rec::Stopped(..))).count(), 1);
-        assert!(net.a.conn.write(id, b"more").is_err(), "a stopped stream took a write");
+        assert!(net.a.write(id, b"more").is_err(), "a stopped stream took a write");
     });
 }
 
@@ -273,8 +284,8 @@ fn a_lost_stop_request_is_sent_again_and_a_stop_for_an_ended_stream_is_ignored()
         link.loss_ppm = 400_000;
         let mut net = setup(&mut w, &mut sa, &mut sb, Link::new(11, link));
         assert!(net.connect(net.now + 30 * SEC));
-        let id = net.a.conn.open_bi().unwrap();
-        net.a.conn.write(id, &vec![7u8; 20_000]).unwrap();
+        let id = net.a.open_bi().unwrap();
+        net.a.write(id, &vec![7u8; 20_000]).unwrap();
         let t = net.now + 5 * SEC;
         net.run(t, |n| n.b.read.get(&id).is_some_and(|d| !d.is_empty()));
         net.b.conn.stop_sending(id, 9).unwrap();
@@ -284,8 +295,8 @@ fn a_lost_stop_request_is_sent_again_and_a_stop_for_an_ended_stream_is_ignored()
             "the stop never arrived over a lossy link"
         );
         // A stop request for a stream the peer already finished sends nothing and fails nothing.
-        let id2 = net.a.conn.open_uni().unwrap();
-        net.a.conn.write(id2, b"done").unwrap();
+        let id2 = net.a.open_uni().unwrap();
+        net.a.write(id2, b"done").unwrap();
         net.a.conn.finish(id2).unwrap();
         let t = net.now + 30 * SEC;
         assert!(net.run(t, |n| n.b.fin.contains(&id2)));
@@ -300,7 +311,15 @@ fn a_lost_stop_request_is_sent_again_and_a_stop_for_an_ended_stream_is_ignored()
 #[test]
 fn a_stop_request_for_a_stream_the_peer_cannot_send_on_is_a_violation() {
     gated_pair(|net| {
-        while net.b.conn.poll_event().is_some() {}
+        while net
+            .b
+            .conn
+            .poll_event(Lent {
+                spill: &mut net.b.spill,
+                store: &mut net.b.store,
+            })
+            .is_some()
+        {}
         let stop = Frame::StopSending { id: 2, error: 1 };
         let mut buf = vec![0u8; 64];
         let mut w = Writer::new(&mut buf);
@@ -321,7 +340,15 @@ fn a_stop_request_for_a_stream_the_peer_cannot_send_on_is_a_violation() {
 fn the_connection_statistics_count_a_stream_range_spill() {
     gated_pair(|net| {
         net.b.spill = pinc_transport::stream::spill::SpillArena::new_boxed(2);
-        while net.b.conn.poll_event().is_some() {}
+        while net
+            .b
+            .conn
+            .poll_event(Lent {
+                spill: &mut net.b.spill,
+                store: &mut net.b.store,
+            })
+            .is_some()
+        {}
         let stats = net.b.conn.stats();
         assert_eq!((stats.range_spills, stats.range_overflows), (0, 0));
         // One-byte frames at every 20th offset leave 100 holes, past the 96 ranges kept inline.
@@ -346,7 +373,15 @@ fn the_connection_statistics_count_a_stream_range_spill() {
 #[test]
 fn the_connection_statistics_count_a_refused_spill() {
     gated_pair(|net| {
-        while net.b.conn.poll_event().is_some() {}
+        while net
+            .b
+            .conn
+            .poll_event(Lent {
+                spill: &mut net.b.spill,
+                store: &mut net.b.store,
+            })
+            .is_some()
+        {}
         let frames: Vec<Frame<'_>> = (0..100u64)
             .map(|k| Frame::Stream {
                 id: 0,

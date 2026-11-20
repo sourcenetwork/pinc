@@ -267,6 +267,7 @@ fn build<const K: usize, const D: usize>(
         identity,
         cfg,
         spec.pool_chunks,
+        2 * K * pinc_transport::stream::store::floor_chunks(spec.pool_chunks),
         pinc_transport::stream::spill::DEFAULT_SLOTS,
     );
     let mut env = Env {

@@ -319,7 +319,7 @@ fn a_peer_reset_frees_the_buffer() {
     t.on_reset_stream(&mut pool, 2, 5, 60_000).unwrap();
     assert_eq!(pool.used_chunks(), 0);
     assert_eq!(t.recv_status(2), Some(RecvStatus::Reset(5)));
-    assert!(t.read_chunk(&pool, 2).is_none());
+    assert!(t.read_chunk(pool.mem(), 2).is_none());
     t.on_stream_frame(&mut pool, 2, 30_000, &[1; 10], false).unwrap();
     assert_eq!(
         t.on_stream_frame(&mut pool, 2, 60_000, &[1; 1], false),
