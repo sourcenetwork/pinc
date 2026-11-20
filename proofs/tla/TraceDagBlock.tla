@@ -1,6 +1,6 @@
 ---------------------------- MODULE TraceDagBlock ----------------------------
 (***************************************************************************)
-(* Trace validation of the blocks of pinc-dag (block/*).                   *)
+(* Trace validation of the blocks of pinc-dag (block/...).                   *)
 (*                                                                         *)
 (* The Rust test tests/trace_dag_block.rs runs the real BlockRef::parse on *)
 (* the hand-built blocks and the mutations of DagBlock.cfg and on seeded   *)

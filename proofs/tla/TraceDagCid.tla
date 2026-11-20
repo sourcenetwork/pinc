@@ -1,6 +1,6 @@
 ----------------------------- MODULE TraceDagCid -----------------------------
 (***************************************************************************)
-(* Trace validation of the CIDs of pinc-dag (cid/*).                       *)
+(* Trace validation of the CIDs of pinc-dag (cid/...).                       *)
 (*                                                                         *)
 (* The Rust test tests/trace_dag_cid.rs runs the real CidRef::parse,       *)
 (* CidRef::parse_prefix, Cid::new, CidRef::encode_text, Cid::parse_text,   *)

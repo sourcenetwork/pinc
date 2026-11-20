@@ -1,6 +1,6 @@
 ----------------------------- MODULE TraceDagCar -----------------------------
 (***************************************************************************)
-(* Trace validation of the CAR v1 archives of pinc-dag (car/*).            *)
+(* Trace validation of the CAR v1 archives of pinc-dag (car/...).            *)
 (*                                                                         *)
 (* The Rust test tests/trace_dag_car.rs builds CARs with the real          *)
 (* CarWriter (recording every CarWriter::new and section call with its     *)

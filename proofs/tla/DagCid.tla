@@ -178,7 +178,7 @@ DecFrom(ds, i, acc, bits, out) ==
          IF ~((ch >= 97 /\ ch <= 122) \/ (ch >= 50 /\ ch <= 55))
          THEN TErr("character outside the base32 lower alphabet")
          ELSE LET v == IF ch >= 97 THEN ch - 97 ELSE ch - 50 + 26
-                  acc1 == (acc * 32) % 65536 + v
+                  acc1 == ((acc * 32) % 65536) + v
                   bits1 == bits + 5
               IN IF bits1 >= 8
                  THEN LET nb == bits1 - 8
