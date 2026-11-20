@@ -768,7 +768,11 @@ fn a_session_due_at_the_clock_limit_runs_once_and_then_has_no_deadline() {
             net.nodes[a].ep.poll_timeout().is_some(),
             "a connected session has a timer"
         );
+        let closed = |net: &CoreNet| net.nodes[a].count(|e| matches!(e, Event::Closed { .. }));
+        let before = closed(&net);
         net.nodes[a].ep.handle_timeout(u64::MAX);
+        net.nodes[a].service(u64::MAX);
+        assert_eq!(closed(&net), before + 1, "the timer due at the last instant ran once");
         assert_eq!(
             net.nodes[a].ep.poll_timeout(),
             None,

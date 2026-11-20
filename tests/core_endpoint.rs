@@ -709,6 +709,11 @@ fn a_dial_refused_for_a_full_table_learns_no_path() {
         net.fill_table(a);
         let paths = net.nodes[a].ep.trace_path_count();
         let (peer, to, now) = (net.nodes[c].node, net.nodes[c].addr, net.now);
+        // The fillers dial 10.9.0.100 to 10.9.0.255; the path count holds only if none of them used this address.
+        assert!(
+            !(100u8..=255).any(|t| to == std::net::SocketAddr::from(([10, 9, 0, t], 4433))),
+            "the table fill used the refused address"
+        );
         let full = net.nodes[a].connect(now, peer, ALPN_A, to, Role::Other);
         assert_eq!(full.err(), Some(CommandError::Full));
         assert_eq!(
