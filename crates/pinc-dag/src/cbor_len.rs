@@ -3,16 +3,7 @@
 //! Invariants: each function returns exactly the byte count the canonical [`pinc_wire::cbor::Encoder`] writes for the
 //! same piece, so a caller can size its buffer before encoding and check the result afterwards.
 
-/// The size of a header (initial byte plus argument) for `arg`.
-pub(crate) const fn head_len(arg: u64) -> usize {
-    match arg {
-        0..=23 => 1,
-        24..=0xff => 2,
-        0x100..=0xffff => 3,
-        0x1_0000..=0xffff_ffff => 5,
-        _ => 9,
-    }
-}
+pub(crate) use pinc_wire::cbor::head_len;
 
 /// The size of a text string of `n` bytes.
 pub(crate) const fn text_len(n: usize) -> usize {

@@ -11,7 +11,7 @@ mod decode;
 mod encode;
 
 pub use decode::{Decoder, MapReader};
-pub use encode::{Encoder, MapKeys};
+pub use encode::{Encoder, MapKeys, head_len};
 
 use crate::error::WireError;
 

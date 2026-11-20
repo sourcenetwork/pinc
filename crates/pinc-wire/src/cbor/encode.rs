@@ -27,7 +27,9 @@ const fn head_shape(arg: u64) -> (u8, usize) {
     }
 }
 
-const fn head_len(arg: u64) -> usize {
+/// The size of the minimal header (initial byte plus argument) the encoder writes for `arg`.
+#[must_use]
+pub const fn head_len(arg: u64) -> usize {
     1 + head_shape(arg).1
 }
 
