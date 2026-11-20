@@ -30,7 +30,7 @@ pub struct Slot<K = ()> {
 }
 
 impl<K> Slot<K> {
-    /// The slot's number, below the pool's capacity.
+    /// The slot's number; below the pool's capacity for a slot the pool gave out.
     pub fn index(self) -> usize {
         self.index as usize
     }
