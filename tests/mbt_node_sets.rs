@@ -705,6 +705,7 @@ fn start(seed_peers: (NodeId, NodeId)) -> Run {
 #[test]
 fn the_reconcile_layer_matches_the_model() {
     let Some(cases) = mbt_cases("node_sets.ndjson") else {
+        eprintln!("mbt_node_sets: PINC_MBT_DIR is not set, nothing checked (scripts/proofs.sh generates the cases)");
         return;
     };
     let mut cases = cases.unwrap();
