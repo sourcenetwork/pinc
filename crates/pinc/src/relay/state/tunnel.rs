@@ -513,11 +513,7 @@ mod tests {
     impl pinc_connect::client::Port for Stub {
         type Src = pinc_transport::stream::NoSource;
 
-        fn command(
-            &mut self,
-            _: u64,
-            _: Command<'_, Self::Src>,
-        ) -> Result<pinc_core::Reply, pinc_core::CommandError> {
+        fn command(&mut self, _: u64, _: Command<'_, Self::Src>) -> Result<pinc_core::Reply, pinc_core::CommandError> {
             Ok(pinc_core::Reply {
                 value: pinc_core::Value::None,
                 events: pinc_core::Events::default(),
@@ -656,16 +652,10 @@ mod tests {
         let m = node(0xe1);
         let (direct, other) = (SessionId(1), SessionId(2));
         let alpn = pinc_security::Alpn::new(b"x").unwrap();
-        let mut ep = Stub {
-            direct: vec![direct],
-        };
+        let mut ep = Stub { direct: vec![direct] };
         let mut out = Vec::new();
         for session in [direct, other] {
-            let ev = EpEvent::Incoming {
-                session,
-                node: m,
-                alpn,
-            };
+            let ev = EpEvent::Incoming { session, node: m, alpn };
             core.hub_event(&mut ep, T0, T0, &ev, &mut out);
         }
         core.fx.set_direct(&m, true);
@@ -682,6 +672,10 @@ mod tests {
             !core.fx.tunnel_ready(&m),
             "the relay still tunnels to a node that has no direct route"
         );
-        assert_eq!(core.hub.as_ref().unwrap().sessions(), 1, "the node's other session was closed");
+        assert_eq!(
+            core.hub.as_ref().unwrap().sessions(),
+            1,
+            "the node's other session was closed"
+        );
     }
 }

@@ -84,7 +84,11 @@ fn a_second_session_of_a_node_closes_the_first_carrier_by_its_slot() {
     core.on_open(first, node, T0);
     let second = core.add_conn((), CarrierKind::Tcp, T0).unwrap();
     core.on_open(second, node, T0);
-    assert_eq!(core.conn(first).unwrap().dying, Some(Closed::Replaced), "the replaced carrier stays open");
+    assert_eq!(
+        core.conn(first).unwrap().dying,
+        Some(Closed::Replaced),
+        "the replaced carrier stays open"
+    );
     assert_eq!(core.conn(second).unwrap().dying, None, "the new carrier was closed");
     assert_eq!(core.by_node.get(&node_key(&node)), Some(&second));
     assert_eq!(core.sm.sessions(), 1, "the node holds more than one session");
