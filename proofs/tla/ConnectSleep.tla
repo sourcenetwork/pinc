@@ -79,19 +79,39 @@ Post(W, now, tk, nowall, started, sus, res) ==
        /\ badWall' = (badWall \/ (nowall /\ started))
        /\ reach' = (reach \/ (fired /\ \E x \in Relays : sent[x] > 0))
 
-Tick == \E now \in Times, w \in BOOLEAN, cp \in BOOLEAN, rj \in BOOLEAN, bj \in BOOLEAN :
-    LET W == TickStep(W0(s), now, w, PubDue(s, now, K) /\ cp, rj, bj, K) IN
+\* The calls try a choice of the host or the code only when its values give different steps, so the states and steps
+\* are the same and fewer successors are generated twice. The publish choice cp is read only through
+\* PubDue(s, now, K) /\ cp: when the publish is not due, cp is FALSE. Whether a record job (rj) or a beacon job (bj)
+\* can be built is read only by a start_jobs (in TickStep, SignResponse or SuspendStep), and only on its record or its
+\* beacon branch, so each is tried both ways only when the step gives two results for it, the other FALSE (Reads);
+\* whether the second start_jobs of a drive can build a beacon job (bj2) likewise, given the rest. Whether it can
+\* build a record job is FALSE: that call never reaches the record branch, since the first one returns early only
+\* when a job is out or there is no wall clock, which the beacon flag does not change, takes a sleep notice when one
+\* is owed, and otherwise leaves the record flag FALSE (it builds the record job or arms the retry).
+PubChoice(st, now) == IF PubDue(st, now, K) THEN BOOLEAN ELSE {FALSE}
+Reads(F(_)) == IF F(TRUE) = F(FALSE) THEN {FALSE} ELSE BOOLEAN
+
+Tick == \E now \in Times, w \in BOOLEAN : \E cp \in PubChoice(s, now) :
+    LET pw == PubDue(s, now, K) /\ cp IN
+    \E rj \in Reads(LAMBDA r : TickStep(W0(s), now, w, pw, r, FALSE, K)),
+       bj \in Reads(LAMBDA b : TickStep(W0(s), now, w, pw, FALSE, b, K)) :
+    LET W == TickStep(W0(s), now, w, pw, rj, bj, K) IN
     /\ Post(W, now, TRUE, ~w, s.job.k = "none" /\ W.s.job.k # "none", FALSE, FALSE)
     /\ UNCHANGED <<failed, badRefuse, badRetry>>
 
-Drive == \E now \in Times, w \in BOOLEAN, cp \in BOOLEAN, rj \in BOOLEAN, bj \in BOOLEAN, rj2 \in BOOLEAN,
-            bj2 \in BOOLEAN, bc \in (IF Beacons THEN BOOLEAN ELSE {FALSE}) :
+Drive == \E now \in Times, w \in BOOLEAN, bc \in (IF Beacons THEN BOOLEAN ELSE {FALSE}) : \E cp \in PubChoice(s, now) :
     /\ bc => w
-    /\ LET W == DriveStep(W0(s), now, w, PubDue(s, now, K) /\ cp, rj, bj, rj2, bj2, bc, K) IN
+    /\ LET pw == PubDue(s, now, K) /\ cp IN
+       \E rj \in Reads(LAMBDA r : TickStep(W0(s), now, w, pw, r, FALSE, K)),
+          bj \in Reads(LAMBDA b : TickStep(W0(s), now, w, pw, FALSE, b, K)) :
+       \E bj2 \in Reads(LAMBDA b : DriveStep(W0(s), now, w, pw, rj, bj, FALSE, b, bc, K)) :
+       LET W == DriveStep(W0(s), now, w, pw, rj, bj, FALSE, bj2, bc, K) IN
        /\ Post(W, now, TRUE, ~w, s.job.k = "none" /\ W.s.job.k # "none", FALSE, FALSE)
        /\ UNCHANGED <<failed, badRefuse, badRetry>>
 
-Answer == \E now \in Times, ok \in BOOLEAN, rj \in BOOLEAN, bj \in BOOLEAN :
+Answer == \E now \in Times, ok \in BOOLEAN :
+    \E rj \in Reads(LAMBDA r : SignResponse(W0(s), now, ok, r, FALSE, K)),
+       bj \in Reads(LAMBDA b : SignResponse(W0(s), now, ok, FALSE, b, K)) :
     /\ s.job.k # "none"
     /\ LET W == SignResponse(W0(s), now, ok, rj, bj, K)
            j == s.job
@@ -104,7 +124,9 @@ Answer == \E now \in Times, ok \in BOOLEAN, rj \in BOOLEAN, bj \in BOOLEAN :
           /\ badRetry' = (badRetry \/ (~ok /\ j.k = "record" /\ ~s.record /\ now < TMax
                                         /\ ((W.s.pub # K.never /\ W.s.pub <= now) \/ W.s.job.k = "record")))
 
-Suspend == \E now \in Times, rj \in BOOLEAN, bj \in BOOLEAN :
+Suspend == \E now \in Times :
+    \E rj \in Reads(LAMBDA r : SuspendStep(W0(s), now, r, FALSE, K)),
+       bj \in Reads(LAMBDA b : SuspendStep(W0(s), now, FALSE, b, K)) :
     /\ Twice \/ ~s.susp
     /\ LET W == SuspendStep(W0(s), now, rj, bj, K) IN
        /\ Post(W, now, FALSE, FALSE, s.job.k = "none" /\ W.s.job.k # "none", TRUE, FALSE)
