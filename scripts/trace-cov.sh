@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Coverage of the library crates under the trace tests only, and, for the Rust items docs/PROOFS.md names as modelled, the
+# Coverage of the library crates under the trace tests only, and, for the Rust items docs/proofs/ names as modelled, the
 # lines (and, with BRANCH=1, the branches) the trace tests never run. Needs cargo-llvm-cov and the llvm-tools component
 # (cargo install cargo-llvm-cov; rustup component add llvm-tools-preview). BRANCH=1 uses the nightly toolchain, since
 # branch coverage is not stable. Output stays under target/; nothing is committed. Usage: [BRANCH=1] scripts/trace-cov.sh

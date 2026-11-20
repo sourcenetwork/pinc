@@ -4,7 +4,7 @@
 # Usage: scripts/proofs.sh [deep]
 # Without an argument it runs the quick profile: a model with a file under proofs/tla/quick/ is checked over the
 # smaller bounds of that file (the same specification and the same properties), so the whole step takes minutes.
-# `deep` checks every model over the bounds docs/PROOFS.md states for it.
+# `deep` checks every model over the bounds docs/proofs/properties.md states for it.
 set -euo pipefail
 PROFILE="${1:-quick}"
 case "$PROFILE" in quick|deep) ;; *) echo "usage: scripts/proofs.sh [deep]" >&2; exit 2 ;; esac

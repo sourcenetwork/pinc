@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Coverage of the Rust items docs/PROOFS.md names as modelled, from an lcov file (see scripts/trace-cov.sh).
+"""Coverage of the Rust items docs/proofs/ names as modelled, from an lcov file (see scripts/trace-cov.sh).
 
-Reads the "Rust item" column of the tables of docs/PROOFS.md, resolves each `Type::function` (or bare `function`) to
+Reads the "Rust item" column of the tables of docs/proofs/*.md, resolves each `Type::function` (or bare `function`) to
 the `fn` definitions under crates/*/src whose file or `impl` block mentions the type, and prints, per file, the line
 coverage of the whole file and of the modelled functions, with the uncovered lines (and uncovered branches, when the
 lcov file has branch data, i.e. it came from a nightly `--branch` run) as file:line.
@@ -35,7 +35,7 @@ branches = {rel(k): v for k, v in branches.items()}
 
 # the Rust-item cells of the proof tables
 tokens = set()
-for row in open("docs/PROOFS.md"):
+for row in (r for f in sorted(glob.glob("docs/proofs/*.md")) for r in open(f)):
     cells = row.split("|")
     if len(cells) < 8 or not row.startswith("| "):
         continue
