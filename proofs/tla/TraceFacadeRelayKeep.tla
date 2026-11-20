@@ -14,8 +14,9 @@
 (* (the write out given back, nothing restored). Every call must be the    *)
 (* step the operators of FacadeRelayKeepOps.tla compute: the answer of     *)
 (* each call, the record and the packets the machine holds after it, every *)
-(* write job, and after each restore and rerun the whole of what the       *)
-(* machine holds and the store error count.                                *)
+(* write job (a failed one tried again behind the marks not tried yet, at  *)
+(* most MAX_TRIES times), and after each restore and rerun the whole of    *)
+(* what the machine holds and the store error count.                       *)
 (*                                                                         *)
 (* Times are in units of RECORD_TTL_NS / 4; nodes and members are numbered *)
 (* in the order of their store key. Needs the TLA+ CommunityModules (Json, *)
@@ -23,7 +24,7 @@
 (* relay-keep.ndjson.                                                      *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
-CONSTANTS NR, NM, RCAP, MCAP, MBP, MAILQ, TTL, AGE
+CONSTANTS NR, NM, RCAP, MCAP, MBP, MAILQ, TTL, AGE, MAXT, FQ
 VARIABLES i, s, st, job
 vars == <<i, s, st, job>>
 INSTANCE FacadeRelayKeepOps
@@ -86,7 +87,8 @@ JobEv == /\ E.op = "job" /\ job.k = "none"
             /\ s' = r.s /\ job' = r.job
          /\ UNCHANGED st
 
-\* Part::store_written: a failure is counted, marked again and waits for the clock to move on (R3)
+\* Part::store_written: a failure is counted and queued behind the marks not tried yet, or given up and counted once
+\* more; the next write waits for the clock to move on (R3)
 WriteEv == /\ E.op = "write" /\ job.k # "none"
            /\ st' = IF E.ok THEN Apply(st, job) ELSE st
            /\ s' = IF E.ok THEN s ELSE Failed(s, job)
@@ -100,8 +102,15 @@ Finished == i > Len(Trace) /\ UNCHANGED vars
 TNext == Step \/ Finished
 TraceSpec == Init /\ [][TNext]_vars
 
+\* The states seen are told apart by the event index alone (VIEW in the config): every event is the step of exactly one
+\* of RestartEv .. WriteEv (each requires its op) and each sets s', st' and job' as functions of the state and the
+\* event, so a behaviour has one state per index and the view merges none. TLC then does not fingerprint the record
+\* table of 1030 nodes at every state; the same traces are accepted, and Inv is still checked in every state.
+IdxView == i
+
 \* the tables of the real run stay within their sizes
 Inv == /\ Count(s.rec) <= RCAP
        /\ \A m \in Members : Len(s.mb[m]) <= MBP
        /\ Cardinality(s.slot) <= MCAP
+       /\ Len(s.fq) <= FQ /\ s.tr < MAXT
 =============================================================================

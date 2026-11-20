@@ -2,7 +2,7 @@
 (***************************************************************************)
 (* What a node that carries the relay role keeps across a restart, step    *)
 (* for step: crates/pinc/src/relay/state/keep.rs (Keep, note_record,       *)
-(* note_mail, note_sweep, next_job, requeue, retry_after, restore) and     *)
+(* note_mail, note_sweep, next_job, requeue, write_failed, restore) and    *)
 (* relay/part.rs store_written, over the parts of the state                *)
 (* machine it reads (pinc-connect relay/records.rs accept and sweep,       *)
 (* mailbox.rs push_at, expire, sweep and the drain of route.rs             *)
@@ -32,6 +32,9 @@
 (*         (Keep.next_sweep is SWEEP_NS later, far below a unit);          *)
 (*   ra    the last_now of the last failed write, -1 when none: the next   *)
 (*         write waits for RETRY_NS (Keep.retry_at), far below a unit;     *)
+(*   fq    Keep.failed, the failed writes [k, n, tr] oldest first, tr the  *)
+(*         tries so far, served after every mark not tried yet;            *)
+(*   tr    Keep.tries, the tries of the write taken last (0: a fresh mark);*)
 (*   errs  Counters.store_errors.                                          *)
 (* Packets of one member have equal length, so MAILBOX_BYTES is MBP        *)
 (* packets. The store st: per node [seq, rcv, bad] (bad: "ok", or a torn   *)
@@ -47,7 +50,9 @@ CONSTANTS NR,    \* record nodes
           MBP,   \* the packets one member's mailbox holds (MAILBOX_BYTES over equal packets)
           MAILQ, \* the most members marked for a mailbox write (keep.rs: 4 * MAILBOX_MEMBERS)
           TTL,   \* RECORD_TTL_NS in units
-          AGE    \* Limits.mailbox_max_age_ns in units
+          AGE,   \* Limits.mailbox_max_age_ns in units
+          MAXT,  \* the tries before a failing write is given up (keep.rs MAX_TRIES)
+          FQ     \* the most failed writes waiting (keep.rs FAILED)
 
 Nodes == 1..NR
 Members == 1..NM
@@ -68,18 +73,18 @@ XCAP == 2 * RCAP
 
 \* Core::new at relay clock t: an empty machine and an empty Keep
 Machine0(t) == [now |-> t, ln |-> t, ls |-> 0, rec |-> [n \in Nodes |-> NoRec], mb |-> [m \in Members |-> <<>>],
-                slot |-> {}, kr |-> {}, kh |-> {}, kx |-> {}, km |-> <<>>, kn |-> -1, ra |-> -1, errs |-> 0]
+                slot |-> {}, kr |-> {}, kh |-> {}, kx |-> {}, km |-> <<>>, kn |-> -1, ra |-> -1, fq |-> <<>>, tr |-> 0,
+                errs |-> 0]
 \* a call that brings an event at the machine's clock (on_read, on_datagram) sets last_now
 Called(s) == [s EXCEPT !.ln = s.now]
 St0 == [rec |-> [n \in Nodes |-> NoSt], mail |-> [m \in Members |-> NoMail]]
 
 \* keep.rs note_record: skipped while restoring (the caller passes note = FALSE then)
 NoteRecord(s, n) == [s EXCEPT !.kr = @ \cup {n}, !.kh = @ \cup {n}]
-\* keep.rs note_mail: a mark past 4 * MAILBOX_MEMBERS is lost and counted as a failed store write (fix R10)
-NoteMail(s, m) ==
-    IF InSeq(m, s.km) THEN s
-    ELSE IF Len(s.km) < MAILQ THEN [s EXCEPT !.km = Append(@, m)]
-    ELSE [s EXCEPT !.errs = @ + 1]
+\* keep.rs push_mail: a mark past 4 * MAILBOX_MEMBERS is lost and counted as a failed store write (fix R10)
+PushMail(s, m) == IF Len(s.km) < MAILQ THEN [s EXCEPT !.km = Append(@, m)] ELSE [s EXCEPT !.errs = @ + 1]
+\* keep.rs note_mail: a member marked already stays marked once
+NoteMail(s, m) == IF InSeq(m, s.km) THEN s ELSE PushMail(s, m)
 
 \* Keep::mark_removed for each node of g, lowest key first: a node already marked stays, a new one is marked while
 \* the table has room; lost when a mark found no room
@@ -156,27 +161,55 @@ PopRec(s) ==
             THEN [job |-> [NoJob EXCEPT !.k = "put", !.n = n, !.seq = s.rec[n].seq, !.rcv = s.rec[n].rcv], s |-> s1]
             ELSE PopRec(s1)
 
-\* keep.rs next_job: nothing while a failed write waits for its retry (last_now before retry_at, fix R3); else a
-\* removal first, then a record, then a member's packets (the blob of held_packet 0, 1, ...)
+MailJob(s, m) == [NoJob EXCEPT !.k = "mail", !.n = m, !.pk = s.mb[m]]
+
+\* next_job, the failed loop: the oldest failed write, with its tries; a Put of a record the machine no longer holds
+\* and a Remove of a record that came back are dropped
+RECURSIVE PopFailed(_)
+PopFailed(s) ==
+    IF s.fq = <<>> THEN [job |-> NoJob, s |-> s]
+    ELSE LET x == Head(s.fq)
+             s1 == [s EXCEPT !.fq = Tail(@), !.tr = x.tr]
+         IN CASE x.k = "put" /\ s.rec[x.n].seq # 0 ->
+                   [job |-> [NoJob EXCEPT !.k = "put", !.n = x.n, !.seq = s.rec[x.n].seq, !.rcv = s.rec[x.n].rcv],
+                    s |-> s1]
+              [] x.k = "remove" /\ s.rec[x.n].seq = 0 -> [job |-> [NoJob EXCEPT !.k = "remove", !.n = x.n], s |-> s1]
+              [] x.k = "mail" -> [job |-> MailJob(s, x.n), s |-> s1]
+              [] OTHER -> PopFailed([s EXCEPT !.fq = Tail(@)])
+
+\* keep.rs next_job: nothing while a failed write waits for its retry (last_now before retry_at, fix R3); else, with
+\* the tries reset, a removal first, then a record, then a member's packets (the blob of held_packet 0, 1, ...), and
+\* only then the oldest failed write
 NextJob(s) ==
     IF s.ln <= s.ra THEN [job |-> NoJob, s |-> s]
-    ELSE IF s.kx # {}
-    THEN [job |-> [NoJob EXCEPT !.k = "remove", !.n = MinOf(s.kx)], s |-> [s EXCEPT !.kx = @ \ {MinOf(s.kx)}]]
-    ELSE LET r == PopRec(s) IN
-         IF r.job.k # "none" \/ r.s.km = <<>> THEN r
-         ELSE LET m == Last(r.s.km)
-              IN [job |-> [NoJob EXCEPT !.k = "mail", !.n = m, !.pk = r.s.mb[m]], s |-> [r.s EXCEPT !.km = Front(@)]]
+    ELSE LET s0 == [s EXCEPT !.tr = 0] IN
+    IF s0.kx # {}
+    THEN [job |-> [NoJob EXCEPT !.k = "remove", !.n = MinOf(s0.kx)], s |-> [s0 EXCEPT !.kx = @ \ {MinOf(s0.kx)}]]
+    ELSE LET r == PopRec(s0) IN
+         IF r.job.k # "none" THEN r
+         ELSE IF r.s.km # <<>> THEN [job |-> MailJob(r.s, Last(r.s.km)), s |-> [r.s EXCEPT !.km = Front(@)]]
+         ELSE PopFailed(r.s)
 
-\* keep.rs requeue: the write of job j did not finish (failed, or dropped with its run by Part::end): its node is
-\* marked again; the next write of a record reads the newest record from the machine
+\* keep.rs requeue: the write of job j was dropped with its run (Part::end): a write tried before goes back to the
+\* front of the failed writes with its tries while they have room; else its node is marked again (a record only in
+\* records: held keeps it unless a sweep took it out); the next write of a record reads the newest from the machine
 Requeue(s, j) ==
-    CASE j.k = "put" -> NoteRecord(s, j.n)
-      [] j.k = "remove" -> MarkOne(s, j.n)
-      [] j.k = "mail" -> NoteMail(s, j.n)
-      [] OTHER -> s
+    LET s0 == [s EXCEPT !.tr = 0] IN
+    IF s.tr > 0 /\ Len(s.fq) < FQ THEN [s0 EXCEPT !.fq = <<[k |-> j.k, n |-> j.n, tr |-> s.tr]>> \o @]
+    ELSE CASE j.k = "put" -> [s0 EXCEPT !.kr = @ \cup {j.n}]
+           [] j.k = "remove" -> MarkOne(s0, j.n)
+           [] j.k = "mail" -> NoteMail(s0, j.n)
+           [] OTHER -> s0
 
-\* Part::store_written(false): counted, marked again, and the next write waits from the part's last_now (fix R3)
-Failed(s, j) == [Requeue([s EXCEPT !.errs = @ + 1], j) EXCEPT !.ra = s.ln]
+\* keep.rs write_failed: a failed write is given up when it was tried MAX_TRIES times or the failed writes are full
+GivenUp(s) == s.tr + 1 >= MAXT \/ Len(s.fq) >= FQ
+\* Part::store_written(false), keep.rs write_failed: counted, and the next write waits from the part's last_now (fix
+\* R3); given up, counted once more; else queued behind the failed writes with one try more, unless its mark waits there
+Failed(s, j) ==
+    LET s1 == [s EXCEPT !.tr = 0, !.ra = s.ln, !.errs = @ + 1]
+    IN IF GivenUp(s) THEN [s1 EXCEPT !.errs = @ + 1]
+       ELSE IF \E x \in 1..Len(s.fq) : s.fq[x].k = j.k /\ s.fq[x].n = j.n THEN s1
+       ELSE [s1 EXCEPT !.fq = Append(@, [k |-> j.k, n |-> j.n, tr |-> s.tr + 1])]
 
 \* StoreWrite::run of a job on the store (an empty blob forgets the member)
 Apply(st, j) ==
@@ -221,13 +254,14 @@ RestPk(s, m, l, d) ==
     ELSE IF SatSub(s.now, Head(l).at) >= AGE THEN RestPk(s, m, Tail(l), TRUE)
     ELSE LET r == PushAt(s, m, Head(l)) IN RestPk(r.s, m, Tail(l), d \/ ~r.ok)
 
-\* the mailboxes loop: a member with a refused packet, or a blob that decodes to nothing, is marked (no cap here)
+\* the mailboxes loop: a member with a refused packet, or a blob that decodes to nothing, is marked through the cap of
+\* the mailbox marks, a mark past it counted (push_mail)
 RECURSIVE RestMail(_, _, _)
 RestMail(s, st, k) ==
     IF k > NM THEN s
     ELSE IF ~st.mail[k].has THEN RestMail(s, st, k + 1)
     ELSE LET r == RestPk(s, k, st.mail[k].pk, FALSE)
-             s1 == IF r.d \/ st.mail[k].pk = <<>> THEN [r.s EXCEPT !.km = Append(@, k)] ELSE r.s
+             s1 == IF r.d \/ st.mail[k].pk = <<>> THEN PushMail(r.s, k) ELSE r.s
          IN RestMail(s1, st, k + 1)
 
 \* Core::restore at relay clock t into a fresh machine s (a second run of the same part does not restore: R2)

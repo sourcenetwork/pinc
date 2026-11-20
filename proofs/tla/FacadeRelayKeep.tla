@@ -3,10 +3,13 @@
 (* The records and mailboxes a node that carries the relay role keeps in   *)
 (* its Store, and what a restart with the same identity reads back:        *)
 (* relay/state/keep.rs (note_record, note_mail, note_sweep, next_job,      *)
-(* requeue, restore), relay/part.rs (next_store_write, store_written:      *)
-(* one write out at a time, a failure counted, marked again and tried      *)
-(* again once the part's clock moved on; end: the write out is given       *)
-(* back; restored: a second run loads and restores nothing), relay/run.rs  *)
+(* requeue, write_failed, restore), relay/part.rs (next_store_write,      *)
+(* store_written: one write out at a time, a failure counted and tried     *)
+(* again once the part's clock moved on, behind the marks not tried yet,   *)
+(* at most MAX_TRIES times from a queue of at most FAILED, a write given   *)
+(* up counted once more; end: the write out is given back, a write tried   *)
+(* before to the front of the failed writes; restored: a second run loads  *)
+(* and restores nothing), relay/run.rs                                     *)
 (* and drive/role_io.rs role_task (load, restore at the relay clock, then  *)
 (* the writes), relay/store.rs (Store, MemStore, Kept). The operators are  *)
 (* in FacadeRelayKeepOps.tla.                                              *)
@@ -46,13 +49,24 @@
 (*  - MarksBounded (keep.rs: the records marked, held and to remove are    *)
 (*    each at most twice the record table, the members marked at most the  *)
 (*    mailbox members); KeptBounded (store.rs: Kept.records is bounded by  *)
-(*    RECORDS);                                                            *)
+(*    RECORDS; not where writes fail: _w_kept, a finding);                 *)
 (*  - WritingHasJob (part.rs: a write is out only while one runs, over the *)
-(*    end of a run too).                                                   *)
+(*    end of a run too);                                                   *)
+(*  - TriesBounded, FailedBounded (keep.rs: no write is tried more than    *)
+(*    MAX_TRIES times; the failed writes never pass FAILED); FreshFirst    *)
+(*    (a failed write delays a mark not tried yet only until the clock     *)
+(*    moves on, RETRY_NS); GivenCounted (every failure counts, a write     *)
+(*    given up once more); RecBehindCounted, MailBehindCounted (_retry:    *)
+(*    with writes given up, the store is behind the machine only for a     *)
+(*    node or member whose write was given up since the restart).          *)
 (* Witnesses of documented limits (each must be violated): _w_life         *)
 (* (LifeSynced: a refresh of the same seq is not written, R7 open),        *)
 (* _w_noparse (RecSynced: a record that does not parse is counted and left *)
-(* in the store), _w_mailq (MailSynced: a lost mailbox mark, counted).     *)
+(* in the store), _w_mailq (MailSynced: a lost mailbox mark, counted),     *)
+(* _w_given and _w_gfull (NoGivenTries, NoGivenFull: a write is given up   *)
+(* after MAX_TRIES tries, and when the failed writes are full), _w_kept    *)
+(* (FINDING, KeptBounded: a failed removal waits behind a put that lands,  *)
+(* so the store holds more records than the table).                       *)
 (***************************************************************************)
 EXTENDS FacadeRelayKeepOps
 
@@ -73,7 +87,8 @@ VARIABLES s,       \* the machine and Keep
           writing, \* Part.writing
           failed,  \* a store write failed
           rs,      \* what the last restore put back, at which clock
-          g        \* ghosts: full, tear, back, ticked, pubs, pid, rst
+          g        \* ghosts: full, tear, back, ticked, pubs, pid, rst; since the last restart: wf (writes failed), gu
+                   \* (writes given up), gv (their nodes and members), gt and gq (given up by tries, by a full queue)
 vars == <<s, st, job, writing, failed, rs, g>>
 
 Init == /\ s = Restore(Machine0(0), 0, St0)
@@ -82,7 +97,8 @@ Init == /\ s = Restore(Machine0(0), 0, St0)
         /\ writing = FALSE
         /\ failed = FALSE
         /\ rs = [at |-> 0, recs |-> {}, pks |-> {}]
-        /\ g = [full |-> FALSE, tear |-> FALSE, back |-> FALSE, ticked |-> FALSE, pubs |-> 0, pid |-> 0, rst |-> 0]
+        /\ g = [full |-> FALSE, tear |-> FALSE, back |-> FALSE, ticked |-> FALSE, pubs |-> 0, pid |-> 0, rst |-> 0,
+               wf |-> 0, gu |-> 0, gv |-> {}, gt |-> FALSE, gq |-> FALSE]
 
 Publish(n, q) ==
     /\ g.pubs < PUBS
@@ -130,12 +146,19 @@ WriteOk ==
     /\ job' = NoJob /\ writing' = FALSE
     /\ UNCHANGED <<s, failed, rs, g>>
 
-\* Part::store_written(false): counted, the node marked again, the next write after the part's clock moved on
+\* the node or member a write is about
+Kind(j) == [k |-> IF j.k = "mail" THEN "mail" ELSE "rec", n |-> j.n]
+
+\* Part::store_written(false): counted, queued behind the marks not tried yet or given up, the next write after the
+\* part's clock moved on
 WriteFail ==
     /\ FAIL /\ writing /\ job.k # "none"
     /\ s' = Failed(s, job)
     /\ job' = NoJob /\ writing' = FALSE /\ failed' = TRUE
-    /\ UNCHANGED <<st, rs, g>>
+    /\ LET give == GivenUp(s)
+       IN g' = [g EXCEPT !.wf = @ + 1, !.gu = IF give THEN @ + 1 ELSE @, !.gv = IF give THEN @ \cup {Kind(job)} ELSE @,
+                         !.gt = @ \/ (give /\ s.tr + 1 >= MAXT), !.gq = @ \/ (give /\ Len(s.fq) >= FQ)]
+    /\ UNCHANGED <<st, rs>>
 
 \* what a restore put back, for RestoredLive
 Restored(m, t, st1) ==
@@ -152,7 +175,7 @@ Restart(t, mode) ==
        IN /\ st' = st1
           /\ s' = m
           /\ rs' = Restored(m, t, st1)
-          /\ g' = [g EXCEPT !.rst = @ + 1, !.ticked = FALSE,
+          /\ g' = [g EXCEPT !.rst = @ + 1, !.ticked = FALSE, !.wf = 0, !.gu = 0, !.gv = {},
                             !.tear = @ \/ (mode \in {"noparse", "noverify", "prefix"}),
                             !.back = @ \/ (t < s.now /\ (rs'.recs # {} \/ rs'.pks # {}))]
     /\ job' = NoJob /\ writing' = FALSE
@@ -188,24 +211,44 @@ RestoredLive == /\ \A x \in rs.recs : SatSub(rs.at, x.rcv) < TTL /\ x.bad = "ok"
 
 MailOrdered == \A m \in Members : \A j \in 1..(Len(s.mb[m]) - 1) : s.mb[m][j].id < s.mb[m][j + 1].id
 
-\* every write the machine asked for is done
-Quiet == ~writing /\ s.kr = {} /\ s.kx = {} /\ s.km = <<>>
+\* every write the machine asked for is done (a failed write waiting to be tried again is one not done)
+Quiet == ~writing /\ s.kr = {} /\ s.kx = {} /\ s.km = <<>> /\ s.fq = <<>>
 
-RecSynced == Quiet => \A n \in Nodes :
-                 /\ (s.rec[n].seq = 0) = (st.rec[n].seq = 0)
-                 /\ s.rec[n].seq # 0 => st.rec[n].seq = s.rec[n].seq /\ st.rec[n].bad = "ok"
+RecOk(n) == /\ (s.rec[n].seq = 0) = (st.rec[n].seq = 0)
+            /\ s.rec[n].seq # 0 => st.rec[n].seq = s.rec[n].seq /\ st.rec[n].bad = "ok"
+LifeOk(n) == s.rec[n].seq # 0 /\ st.rec[n].seq = s.rec[n].seq => st.rec[n].rcv = s.rec[n].rcv
+MailOk(m) == Live(st.mail[m].pk, s.now) = Live(s.mb[m], s.now)
 
-LifeSynced == Quiet => \A n \in Nodes :
-                  s.rec[n].seq # 0 /\ st.rec[n].seq = s.rec[n].seq => st.rec[n].rcv = s.rec[n].rcv
+RecSynced == Quiet => \A n \in Nodes : RecOk(n)
 
-MailSynced == Quiet => \A m \in Members : Live(st.mail[m].pk, s.now) = Live(s.mb[m], s.now)
+LifeSynced == Quiet => \A n \in Nodes : LifeOk(n)
+
+MailSynced == Quiet => \A m \in Members : MailOk(m)
 
 \* a store behind the machine's mailboxes is counted (counters live as long as the machine: a restart restores
 \* from the store, and the two agree again)
-MailCounted == Quiet => (\A m \in Members : Live(st.mail[m].pk, s.now) = Live(s.mb[m], s.now)) \/ s.errs > 0
+MailCounted == Quiet => (\A m \in Members : MailOk(m)) \/ s.errs > 0
+
+\* with writes given up (_retry): the store is behind only for a node or member whose write was given up since the
+\* restart, which counted it (GivenCounted)
+RecBehindCounted == Quiet => \A n \in Nodes : (RecOk(n) /\ LifeOk(n)) \/ [k |-> "rec", n |-> n] \in g.gv
+MailBehindCounted == Quiet => \A m \in Members : MailOk(m) \/ [k |-> "mail", n |-> m] \in g.gv
 
 MarksBounded == /\ Cardinality(s.kr) <= XCAP /\ Cardinality(s.kh) <= XCAP /\ Cardinality(s.kx) <= XCAP
-                /\ Len(s.km) <= NM
+                /\ Len(s.km) <= NM /\ Len(s.km) <= MAILQ
+
+\* keep.rs: the write out is at most its MAX_TRIES-th try, and a failed write waits with fewer tries than that
+TriesBounded == s.tr < MAXT /\ \A x \in 1..Len(s.fq) : s.fq[x].tr \in 1..(MAXT - 1)
+\* keep.rs FAILED: the failed writes never pass the bound
+FailedBounded == Len(s.fq) <= FQ
+\* a mark not tried yet: a removal, a record the machine still holds, a member's packets
+Fresh == s.kx # {} \/ (\E n \in s.kr : s.rec[n].seq # 0) \/ s.km # <<>>
+\* a failed write holds the writes back only until the part's clock moves on past the failure (RETRY_NS is below a
+\* unit), and then a mark not tried yet is written before any failed write
+FreshFirst == /\ s.ra <= s.ln
+              /\ (~writing /\ s.ln > s.ra /\ Fresh) => LET r == NextJob(s) IN r.job.k # "none" /\ r.s.tr = 0
+\* every failed write is counted, and a write given up once more (since the restart, as the counters)
+GivenCounted == s.errs >= g.wf + g.gu
 
 KeptBounded == Cardinality({n \in Nodes : st.rec[n].seq # 0}) <= RCAP
 
@@ -215,4 +258,6 @@ WritingHasJob == writing = (job.k # "none")
 NoFull == ~g.full
 NoTear == ~g.tear
 NoBack == ~g.back
+NoGivenTries == ~g.gt
+NoGivenFull == ~g.gq
 =============================================================================
