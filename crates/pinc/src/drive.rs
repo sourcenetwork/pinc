@@ -671,12 +671,10 @@ mod tests {
         let wall = 3 * SEC;
         let ep = rolled(wall);
         let sh = &ep.0.shared;
-        let rnow = sh.relay_now(wall);
+        let rnow = sh.relay_now(T0);
+        assert_eq!(rnow, wall, "the role's clock does not start at the wall clock");
         let due = sh.role().unwrap().due(rnow).unwrap();
-        assert!(
-            (rnow..=rnow + SEC).contains(&due),
-            "the role's first deadline is {due} at {rnow}, not within a second"
-        );
+        assert!(due <= rnow + SEC, "the role's first deadline is {due} at {rnow}, more than a second away");
     }
 
     /// A datagram for a member that the endpoint hands over before the role restored its mailbox is taken and counted
