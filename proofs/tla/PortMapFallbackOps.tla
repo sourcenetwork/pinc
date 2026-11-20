@@ -137,10 +137,11 @@ PollOf(s) == CASE s.st = "desc" -> "get" [] s.st = "extip" -> "extip"
                [] s.st = "add" -> (IF s.ig.pm THEN "addperm" ELSE "add") [] OTHER -> "delete"
 HttpPoll(s) == IF s.ht # "due" THEN Same(s, "none") ELSE Same([s EXCEPT !.ht = "sent"], PollOf(s))
 
-\* PortMap::handle_datagram of a PCP datagram from the gateway's port (pcp_answer)
+\* PortMap::handle_datagram of a PCP datagram from the gateway's port (pcp_answer); stopped, or searching (it is not a
+\* search answer with a location), it is counted as unexpected
 Unexp(s) == Same(s, "unexpected")
 Pcp(s, k) ==
-    IF s.st \in {"stopped", "ssdp"} THEN Same(s, "none")
+    IF s.st \in {"stopped", "ssdp"} THEN Unexp(s)
     ELSE CASE k = "nonce" -> Same(s, "wrong_nonce")
            [] k \in {"grant", "grantpriv", "unsupp", "err", "port"} ->
                 IF s.st # "pcp" \/ k = "port" THEN Unexp(s)
@@ -154,9 +155,9 @@ Pcp(s, k) ==
                 ELSE Fail(s, "none")
            [] OTHER -> IF s.hd = "none" THEN Unexp(s) ELSE Same(s, "none")      \* announce
 
-\* PortMap::handle_datagram of a NAT-PMP datagram from the gateway's port (natpmp_answer)
+\* PortMap::handle_datagram of a NAT-PMP datagram from the gateway's port (natpmp_answer); stopped or searching as Pcp
 NatStep(s, k) ==
-    IF s.st \in {"stopped", "ssdp"} THEN Same(s, "none")
+    IF s.st \in {"stopped", "ssdp"} THEN Unexp(s)
     ELSE CASE k \in {"err0", "err1"} ->
                 IF s.st = "pcp" /\ ~s.rn THEN Same(Enter(s, "nataddr"), "none")
                 ELSE IF (k = "err0" /\ s.st = "nataddr") \/ (k = "err1" /\ s.st = "natmap") THEN Fail(s, "none")
@@ -175,7 +176,7 @@ NatStep(s, k) ==
 Ssdp(s, k) ==
     IF s.st # "ssdp" \/ k \in {"foreign", "bad"} THEN Same(s, "wrong_source")
     ELSE IF k = "ok" THEN Same(Enter([s EXCEPT !.ig = [on |-> TRUE, ctl |-> FALSE, pm |-> FALSE, cf |-> 0]], "desc"), "none")
-    ELSE Same(s, "none")                                                          \* other: a 404
+    ELSE Unexp(s)                                                                 \* other: a 404, no location
 
 \* PortMap::handle_http
 Http(s, k) ==
