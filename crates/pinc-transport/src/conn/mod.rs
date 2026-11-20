@@ -72,6 +72,7 @@ mod mtu;
 mod params;
 mod path;
 mod path_held;
+mod path_timers;
 #[cfg(feature = "trace")]
 mod path_trace;
 mod reasm;
