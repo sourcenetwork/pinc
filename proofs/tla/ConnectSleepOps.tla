@@ -104,10 +104,10 @@ SignResponse(W, now, ok, rj, bj, K) ==
                                    !.s.pub = IF j.k = "record" THEN SatAdd(now, K.retry, K) ELSE @]
          IN MaybeClose(StartJobs(W2, now, rj, bj, K), now, K)
 
-(* tick: the wall clock is the one given now, none without one (fix K8); the suspension's close; publish asks for the record when pw (its due
+(* tick: the wall clock is kept once given (a tick without one keeps the earlier one); the suspension's close; publish asks for the record when pw (its due
    time came, no record is wanted, the class is known and the home carrier is open: PubDue and the caller) *)
 TickStep(W, now, w, pw, rj, bj, K) ==
-    LET W1 == CloseForSuspend([W EXCEPT !.s.wall = w], now, K)
+    LET W1 == CloseForSuspend([W EXCEPT !.s.wall = @ \/ w], now, K)
         W2 == IF pw THEN [W1 EXCEPT !.s.record = TRUE, !.s.pub = K.tmax] ELSE W1
     IN StartJobs(W2, now, rj, bj, K)
 

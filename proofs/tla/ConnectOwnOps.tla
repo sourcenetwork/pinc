@@ -14,8 +14,8 @@
 (*   probe[k]  the nonce of the outstanding probe to relay k, 0 if none    *)
 (*   refl[k]   the reflexive address relay k reported, 0 if none           *)
 (*   local     the node's own addresses, at most cf.cap (MAX_ADDRS = 8)    *)
-(*   wall      the wall clock of the last tick, in ms (0: none, after a    *)
-(*             tick without one too: fix K8)                               *)
+(*   wall      the wall clock of the last tick that had one, in ms (0:     *)
+(*             none yet)                                                   *)
 (*   last      the sequence number of the last record built (0: none yet)  *)
 (* cf.cap is MAX_ADDRS; the real value is 8, TLC checks small ones and the *)
 (* Lean theorems (ConnectOwn.lean) hold for all. The home relay, the       *)
@@ -64,9 +64,8 @@ Cands(cf, S) == LET r0 == ReflList(cf, S)
                         ELSE IF Len(F[i - 1]) < cf.cap /\ ~InSeq(F[i - 1], S.local[i]) THEN Append(F[i - 1], S.local[i]) ELSE F[i - 1]
                 IN F[Len(S.local)]
 
-(* tick takes the wall clock it is given; without one (0) the layer has none (fix K8: the clock of an earlier tick
-   is not kept) *)
-Tick(S, wall) == [S EXCEPT !.wall = wall]
+(* tick records the wall clock when it is given one *)
+Tick(S, wall) == IF wall # 0 THEN [S EXCEPT !.wall = wall] ELSE S
 
 (* the number of a record built at wall clock wall after the one numbered last: the clock, or one above the last when
    the clock did not move past it (the code's addition saturates at 2^64 - 1, which the small numbers here never reach;

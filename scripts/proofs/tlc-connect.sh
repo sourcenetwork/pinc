@@ -29,6 +29,6 @@ par run_tlc connect_sleep_beacon ConnectSleep ConnectSleep_beacon
 par witness_tlc connect_sleep_w_close ConnectSleep ConnectSleep_w_close NoCloseAfterNotice
 par run_tlc connect_sleep_twice ConnectSleep ConnectSleep_twice
 par run_tlc connect_sleep_w_behind ConnectSleep ConnectSleep_w_behind
-par run_tlc connect_sleep_w_wall ConnectSleep ConnectSleep_w_wall
+par witness_tlc connect_sleep_w_wall ConnectSleep ConnectSleep_w_wall NoWallNoSign
 par run_tlc connect_sleep_resume ConnectSleep ConnectSleep_resume
 par witness_tlc connect_sleep_w_cancel ConnectSleep ConnectSleep_w_cancel NoCancelled

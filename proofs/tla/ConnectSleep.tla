@@ -20,10 +20,9 @@
 (*                      every notice was signed or failed                  *)
 (*  PriorityOrder       a job starts in the order sleep notices, record,  *)
 (*                      beacon                                             *)
-(*  NoticesNotIdle      with a wall clock, notices owed always have a     *)
-(*                      request outstanding (the host asks after any      *)
-(*                      call); without one they wait (K8, NoWallNoSign)    *)
-(*  NoWallNoSign        no signature starts without a wall clock           *)
+(*  NoticesNotIdle      notices owed always have a request outstanding     *)
+(*                      (the host asks after any call)                     *)
+(*  NoWallNoJob         without a wall clock nothing is signed             *)
 (*  RefusedNotSent      a refused or failed signature sends nothing and is *)
 (*                      reported as SignFailed                              *)
 (*  SleepNotRetried     a failed sleep notice is not asked again           *)
@@ -31,14 +30,15 @@
 (*  NoticeTwice         each relay owed a notice gets it twice over UDP,  *)
 (*                      and no other relay gets one                        *)
 (*  CloseOnlySuspended  a resume cancels the close of a suspension         *)
-(* A job started with a wall clock is still answered and used after a    *)
-(* tick without one (K8: the clock is forgotten, the job's bytes were made *)
-(* with the clock of its start).                                           *)
+(* A tick or drive without a wall clock keeps the one an earlier tick or   *)
+(* suspend gave (timers.rs tick), so it may start a signature with it.     *)
 (* Witnesses (TLC must violate): ConnectSleep_w_close (NoCloseAfterNotice: *)
 (* a close for suspension after a notice was sent), ConnectSleep_w_cancel  *)
-(* (NoCancelled: a cancelled sleep notice is outstanding). Checks of the   *)
-(* fixes (passing once they land): ConnectSleep_twice (CloseAfterNotices   *)
-(* with a second suspend, K7), ConnectSleep_w_wall (NoWallNoSign, K8),     *)
+(* (NoCancelled: a cancelled sleep notice is outstanding),                 *)
+(* ConnectSleep_w_wall (NoWallNoSign: a call without a wall clock starts a *)
+(* signature with the kept one). Checks of the fixes (passing once they    *)
+(* land):                                                                  *)
+(* ConnectSleep_twice (CloseAfterNotices with a second suspend, K7),       *)
 (* ConnectSleep_w_behind (NotBehindRecord, the rule restated by K9, with   *)
 (* PriorityOrder) and ConnectSleep_resume (NoticeTwice, CloseAfterNotices, *)
 (* SleepNotRetried over resume and a second suspend with a notice asked    *)
@@ -127,18 +127,20 @@ Spec == Init /\ [][Next]_vars
 
 CloseAfterNotices == ~badClose
 PriorityOrder == ~badPrio
-NoticesNotIdle == s.job.k = "none" /\ s.wall => s.sleep = {}
+NoticesNotIdle == s.job.k = "none" => s.sleep = {}
+NoWallNoJob == ~s.wall => s.job.k = "none"
 RefusedNotSent == ~badRefuse
 SleepNotRetried == failed \cap (s.sleep \cup SleepJob(s)) = {}
 RecordRetry == ~badRetry
 NoticeTwice == \A x \in Relays : sent[x] \in {0, 2} /\ (sent[x] > 0 => x \in owed /\ x \in Udp)
 CloseOnlySuspended == ~badSusp
 
-\* the documented claims of the findings K7, K8 and K9 (kept by the code once they land), and a reachability witness
+\* the documented claims of the findings K7 and K9 (kept by the code once they land), and reachability witnesses
 \* signing.rs, restated (K9): "a suspending node's notices wait for at most the one signature already asked for": a
 \* record job seen with notices owed is the one outstanding before the step (a record job started while notices are
 \* owed is PriorityOrder's case)
 NotBehindRecord == [][(s'.sleep # {} /\ s'.job.k = "record") => s.job = s'.job]_vars
+\* a call without a wall clock starts a signature (the clock an earlier call gave is kept): reachable, ConnectSleep_w_wall
 NoWallNoSign == ~badWall
 NoCloseAfterNotice == ~reach
 NoCancelled == ~(s.job.k = "sleep" /\ s.job.c)

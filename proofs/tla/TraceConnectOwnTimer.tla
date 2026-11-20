@@ -77,7 +77,7 @@ Results(e) ==
     LET s == P(e.before)
         n == e.now
     IN CASE e.op = "tick" ->
-              LET s0 == [s EXCEPT !.wall = e.w]  \* the wall clock of this tick, none without one (fix K8)
+              LET s0 == [s EXCEPT !.wall = @ \/ e.w]  \* a tick without a wall clock keeps the earlier one
               IN StartAll({Publish(c, n, e.after.can) : c \in {s0, Changed(s0, n)}}, n)
          [] e.op = "sign" -> Start(Signed(s, n, e.ok, e.sent), n)
          [] e.op = "hints" -> {[s EXCEPT !.want = TRUE]}

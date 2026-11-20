@@ -235,21 +235,14 @@ def clockOp : Op → Bool
   | .tick (some _) => true
   | _ => false
 
-/-- A step that is not a tick with a clock keeps the wall clock, or (a tick without one, fix K8) forgets it. -/
-theorem step_wall (cf : Cf) (s : St) (o : Op) (h : clockOp o = false) :
-    (step cf s o).wall = s.wall ∨ (step cf s o).wall = none := by
+theorem step_wall (cf : Cf) (s : St) (o : Op) (h : clockOp o = false) : (step cf s o).wall = s.wall := by
   cases o with
-  | tick w =>
-    cases w with
-    | none => exact Or.inr rfl
-    | some _ => simp [clockOp] at h
+  | tick w => cases w <;> simp [clockOp, step, tick] at h ⊢
   | answer f n a =>
-    left
     simp only [step]; unfold observe; split
     · rfl
     · split <;> rfl
   | start now hm c =>
-    left
     simp only [step, start]
     split
     · rfl
@@ -259,7 +252,6 @@ theorem step_wall (cf : Cf) (s : St) (o : Op) (h : clockOp o = false) :
         · split <;> rfl
         · rfl
   | signed now ok sent =>
-    left
     simp only [step, signed]
     split
     · rfl
@@ -267,26 +259,19 @@ theorem step_wall (cf : Cf) (s : St) (o : Op) (h : clockOp o = false) :
       · split <;> rfl
       · rfl
   | publish now c =>
-    left
     simp only [step, publish]
     split
     · rfl
     · split <;> rfl
-  | _ =>
-    left
-    rfl
+  | _ => rfl
 
 theorem run_wall (cf : Cf) (s : St) (ops : List Op) (h : ∀ o ∈ ops, clockOp o = false) :
-    (run cf s ops).wall = s.wall ∨ (run cf s ops).wall = none := by
+    (run cf s ops).wall = s.wall := by
   induction ops generalizing s with
-  | nil => exact Or.inl rfl
+  | nil => rfl
   | cons o ops ih =>
-    show (run cf (step cf s o) ops).wall = s.wall ∨ (run cf (step cf s o) ops).wall = none
-    rcases ih _ (fun o' ho' => h o' (List.mem_cons_of_mem _ ho')) with e | e
-    · rcases step_wall cf s o (h o (by simp)) with e' | e'
-      · exact Or.inl (e.trans e')
-      · exact Or.inr (e.trans e')
-    · exact Or.inr e
+    show (run cf (step cf s o) ops).wall = s.wall
+    rw [ih _ (fun o' ho' => h o' (List.mem_cons_of_mem _ ho')), step_wall cf s o (h o (by simp))]
 
 /-- The operations that set the last number: a record job that starts, a restore. -/
 def lastOp : Op → Bool
@@ -683,17 +668,9 @@ theorem same_tick_next_seq (cf : Cf) (s : St) (now : Nat) (home cls home' cls' :
     (h2 : recordJob cf (run cf (step cf s (.start now home cls)) ops) home' cls' = some j2) (hm : j1.seq < uMax) :
     j2.seq = j1.seq + 1 := by
   obtain ⟨w1, hw1, e1⟩ := job_seq cf s home cls j1 h1
-  -- The second record had a wall clock, so no tick between them forgot it (fix K8): it is still the first's.
-  obtain ⟨w2, hw2, _⟩ := job_seq cf _ home' cls' j2 h2
   have hw : (run cf (step cf s (.start now home cls)) ops).wall = some w1 := by
-    rcases run_wall cf _ ops (fun o ho => (hops o ho).1) with e | e
-    · rcases step_wall cf s (.start now home cls) rfl with e' | e'
-      · rw [e, e']
-        exact hw1
-      · rw [e, e'] at hw2
-        simp at hw2
-    · rw [e] at hw2
-      simp at hw2
+    rw [run_wall cf _ ops (fun o ho => (hops o ho).1), step_wall cf s (.start now home cls) rfl]
+    exact hw1
   simp only [nextSeq, sadd] at e1
   exact seq_next_behind cf s now home cls home' cls' j1 j2 ops w1 (fun o ho => (hops o ho).2) h0 hwant hw
     (by omega) h1 h2 hm
