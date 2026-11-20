@@ -17,6 +17,7 @@ use alloc::vec::Vec;
 use pinc_crypto::{IdentityAlg, Keypair, NodeId, Provider, Software};
 use pinc_keystore::{KeyHandle, KeyStore, SoftwareStore};
 use pinc_security::{KeyHandle as WireHandle, LocalIdentity, PrekeyInfo};
+use pinc_transport::recovery::deadline_after;
 use zeroize::Zeroizing;
 
 use crate::error::{Error, ErrorKind, Result};
@@ -202,7 +203,8 @@ pub(crate) struct Prekeys {
     store: SoftwareStore,
     held: Vec<(u64, KeyHandle)>,
     next: u64,
-    rotate_at: u64,
+    /// When the newest prekey is due; `None` when that instant is past the clock's last one: no later time exists.
+    rotate_at: Option<u64>,
     /// Handshakes the newest prekey has served.
     used: u32,
 }
@@ -214,7 +216,7 @@ impl Prekeys {
             store: SoftwareStore::from_entropy(entropy),
             held: Vec::new(),
             next: 1,
-            rotate_at: 0,
+            rotate_at: Some(0),
             used: 0,
         }
     }
@@ -235,14 +237,14 @@ impl Prekeys {
             let (_, old) = self.held.remove(0);
             self.store.remove(&old);
         }
-        self.rotate_at = now.saturating_add(PREKEY_LIFE);
+        self.rotate_at = deadline_after(now, PREKEY_LIFE);
         self.used = 0;
         Ok(PrekeyInfo::new(ek, WireHandle(gen_id)))
     }
 
     /// Whether the newest prekey is past its lifetime or has served [`PREKEY_USES`] handshakes.
-    pub(crate) const fn due(&self, now: u64) -> bool {
-        now >= self.rotate_at || self.used >= PREKEY_USES
+    pub(crate) fn due(&self, now: u64) -> bool {
+        self.rotate_at.is_some_and(|at| now >= at) || self.used >= PREKEY_USES
     }
 
     pub(crate) fn decapsulate(&mut self, key: WireHandle, ct: &[u8]) -> Option<pinc_crypto::Secret<32>> {
@@ -257,7 +259,7 @@ impl Prekeys {
 #[cfg(test)]
 impl Prekeys {
     /// The generations held (oldest first), `next`, `rotate_at` and `used`.
-    pub(crate) fn view(&self) -> (Vec<u64>, u64, u64, u32) {
+    pub(crate) fn view(&self) -> (Vec<u64>, u64, Option<u64>, u32) {
         (
             self.held.iter().map(|(g, _)| *g).collect(),
             self.next,
@@ -287,6 +289,11 @@ pub(crate) mod trace_out {
             (v >> 32) & 0xffff,
             v >> 48
         )
+    }
+
+    /// An instant that may not exist (`[]`: never) as the limbs of [`limbs`].
+    pub(crate) fn at(v: Option<u64>) -> String {
+        v.map_or_else(|| "[]".into(), limbs)
     }
 
     /// Append `lines` to `prekeys.ndjson` under `PINC_TRACE_DIR`, in one write; nothing when the variable is unset.
@@ -336,6 +343,18 @@ mod tests {
         let _ = p.decapsulate(newest, &[]);
         assert!(!p.due(4));
         assert!(p.due(3 + PREKEY_LIFE), "its lifetime");
+    }
+
+    #[test]
+    fn a_prekey_made_at_the_clocks_end_is_not_due_by_time_at_every_call() {
+        let mut p = Prekeys::new([5; 32]);
+        let mut store = SoftwareStore::from_entropy([1; 32]);
+        let mut os = |out: &mut [u8]| store.random(out).map_err(key_error);
+        p.rotate(u64::MAX - PREKEY_LIFE + 1, &mut os).unwrap();
+        assert!(!p.due(u64::MAX), "its lifetime ends past the last instant, so never");
+        p.rotate(u64::MAX - PREKEY_LIFE, &mut os).unwrap();
+        assert!(!p.due(u64::MAX - 1));
+        assert!(p.due(u64::MAX), "the last instant is a valid deadline: it fires once");
     }
 
     /// A `random` that replays `stream`, 32 bytes at a time.
@@ -406,7 +425,7 @@ mod tests {
         store: SoftwareStore,
         held: Vec<u64>,
         next: u64,
-        at: u64,
+        at: Option<u64>,
         used: u32,
         infos: Vec<(u64, PrekeyInfo)>,
         out: String,
@@ -419,7 +438,7 @@ mod tests {
                 store: SoftwareStore::from_entropy([k; 32]),
                 held: Vec::new(),
                 next: 1,
-                at: 0,
+                at: Some(0),
                 used: 0,
                 infos: Vec::new(),
                 out: String::new(),
@@ -434,7 +453,7 @@ mod tests {
                 r#"{{"held":[{}],"next":{},"at":{},"used":{}}}"#,
                 held.join(","),
                 self.next,
-                trace_out::limbs(self.at),
+                trace_out::at(self.at),
                 self.used
             )
         }
@@ -474,7 +493,7 @@ mod tests {
                     while self.held.len() > 2 {
                         self.held.remove(0);
                     }
-                    self.at = now.saturating_add(PREKEY_LIFE);
+                    self.at = deadline_after(now, PREKEY_LIFE);
                     self.used = 0;
                     self.next += 1;
                     self.infos.push((gen_id, info));
@@ -492,7 +511,7 @@ mod tests {
 
         fn due(&mut self, now: u64) {
             let r = self.p.due(now);
-            assert_eq!(r, now >= self.at || self.used >= PREKEY_USES);
+            assert_eq!(r, self.at.is_some_and(|t| now >= t) || self.used >= PREKEY_USES);
             writeln!(
                 self.out,
                 r#"{{"t":"pk","op":"due","now":{},"r":{r}}}"#,

@@ -11,6 +11,8 @@ use core::ops::RangeInclusive;
 use pinc_security::KeyHandle as WireHandle;
 
 use super::adjacent_tests::{C, core};
+use pinc_transport::recovery::deadline_after;
+
 use crate::keys::{PREKEY_LIFE, PREKEY_USES, trace_out};
 
 fn st(c: &C) -> String {
@@ -19,14 +21,14 @@ fn st(c: &C) -> String {
     format!(
         r#"{{"held":[{}],"next":{next},"at":{},"used":{used}}}"#,
         held.join(","),
-        trace_out::limbs(at)
+        trace_out::at(at)
     )
 }
 
 /// One `service` call at `now`; `borrowed` says the identity is held by the caller of this function.
 fn svc(c: &mut C, out: &mut String, now: u64, borrowed: bool, fresh_says: bool) {
     let (held, next, at, used) = c.prekeys.view();
-    let due = now >= at || used >= PREKEY_USES;
+    let due = at.is_some_and(|t| now >= t) || used >= PREKEY_USES;
     let rotates = due && !borrowed;
     let asked = Cell::new(0u32);
     c.service(now, &mut |bytes| {
@@ -44,7 +46,7 @@ fn svc(c: &mut C, out: &mut String, now: u64, borrowed: bool, fresh_says: bool) 
         assert_eq!(next_after, next + 1);
         assert_eq!(held_after.last(), Some(&next));
         assert_eq!(held_after.len(), (held.len() + 1).min(2));
-        assert_eq!(at_after, now.saturating_add(PREKEY_LIFE));
+        assert_eq!(at_after, deadline_after(now, PREKEY_LIFE));
         assert_eq!(used_after, 0);
     } else {
         assert_eq!((held_after, next_after, at_after, used_after), (held, next, at, used));
@@ -77,7 +79,7 @@ fn uses(c: &mut C, out: &mut String, n: RangeInclusive<u32>) {
 fn trace_prekey_service() {
     let mut c = core();
     let mut out = String::new();
-    assert_eq!(c.prekeys.view(), (alloc::vec![1], 2, 1 + PREKEY_LIFE, 0));
+    assert_eq!(c.prekeys.view(), (alloc::vec![1], 2, Some(1 + PREKEY_LIFE), 0));
     writeln!(out, r#"{{"t":"pk","op":"load","st":{}}}"#, st(&c)).unwrap();
     svc(&mut c, &mut out, 2, false, true);
     svc(&mut c, &mut out, 1 + PREKEY_LIFE, false, false);

@@ -72,7 +72,8 @@ pub trait Platform {
     /// The type of an I/O error of the host.
     type Error: HostError;
 
-    /// The monotonic clock, which never goes backward.
+    /// The monotonic clock, which never goes backward. A clock that reaches its maximum stops the timers (a deadline
+    /// past it never fires); inputs are still served.
     fn now(&self) -> Self::Instant;
 
     /// Nanoseconds since the Unix epoch by the wall clock; zero if the host does not know it.
