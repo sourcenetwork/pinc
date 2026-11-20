@@ -1,8 +1,7 @@
 //! One accepted byte stream: its protected carrier, its WebSocket framing, and the bytes queued for it.
 //!
 //! Invariants: the queue of a stream and the write in flight together hold whole sealed units and never more than the
-//! backlog limit (plus one unit and the control replies, at most `CTL_MAX` bytes); a read or write
-//! buffer is owned by at most one operation; the buffers of a stream are allocated once and reused.
+//! backlog limit (plus one unit and one pong); a read or write buffer is owned by at most one operation; the buffers of a stream are allocated once and reused.
 
 use alloc::boxed::Box;
 use alloc::rc::Rc;
@@ -18,8 +17,6 @@ use crate::carrier::CarrierKind;
 
 /// The bytes one read may return.
 pub(crate) const READ_LEN: usize = 32 * 1024;
-/// The most WebSocket control replies kept for a stream that is not draining.
-const CTL_MAX: usize = 1024;
 
 pub(crate) struct Conn<S> {
     pub(crate) stream: Rc<S>,
@@ -110,13 +107,11 @@ impl<S> Conn<S> {
         self.q.len() - self.qpos + self.unsent
     }
 
-    /// Queue a WebSocket control reply; false if it does not fit (the peer is not draining its replies).
-    pub(crate) fn push_ctl(&mut self, frame: &[u8]) -> bool {
-        let fits = self.ctl.len() + frame.len() <= CTL_MAX;
-        if fits {
-            self.ctl.extend_from_slice(frame);
-        }
-        fits
+    /// Queue the answer to a WebSocket ping. It replaces an answer still waiting: a peer may answer only the most recent
+    /// ping (RFC 6455, 5.5.3), so the answers waiting are one frame, whatever the peer sends.
+    pub(crate) fn push_pong(&mut self, frame: &[u8]) {
+        self.ctl.clear();
+        self.ctl.extend_from_slice(frame);
     }
 
     /// The next bytes to write and the offset to write from, if there are any and no write is in flight.

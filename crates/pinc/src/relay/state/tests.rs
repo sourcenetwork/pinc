@@ -45,18 +45,24 @@ fn a_stream_refused_while_stopping_is_an_accept_error() {
     assert_eq!(core.counters.accept_errors, 1);
 }
 
-/// A peer that pings faster than it reads is closed as slow, not answered with dropped pongs.
+/// Pings that arrive together are answered once, with the latest: no honest peer is closed, and the answers waiting
+/// stay one frame.
 #[test]
-fn control_replies_past_the_cap_close_the_carrier_as_slow() {
+fn nine_pings_in_one_read_leave_one_answer_and_an_open_carrier() {
     let mut core = core(Limits::default());
     let slot = core.add_conn((), CarrierKind::Ws, T0).unwrap();
     let mut raw = Vec::new();
-    for _ in 0..9 {
+    for i in 0..9u8 {
         let mut f = [0u8; 2 + 4 + 125];
-        let n = ws::encode(Opcode::Ping, &[7; 125], Some([1, 2, 3, 4]), &mut f).unwrap();
+        let n = ws::encode(Opcode::Ping, &[i; 125], Some([1, 2, 3, 4]), &mut f).unwrap();
         raw.extend_from_slice(&f[..n]);
     }
     core.read_ws(slot, T0, &raw, raw.len());
-    assert_eq!(core.conn(slot).unwrap().dying, Some(Closed::Slow));
-    assert_eq!(core.counters.slow_closed, 1);
+    let c = core.conn(slot).unwrap();
+    assert_eq!(c.dying, None, "an honest peer was closed");
+    let (buf, from) = c.take_write(None).unwrap();
+    let mut pong = [0u8; 2 + 125];
+    let n = ws::encode(Opcode::Pong, &[8; 125], None, &mut pong).unwrap();
+    assert_eq!((&buf[from..], from), (&pong[..n], 0), "the answer is not the latest ping's alone");
+    assert_eq!(core.counters.slow_closed, 0);
 }

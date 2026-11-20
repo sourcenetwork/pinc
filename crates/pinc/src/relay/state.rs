@@ -474,11 +474,8 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
                     if let Some(c) = self.conn(slot)
                         && let Ok(len) = ws::encode(Opcode::Pong, p, mask, &mut f)
                     {
-                        if c.push_ctl(f.get(..len).unwrap_or_default()) {
-                            self.mark(slot);
-                        } else {
-                            self.dying(slot, Closed::Slow);
-                        }
+                        c.push_pong(f.get(..len).unwrap_or_default());
+                        self.mark(slot);
                     }
                     pos += used;
                 }
