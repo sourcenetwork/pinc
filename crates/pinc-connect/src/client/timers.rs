@@ -182,7 +182,8 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
     }
 
     /// The node resumed. Carriers that the system closed during the suspension are dialed again; open ones are
-    /// checked at once.
+    /// checked at once. A signature request the host still holds ([`Connectivity::sign_request`]) must still be
+    /// answered; its answer is dropped.
     pub fn resume(&mut self, now: u64) {
         self.sign.cancel_suspend();
         self.net.restart();

@@ -114,7 +114,9 @@ impl Signing {
 }
 
 impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> {
-    /// The signature the layer waits for, if any. Answer with [`Connectivity::sign_response`].
+    /// The signature the layer waits for, if any. Answer with [`Connectivity::sign_response`]. Every request must be
+    /// answered, also after [`Connectivity::resume`]: a request the node no longer needs is answered and dropped, and
+    /// no later signature is asked for before it is.
     pub fn sign_request(&self) -> Option<KeyRequest<'_>> {
         let j = self.sign.job.as_ref()?;
         let message = if j.kind == Kind::Sleep {
