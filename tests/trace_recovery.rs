@@ -157,19 +157,30 @@ fn event_json(e: &Event<'_>, log: &mut Log, seen: &mut Seen) {
             );
             let fr: Vec<bool> = frames.iter().map(is_data).collect();
             log.events.push(format!(
-                r#"["acked",{pn},{size},{},{},{}]"#,
+                r#"["acked",{pn},{size},{},{},{},0,false]"#,
                 bools(&fr),
                 b(*mtu_probe),
                 b(*repair)
             ));
         }
-        Event::LateAcked { pn, frames } => {
+        Event::LateAcked {
+            pn,
+            frames,
+            path,
+            mtu_probe,
+        } => {
             assert!(seen.lost.contains(pn), "packet {pn} late-acknowledged but never lost");
             assert!(seen.late.insert(*pn), "packet {pn} late-acknowledged twice");
             let fr: Vec<bool> = frames.iter().map(is_data).collect();
             assert!(fr.iter().all(|x| *x), "a late acknowledgement acts on stream data only");
-            log.events
-                .push(format!(r#"["late",{pn},0,{},false,false]"#, bools(&fr)));
+            log.events.push(format!(
+                r#"["late",{pn},0,{},{},{},{},{}]"#,
+                bools(&fr),
+                b(*mtu_probe),
+                false,
+                path,
+                false
+            ));
         }
         Event::Lost {
             pn,
@@ -177,6 +188,8 @@ fn event_json(e: &Event<'_>, log: &mut Log, seen: &mut Seen) {
             frames,
             requeue,
             mtu_probe,
+            path,
+            flushed,
         } => {
             assert!(seen.lost.insert(*pn), "packet {pn} declared lost twice");
             assert!(
@@ -185,10 +198,12 @@ fn event_json(e: &Event<'_>, log: &mut Log, seen: &mut Seen) {
             );
             let fr: Vec<bool> = frames.iter().map(is_data).collect();
             log.events.push(format!(
-                r#"["lost",{pn},{size},{},{},{}]"#,
+                r#"["lost",{pn},{size},{},{},{},{},{}]"#,
                 bools(&fr),
                 b(*requeue),
-                b(*mtu_probe)
+                b(*mtu_probe),
+                path,
+                b(*flushed)
             ));
         }
     }

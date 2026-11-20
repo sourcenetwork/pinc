@@ -598,7 +598,7 @@ conn_impl! {
                 self.dgrams.on_datagram_frame(&mut self.pool, data);
                 self.push(Ev::Datagram);
             }
-            Frame::MtuProbeEcho { mtu } => self.mtu_raise(pi, mtu),
+            Frame::MtuProbeEcho { mtu } => self.mtu_echo(pi, mtu),
             Frame::Sleep => {
                 if self.life.peer_asleep.is_none() {
                     self.life.peer_asleep = Some(now);
@@ -663,7 +663,7 @@ conn_impl! {
                     self.mtu_black_hole(now);
                 }
                 self.mtu_black_hole_check(now);
-                self.after_feedback(out, now);
+                self.after_feedback(&out, now);
                 self.after_ack(now);
                 Ok(())
             }
@@ -671,16 +671,28 @@ conn_impl! {
         }
     }
 
-    /// Fold recovery feedback into the loss average, the path MTU state and the counters.
-    pub(super) fn after_feedback(&mut self, out: Outcome, now: u64) {
+    /// Fold recovery feedback into the loss average, the path MTU state and the counters. A probe's outcome follows
+    /// the probe: it is applied to the path the probe left on, never to the path the session sits on.
+    pub(super) fn after_feedback(&mut self, out: &Outcome, now: u64) {
         self.stats.packets_lost += u64::from(out.lost_packets);
         self.loss.record(out.loss_lost, out.loss_acked);
-        let active = self.paths.active;
-        if let Some(size) = out.probe_acked.and_then(|s| u16::try_from(s).ok()) {
-            self.mtu_raise(active, size);
+        if out.probe_outcomes > 0 {
+            for (i, slot) in out.probe.iter().enumerate() {
+                if let Some((pn, size, flags)) = *slot {
+                    if flags & super::ctl::PROBE_LOST == 0 {
+                        self.mtu_acked(i, size, pn);
+                    } else if flags & super::ctl::PROBE_FLUSHED != 0 {
+                        self.mtu_flushed(i, size, pn);
+                    } else {
+                        self.mtu_probe_lost(i, size, pn, now);
+                    }
+                }
+            }
         }
-        if let Some(size) = out.probe_lost.and_then(|s| u16::try_from(s).ok()) {
-            self.mtu_probe_lost(active, size, now);
+        for (i, pn) in out.late_acked.iter().enumerate() {
+            if let Some(pn) = *pn {
+                self.mtu_flush_raise(i, pn);
+            }
         }
         for (slot, pn) in out.acked_pn.iter().enumerate() {
             if let Some(pn) = *pn {

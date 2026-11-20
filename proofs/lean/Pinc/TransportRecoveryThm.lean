@@ -242,7 +242,8 @@ theorem upd_get_ne {α : Type} (f : α → α) : ∀ (l : List α) (i j : Nat), 
 
 /-- A lost packet is reported with its frames, and requeued unless it is a repair packet or a path MTU probe. -/
 theorem loseAt_event (p : P) (y : Y) (i now : Nat) (sl : Slot) (h : y.r.ring[i]? = some sl) :
-    (loseAt p y i now).ev = y.ev ++ [⟨"lost", sl.pn, sl.size, sl.fr, !sl.rep && !sl.probe, sl.probe⟩] := by
+    (loseAt p y i now).ev =
+      y.ev ++ [⟨"lost", sl.pn, sl.size, sl.fr, !sl.rep && !sl.probe, sl.probe, sl.path, false⟩] := by
   unfold loseAt
   rw [h]
 

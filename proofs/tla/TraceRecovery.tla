@@ -46,7 +46,7 @@ ROf(v) ==
      act |-> v.act, flip |-> v.flip, late |-> [k \in 1..Len(v.late) |-> <<v.late[k][1], v.late[k][2]>>],
      saved |-> v.saved,
      reo |-> [p \in 0..(MP - 1) |-> [ext |-> v.reo[p + 1][1], seen |-> v.reo[p + 1][2]]], gs |-> v.gs, lat |-> v.lat]
-EvOf(e) == Ev(e[1], e[2], e[3], e[4], e[5], e[6])
+EvOf(e) == Ev(e[1], e[2], e[3], e[4], e[5], e[6], e[7], e[8])
 EvsOf(l) == [k \in 1..Len(l) |-> EvOf(l[k])]
 SumOf(s) == [ap |-> s[1], ab |-> s[2], lap |-> s[3], lp |-> s[4], lb |-> s[5]]
 

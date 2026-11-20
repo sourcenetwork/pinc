@@ -99,6 +99,8 @@ pub use hooks::{SubOpen, SubWait};
 #[cfg(feature = "trace")]
 pub use keys::trace::{KeyEvent, KeysView, Slot};
 #[cfg(feature = "trace")]
+pub use mtu::Rose;
+#[cfg(feature = "trace")]
 pub use mtu::trace::{MtuProbe, MtuView};
 pub use params::{CreditRecord, credit_for_streams, peer_limits};
 pub use path::{PathError, RJ_THIN_GAP};

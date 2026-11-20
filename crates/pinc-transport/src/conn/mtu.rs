@@ -36,6 +36,15 @@ pub(crate) enum Jumbo {
     Done,
 }
 
+/// What an acknowledgement of a probe did to the path's datagram size.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Rose {
+    /// The acknowledgement named the probe in flight but the size did not rise: taken, no refusal.
+    Flat,
+    /// The size rose to this.
+    New(u16),
+}
+
 /// What the probe decision needs to know about the path and the connection.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ProbeCtx {
@@ -55,6 +64,7 @@ impl Mtu {
         Self {
             current: MIN_MTU,
             inflight: None,
+            flushed: None,
             probed: false,
             jumbo: Jumbo::Untried,
             retry_at: 0,
@@ -80,9 +90,10 @@ impl Mtu {
             .then_some(jumbo)
     }
 
-    /// A probe of `size` left.
-    pub(crate) fn probe_sent(&mut self, size: u16) {
-        self.inflight = Some(size);
+    /// A probe of `size` left as packet `pn`.
+    pub(crate) fn probe_sent(&mut self, size: u16, pn: u64) {
+        self.inflight = Some((size, pn));
+        self.flushed = None;
         if size == PROBE_MTU && !self.probed {
             self.probed = true;
         } else {
@@ -90,29 +101,73 @@ impl Mtu {
         }
     }
 
-    /// A probe of `size` was acknowledged or echoed; the new datagram size if it rose.
-    pub(crate) fn raise(&mut self, size: u16) -> Option<u16> {
-        if self.inflight == Some(size) {
-            self.inflight = None;
-        }
+    /// The datagram size rose to `size`.
+    fn rose(&mut self, size: u16) -> Option<u16> {
         (size > self.current).then(|| {
             self.current = size;
             size
         })
     }
 
-    /// A probe of `size` was lost: it waits for the next path event or [`REPROBE_AFTER`].
-    pub(crate) fn probe_lost(&mut self, size: u16, now: u64) {
-        if self.inflight == Some(size) {
+    /// A probe of `size` was acknowledged or echoed; the new datagram size if it rose. An acknowledgement of any
+    /// other probe than the one in flight is no evidence about this path and raises nothing.
+    pub(crate) fn raise(&mut self, size: u16) -> Option<u16> {
+        if self.inflight.is_some_and(|(s, _)| s == size) {
             self.inflight = None;
         }
+        self.rose(size)
+    }
+
+    /// The probe of `size` sent as `pn` was acknowledged; `None` when the acknowledgement names another probe than
+    /// the one in flight (no evidence about this path, a refusal), otherwise what it did to the datagram size.
+    pub(crate) fn acked(&mut self, size: u16, pn: u64) -> Option<Rose> {
+        if self.inflight != Some((size, pn)) {
+            return None;
+        }
+        self.inflight = None;
+        Some(match self.rose(size) {
+            Some(new) => Rose::New(new),
+            None => Rose::Flat,
+        })
+    }
+
+    /// The probe of `size` sent as `pn` was declared lost: it waits for the next path event or [`REPROBE_AFTER`].
+    /// The loss of any other probe than the one in flight is refused.
+    pub(crate) fn probe_lost(&mut self, size: u16, pn: u64, now: u64) -> bool {
+        if self.inflight != Some((size, pn)) {
+            return false;
+        }
+        self.inflight = None;
         self.retry_at = now.saturating_add(REPROBE_AFTER);
         if size > PROBE_MTU {
             self.jumbo = Jumbo::Done;
         }
+        true
     }
 
-    /// A path event happened: probe again.
+    /// A flush took the probe of `size` sent as `pn`: its size and packet number are kept, so its acknowledgement
+    /// can still raise the path, and the probe is owed again at once. The flush of any other probe than the one in
+    /// flight is refused.
+    pub(crate) fn flush(&mut self, size: u16, pn: u64) -> bool {
+        if self.inflight != Some((size, pn)) {
+            return false;
+        }
+        self.inflight = None;
+        self.flushed = Some((size, pn));
+        true
+    }
+
+    /// The probe a flush took, of `size` sent as `pn`, was acknowledged after all; the new datagram size if it rose.
+    pub(crate) fn flushed_acked(&mut self, pn: u64) -> Option<u16> {
+        let (size, marked) = self.flushed?;
+        if marked != pn {
+            return None;
+        }
+        self.flushed = None;
+        self.rose(size)
+    }
+
+    /// A path event happened: probe again. The probe a flush took stays marked: its acknowledgement is still owed.
     pub(crate) fn event(&mut self) {
         self.probed = false;
         self.jumbo = Jumbo::Untried;
@@ -141,6 +196,9 @@ impl Mtu {
         self.suspect = None;
         self.current = MIN_MTU;
         self.inflight = None;
+        // The path was condemned for carrying small packets only: the mark of the probe a flush took is stale
+        // evidence against that, and its acknowledgement, arriving late, raises nothing.
+        self.flushed = None;
         self.last_big = None;
         self.ping_big = None;
         self.retry_at = now.saturating_add(REPROBE_AFTER);
@@ -163,10 +221,66 @@ conn_impl! {
         p.mtu.target(ctx, now)
     }
 
-    /// Note that a probe of `size` left on path `i`.
-    pub(super) fn mtu_probe_sent(&mut self, i: usize, size: u16) {
+    /// Note that a probe of `size` left on path `i` as packet `pn`.
+    pub(super) fn mtu_probe_sent(&mut self, i: usize, size: u16, pn: u64) {
         let Some(p) = self.paths.get_mut(i) else { return };
-        p.mtu.probe_sent(size);
+        p.mtu.probe_sent(size, pn);
+    }
+
+    /// A probe of `size` was acknowledged on path `i`: the path carries it. An acknowledgement naming another probe
+    /// than the one in flight there is refused and counted; one naming the probe in flight but not raising the size
+    /// is taken, and no refusal.
+    pub(super) fn mtu_acked(&mut self, i: usize, size: u16, pn: u64) {
+        let active = i == self.paths.active;
+        let Some(p) = self.paths.get_mut(i) else { return };
+        match p.mtu.acked(size, pn) {
+            Some(Rose::New(new)) if active => self.rec.set_max_datagram_size(u64::from(new)),
+            Some(_) => {}
+            None => self.stats.probe_outcomes_dropped += 1,
+        }
+    }
+
+    /// A probe of `size` sent as `pn` was declared lost on path `i`: it waits for the next path event or
+    /// [`REPROBE_AFTER`]. The loss of another probe than the one in flight there is refused and counted.
+    pub(super) fn mtu_probe_lost(&mut self, i: usize, size: u16, pn: u64, now: u64) {
+        let Some(p) = self.paths.get_mut(i) else { return };
+        if !p.mtu.probe_lost(size, pn, now) {
+            self.stats.probe_outcomes_dropped += 1;
+        }
+    }
+
+    /// A flush took the probe of `size` sent as `pn` on path `i`: its size and packet number are kept for its
+    /// acknowledgement. The flush of another probe than the one in flight there is refused and counted.
+    pub(super) fn mtu_flushed(&mut self, i: usize, size: u16, pn: u64) {
+        let Some(p) = self.paths.get_mut(i) else { return };
+        if !p.mtu.flush(size, pn) {
+            self.stats.probe_outcomes_dropped += 1;
+        }
+    }
+
+    /// An acknowledgement naming `pn` arrived: if it is the probe a flush took on path `i`, the path rises to the
+    /// size the probe carried.
+    pub(super) fn mtu_flush_raise(&mut self, i: usize, pn: u64) {
+        let active = i == self.paths.active;
+        let Some(p) = self.paths.get_mut(i) else { return };
+        if let Some(new) = p.mtu.flushed_acked(pn)
+            && active
+        {
+            self.rec.set_max_datagram_size(u64::from(new));
+        }
+    }
+
+    /// The peer echoed `mtu` on path `i`: the path rises to it only when a probe of exactly that size is in flight
+    /// there and the smaller of the jumbo size and what the path's interface carries can hold it. Any other echo is
+    /// refused and counted.
+    pub(super) fn mtu_echo(&mut self, i: usize, mtu: u16) {
+        let Some(p) = self.paths.get(i) else { return };
+        let ceiling = interface_payload(p.info.interface_mtu, p.info.v6).min(JUMBO_MTU);
+        if p.mtu.inflight.is_none_or(|(size, _)| size != mtu) || mtu > ceiling {
+            self.stats.probe_outcomes_dropped += 1;
+            return;
+        }
+        self.mtu_raise(i, mtu);
     }
 
     /// The earliest time a path whose probe was lost is probed again.
@@ -187,12 +301,6 @@ conn_impl! {
         {
             self.rec.set_max_datagram_size(u64::from(new));
         }
-    }
-
-    /// A probe of `size` was lost: it waits for the next path event or [`REPROBE_AFTER`].
-    pub(super) fn mtu_probe_lost(&mut self, i: usize, size: u16, now: u64) {
-        let Some(p) = self.paths.get_mut(i) else { return };
-        p.mtu.probe_lost(size, now);
     }
 
     /// A path event happened on path `i`: probe it again.
@@ -246,15 +354,17 @@ conn_impl! {
 /// Test-only driver of the path MTU state machine, for trace validation (cargo feature `trace`, off by default).
 #[cfg(feature = "trace")]
 pub(super) mod trace {
-    use super::{Jumbo, Mtu, ProbeCtx};
+    use super::{Jumbo, Mtu, ProbeCtx, Rose};
 
     /// The state of the machine.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct MtuView {
         /// The datagram size the path carries.
         pub current: u16,
-        /// The probe in flight.
-        pub inflight: Option<u16>,
+        /// The probe in flight: its size and packet number.
+        pub inflight: Option<(u16, u64)>,
+        /// The probe a flush took: its size and packet number.
+        pub flushed: Option<(u16, u64)>,
         /// The main probe was sent since the last path event.
         pub probed: bool,
         /// The jumbo probe is done.
@@ -314,9 +424,9 @@ pub(super) mod trace {
             )
         }
 
-        /// A probe of `size` left.
-        pub fn probe_sent(&mut self, size: u16) {
-            self.0.probe_sent(size);
+        /// A probe of `size` left as packet `pn`.
+        pub fn probe_sent(&mut self, size: u16, pn: u64) {
+            self.0.probe_sent(size, pn);
         }
 
         /// A probe of `size` was acknowledged or echoed; the new size if it rose.
@@ -324,9 +434,25 @@ pub(super) mod trace {
             self.0.raise(size)
         }
 
-        /// A probe of `size` was lost.
-        pub fn probe_lost(&mut self, size: u16, now: u64) {
-            self.0.probe_lost(size, now);
+        /// A probe of `size` sent as `pn` was acknowledged; `None` when it names another probe than the one in
+        /// flight, otherwise what it did to the size.
+        pub fn acked(&mut self, size: u16, pn: u64) -> Option<Rose> {
+            self.0.acked(size, pn)
+        }
+
+        /// A probe of `size` sent as `pn` was lost; false when the loss names another probe.
+        pub fn probe_lost(&mut self, size: u16, pn: u64, now: u64) -> bool {
+            self.0.probe_lost(size, pn, now)
+        }
+
+        /// A flush took the probe of `size` sent as `pn`; false when it names another probe.
+        pub fn flush(&mut self, size: u16, pn: u64) -> bool {
+            self.0.flush(size, pn)
+        }
+
+        /// The probe a flush took, sent as `pn`, was acknowledged after all; the new size if it rose.
+        pub fn flushed_acked(&mut self, pn: u64) -> Option<u16> {
+            self.0.flushed_acked(pn)
         }
 
         /// A path event.
@@ -350,6 +476,7 @@ pub(super) mod trace {
             MtuView {
                 current: m.current,
                 inflight: m.inflight,
+                flushed: m.flushed,
                 probed: m.probed,
                 jumbo_done: m.jumbo == Jumbo::Done,
                 retry_at: m.retry_at,
@@ -360,5 +487,56 @@ pub(super) mod trace {
                 suspect: m.suspect,
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MIN_MTU, Mtu, PROBE_MTU, Rose};
+
+    /// An acknowledgement that names the probe in flight but does not raise the size is taken (the probe leaves
+    /// flight, nothing is refused); only an acknowledgement of any other packet is a refusal.
+    #[test]
+    fn an_acknowledgment_that_names_the_probe_but_raises_nothing_is_no_refusal() {
+        let mut m = Mtu::new();
+        m.started = true;
+        m.probe_sent(PROBE_MTU, 7);
+        m.current = PROBE_MTU;
+        assert_eq!(
+            m.acked(PROBE_MTU, 7),
+            Some(Rose::Flat),
+            "a matched, flat acknowledgement is a refusal"
+        );
+        assert_eq!(m.inflight, None, "the matched probe stayed in flight");
+        m.probe_sent(PROBE_MTU, 8);
+        assert_eq!(
+            m.acked(PROBE_MTU, 9),
+            None,
+            "an acknowledgement of another packet was taken"
+        );
+        assert_eq!(
+            m.inflight,
+            Some((PROBE_MTU, 8)),
+            "the refusal touched the probe in flight"
+        );
+    }
+
+    /// A black-hole drop clears the mark of the probe a flush took: the path was condemned for carrying small
+    /// packets only, and the stale acknowledgement of its probe is no evidence against that.
+    #[test]
+    fn a_black_hole_drop_clears_the_mark_of_the_probe_the_flush_took() {
+        let mut m = Mtu::new();
+        m.started = true;
+        m.probe_sent(PROBE_MTU, 7);
+        m.current = PROBE_MTU;
+        assert!(m.flush(PROBE_MTU, 7));
+        assert_eq!(m.flushed, Some((PROBE_MTU, 7)));
+        // The signature: a probe-timeout PING was answered while the full-size packet before it was not.
+        m.ping_big = Some(5);
+        m.black_hole(1_000, 4_000_000);
+        assert!(m.black_hole_check(5_000_000), "the path did not drop to the minimum");
+        assert_eq!(m.current, MIN_MTU);
+        assert_eq!(m.flushed, None, "the drop kept the stale mark");
+        assert_eq!(m.flushed_acked(7), None, "the stale acknowledgement raised the path");
     }
 }

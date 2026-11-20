@@ -221,6 +221,9 @@ pub struct Stats {
     pub held_back: u64,
     /// Repair packets sent.
     pub repairs: u64,
+    /// Path MTU probe outcomes refused: an echo with no probe of that size in flight or above the path's ceiling, an
+    /// acknowledgement or loss naming another probe than the one in flight.
+    pub probe_outcomes_dropped: u64,
     /// Datagrams dropped from the send queue to make room.
     pub datagrams_dropped_send: u64,
     /// Datagrams dropped from the receive queue to make room.

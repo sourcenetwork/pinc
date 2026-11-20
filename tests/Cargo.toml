@@ -246,6 +246,10 @@ name = "transport_reply_path"
 path = "transport_reply_path.rs"
 
 [[test]]
+name = "transport_mtu_probe_path"
+path = "transport_mtu_probe_path.rs"
+
+[[test]]
 name = "membership_codec"
 path = "membership_codec.rs"
 

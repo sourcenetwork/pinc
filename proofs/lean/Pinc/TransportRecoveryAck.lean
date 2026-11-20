@@ -24,14 +24,14 @@ namespace Pinc.TransportRecovery
 ghost. -/
 def AckSrc (ring : List Slot) (i : Nat) (e : Ev) : Prop :=
   ∃ j, i ≤ j ∧ ∃ sl, ring[j]? = some sl ∧
-    ((sl.st = .fl ∧ e = ⟨"acked", sl.pn, sl.size, sl.fr, sl.probe, sl.rep⟩) ∨
-     (sl.st = .lost ∧ e = ⟨"late", sl.pn, 0, sl.fr.filter id, false, false⟩))
+    ((sl.st = .fl ∧ e = ⟨"acked", sl.pn, sl.size, sl.fr, sl.probe, sl.rep, 0, false⟩) ∨
+     (sl.st = .lost ∧ e = ⟨"late", sl.pn, 0, sl.fr.filter id, sl.probe, false, sl.path, false⟩))
 
 /-- The same without the place: `e` is the event of a slot of the ring. -/
 def AckFrom (ring : List Slot) (e : Ev) : Prop :=
   ∃ sl ∈ ring,
-    ((sl.st = .fl ∧ e = ⟨"acked", sl.pn, sl.size, sl.fr, sl.probe, sl.rep⟩) ∨
-     (sl.st = .lost ∧ e = ⟨"late", sl.pn, 0, sl.fr.filter id, false, false⟩))
+    ((sl.st = .fl ∧ e = ⟨"acked", sl.pn, sl.size, sl.fr, sl.probe, sl.rep, 0, false⟩) ∨
+     (sl.st = .lost ∧ e = ⟨"late", sl.pn, 0, sl.fr.filter id, sl.probe, false, sl.path, false⟩))
 
 theorem AckSrc.mono {ring ring' : List Slot} {i : Nat} {e : Ev} (h : ∀ j, i + 1 ≤ j → ring'[j]? = ring[j]?)
     (a : AckSrc ring' (i + 1) e) : AckSrc ring i e := by

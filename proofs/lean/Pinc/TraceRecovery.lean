@@ -75,10 +75,11 @@ def clampR (r : R) : R :=
 
 def evOf (j : J) : Except String Ev := do
   match j.arr? with
-  | some #[k, pn, size, fr, f1, f2] =>
-    match k.str?, pn.nat?, size.nat?, f1.bool?, f2.bool? with
-    | some k, some pn, some size, some f1, some f2 => pure ⟨k, pn, size, ← boolList fr, f1, f2⟩
-    | _, _, _, _, _ => throw "bad event"
+  | some #[k, pn, size, fr, f1, f2, path, fl] =>
+    match k.str?, pn.nat?, size.nat?, f1.bool?, f2.bool?, path.nat?, fl.bool? with
+    | some k, some pn, some size, some f1, some f2, some path, some fl =>
+      pure ⟨k, pn, size, ← boolList fr, f1, f2, path, fl⟩
+    | _, _, _, _, _, _, _ => throw "bad event"
   | _ => throw "bad event"
 
 def evsOf (j : J) : Except String (List Ev) := do

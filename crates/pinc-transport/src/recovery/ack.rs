@@ -161,6 +161,8 @@ impl<const N: usize> Recovery<N> {
                 on_event(Event::LateAcked {
                     pn: sent.pn,
                     frames: &data,
+                    path: sent.path,
+                    mtu_probe: sent.is_mtu_probe,
                 });
                 continue;
             }

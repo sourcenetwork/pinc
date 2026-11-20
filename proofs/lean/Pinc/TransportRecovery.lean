@@ -112,7 +112,8 @@ def R.init (p : P) : R :=
     reo := List.replicate p.mp (0, none), gs := 0, lat := 0 }
 
 /-- An event the engine reports: `kind` is `acked`, `late` or `lost`; `f1` and `f2` are probe and repair for an
-acknowledgement, requeue and probe for a loss. -/
+acknowledgement, requeue and probe for a loss. On a loss, `path` is the path the packet left on and `fl` whether a
+flush took it; the other kinds record 0 and false. -/
 structure Ev where
   k : String
   pn : Nat
@@ -120,6 +121,8 @@ structure Ev where
   fr : List Bool
   f1 : Bool
   f2 : Bool
+  path : Nat := 0
+  fl : Bool := false
   deriving DecidableEq, Repr, Inhabited
 
 structure Sm where
@@ -259,7 +262,7 @@ def loseAt (p : P) (y : Y) (i now : Nat) : Y :=
       ring := upd y.r.ring i (fun s => { s with st := if ghost then .lost else .done, lostAt := if ghost then now else s.lostAt }),
       inf := y.r.inf - sl.size, lost := y.r.lost + sl.size, infp := y.r.infp - 1,
       late := if counts then lateInsert p y.r.late sl.pn sl.time else y.r.late }
-    { r := r1, ev := y.ev ++ [⟨"lost", sl.pn, sl.size, sl.fr, counts, sl.probe⟩],
+    { r := r1, ev := y.ev ++ [⟨"lost", sl.pn, sl.size, sl.fr, counts, sl.probe, sl.path, false⟩],
       s := { y.s with lp := y.s.lp + 1, lb := y.s.lb + sl.size },
       nl := if counts then omax y.nl (some sl.time) else y.nl }
 
@@ -385,7 +388,7 @@ def flushLoop (now : Nat) : Nat → Nat → Y → Y
         let r1 := { y.r with ring := upd y.r.ring i (fun s => { s with st := .lost, lostAt := now }),
                              inf := y.r.inf - sl.size, lost := y.r.lost + sl.size, infp := y.r.infp - 1 }
         flushLoop now k (i + 1)
-          ⟨r1, y.ev ++ [⟨"lost", sl.pn, sl.size, sl.fr, !sl.rep && !sl.probe, sl.probe⟩],
+          ⟨r1, y.ev ++ [⟨"lost", sl.pn, sl.size, sl.fr, !sl.rep && !sl.probe, sl.probe, sl.path, true⟩],
            { y.s with lp := y.s.lp + 1, lb := y.s.lb + sl.size }, none⟩
 
 def flush (r : R) (now : Nat) : Res :=
@@ -447,12 +450,12 @@ def ackRing (p : P) (now b : Nat) : Nat → Nat → X → X
           ackRing p now b k (i + 1)
             { x with r := { r1 with lost := r1.lost - sl.size, acked := r1.acked + sl.size },
                      s := { x.s with lap := x.s.lap + 1 },
-                     ev := x.ev ++ [⟨"late", sl.pn, 0, sl.fr.filter id, false, false⟩] }
+                     ev := x.ev ++ [⟨"late", sl.pn, 0, sl.fr.filter id, sl.probe, false, sl.path, false⟩] }
         else
           ackRing p now b k (i + 1)
             { x with r := { r1 with inf := r1.inf - sl.size, acked := r1.acked + sl.size, infp := r1.infp - 1 },
                      s := { x.s with ap := x.s.ap + 1, ab := x.s.ab + sl.size },
-                     ev := x.ev ++ [⟨"acked", sl.pn, sl.size, sl.fr, sl.probe, sl.rep⟩],
+                     ev := x.ev ++ [⟨"acked", sl.pn, sl.size, sl.fr, sl.probe, sl.rep, 0, false⟩],
                      nw := match x.nw with
                        | none => some (sl.pn, sl.time, sl.path)
                        | some n => if sl.pn > n.1 then some (sl.pn, sl.time, sl.path) else x.nw }

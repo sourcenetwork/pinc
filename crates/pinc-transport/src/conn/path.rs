@@ -97,7 +97,13 @@ pub(crate) const CTRL_SMALL: usize = 72;
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Mtu {
     pub(crate) current: u16,
-    pub(crate) inflight: Option<u16>,
+    /// The probe in flight: its size and packet number. An acknowledgement or echo of exactly this packet raises the
+    /// path; one of any other packet says nothing about this probe and is refused.
+    pub(crate) inflight: Option<(u16, u64)>,
+    /// A probe a flush took: its size and packet number, kept so its acknowledgement can still raise the path. A
+    /// newer probe or a black-hole drop clears it; a path event does not. A raise cannot clear it: the flush left
+    /// nothing in flight, and an acknowledgement or an echo raises only with the probe in flight.
+    pub(crate) flushed: Option<(u16, u64)>,
     /// The main probe was sent since the last path event.
     pub(crate) probed: bool,
     pub(crate) jumbo: Jumbo,
@@ -723,7 +729,7 @@ conn_impl! {
             .resend_off_path(now, slot, REJOIN_RESEND, |ev| super::ctl::apply(&ev, streams, pool, ctl, &mut out));
         self.life.probes = 0;
         self.degraded_told = false;
-        self.after_feedback(out, now);
+        self.after_feedback(&out, now);
     }
 
     /// The path a session of this peer's abandoned address validated again, with its round trip, once; the endpoint

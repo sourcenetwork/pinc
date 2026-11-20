@@ -80,6 +80,10 @@ pub enum Event<'a> {
         pn: u64,
         /// What the packet carried.
         frames: &'a FrameRefs,
+        /// The path the packet left on.
+        path: u8,
+        /// Whether the packet was a path MTU probe.
+        mtu_probe: bool,
     },
     /// The packet was declared lost.
     Lost {
@@ -93,6 +97,11 @@ pub enum Event<'a> {
         requeue: bool,
         /// Whether the packet was a path MTU probe.
         mtu_probe: bool,
+        /// The path the packet left on.
+        path: u8,
+        /// Whether a flush took the packet (a link return or a wake emptied the flight) rather than the loss
+        /// detection: a flush says nothing about the path's quality.
+        flushed: bool,
     },
 }
 
@@ -665,6 +674,8 @@ impl<const N: usize> Recovery<N> {
                 frames: &sent.frames,
                 requeue: !sent.is_repair && !sent.is_mtu_probe,
                 mtu_probe: sent.is_mtu_probe,
+                path: sent.path,
+                flushed: true,
             });
         }
         s

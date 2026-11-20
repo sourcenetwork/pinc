@@ -11,11 +11,17 @@
 (*  - a probe is due only when discovery started, none is in flight and no *)
 (*    lost probe still waits, and it is above the datagram size, so at     *)
 (*    most one probe is in flight (TargetShape);                           *)
+(*  - a rise consumes the probe in flight: every rise leaves nothing in    *)
+(*    flight (RiseClearsProbe), a flush mark exists only with nothing in   *)
+(*    flight (FlushAwaits), and an echo rises only when a probe of exactly *)
+(*    that size is in flight and the ceiling can carry it (the RaiseA      *)
+(*    guard);                                                              *)
 (*  - a lost probe is not tried again until a path event or REPROBE later  *)
 (*    (LostWaits);                                                         *)
 (*  - a black-hole suspicion exists only above the floor, and the          *)
-(*    fallback leaves the floor, nothing in flight, the path marked        *)
-(*    probed and the jumbo probe done (SuspectShape, DropShape).           *)
+(*    fallback leaves the floor, nothing in flight, no flush mark, the     *)
+(*    path marked probed and the jumbo probe done (SuspectShape,           *)
+(*    DropShape).                                                          *)
 (* Lean counterpart: proofs/lean/Pinc/TransportMtu*.lean.                  *)
 (***************************************************************************)
 EXTENDS Integers, Sequences
@@ -29,19 +35,29 @@ Init == m = M0 /\ t = 0 /\ k = 0 /\ lost = -1 /\ ev = [dropped |-> FALSE, raised
 
 StartA == m' = Start(m) /\ UNCHANGED <<t, lost>> /\ ev' = [dropped |-> FALSE, raised |-> -1]
 TickA == \E d \in {0, 3, 12} : t' = t + d /\ UNCHANGED <<m, lost, ev>>
-SentA == \E allowed \in BOOLEAN, im \in {1200, 1500, 9000}, ll \in BOOLEAN :
+SentA == \E allowed \in BOOLEAN, im \in {1200, 1500, 9000}, ll \in BOOLEAN, pn \in {0, 1, 2} :
            LET s == Target(m, allowed, im, ll, t)
-           IN /\ s >= 0 /\ m' = ProbeSent(m, s) /\ UNCHANGED <<t, lost>> /\ ev' = [dropped |-> FALSE, raised |-> -1]
-RaiseA == \E s \in {1452, 3000, 9000} :
+           IN /\ s >= 0 /\ m' = ProbeSent(m, s, pn) /\ UNCHANGED <<t, lost>> /\ ev' = [dropped |-> FALSE, raised |-> -1]
+RaiseA == \E s \in {1452, 3000}, ceil \in {1172, 1452, 8952} :
+            m.infl >= 0 /\ m.infl[1] = s /\ s <= ceil /\
             LET r == Raise(m, s) IN m' = r.m /\ ev' = [dropped |-> FALSE, raised |-> r.new] /\ UNCHANGED <<t, lost>>
-LostA == \E s \in {1452, 9000} : m' = ProbeLost(m, s, t) /\ lost' = t /\ UNCHANGED <<t>> /\ ev' = [dropped |-> FALSE, raised |-> -1]
+AckA == \E s \in {1452, 3000, 9000}, pn \in {0, 1, 2} :
+          LET r == Acked(m, s, pn) IN m' = r.m /\ ev' = [dropped |-> FALSE, raised |-> r.new] /\ UNCHANGED <<t, lost>>
+LostA == \E s \in {1452, 9000}, pn \in {0, 1, 2} :
+           LET r == ProbeLost(m, s, pn, t)
+           IN m' = r.m /\ lost' = IF r.applied THEN t ELSE lost /\ UNCHANGED <<t>> /\ ev' = [dropped |-> FALSE, raised |-> -1]
+FlushA == \E s \in {1452, 9000}, pn \in {0, 1, 2} :
+            LET r == Flush(m, s, pn)
+            IN m' = r.m /\ UNCHANGED <<t, lost>> /\ ev' = [dropped |-> FALSE, raised |-> -1]
+FackA == \E pn \in {0, 1, 2} :
+           LET r == FlushedAcked(m, pn) IN m' = r.m /\ ev' = [dropped |-> FALSE, raised |-> r.new] /\ UNCHANGED <<t, lost>>
 EventA == m' = Event(m) /\ lost' = -1 /\ UNCHANGED <<t>> /\ ev' = [dropped |-> FALSE, raised |-> -1]
 BigA == \E lb \in {-1, 5}, ba \in {-1, 3, 6}, pb \in {-1, 5} :
           m' = SetBig(m, lb, ba, pb) /\ UNCHANGED <<t, lost>> /\ ev' = [dropped |-> FALSE, raised |-> -1]
 BhA == \E rtt \in {0, 4} : m' = BlackHole(m, t, rtt) /\ UNCHANGED <<t, lost>> /\ ev' = [dropped |-> FALSE, raised |-> -1]
 BhcA == LET r == BlackHoleCheck(m, t) IN m' = r.m /\ ev' = [dropped |-> r.dropped, raised |-> -1] /\ UNCHANGED <<t, lost>>
 
-Next == (StartA \/ TickA \/ SentA \/ RaiseA \/ LostA \/ EventA \/ BigA \/ BhA \/ BhcA) /\ k' = k + 1
+Next == (StartA \/ TickA \/ SentA \/ RaiseA \/ AckA \/ LostA \/ FlushA \/ FackA \/ EventA \/ BigA \/ BhA \/ BhcA) /\ k' = k + 1
 Spec == Init /\ [][Next]_vars
 Bound == k <= KMAX
 
@@ -51,9 +67,11 @@ LostWaits == lost >= 0 => m.retry >= SAdd(lost, REPROBE)
 TargetShape == \A al \in BOOLEAN, im \in {1200, 1500, 9000}, ll \in BOOLEAN :
                  LET s == Target(m, al, im, ll, t)
                  IN s >= 0 => (al /\ m.started /\ m.infl = -1 /\ m.retry <= t /\ s > m.cur)
-Inv == Floor /\ SuspectShape /\ LostWaits /\ TargetShape
+Inv == Floor /\ SuspectShape /\ LostWaits /\ TargetShape /\ FlushAwaits
 
 RisesByRaise == [][m'.cur > m.cur => ev'.raised = m'.cur]_vars
 FallsToFloor == [][m'.cur < m.cur => (ev'.dropped /\ m'.cur = MINMTU)]_vars
-DropShape == [][ev'.dropped => (m'.cur = MINMTU /\ m'.infl = -1 /\ m'.probed /\ m'.jdone /\ m'.susp[1] < 0)]_vars
+DropShape == [][ev'.dropped => (m'.cur = MINMTU /\ m'.infl = -1 /\ m'.flushed = -1 /\ m'.probed /\ m'.jdone /\ m'.susp[1] < 0)]_vars
+RiseClearsProbe == [][m'.cur > m.cur => m'.infl = -1]_vars
+FlushAwaits == m.flushed >= 0 => m.infl = -1
 =============================================================================

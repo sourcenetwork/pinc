@@ -175,6 +175,8 @@ impl<const N: usize> Recovery<N> {
             frames: &sent.frames,
             requeue: counts,
             mtu_probe: sent.is_mtu_probe,
+            path: sent.path,
+            flushed: false,
         });
         counts.then_some(sent.time)
     }

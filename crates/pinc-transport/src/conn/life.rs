@@ -217,7 +217,7 @@ conn_impl! {
         self.rec.flush_in_flight(now, |ev| super::ctl::apply(&ev, streams, pool, ctl, &mut out));
         self.life.probes = 0;
         self.degraded_told = false;
-        self.after_feedback(out, now);
+        self.after_feedback(&out, now);
     }
 
     /// Start closing with `error`: one CLOSE goes out when the next datagram is built, and the state is then freed.

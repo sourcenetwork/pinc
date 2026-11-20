@@ -49,8 +49,18 @@ pub(crate) struct ExtSlot {
 /// What a batch of recovery events turned up for the connection.
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct Outcome {
-    pub(crate) probe_acked: Option<u32>,
-    pub(crate) probe_lost: Option<u32>,
+    /// Per path slot, the path MTU probe outcome there: the probe's packet number and size, and the flags
+    /// (`PROBE_LOST` set when the probe was declared lost rather than acknowledged, `PROBE_FLUSHED` set when a
+    /// flush took it rather than the loss detection).
+    pub(crate) probe: [Option<(u64, u16, u8)>; crate::recovery::MAX_PATHS],
+    /// How many slots hold a path MTU probe outcome, so the per-slot fold can be skipped whole.
+    pub(crate) probe_outcomes: u8,
+    /// Per path slot, the newest packet number acknowledged there after having been declared lost (a look at the
+    /// ghosts found it): the acknowledgement of a probe a flush took raises its path. Only path MTU probes are
+    /// kept, one slot per path, because a held mark is always the newest probe the path sent: no newer probe has
+    /// left since the flush took the marked one (a newer probe clears the mark), so the ghost scan, which walks
+    /// the ring in packet-number order, writes the marked probe last and it keeps the slot.
+    pub(crate) late_acked: [Option<u64>; crate::recovery::MAX_PATHS],
     /// The newest acknowledged packet larger than the minimum datagram size.
     pub(crate) big_acked: Option<u64>,
     /// A REKEY answer was lost.
@@ -67,6 +77,11 @@ pub(crate) struct Outcome {
     /// Per path slot, the highest packet number acknowledged on it.
     pub(crate) acked_pn: [Option<u64>; crate::recovery::MAX_PATHS],
 }
+
+/// The probe of a slot was declared lost rather than acknowledged.
+pub(crate) const PROBE_LOST: u8 = 1;
+/// A flush took the probe of a slot rather than the loss detection.
+pub(crate) const PROBE_FLUSHED: u8 = 2;
 
 /// Pending control state and the table of frames in flight.
 #[derive(Debug)]
@@ -190,8 +205,9 @@ pub(crate) fn apply<S: StreamSource, const N: usize, const C: usize>(
                 out.big_acked = out.big_acked.max(Some(pn));
             }
             out.loss_acked += u32::from(!repair);
-            if mtu_probe {
-                out.probe_acked = Some(size);
+            if mtu_probe && let Some(slot) = out.probe.get_mut(usize::from(path)) {
+                *slot = Some((pn, u16::try_from(size).unwrap_or(u16::MAX), 0));
+                out.probe_outcomes += 1;
             }
             for f in frames {
                 match *f {
@@ -202,7 +218,17 @@ pub(crate) fn apply<S: StreamSource, const N: usize, const C: usize>(
                 }
             }
         }
-        Event::LateAcked { frames, .. } => {
+        Event::LateAcked {
+            pn,
+            frames,
+            path,
+            mtu_probe,
+        } => {
+            if let Some(slot) = out.late_acked.get_mut(usize::from(path))
+                && mtu_probe
+            {
+                *slot = Some(pn);
+            }
             for f in frames {
                 match *f {
                     FrameRef::Stream { id, offset, len, fin } => {
@@ -213,16 +239,25 @@ pub(crate) fn apply<S: StreamSource, const N: usize, const C: usize>(
             }
         }
         Event::Lost {
+            pn,
             size,
             frames,
             requeue,
             mtu_probe,
+            path,
+            flushed,
             ..
         } => {
             out.lost_packets += 1;
             out.loss_lost += u32::from(requeue);
-            if mtu_probe {
-                out.probe_lost = Some(size);
+            if mtu_probe && let Some(slot) = out.probe.get_mut(usize::from(path)) {
+                let flags = if flushed {
+                    PROBE_LOST | PROBE_FLUSHED
+                } else {
+                    PROBE_LOST
+                };
+                *slot = Some((pn, u16::try_from(size).unwrap_or(u16::MAX), flags));
+                out.probe_outcomes += 1;
             }
             if !requeue {
                 return;

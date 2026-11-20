@@ -104,7 +104,9 @@ DataFrames(fr) == SelectSeq(fr, LAMBDA f : f)
 IsRelay(R, p) == p < MP /\ R.rel[p]
 
 (* ---- events and results ---- *)
-Ev(k, pn, size, fr, f1, f2) == [k |-> k, pn |-> pn, size |-> size, fr |-> fr, f1 |-> f1, f2 |-> f2]
+(* path and fl are the path a lost packet left on and whether a flush took it; the other kinds record 0 and FALSE. *)
+Ev(k, pn, size, fr, f1, f2, path, fl) == [k |-> k, pn |-> pn, size |-> size, fr |-> fr, f1 |-> f1, f2 |-> f2,
+                                          path |-> path, fl |-> fl]
 
 (* ---- the reorder lens (loss.rs) ---- *)
 ReoHold(R) == Mx(SMul(SEC, 2), SMul(R.rtt.sm, 16))
@@ -141,7 +143,7 @@ LoseAt(Y, i, now) ==
         R1 == [R EXCEPT !.ring[i].st = IF ghost THEN 1 ELSE 2, !.ring[i].at = IF ghost THEN now ELSE sl.at,
                         !.inf = R.inf - sl.size, !.lost = R.lost + sl.size, !.infp = R.infp - 1,
                         !.late = IF counts THEN LateInsert(R.late, sl.pn, sl.time) ELSE R.late]
-    IN [r |-> R1, ev |-> Append(Y.ev, Ev("lost", sl.pn, sl.size, sl.fr, counts, sl.probe)),
+    IN [r |-> R1, ev |-> Append(Y.ev, Ev("lost", sl.pn, sl.size, sl.fr, counts, sl.probe, sl.path, FALSE)),
         s |-> [Y.s EXCEPT !.lp = Y.s.lp + 1, !.lb = Y.s.lb + sl.size],
         nl |-> IF counts THEN Mx(Y.nl, sl.time) ELSE Y.nl]
 Settle(Y) == IF Y.s.lp > 0 THEN [Y EXCEPT !.r.ring = LimitGhosts(Y.r.ring)] ELSE Y
@@ -237,7 +239,7 @@ FlushLoop(Y, i, now) ==
          IF sl.st # 0 THEN FlushLoop(Y, i + 1, now)
          ELSE LET R1 == [Y.r EXCEPT !.ring[i].st = 1, !.ring[i].at = now, !.inf = Y.r.inf - sl.size,
                                     !.lost = Y.r.lost + sl.size, !.infp = Y.r.infp - 1]
-              IN FlushLoop([r |-> R1, ev |-> Append(Y.ev, Ev("lost", sl.pn, sl.size, sl.fr, ~sl.rep /\ ~sl.probe, sl.probe)),
+              IN FlushLoop([r |-> R1, ev |-> Append(Y.ev, Ev("lost", sl.pn, sl.size, sl.fr, ~sl.rep /\ ~sl.probe, sl.probe, sl.path, TRUE)),
                             s |-> [Y.s EXCEPT !.lp = Y.s.lp + 1, !.lb = Y.s.lb + sl.size], nl |-> -1], i + 1, now)
 Flush(R, now) ==
     LET Y == FlushLoop([r |-> [R EXCEPT !.clock = Mx(R.clock, now)], ev |-> <<>>, s |-> S0, nl |-> -1], 1, now)
@@ -273,12 +275,12 @@ AckRing(X, now, i, b) ==
            IN IF late
               THEN AckRing([X EXCEPT !.r = [R1 EXCEPT !.lost = R1.lost - sl.size, !.acked = R1.acked + sl.size],
                                      !.s.lap = X.s.lap + 1,
-                                     !.ev = Append(X.ev, Ev("late", sl.pn, 0, DataFrames(sl.fr), FALSE, FALSE))],
+                                     !.ev = Append(X.ev, Ev("late", sl.pn, 0, DataFrames(sl.fr), sl.probe, FALSE, sl.path, FALSE))],
                            now, i + 1, b)
               ELSE AckRing([X EXCEPT !.r = [R1 EXCEPT !.inf = R1.inf - sl.size, !.acked = R1.acked + sl.size,
                                                       !.infp = R1.infp - 1],
                                      !.s.ap = X.s.ap + 1, !.s.ab = X.s.ab + sl.size,
-                                     !.ev = Append(X.ev, Ev("acked", sl.pn, sl.size, sl.fr, sl.probe, sl.rep)),
+                                     !.ev = Append(X.ev, Ev("acked", sl.pn, sl.size, sl.fr, sl.probe, sl.rep, 0, FALSE)),
                                      !.nw = IF X.nw[1] < 0 \/ sl.pn > X.nw[1] THEN <<sl.pn, sl.time, sl.path>> ELSE X.nw],
                            now, i + 1, b)
 

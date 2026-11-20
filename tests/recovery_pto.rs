@@ -360,7 +360,7 @@ fn a_late_ack_counts_as_acknowledged_and_reports_the_frames() {
     let mut late = Vec::new();
     let s = rec
         .on_ack_received(215 * MS, one(1, 2), |e| {
-            if let Event::LateAcked { pn, frames } = e {
+            if let Event::LateAcked { pn, frames, .. } = e {
                 late.push((pn, frames.as_slice().to_vec()));
             }
         })
@@ -442,7 +442,7 @@ fn a_ghost_keeps_only_stream_data_frames() {
     ack(&mut rec, 210 * MS, &[(8, 8)]);
     let mut seen = Vec::new();
     rec.on_ack_received(220 * MS, std::iter::once(1..=4), |e| {
-        if let Event::LateAcked { pn, frames } = e {
+        if let Event::LateAcked { pn, frames, .. } = e {
             seen.push((pn, frames.as_slice().to_vec()));
         }
     })
