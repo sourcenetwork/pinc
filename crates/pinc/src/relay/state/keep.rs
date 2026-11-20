@@ -6,6 +6,8 @@
 //! lifetime is removed from the store; a record and a packet come back with the time they arrived, so what is left of
 //! their lifetime is the same after a restart.
 //!
+//! A mark the mailbox table has no room for is counted as a store error.
+//!
 //! Invariants: the nodes marked are bounded by the record table and the mailbox member table; a packet is written
 //! with its arrival time and restored oldest first; nothing past its lifetime is restored.
 
@@ -94,10 +96,16 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
         }
     }
 
-    /// A packet was held for `node` or handed to it: write what is held.
+    /// A packet was held for `node` or handed to it: write what is held. A mark the table has no room for leaves the
+    /// store behind: it is counted as a failed write.
     pub(super) fn note_mail(&mut self, node: NodeId) {
-        if !self.keep.restoring && !self.keep.mail.contains(&node) && self.keep.mail.len() < 4 * MAILBOX_MEMBERS {
+        if self.keep.restoring || self.keep.mail.contains(&node) {
+            return;
+        }
+        if self.keep.mail.len() < 4 * MAILBOX_MEMBERS {
             self.keep.mail.push(node);
+        } else {
+            self.store_failed();
         }
     }
 
@@ -169,5 +177,48 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
         }
         self.keep.count = self.sm.record_count();
         self.keep.restoring = false;
+    }
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::panic,
+    reason = "tests assert"
+)]
+mod tests {
+    use alloc::rc::Rc;
+    use core::cell::RefCell;
+    use core::net::SocketAddr;
+
+    use pinc_keystore::SoftwareStore;
+
+    use super::*;
+    use crate::keys::Identity;
+    use crate::relay::access::AllowAll;
+    use crate::relay::limits::Limits;
+
+    const T0: u64 = 1_000_000_000_000;
+
+    fn core() -> Core<(), SoftwareStore, AllowAll> {
+        let identity = Rc::new(RefCell::new(Identity::from_seed_with(&[7; 32], &[0; 32]).unwrap()));
+        let local: SocketAddr = "192.0.2.1:4000".parse().unwrap();
+        Core::new(identity, AllowAll, &[], Limits::default(), Some(local), T0).unwrap()
+    }
+
+    /// A mark the table has no room for is a store that is behind, and is counted like a failed write.
+    #[test]
+    fn a_mailbox_mark_past_the_table_is_counted() {
+        let mut core = core();
+        for i in 0..=u16::try_from(4 * MAILBOX_MEMBERS).unwrap() {
+            let mut bytes = [0u8; 32];
+            bytes[..2].copy_from_slice(&i.to_be_bytes());
+            core.note_mail(NodeId {
+                alg: IdentityAlg::Ed25519,
+                bytes,
+            });
+        }
+        assert_eq!(core.counters.store_errors, 1, "the lost mark was not counted");
     }
 }
