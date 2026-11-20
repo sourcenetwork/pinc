@@ -56,7 +56,7 @@ pub(crate) const ASK: u8 = 2;
 pub(crate) const HUB_FULL: u8 = 3;
 
 /// How long a member waits before asking again, after its `step`th notice of one wait: 2 s, doubling to 64 s.
-fn sub_wait(step: u8) -> Nanos {
+pub(crate) fn sub_wait(step: u8) -> Nanos {
     SUB_WAIT_FIRST
         .saturating_mul(1 << (step.max(1) - 1).min(5))
         .min(SUB_WAIT_MAX)
@@ -611,6 +611,7 @@ fn ask<H: Host>(h: &mut H, scratch: &mut Vec<u8>, hub: &NodeId, topic: &[u8]) {
 fn confirm<H: Host>(h: &mut H, st: &mut Topic, from: &NodeId, topic: &[u8], me: &NodeId) {
     if st.sub && !st.confirmed && st.peers.contains(me) {
         st.confirmed = true;
+        st.joined_before = true;
         st.end_wait();
         h.event(Event::Subscribed { hub: from, topic });
     }

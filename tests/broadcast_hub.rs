@@ -413,6 +413,100 @@ fn a_refused_join_asks_again_on_a_bounded_backoff_and_ends_in_joined() {
     assert_eq!(net.count_between(1, 0, ty::SUB), asked, "no ask once the hub holds it");
 }
 
+/// A hub of one topic held at `TABLE_MAX` by fake subscribers, and member 1 refused once: the notice is heard at
+/// the returned start time plus a second at most, and its ask is due at 2 s.
+fn refused_member() -> (Net, NodeId, u64) {
+    let mut net = Net::new(IdentityAlg::Ed25519, 1, 1, SEC);
+    for n in 0..TABLE_MAX {
+        sub_from(&mut net, &fake(n), T);
+    }
+    assert!(net.id(1) < fake(0), "the cut list names the member");
+    let hub = net.id(0);
+    let t0 = net.now;
+    net.subscribe(1, T);
+    net.run_until(t0 + SEC);
+    assert_eq!(hub_fulls(&net, 1), 1);
+    (net, hub, t0)
+}
+
+fn hub_fulls(net: &Net, i: usize) -> usize {
+    net.events(i).iter().filter(|e| matches!(e, Ev::HubFull { .. })).count()
+}
+
+/// Make room at hub 0 for the member: fake subscriber `n` leaves.
+fn free_a_place(net: &mut Net, n: usize) {
+    let now = net.now;
+    let h = &mut net.nodes[0];
+    h.t.frame(&mut h.h, now, &fake(n), ty::UNSUB, T, &[]);
+}
+
+/// The hub is not up at the instant the retry is due (silent past its stale time, the session still open): the
+/// member keeps the wait armed at the same step, asks when the hub is heard again and ends in `Subscribed`.
+#[test]
+fn a_refused_join_asks_again_when_the_hub_was_stale_at_the_due_instant() {
+    let (mut net, hub, t0) = refused_member();
+    net.nodes[1].h.hubs.remove(&hub);
+    net.run_until(t0 + 3 * SEC);
+    assert_eq!(
+        net.count_between(1, 0, ty::SUB),
+        1,
+        "nothing is sent to a hub that is not up"
+    );
+    net.nodes[1].h.hubs.insert(hub);
+    free_a_place(&mut net, 0);
+    net.run_until(t0 + 10 * SEC);
+    assert_eq!(net.subscribed(1), [T.to_vec()]);
+    assert_eq!(hub_fulls(&net, 1), 1, "one event for the wait");
+}
+
+/// The stream to the hub has no room at the due instant: the ask is tried again, not given up.
+#[test]
+fn a_refused_join_asks_again_when_the_stream_refused_the_retry() {
+    let (mut net, hub, t0) = refused_member();
+    net.nodes[1].h.full.insert(hub);
+    net.run_until(t0 + 3 * SEC);
+    assert_eq!(net.count_between(1, 0, ty::SUB), 1, "the refused frame is not sent");
+    net.nodes[1].h.full.remove(&hub);
+    free_a_place(&mut net, 0);
+    net.run_until(t0 + 10 * SEC);
+    assert_eq!(net.subscribed(1), [T.to_vec()]);
+}
+
+/// A join confirmed before and refused after a resubscribe asks again from the floor the resubscribe asked from,
+/// not from the instant of the retry, so what was logged in between is still offered.
+#[test]
+fn a_refused_resubscribe_asks_again_from_the_old_floor() {
+    let mut net = Net::new(IdentityAlg::Ed25519, 1, 1, SEC);
+    let (hub, me) = (net.id(0), net.id(1));
+    net.subscribe(1, T);
+    net.run_until(net.now + 3 * SEC);
+    assert_eq!(net.subscribed(1), [T.to_vec()]);
+    // The hub loses the member and fills up.
+    let now = net.now;
+    let n = &mut net.nodes[0];
+    n.t.frame(&mut n.h, now, &me, ty::UNSUB, T, &[]);
+    for n in 0..TABLE_MAX {
+        sub_from(&mut net, &fake(n), T);
+    }
+    let sinces = Rc::new(RefCell::new(Vec::<u64>::new()));
+    let s = Rc::clone(&sinces);
+    net.filter = Some(Box::new(move |from, _, bytes| {
+        if from == 1 && bytes.get(4) == Some(&ty::SUB) {
+            let at = 6 + usize::from(bytes[5]);
+            s.borrow_mut().push(u64::from_be_bytes(bytes[at..at + 8].try_into().unwrap()));
+        }
+        true
+    }));
+    let n = &mut net.nodes[1];
+    n.h.tick(now);
+    n.t.resubscribe(&mut n.h, now, &hub);
+    net.run_until(now + 5 * SEC);
+    let got = sinces.borrow().clone();
+    assert_eq!(got.len(), 2, "the resubscribe and one retry");
+    assert_eq!(got[0], got[1], "the retry asks from the floor of the resubscribe");
+    assert!(got[1] + 1000 < net.nodes[1].h.wall, "and not from the instant of the retry");
+}
+
 /// A network of `hubs` hubs, each holding one topic at most, then `members` members attached to every hub.
 fn small_tables(hubs: usize, members: usize) -> Net {
     let limits = pinc_broadcast::Limits {

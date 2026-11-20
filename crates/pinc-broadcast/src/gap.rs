@@ -50,7 +50,7 @@ use crate::host::{Host, Lane};
 use crate::log::HubLog;
 use crate::node::{Refused, Topic, Topics, TraceQueue};
 use crate::reach::{offers, reaches};
-use crate::subs::{HUB_FULL, Ver, read_ver, ver_bytes};
+use crate::subs::{HUB_FULL, Ver, read_ver, sub_wait, ver_bytes};
 use crate::wire::{self, Head, get_u64, ty};
 
 /// SUB flag: replay the logged messages instead of offering their ids.
@@ -112,9 +112,9 @@ impl Topics {
         since_ms: u64,
         replay: bool,
         held: Option<Ver>,
-    ) {
+    ) -> bool {
         if *hub == self.me {
-            return;
+            return false;
         }
         let since = since_ms.to_be_bytes();
         let flag = [(u8::from(replay) * SUB_REPLAY) | (u8::from(held.is_some()) * SUB_VER)];
@@ -124,15 +124,17 @@ impl Topics {
             (_, None) => &[&since, &flag],
             (_, Some(_)) => &[&since, &flag, &ver],
         };
-        if wire::build(&mut self.scratch, ty::SUB, topic, parts).is_ok() {
-            h.send(hub, Lane::Main, &self.scratch);
-            self.trace(|| Trace::SubSent {
-                hub: *hub,
-                topic: topic_tag(topic),
-                since_ms,
-                replay,
-            });
+        if wire::build(&mut self.scratch, ty::SUB, topic, parts).is_err() {
+            return false;
         }
+        let sent = h.send(hub, Lane::Main, &self.scratch);
+        self.trace(|| Trace::SubSent {
+            hub: *hub,
+            topic: topic_tag(topic),
+            since_ms,
+            replay,
+        });
+        sent
     }
 
     /// Subscribe to `topic`.
@@ -147,6 +149,7 @@ impl Topics {
         if !st.sub {
             st.sub = true;
             st.confirmed = false;
+            st.joined_before = false;
             if let Some(p) = self.primary {
                 let since = h.wall_ms();
                 let held = self.held_ver(&p, topic);
@@ -268,8 +271,9 @@ impl Topics {
         }
     }
 
-    /// A member whose hub could not hold a subscription asks again for every topic whose wait is due. With the hub
-    /// down nothing is sent: the next session's [`Topics::resubscribe`] asks and starts the wait over.
+    /// A member whose hub could not hold a subscription asks again for every topic whose wait is due, from the floor
+    /// a resubscribe uses when the topic was confirmed before. With the hub down or its stream full nothing goes out:
+    /// the wait stays armed at the same step and the ask is tried again after it.
     pub(crate) fn sub_wait_retry<H: Host>(&mut self, h: &mut H, now: Nanos) {
         if self.is_hub || !self.topics.values().any(|st| st.wait_at.is_some_and(|t| t <= now)) {
             return;
@@ -280,10 +284,13 @@ impl Topics {
         for (k, st) in &mut topics {
             if st.wait_at.is_some_and(|t| t <= now) {
                 st.wait_at = None;
-                if st.sub
-                    && let Some(p) = up
-                {
-                    self.send_sub(h, &p, k, wall, false, st.held(&p));
+                if !st.sub {
+                    continue;
+                }
+                let since = if st.joined_before { self.since_ms() } else { wall };
+                let sent = up.is_some_and(|p| self.send_sub(h, &p, k, since, false, st.held(&p)));
+                if !sent {
+                    st.wait_at = Some(now.saturating_add(sub_wait(st.wait_step)));
                 }
             }
         }

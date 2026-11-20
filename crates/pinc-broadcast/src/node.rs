@@ -178,6 +178,9 @@ pub(crate) struct Topic {
     pub(crate) sub: bool,
     /// Member: a hub's subscriber set listed this node since it last subscribed.
     pub(crate) confirmed: bool,
+    /// Member: a hub's list named this node since it subscribed, so a retry after a refusal asks from the resubscribe
+    /// floor and not from now.
+    pub(crate) joined_before: bool,
     /// Member: the hub could not hold this subscription; when to ask again, `None` while an ask is out or nothing
     /// waits.
     pub(crate) wait_at: Option<Nanos>,
@@ -229,6 +232,7 @@ impl Topic {
         Self {
             sub: false,
             confirmed: false,
+            joined_before: false,
             wait_at: None,
             wait_step: 0,
             subs: BTreeMap::new(),
