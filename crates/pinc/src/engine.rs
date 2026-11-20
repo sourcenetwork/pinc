@@ -937,11 +937,6 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
                 stream: id,
                 error: BUSY,
             });
-            self.send_failed(
-                session,
-                id,
-                Error::new(ErrorKind::Stopped(BUSY), "the stream was refused"),
-            );
         }
         let _ = self.cmd(now, || Command::StopSending {
             session,
