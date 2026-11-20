@@ -9,7 +9,8 @@
 //! A write that fails or is dropped with its run is marked again, and tried again after `RETRY_NS`; a failure of the
 //! store is counted and reported, and a mark the table has no room for counts as one.
 //!
-//! Invariants: the nodes marked are at most twice the record table and four times the mailbox member table; a packet
+//! Invariants: the nodes marked are at most twice the record table for records kept, twice for records removed, and
+//! four times the mailbox member table; a packet
 //! is written with its arrival time and restored oldest first; nothing past its lifetime is restored. A wall clock that
 //! goes back across a restart lengthens what the store kept by up to the step back: the node cannot know it.
 
@@ -24,7 +25,7 @@ use pinc_crypto::{IdentityAlg, NodeId};
 
 use super::Core;
 use crate::relay::access::Access;
-use crate::relay::limits::MAILBOX_MEMBERS;
+use crate::relay::limits::{MAILBOX_MEMBERS, RECORDS};
 use crate::relay::store::{Kept, node_key};
 use pinc_keystore::KeyStore;
 
@@ -35,8 +36,8 @@ pub(super) struct Keep {
     records: BTreeMap<[u8; 33], NodeId>,
     /// Records the store holds and the machine may have dropped: at most twice the record table.
     held: BTreeMap<[u8; 33], NodeId>,
-    /// Records to remove from the store.
-    removed: Vec<NodeId>,
+    /// Records to remove from the store: at most twice the record table, a mark past it is lost and counted.
+    removed: BTreeMap<[u8; 33], NodeId>,
     /// Members whose held packets changed.
     mail: Vec<NodeId>,
     /// When `held` is next checked against the machine's records; `None` before the first check.
@@ -45,6 +46,19 @@ pub(super) struct Keep {
     retry_at: u64,
     /// Restoring: the machine reports what it restores, which is already in the store.
     restoring: bool,
+}
+
+impl Keep {
+    /// Mark `node` to be removed from the store; false if the table is full and the mark is lost (the record stays in
+    /// the store, which drops it at the next start, when it is past its lifetime).
+    fn mark_removed(removed: &mut BTreeMap<[u8; 33], NodeId>, node: NodeId) -> bool {
+        let key = node_key(&node);
+        if removed.len() >= 2 * RECORDS && !removed.contains_key(&key) {
+            return false;
+        }
+        removed.insert(key, node);
+        true
+    }
 }
 
 /// How long after a failed write the next is tried.
@@ -144,6 +158,7 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
         }
         self.keep.next_sweep = Some(now.saturating_add(SWEEP_NS));
         let Self { sm, keep, .. } = self;
+        let mut lost = false;
         let Keep {
             held, records, removed, ..
         } = keep;
@@ -151,10 +166,14 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
             let alive = sm.record_received(node).is_some();
             if !alive {
                 records.remove(key);
-                removed.push(*node);
+                lost |= !Keep::mark_removed(removed, *node);
             }
             alive
         });
+        // one count and one event per sweep, not one per mark
+        if lost {
+            self.store_failed();
+        }
     }
 
     /// A write that was taken did not finish: mark its node again.
@@ -162,8 +181,8 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
         match mark {
             Mark::Put(n) => self.note_record(n),
             Mark::Remove(n) => {
-                if !self.keep.removed.contains(&n) {
-                    self.keep.removed.push(n);
+                if !Keep::mark_removed(&mut self.keep.removed, n) {
+                    self.store_failed();
                 }
             }
             Mark::Mail(n) => self.note_mail(n),
@@ -189,7 +208,7 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
         if self.last_now < self.keep.retry_at {
             return None;
         }
-        if let Some(n) = self.keep.removed.pop() {
+        if let Some((_, n)) = self.keep.removed.pop_first() {
             return Some(Job::Remove(n));
         }
         while let Some((_, n)) = self.keep.records.pop_first() {
@@ -224,7 +243,11 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
                 (true, Some(n)) => {
                     self.keep.held.insert(node_key(&n), n);
                 }
-                (false, Some(n)) => self.keep.removed.push(n),
+                (false, Some(n)) => {
+                    if !Keep::mark_removed(&mut self.keep.removed, n) {
+                        self.store_failed();
+                    }
+                }
                 (_, None) => self.counters.store_errors += 1,
             }
         }
@@ -273,8 +296,19 @@ mod tests {
         Core::new(identity, AllowAll, &[], Limits::default(), Some(local), T0).unwrap()
     }
 
-    fn signed(tag: u8, home: NodeId) -> (NodeId, Vec<u8>) {
-        let kp = Keypair::from_seed(IdentityAlg::Ed25519, &[tag; 32]).unwrap();
+    fn nid(i: u16) -> NodeId {
+        let mut bytes = [0u8; 32];
+        bytes[..2].copy_from_slice(&i.to_be_bytes());
+        NodeId {
+            alg: IdentityAlg::Ed25519,
+            bytes,
+        }
+    }
+
+    fn signed(tag: u16, home: NodeId) -> (NodeId, Vec<u8>) {
+        let mut seed = [1u8; 32];
+        seed[..2].copy_from_slice(&tag.to_be_bytes());
+        let kp = Keypair::from_seed(IdentityAlg::Ed25519, &seed).unwrap();
         let mut out = vec![0u8; record::MAX_RECORD_LEN];
         let n = record::sign(
             &kp,
@@ -332,5 +366,38 @@ mod tests {
             });
         }
         assert_eq!(core.counters.store_errors, 1, "the lost mark was not counted");
+    }
+
+    /// The records to remove from the store never pass twice the record table, and the ones lost are counted.
+    #[test]
+    fn removals_past_the_table_are_counted_and_not_kept() {
+        let mut core = core();
+        for i in 0..=u16::try_from(2 * RECORDS).unwrap() {
+            core.requeue(Mark::Remove(nid(i)));
+        }
+        assert!(core.keep.removed.len() <= 2 * RECORDS, "{} removals kept", core.keep.removed.len());
+        assert_eq!(core.counters.store_errors, 1, "the lost removal was not counted");
+    }
+
+    /// A store that fails every write does not let the removals pile up as records expire.
+    #[test]
+    fn removals_stay_bounded_while_the_store_fails() {
+        let mut core = core();
+        let home = core.node_id();
+        let table = u16::try_from(RECORDS).unwrap();
+        for round in 0..3u16 {
+            let at = T0 + (u64::from(round) + 1) * 2 * RECORD_TTL_NS;
+            for i in 0..table {
+                let (n, rec) = signed(round * table + i, home);
+                core.sm.restore_record(at, &rec, &mut core.fx).unwrap();
+                core.note_record(n);
+            }
+            core.on_timeout(at + RECORD_TTL_NS + SEC);
+            if let Some(job) = core.next_job() {
+                core.requeue(job.mark());
+            }
+            assert!(core.keep.removed.len() <= 2 * RECORDS, "{} removals kept", core.keep.removed.len());
+        }
+        assert!(core.counters.store_errors >= 1, "the lost removals were not counted");
     }
 }
