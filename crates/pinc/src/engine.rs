@@ -433,8 +433,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
         if let Some(t) = self.driver
             && self.deadline().is_some_and(|d| d < self.armed)
         {
-            #[cfg(feature = "trace")]
-            self.standby.mark(crate::trace_waits::Mark::Kick);
+            self.standby.trace_kick();
             self.standby.notify(t);
         }
     }
@@ -473,8 +472,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             if dropped != self.last_dropped {
                 // A dropped event may have been for any waiter: they all look again.
                 self.last_dropped = dropped;
-                #[cfg(feature = "trace")]
-                self.standby.mark(crate::trace_waits::Mark::All);
+                self.standby.trace_all();
                 self.standby.notify_all();
             }
         }
@@ -994,8 +992,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
 
 /// End a session record for `err`: the reason is set before every waiting future is woken.
 fn end_session(standby: &mut Standby, rec: Sess, err: Error) {
-    #[cfg(feature = "trace")]
-    standby.mark_end(&err);
+    standby.trace_end(&err);
     let _ = rec.info.ended.set(err);
     for (_, t) in rec.waits {
         standby.notify(t);

@@ -38,6 +38,33 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
     }
 }
 
+/// Marks that cost nothing and exist only with the `trace` feature, so a call site needs no `cfg` of its own.
+#[cfg_attr(
+    not(feature = "trace"),
+    allow(clippy::unused_self, reason = "the marks exist only with `trace`")
+)]
+impl crate::standby::Standby {
+    /// Log a kick of the driver.
+    pub(super) fn trace_kick(&self) {
+        #[cfg(feature = "trace")]
+        self.mark(Mark::Kick);
+    }
+
+    /// Log the wake of every waiter.
+    pub(super) fn trace_all(&self) {
+        #[cfg(feature = "trace")]
+        self.mark(Mark::All);
+    }
+
+    /// Log the end of a session with reason `err`.
+    pub(super) fn trace_end(&self, err: &crate::error::Error) {
+        #[cfg(feature = "trace")]
+        self.mark_end(err);
+        #[cfg(not(feature = "trace"))]
+        let _ = err;
+    }
+}
+
 /// The code of an event's variant in the trace.
 #[cfg(feature = "trace")]
 const fn event_code(ev: &Event) -> u32 {
