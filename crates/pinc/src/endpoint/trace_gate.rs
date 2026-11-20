@@ -20,6 +20,13 @@ impl<H: Hosted, D> Endpoint<H, D> {
         self.0.shared.lock().is_none()
     }
 
+    /// Whether the node is thin now, as a dial handed over now would be told (the handshake has no early end then);
+    /// `None` while an endpoint call holds the core.
+    #[doc(hidden)]
+    pub fn trace_thin(&self) -> Option<bool> {
+        self.0.shared.lock().map(|core| core.node_stats().thin)
+    }
+
     /// The endpoint's answer for `peer` runs out, as after 30 s.
     #[doc(hidden)]
     pub fn trace_expire(&self, peer: &NodeId) {

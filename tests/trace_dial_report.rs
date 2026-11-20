@@ -273,7 +273,9 @@ impl<H: Hosted + 'static> R<H> {
     }
 
     fn dial(&mut self) {
-        self.own(r#"{"op":"dial"}"#);
+        // Whether the node is thin is read from the endpoint, the state the handshake's end is chosen by.
+        let thin = self.a.trace_thin().expect("the core is free");
+        self.own(&format!("{{\"op\":\"dial\",\"thin\":{thin}}}"));
         self.seen.dial_at.set(self.seen.tick.get());
         let (a, to) = (self.a.clone(), self.paddr.clone());
         let id = self.spawn(async move { Out::Dial(a.connect(to, ALPN).await) });
@@ -409,5 +411,15 @@ fn trace_dial_report() {
     }
     assert!(r.count("tick") > 61, "the limit was waited out");
     assert_eq!(r.count("dial"), 7);
+    let thin: Vec<bool> = out
+        .lines()
+        .filter(|l| l.contains("\"op\":\"dial\""))
+        .map(|l| l.contains("\"thin\":true"))
+        .collect();
+    assert_eq!(
+        thin,
+        [false, false, false, false, false, false, true],
+        "only the dial after the slow round trip was made on a thin node"
+    );
     assert_eq!(r.count("drop"), 4);
 }
