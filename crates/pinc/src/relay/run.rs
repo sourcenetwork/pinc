@@ -152,7 +152,7 @@ where
             }
             if let Some(r) = poll_opt(&mut persist, cx) {
                 progressed = true;
-                part.store_written(r.is_ok(), now);
+                part.store_written(r.is_ok());
             }
 
             let mut want = part.next_deadline(now).unwrap_or(u64::MAX);

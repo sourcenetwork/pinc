@@ -251,15 +251,16 @@ impl<C: Carriers, K: KeyStore, St: Store, A: Access> Part<C, K, St, A> {
         })
     }
 
-    /// The write taken last finished at `now` (the part's clock), `ok` if the store kept it. A failure is counted and
-    /// reported as an event, and the write is tried again a second later (one write a second while the store fails).
-    pub fn store_written(&mut self, ok: bool, now: u64) {
+    /// The write taken last finished, `ok` if the store kept it. A failure is counted and reported as an event, and the
+    /// write is tried again, by the part's clock as of the last [`Part::poll`] or [`Part::handle_timeout`]: within one
+    /// second of the failure, and never more often than once a second while the store fails.
+    pub fn store_written(&mut self, ok: bool) {
         let mark = self.writing.take();
         if !ok {
             self.core.store_failed();
             if let Some(mark) = mark {
                 self.core.requeue(mark);
-                self.core.retry_after(now);
+                self.core.retry_after(self.core.now_hint());
             }
         }
     }
@@ -474,15 +475,37 @@ mod tests {
         p.restore(T0, &owed_write());
         let w = p.next_store_write().expect("one write is owed");
         assert!(done(w.run()).is_err());
-        p.store_written(false, T0);
+        p.store_written(false);
         assert_eq!(p.stats().store_errors, 1);
         assert!(p.next_store_write().is_none(), "the retry came at once");
+        assert_eq!(p.next_deadline(T0), Some(T0 + SEC), "no wake for the retry");
         p.handle_timeout(T0 + SEC);
         let w = p.next_store_write().expect("the failed write was forgotten");
         assert!(done(w.run()).is_ok());
-        p.store_written(true, T0 + SEC);
+        p.store_written(true);
         assert_eq!(store.writes.get(), 2);
         assert!(p.next_store_write().is_none());
+    }
+
+    /// An idle part is woken for the retry of a failed write, though its own check comes later than the retry.
+    #[test]
+    fn a_failed_write_wakes_an_idle_part_for_its_retry() {
+        let store = Flaky::default();
+        store.fail_first.set(true);
+        let (mut p, _) = part(store);
+        p.restore(T0, &owed_write());
+        p.handle_timeout(T0 + SEC / 2);
+        let w = p.next_store_write().expect("one write is owed");
+        assert!(done(w.run()).is_err());
+        p.store_written(false);
+        p.handle_timeout(T0 + SEC);
+        assert_eq!(
+            p.next_deadline(T0 + SEC),
+            Some(T0 + SEC + SEC / 2),
+            "the part sleeps past the retry"
+        );
+        p.handle_timeout(T0 + SEC + SEC / 2);
+        assert!(p.next_store_write().is_some(), "the retry did not come");
     }
 
     #[test]

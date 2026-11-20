@@ -96,7 +96,7 @@ pub trait Role: sealed::Sealed + Sized {
 
     /// The write taken last finished.
     #[doc(hidden)]
-    fn written(&mut self, ok: bool, relay_now: u64);
+    fn written(&mut self, ok: bool);
 
     /// The run is over: drop every carrier.
     #[doc(hidden)]
@@ -169,7 +169,7 @@ impl Role for () {
         None::<Ready<Result<()>>>
     }
 
-    fn written(&mut self, _: bool, _: u64) {}
+    fn written(&mut self, _: bool) {}
 
     fn end(&mut self, _: u64) {}
 
@@ -247,8 +247,8 @@ impl<C: Carriers, K: KeyStore, St: Store, A: Access> Role for Part<C, K, St, A> 
         self.next_store_write().map(crate::relay::StoreWrite::run)
     }
 
-    fn written(&mut self, ok: bool, relay_now: u64) {
-        self.store_written(ok, relay_now);
+    fn written(&mut self, ok: bool) {
+        self.store_written(ok);
     }
 
     fn end(&mut self, relay_now: u64) {
