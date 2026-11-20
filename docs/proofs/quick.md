@@ -95,6 +95,7 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `BroadcastSubsDelta_nocap` | Hinted {1, 2} -> {1}, MaxLives 2 -> 1 |
 | `BroadcastSubsDelta_nofrom` | Hinted {1, 2} -> {2}, MaxLives 2 -> 1 |
 | `BroadcastSubsDelta_nogap` | Hinted {1, 2} -> {1}, MaxLives 2 -> 1 |
+| `BroadcastSubsDelta_nohint` | MaxSteps 8 -> 6 |
 | `BroadcastSubsDelta_three` | MaxSteps 8 -> 4 |
 | `BroadcastSystem_live` | MaxFlips 3 -> 2 |
 | `BroadcastWire` | AllBytes -> AllBytesQuick: the message id byte held at 0 past the first byte; MaxLen 10 as deep (a head with a public key, tag 1, parses) |
