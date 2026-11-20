@@ -124,6 +124,7 @@ impl<A: SimApps> SimNode<A> {
                 length,
                 ranges,
                 providers,
+                deadline,
             } => {
                 let spans: Vec<pinc_values::span::Span> = ranges
                     .iter()
@@ -134,7 +135,7 @@ impl<A: SimApps> SimNode<A> {
                     length,
                     ranges: &spans,
                     providers: &providers,
-                    deadline: None,
+                    deadline,
                 };
                 let _ = self.node.values_fetch(now, &req);
             }

@@ -58,6 +58,7 @@ fn a_flight_read_twice_in_one_carrier_read_is_answered_at_once() {
                     length: value.len() as u64,
                     ranges: vec![],
                     providers,
+                    deadline: None,
                 },
             );
             w.run(secs(40));

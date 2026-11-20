@@ -4,9 +4,9 @@
 //!
 //! Three seeds, one world each (two hubs, six members, a line rate of 8 Mbit/s). Members 1 to 4 provide a value each
 //! (the four roots differ), member 3 lies and is evicted by the fetch. At 30 s member 0 fetches each of the four
-//! roots from the four providers and member 5 fetches the root of member 1 from members 1 and 2; at 31 s member 0
-//! cancels its lowest running fetch; member 2 crashes at 32 s and restarts at 33 s, so that its new sessions
-//! supersede the incoming ones its peers still hold from it. The world runs to 60 s in steps of 50 ms, and after
+//! roots from the four providers and member 5 fetches the root of member 1 from members 1 and 2, each with a deadline of
+//! 50 s; at 31 s member 0 cancels its lowest running fetch; member 2 crashes at 32 s and restarts at 33 s, so that its
+//! new sessions supersede the incoming ones its peers still hold from it. The world runs to 60 s in steps of 50 ms, and after
 //! each step every member writes one line with the view of the probe `Node::values_view`: its values sessions, the
 //! sessions it dialed, the provider table, the streams with their provider, owner and session, and the running
 //! fetches' provider lists. Peers, sessions and stream numbers are written as small numbers, numbered per member and
@@ -15,8 +15,9 @@
 //! The test checks every snapshot without the model: every stream is on a values session of the table, every stream
 //! of a fetch is owned by a running fetch, every dialed session is an outgoing values session of the same peer, and
 //! each slot's use count is its holders; at the end of a seed members 0 and 5 run no fetch and hold no fetch stream,
-//! and some member showed a superseded incoming session of member 2 (its streams gone while a newer one is in the
-//! table).
+//! member 0 completed its fetch of the root of member 4 and member 5 its fetch of the root of member 1 before the
+//! deadline, and some member showed a superseded incoming session of member 2 (its streams gone while a newer one is
+//! in the table).
 #![allow(
     clippy::unwrap_used,
     clippy::too_many_lines,
@@ -35,9 +36,12 @@ use std::fmt::Write as _;
 
 use layers_common::{LWorld, big, data, ids, secs, values_on};
 use pinc_core::SessionId;
-use pinc_node::ValuesView;
-use pinc_sim::MS;
+use pinc_node::{NodeEvent, ValuesView};
+use pinc_sim::{MS, SEC};
 use pinc_tests::{Lie, NCmd};
+
+/// The time at which the fetches of the run end if nothing else has ended them.
+const DEADLINE: u64 = 50 * SEC;
 
 /// The numbers a member's snapshots use: assigned from 1 in the order first seen, and kept.
 #[derive(Default)]
@@ -187,6 +191,7 @@ fn run(seed: u64, out: &mut String) {
                 length: len as u64,
                 ranges: vec![],
                 providers,
+                deadline: Some(DEADLINE),
             },
         );
     }
@@ -199,6 +204,7 @@ fn run(seed: u64, out: &mut String) {
             length: len as u64,
             ranges: vec![],
             providers,
+            deadline: Some(DEADLINE),
         },
     );
     w.sim.crash(secs(32), m[2]);
@@ -227,6 +233,18 @@ fn run(seed: u64, out: &mut String) {
         assert!(
             v.streams.iter().all(|s| s.2 == 0),
             "seed {seed}: member {i} still holds a fetch stream"
+        );
+    }
+    // Fetch ids run from 1 in the order the commands were given. The roots of members 2 and 3 have no holder after
+    // 33 s (a crashed provider, a liar) and may end at the deadline; the other two have an honest holder all run.
+    for (who, fetch, root) in [(0, 4, "member 4"), (5, 1, "member 1")] {
+        let done = w
+            .node_events(m[who])
+            .iter()
+            .any(|(t, e)| matches!(e, NodeEvent::ValueComplete { fetch: f } if *f == fetch) && *t < DEADLINE);
+        assert!(
+            done,
+            "seed {seed}: member {who} did not complete its fetch of the root of {root} before the deadline"
         );
     }
     assert!(

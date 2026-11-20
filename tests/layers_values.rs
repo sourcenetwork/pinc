@@ -47,6 +47,7 @@ fn a_fetch_from_four_providers_survives_a_liar_and_a_stalled_provider() {
                     length: value.len() as u64,
                     ranges: vec![],
                     providers,
+                    deadline: None,
                 },
             );
             let rest: Vec<SimId> = w
@@ -96,6 +97,7 @@ fn a_second_fetch_from_a_provider_uses_the_session_the_first_one_dialed() {
                         length: len as u64,
                         ranges: vec![],
                         providers: ids(&w, &m[1..2]),
+                        deadline: None,
                     },
                 );
             }
@@ -132,6 +134,7 @@ fn a_finished_fetch_gives_its_providers_back() {
                     length: value.len() as u64,
                     ranges: vec![],
                     providers: ids(&w, &m[k..=k]),
+                    deadline: None,
                 },
             );
         }
@@ -174,6 +177,7 @@ fn stored_value(seed: u64) -> (LWorld, [u8; 32], u64, Vec<[u8; 32]>, u64) {
             length: value.len() as u64,
             ranges: vec![],
             providers: providers.clone(),
+            deadline: None,
         },
     );
     let mut at = 30;
@@ -210,6 +214,7 @@ fn late_frames(seeds: &[u64]) -> Vec<(u64, usize, usize)> {
                     length: len as u64,
                     ranges: vec![],
                     providers: ids(&w, &m[1..2]),
+                    deadline: None,
                 },
             );
         }
@@ -317,6 +322,7 @@ fn a_striped_fetch_asks_again_as_each_request_stream_ends() {
                     length: value.len() as u64,
                     ranges: vec![],
                     providers,
+                    deadline: None,
                 },
             );
             w.run(secs(120));
@@ -358,6 +364,7 @@ fn a_value_larger_than_the_session_windows_arrives_whole() {
                     length: value.len() as u64,
                     ranges: vec![],
                     providers,
+                    deadline: None,
                 },
             );
             w.run(secs(120));
@@ -394,6 +401,7 @@ fn a_fetch_resumes_from_the_verified_ranges_after_a_restart() {
                 length: value.len() as u64,
                 ranges: vec![],
                 providers,
+                deadline: None,
             };
             w.sim.command(secs(30), m[0], request.clone());
             w.sim.crash(secs(33), m[0]);
@@ -431,6 +439,7 @@ fn a_peer_that_dials_again_supersedes_its_older_incoming_session() {
             length: value.len() as u64,
             ranges: vec![],
             providers,
+            deadline: None,
         };
         w.sim.command(secs(30), m[0], request.clone());
         // The requester restarts while the provider is still sending; its new session finds the old one open. It asks
@@ -488,6 +497,7 @@ fn groups_behind_a_lost_packet_verify_through_range_proofs_and_nothing_is_copied
                         length: value.len() as u64,
                         ranges: vec![],
                         providers,
+                        deadline: None,
                     },
                 );
                 w.run(secs(150));
@@ -523,6 +533,7 @@ fn a_value_the_store_holds_is_served_only_while_its_root_is_provided() {
             length: value.len() as u64,
             ranges: vec![],
             providers,
+            deadline: None,
         };
         w.sim.command(secs(30), m[0], fetch(ids(&w, &m[2..3])));
         w.run(secs(100));
@@ -548,6 +559,7 @@ fn a_value_the_store_holds_is_served_only_while_its_root_is_provided() {
                 length: other.len() as u64,
                 ranges: vec![],
                 providers: ids(&w, &m[1..2]),
+                deadline: None,
             },
         );
         w.run(secs(260));
@@ -597,6 +609,7 @@ fn a_cancelled_fetch_reports_nothing_more_and_its_streams_are_gone() {
                 length: value.len() as u64,
                 ranges: vec![],
                 providers: ids(&w, &m[1..2]),
+                deadline: None,
             },
         );
         // The first fetch of a node is number 1; cancel it while it is still receiving.
@@ -651,6 +664,7 @@ fn a_server_session_that_began_on_a_relay_moves_to_the_direct_path_that_validate
                 length: value.len() as u64,
                 ranges: vec![],
                 providers: ids(&w, &m[1..2]),
+                deadline: None,
             },
         );
         w.run(secs(30) + 400_000_000);
@@ -691,6 +705,7 @@ fn a_dial_still_in_its_handshake_does_not_keep_the_node_awake() {
                 length: value.len() as u64,
                 ranges: vec![],
                 providers: ids(&w, &m[1..2]),
+                deadline: None,
             },
         );
         w.sim.command(secs(12), m[0], NCmd::AddressChanged);
@@ -724,6 +739,7 @@ fn a_burst_for_a_relay_carrier_is_held_and_sent_not_lost() {
                 length: value.len() as u64,
                 ranges: vec![],
                 providers: ids(&w, &m[1..2]),
+                deadline: None,
             },
         );
         w.run(secs(30) + 300_000_000);

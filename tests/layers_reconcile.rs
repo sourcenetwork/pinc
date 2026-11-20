@@ -193,6 +193,7 @@ fn a_round_on_a_session_reported_before_its_handshake_ends_waits_for_stream_cred
                     length: value.len() as u64,
                     ranges: vec![],
                     providers: vec![peer],
+                    deadline: None,
                 },
             );
             for at in [32, 36] {

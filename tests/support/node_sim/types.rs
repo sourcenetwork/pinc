@@ -161,6 +161,8 @@ pub enum NCmd {
         length: u64,
         ranges: Vec<(u64, u64)>,
         providers: Vec<[u8; 32]>,
+        /// The time (nanoseconds) at which the fetch ends if it has not, `None` for no deadline.
+        deadline: Option<u64>,
     },
     /// Cancel a fetch.
     ValuesCancel(u32),

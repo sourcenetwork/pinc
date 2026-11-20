@@ -50,6 +50,7 @@ fn the_receive_path_requests_a_fraction_of_the_value_size_from_the_heap() {
                     length: value.len() as u64,
                     ranges: vec![],
                     providers,
+                    deadline: None,
                 },
             );
             meter_endpoint_calls(true);

@@ -29,6 +29,7 @@ fn fetch(root: [u8; 32], length: usize, providers: Vec<[u8; 32]>) -> NCmd {
         length: length as u64,
         ranges: vec![],
         providers,
+        deadline: None,
     }
 }
 
