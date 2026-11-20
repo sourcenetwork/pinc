@@ -294,6 +294,12 @@ impl<C: Carriers, K: KeyStore, St: Store, A: Access> Part<C, K, St, A> {
         self.core.tunnel(now, remote, bytes)
     }
 
+    /// The relay path address that names `node` at this part's hub (for tests of the endpoint's driver).
+    #[cfg(test)]
+    pub(crate) fn member_addr(&mut self, node: &NodeId) -> Option<SocketAddr> {
+        self.core.member_addr(node)
+    }
+
     /// A packet for a member was dropped before the part could take it: it is counted like one the hub had no room for.
     pub(crate) fn lost(&mut self) {
         self.core.hub_lost();
@@ -502,17 +508,17 @@ mod tests {
         p.restore(T0, &owed_write());
         p.handle_timeout(T0 + SEC * 3 / 10);
         let w = p.next_store_write().expect("one write is owed");
+        p.handle_timeout(T0 + SEC / 2);
         assert!(done(w.run()).is_err());
         p.store_written(false);
-        // the machine's own timers move on past the retry (1.3 s), and so does the part's check
-        p.handle_timeout(T0 + SEC / 2);
         p.handle_timeout(T0 + SEC);
+        p.handle_timeout(T0 + SEC * 13 / 10);
         assert_eq!(
-            p.next_deadline(T0 + SEC),
-            Some(T0 + SEC * 13 / 10),
+            p.next_deadline(T0 + SEC * 13 / 10),
+            Some(T0 + SEC * 3 / 2),
             "the part sleeps past the retry"
         );
-        p.handle_timeout(T0 + SEC * 13 / 10);
+        p.handle_timeout(T0 + SEC * 3 / 2);
         assert!(p.next_store_write().is_some(), "the retry did not come");
     }
 

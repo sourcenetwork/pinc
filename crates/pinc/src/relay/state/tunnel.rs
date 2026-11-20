@@ -331,6 +331,12 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
         true
     }
 
+    /// The relay path address that names `node` at this hub, taking it a slot (for tests of the endpoint's driver).
+    #[cfg(test)]
+    pub(crate) fn member_addr(&mut self, node: &NodeId) -> Option<SocketAddr> {
+        self.hub.as_mut().map(|t| t.addr_of(node))
+    }
+
     /// End the carrier of `node`, if it has one; whether it had.
     pub(crate) fn revoke(&mut self, node: &NodeId) -> bool {
         let Some(&slot) = self.by_node.get(&super::node_key(node)) else {

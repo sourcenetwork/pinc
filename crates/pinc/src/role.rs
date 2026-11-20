@@ -62,6 +62,12 @@ pub trait Role: sealed::Sealed + Sized {
     #[doc(hidden)]
     fn lost(&mut self);
 
+    /// The relay path address that names `node` at the hub, for the tests of the endpoint's driver.
+    #[cfg(test)]
+    fn member_addr(&mut self, _: &NodeId) -> Option<SocketAddr> {
+        None
+    }
+
     /// The next datagram the relay wants to send: its remote and its length in `out`.
     #[doc(hidden)]
     fn outgoing(&mut self, out: &mut [u8]) -> Option<(SocketAddr, usize)>;
@@ -219,6 +225,11 @@ impl<C: Carriers, K: KeyStore, St: Store, A: Access> Role for Part<C, K, St, A> 
 
     fn lost(&mut self) {
         Part::lost(self);
+    }
+
+    #[cfg(test)]
+    fn member_addr(&mut self, node: &NodeId) -> Option<SocketAddr> {
+        Part::member_addr(self, node)
     }
 
     fn outgoing(&mut self, out: &mut [u8]) -> Option<(SocketAddr, usize)> {
