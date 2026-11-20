@@ -22,6 +22,8 @@ Unbounded theorems about the receive half and the table of `Pinc.TransportStream
   arrives after a stop was asked, holds no bytes and is read to its end; the stop request asks nothing and settles it,
   so it leaves the table at once when its send half is done, and a counted peer stream gives back exactly its place in
   the peer's limit (`regrant_rl`: a regrant moves no count).
+* `onData_stopped_end_acks` (9a410adf): the end arriving on a stream asked to stop ends the request, so no stop frame
+  waits to be sent and `ctlLostStop` sends none again (`ctlLostStop_acked`).
 * `Content`, `exactly_once_in_order`, `stored_immutable`: with the checks of `Recv::store` (a byte received twice
   must be identical) and the rule that a consume stays inside the stored prefix, the bytes delivered are the bytes
   stored, in offset order, each once; `held_back_delivers_once`: a held-back first arrival changes nothing and its
@@ -209,6 +211,23 @@ theorem onData_stopped_end_discards (p : P) (T : Tab) (r : Slot) (off len : Nat)
   dsimp only
   repeat' split
   all_goals simp_all [Slot.discard, Slot.recvDone, Slot.status]
+
+/-- The end arriving on a stream asked to stop ends the request (9a410adf): it is acknowledged, no frame waits. -/
+theorem onData_stopped_end_acks (p : P) (T : Tab) (r : Slot) (off len : Nat) (diff : Bool) (hr : r.rst = none)
+    (hs : r.stop ≠ 0) :
+    (onData p T r off len true diff).2 = "ok" → (onData p T r off len true diff).1.stop = 3 := by
+  have hst := storeStep_rst p T r off len diff
+  unfold onData
+  dsimp only
+  repeat' split
+  all_goals simp_all
+
+/-- A lost stop request of a stream whose request was acknowledged is not sent again. -/
+theorem ctlLostStop_acked (T : Tab) (id i : Nat) (hi : findSlot T id = some i) (ha : (T.slots.getD i Slot.new).stop = 3) :
+    ctlLostStop T id = T := by
+  have ha' : (T.slots[i]?.getD Slot.new).stop = 3 := by simpa [List.getD_eq_getElem?_getD] using ha
+  unfold ctlLostStop
+  simp [hi, ha']
 
 theorem grantOne_rl (p : P) (first : Nat) (T : Tab) (i : Nat) : (grantOne p first T i).rl = T.rl := by
   unfold grantOne

@@ -160,9 +160,10 @@ def Slot.demandTo (p : P) (r : Slot) (l : Nat) : Nat := poolDemand p r (r.charge
 
 def Slot.unreceived (p : P) (r : Slot) : Nat := r.demandTo p r.limit
 
-/-- `due`: the limit the window is due to move to, once an eighth of it was freed. -/
+/-- `due`: the limit the window is due to move to, once an eighth of it was freed; none for a stream asked to stop
+(aabe075c): its sender was told to reset and needs no credit for that. -/
 def Slot.due (p : P) (r : Slot) : Option Nat :=
-  if !r.open_ then none
+  if !r.open_ || r.stop != 0 then none
   else
     let cap := match r.fin with | none => p.maxoff | some f => f
     let cand := min (r.read + r.size) cap
@@ -329,8 +330,9 @@ def onData (p : P) (T : Tab) (r : Slot) (off len : Nat) (fin diff : Bool) : Slot
   let e := off + len
   let store := storeStep p T r off len diff
   let done0 := { store.1 with hi := max store.1.hi e, fin := if fin then some e else store.1.fin }
-  -- the end arriving on a stream asked to stop discards it: nothing else would end it
-  let done := if fin && r.stop != 0 then done0.discard else done0
+  -- the end arriving on a stream asked to stop discards it: nothing else would end it; every byte arrived, so the
+  -- request is over (9a410adf): one not yet sent is never sent and a lost one is not sent again
+  let done := if fin && r.stop != 0 then { done0.discard with stop := 3, qcode := none } else done0
   if e > p.maxoff then (r, "FlowControl")
   else if r.fin.any (fun f => e > f || (fin && e != f)) then (r, "FinalSize")
   else if r.fin.isNone && fin && e < r.hi then (r, "FinalSize")

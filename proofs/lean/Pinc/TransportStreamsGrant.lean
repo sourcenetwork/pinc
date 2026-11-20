@@ -8,6 +8,7 @@ window arithmetic of `Streams::new`, `Streams::consume` and `Recv::due`. Sizes a
 
 * `due_spec`: the limit a window is due to move to is above the old one by at least an eighth of the window, never
   beyond the read position plus the window, and never beyond a fixed final size (the 1/8 rule of flow control).
+* `due_stopped`: a stream asked to stop is due no raise (aabe075c), so a grant leaves its limit as it was.
 * `grantOne_ledger`: when a grant raises a limit, the credit granted and not yet received, with the new grant,
   fits in the bytes the pool has left (POOL_GRANT).
 * `grantOne_limit_mono`, `grantSlot_eighth` (with `grantOne_proc`, which says a grant that acts is `grantSlot`): a grant
@@ -79,6 +80,9 @@ theorem lt_of_open (l : List Slot) (i : Nat) (h : (l.getD i Slot.new).open_ = tr
 @[simp] theorem parked_open (r : Slot) (d : Bool) : (r.parked d).open_ = r.open_ := rfl
 @[simp] theorem parked_read (r : Slot) (d : Bool) : (r.parked d).read = r.read := rfl
 @[simp] theorem parked_fin (r : Slot) (d : Bool) : (r.parked d).fin = r.fin := rfl
+@[simp] theorem parked_stop (r : Slot) (d : Bool) : (r.parked d).stop = r.stop := rfl
+@[simp] theorem raised_stop (r : Slot) (c : Nat) : (r.raised c).stop = r.stop := rfl
+@[simp] theorem grown_stop (r : Slot) (t : Nat) : (r.grown t).stop = r.stop := rfl
 @[simp] theorem raised_open (r : Slot) (c : Nat) : (r.raised c).open_ = r.open_ := rfl
 @[simp] theorem raised_read (r : Slot) (c : Nat) : (r.raised c).read = r.read := rfl
 @[simp] theorem raised_fin (r : Slot) (c : Nat) : (r.raised c).fin = r.fin := rfl
@@ -91,24 +95,30 @@ theorem due_spec (p : P) (r : Slot) (c : Nat) (h : r.due p = some c) :
     r.open_ = true ∧ c > r.limit ∧ c ≥ r.limit + r.size / 8 ∧ c ≤ r.read + r.size ∧
       (∀ f, r.fin = some f → c ≤ f) := by
   unfold Slot.due at h
-  cases ho : r.open_ <;> simp only [ho] at h
+  split at h
   · simp at h
-  · cases hf : r.fin with
+  · have ho : r.open_ = true := by cases h' : r.open_ <;> simp_all
+    cases hf : r.fin with
     | none =>
       simp [hf] at h
       obtain ⟨⟨h1, h2⟩, h3⟩ := h
       subst h3
-      refine ⟨rfl, by omega, by omega, by omega, ?_⟩
+      refine ⟨ho, by omega, by omega, by omega, ?_⟩
       intro f hf'
       simp at hf'
     | some f =>
       simp [hf] at h
       obtain ⟨⟨h1, h2⟩, h3⟩ := h
       subst h3
-      refine ⟨rfl, by omega, by omega, by omega, ?_⟩
+      refine ⟨ho, by omega, by omega, by omega, ?_⟩
       intro f' hf'
       simp at hf'
       omega
+
+/-- A stream asked to stop is due no raise (aabe075c). -/
+theorem due_stopped (p : P) (r : Slot) (hs : r.stop ≠ 0) : r.due p = none := by
+  unfold Slot.due
+  simp [hs]
 
 /-- A window with no final size or a final size not yet reached is never due when it is not open. -/
 theorem due_closed (p : P) (r : Slot) (h : r.open_ = false) : r.due p = none := by
