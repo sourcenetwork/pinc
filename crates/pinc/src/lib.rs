@@ -107,6 +107,9 @@ mod role;
 mod standby;
 mod start;
 pub mod stream;
+#[cfg(feature = "trace")]
+#[doc(hidden)]
+pub mod trace_turn;
 #[cfg(test)]
 mod trace_util;
 #[cfg(feature = "trace")]

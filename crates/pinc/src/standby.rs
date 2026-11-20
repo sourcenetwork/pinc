@@ -44,6 +44,14 @@ pub(crate) struct Standby {
     pub(crate) traced: bool,
 }
 
+#[cfg(feature = "trace")]
+impl Ticket {
+    /// The slot and the generation, as the turn probe names a ticket.
+    pub(crate) const fn code(self) -> (u32, u32) {
+        (self.idx, self.gen_)
+    }
+}
+
 impl Standby {
     /// A new ticket.
     pub(crate) fn alloc(&mut self) -> Ticket {
@@ -94,6 +102,8 @@ impl Standby {
 
     /// Wake `t`'s future if it is armed.
     pub(crate) fn notify(&mut self, t: Ticket) {
+        #[cfg(feature = "trace")]
+        self.turn_mark(crate::trace_turn::Kind::Notify(t.code()));
         if let Some(w) = self.slot(t).and_then(|s| s.waker.take()) {
             w.wake();
         }
@@ -113,6 +123,8 @@ impl Standby {
 
     /// Wake every armed ticket (an event the endpoint dropped may have been for any of them).
     pub(crate) fn notify_all(&mut self) {
+        #[cfg(feature = "trace")]
+        self.turn_mark(crate::trace_turn::Kind::NotifyAll);
         for s in &mut self.slots {
             if s.live
                 && let Some(w) = s.waker.take()

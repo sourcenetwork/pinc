@@ -70,6 +70,8 @@ struct Net {
     inbox: HashMap<SocketAddr, VecDeque<(Vec<u8>, SocketAddr)>>,
     rx: HashMap<SocketAddr, Waker>,
     known: HashSet<SocketAddr>,
+    /// How many packets reached each address's inbox.
+    arrived: HashMap<SocketAddr, usize>,
     /// Pairs whose packets are dropped on the way, and addresses that are down (nothing reaches them).
     cut: HashSet<(SocketAddr, SocketAddr)>,
     down: HashSet<SocketAddr>,
@@ -79,7 +81,9 @@ struct Net {
 pub struct Wire {
     pub virt: Virt,
     net: Rc<RefCell<Net>>,
-    timers: Rc<RefCell<Vec<(u64, Waker)>>>,
+    timers: Rc<RefCell<Vec<(u64, Waker, SocketAddr)>>>,
+    /// The addresses whose timers the last advance of the clock fired.
+    fired: RefCell<Vec<SocketAddr>>,
 }
 
 impl Wire {
@@ -92,6 +96,7 @@ impl Wire {
             },
             net: Rc::default(),
             timers: Rc::default(),
+            fired: RefCell::default(),
         }
     }
 
@@ -163,7 +168,7 @@ impl Wire {
                         if virt.now.get() >= at {
                             Poll::Ready(())
                         } else {
-                            timers.borrow_mut().push((at, cx.waker().clone()));
+                            timers.borrow_mut().push((at, cx.waker().clone(), addr));
                             Poll::Pending
                         }
                     })
@@ -195,6 +200,16 @@ impl Wire {
         }
     }
 
+    /// How many packets reached `addr`'s inbox so far.
+    pub fn arrived(&self, addr: SocketAddr) -> usize {
+        self.net.borrow().arrived.get(&addr).copied().unwrap_or(0)
+    }
+
+    /// Whether the last advance of the clock fired a timer of `addr`.
+    pub fn fired(&self, addr: SocketAddr) -> bool {
+        self.fired.borrow().contains(&addr)
+    }
+
     /// The packets in flight and those waiting in an inbox (for a failure message).
     pub fn queued(&self) -> (usize, usize) {
         let n = self.net.borrow();
@@ -211,6 +226,7 @@ impl Wire {
                 continue;
             }
             moved += 1;
+            *n.arrived.entry(to).or_default() += 1;
             n.inbox.entry(to).or_default().push_back((bytes, from));
             wakers.extend(n.rx.remove(&to));
         }
@@ -219,7 +235,7 @@ impl Wire {
 
     /// As [`Wire::advance`] for a timer due by `end` only; with none, the clock moves to `end` and the answer is `None`.
     pub fn advance_to(&self, end: u64) -> Option<Vec<Waker>> {
-        let first = self.timers.borrow().iter().map(|(at, _)| *at).min();
+        let first = self.timers.borrow().iter().map(|(at, ..)| *at).min();
         if first.is_none_or(|at| at > end) {
             self.virt.now.set(self.virt.now.get().max(end));
             return None;
@@ -230,12 +246,13 @@ impl Wire {
     /// Move the clock to the earliest timer and take the wakers of every timer due; `None` when no timer is set.
     pub fn advance(&self) -> Option<Vec<Waker>> {
         let mut t = self.timers.borrow_mut();
-        let first = t.iter().map(|(at, _)| *at).min()?;
+        let first = t.iter().map(|(at, ..)| *at).min()?;
         self.virt.now.set(self.virt.now.get().max(first));
         let now = self.virt.now.get();
-        let (due, rest): (Vec<_>, Vec<_>) = t.drain(..).partition(|(at, _)| *at <= now);
+        let (due, rest): (Vec<_>, Vec<_>) = t.drain(..).partition(|(at, ..)| *at <= now);
         *t = rest;
-        Some(due.into_iter().map(|(_, w)| w).collect())
+        *self.fired.borrow_mut() = due.iter().map(|(.., a)| *a).collect();
+        Some(due.into_iter().map(|(_, w, _)| w).collect())
     }
 }
 

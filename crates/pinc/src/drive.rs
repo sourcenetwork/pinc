@@ -33,6 +33,8 @@ use core::time::Duration;
 mod carrier_io;
 mod http_io;
 mod role_io;
+#[cfg(feature = "trace")]
+mod turn_probe;
 
 pub(crate) use role_io::RoleEnd;
 
@@ -193,10 +195,22 @@ struct Turn<'a, H: Hosted> {
     ticket: Option<Ticket>,
     wait: Option<Wait>,
     driving: bool,
+    /// Whether the call returned (else the host dropped it), for the mark that follows the release.
+    #[cfg(feature = "trace")]
+    returned: bool,
 }
 
 impl<H: Hosted> Drop for Turn<'_, H> {
     fn drop(&mut self) {
+        self.release();
+        #[cfg(feature = "trace")]
+        turn_probe::end(self.sh, self.returned);
+    }
+}
+
+impl<H: Hosted> Turn<'_, H> {
+    /// Undo what the call registered, and offer the role on.
+    fn release(&mut self) {
         let Some(t) = self.ticket else { return };
         if self.driving {
             self.sh.driving.set(false);
@@ -310,11 +324,15 @@ impl<H: Hosted> Shared<H> {
         owner: bool,
         mut attempt: impl FnMut(&mut Core<H::Keys, H::Access>, u64) -> Try<T>,
     ) -> T {
+        #[cfg(feature = "trace")]
+        turn_probe::mark_free(self, crate::trace_turn::Kind::Start);
         let mut turn = Turn {
             sh: self,
             ticket: None,
             wait: None,
             driving: false,
+            #[cfg(feature = "trace")]
+            returned: false,
         };
         let mut rx = pin!(None);
         let mut sl = pin!(None);
@@ -333,9 +351,13 @@ impl<H: Hosted> Shared<H> {
                 // ends with the endpoint must not wait for the timers to have nothing due (pinc#551, pinc#569).
                 let served = self.service(&mut core, now) > 0;
                 if served && !core.stopping() {
+                    #[cfg(feature = "trace")]
+                    turn_probe::mark(self, &core, crate::trace_turn::Kind::Io);
                     return Poll::Ready(Step::Io);
                 }
                 if H::Role::ON && owner && self.role_serve(&mut core, now) {
+                    #[cfg(feature = "trace")]
+                    turn_probe::mark(self, &core, crate::trace_turn::Kind::Io);
                     return Poll::Ready(Step::Io);
                 }
                 core.caller = turn.ticket;
@@ -344,11 +366,15 @@ impl<H: Hosted> Shared<H> {
                         #[cfg(feature = "trace")]
                         core.standby.mark(crate::trace_waits::Mark::Try { key: 0, s: 0 });
                         core.kick();
+                        #[cfg(feature = "trace")]
+                        turn_probe::mark(self, &core, crate::trace_turn::Kind::Done);
                         return Poll::Ready(Step::Done(v));
                     }
                     Try::Wait(w) => w,
                 };
                 if core.take_dirty() || served {
+                    #[cfg(feature = "trace")]
+                    turn_probe::mark(self, &core, crate::trace_turn::Kind::Io);
                     return Poll::Ready(Step::Io);
                 }
                 let t = *turn.ticket.get_or_insert_with(|| core.standby.alloc());
@@ -370,6 +396,8 @@ impl<H: Hosted> Shared<H> {
                 }
                 if !turn.driving {
                     // The attempt may have added a deadline the driver does not sleep until.
+                    #[cfg(feature = "trace")]
+                    turn_probe::wait(self, Some(&core), turn.ticket, false, false);
                     core.kick();
                     return Poll::Pending;
                 }
@@ -419,6 +447,8 @@ impl<H: Hosted> Shared<H> {
                         break;
                     };
                     rx.set(None);
+                    #[cfg(feature = "trace")]
+                    crate::trace_turn::took();
                     progressed = true;
                     match res {
                         Ok((n, from, segment)) => {
@@ -453,6 +483,8 @@ impl<H: Hosted> Shared<H> {
                     }
                     progressed |= self.cdirty.take();
                 }
+                #[cfg(feature = "trace")]
+                turn_probe::wait(self, None, turn.ticket, true, progressed);
                 if progressed {
                     Poll::Ready(Step::Io)
                 } else {
@@ -463,9 +495,17 @@ impl<H: Hosted> Shared<H> {
             match step {
                 Step::Done(v) => {
                     self.flush().await;
+                    #[cfg(feature = "trace")]
+                    {
+                        turn.returned = true;
+                    }
                     return v;
                 }
-                Step::Io => self.flush().await,
+                Step::Io => {
+                    self.flush().await;
+                    #[cfg(feature = "trace")]
+                    turn_probe::mark_free(self, crate::trace_turn::Kind::Flush);
+                }
             }
         }
     }
