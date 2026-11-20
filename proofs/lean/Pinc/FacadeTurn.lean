@@ -7,8 +7,11 @@ import Pinc.FacadeStandbyOrder
 A transcription of `proofs/tla/FacadeTurn.tla` over any number of futures, datagrams and steps, on the slab of
 `Pinc.FacadeStandby`. The Rust code is `crates/pinc/src/drive.rs` (`Shared::run_as`, the guard `Turn` and its
 `Drop`). The futures are numbered; a future's waker is its number. A future is off, run (woken: the executor will
-poll it), wait (its poll returned `Pending`) or flush (it sends what the endpoint wants sent). One poll is one call of
-the poll function of `run_as`: it ends in Io before it registers anything (`pollIo`), finishes (`pollDone`), or waits
+poll it), wait (its poll returned `Pending`) or flush (it sends what the endpoint wants sent, after an Io step, or
+after the attempt of a call whose payload is the send finished). One poll is one call of
+the poll function of `run_as`: it ends in Io before it registers anything (`pollIo`), finishes (`pollDone`: a call
+that took its value out of the endpoint returns it in that poll, and a call whose payload is the send flushes first,
+as before the fix of pinc#636 and pinc#702), or waits
 (`pollWait`): the future's ticket, allocated at its first wait, is armed with its waker, the future takes the role if
 it may and the flag is free, and a driver reads at most `drain` datagrams the host has ready, handing each to the core.
 The guard's `Drop` (`endedS`) clears the flag of a driver, releases the ticket and, for a driver or (`pass`) any
@@ -41,13 +44,16 @@ inductive FSt where
   | flush
   deriving DecidableEq, Repr
 
-/-- What does not change: the relay role (only `owner` drives), the burst bound, and whether a future that ends
-while the flag is free passes the baton (the code does; the witness does not). -/
+/-- What does not change: the relay role (only `owner` drives), the burst bound, whether a future that ends
+while the flag is free passes the baton (the code does; the witness does not), and which futures' calls have their
+payload in the send (a write, a datagram, a close): those flush after their attempt finished, as before the fix of
+pinc#636 and pinc#702, while the others return their value in the poll that took it. -/
 structure Cfg where
   role : Bool
   owner : Nat
   drain : Nat
   pass : Bool
+  sent : Nat → Bool
 
 structure State where
   sb : S
@@ -119,7 +125,8 @@ inductive Step (c : Cfg) : State → State → Prop where
       Step c s { s with st := set s.st f .run, done := set s.done f false, took := 0 }
   | pollIo (s : State) (f : Nat) : s.st f = .run → Step c s { s with st := set s.st f .flush, took := 0 }
   | pollDone (s : State) (f : Nat) : s.st f = .run →
-      Step c s { s with st := set s.st f .flush, done := set s.done f true, took := 0 }
+      Step c s (if c.sent f then { s with st := set s.st f .flush, done := set s.done f true, took := 0 }
+                else endedS c s f)
   | pollWait (s : State) (f ready : Nat) (moved : Bool) : s.st f = .run → ready ≤ s.sock.length →
       Step c s (pollWaitS c s f ready moved)
   | flushMore (s : State) (f : Nat) : s.st f = .flush → s.done f = false →
@@ -791,7 +798,7 @@ theorem inv_step (c : Cfg) (hp : c.pass = true) (s t : State) (h : Inv c s) (hs 
       by_cases hgf : g = f
       · subst hgf; rw [hf] at hrf; simp at hrf
       · rwa [set_other _ _ _ _ hgf]
-  | pollIo f hf | pollDone f hf =>
+  | pollIo f hf =>
     refine st_step c s _ (set s.st f .flush) h rfl rfl rfl rfl rfl rfl h.fed (Nat.zero_le _) ?_ ?_ ?_
     · intro g hg
       by_cases hgf : g = f
@@ -805,6 +812,24 @@ theorem inv_step (c : Cfg) (hp : c.pass = true) (s t : State) (h : Inv c s) (hs 
       by_cases hgf : g = f
       · subst hgf; rw [set_same]; right; rfl
       · rwa [set_other _ _ _ _ hgf]
+  | pollDone f hf =>
+    by_cases hsent : c.sent f = true
+    · rw [if_pos hsent]
+      refine st_step c s _ (set s.st f .flush) h rfl rfl rfl rfl rfl rfl h.fed (Nat.zero_le _) ?_ ?_ ?_
+      · intro g hg
+        by_cases hgf : g = f
+        · subst hgf; rw [set_same] at hg; cases hg
+        · rw [set_other _ _ _ _ hgf] at hg; exact h.off_none g hg
+      · intro g hg
+        by_cases hgf : g = f
+        · subst hgf; rw [set_same] at hg; cases hg
+        · rwa [set_other _ _ _ _ hgf] at hg
+      · intro g u _ hrf
+        by_cases hgf : g = f
+        · subst hgf; rw [set_same]; right; rfl
+        · rwa [set_other _ _ _ _ hgf]
+    · rw [if_neg hsent]
+      exact ended_inv c hp s h f
   | pollWait f ready moved _ _ => exact pw_inv c s h f ready moved
   | flushMore f hf _ =>
     refine st_step c s _ (set s.st f .run) h rfl rfl rfl rfl rfl rfl h.fed (Nat.zero_le _) ?_ ?_ ?_
@@ -877,7 +902,7 @@ theorem pollWait_takes (c : Cfg) (s : State) (h : Inv c s) (f ready : Nat) (move
 /-! ## The witness: a future that ends while the flag is free must pass the baton on -/
 
 /-- The code without the `else if !self.sh.driving.get()` branch of `Turn::drop`. -/
-def noPass : Cfg := ⟨false, 1, 1, false⟩
+def noPass : Cfg := ⟨false, 1, 1, false, fun _ => false⟩
 
 def startS (s : State) (f : Nat) : State := { s with st := set s.st f .run, done := set s.done f false, took := 0 }
 

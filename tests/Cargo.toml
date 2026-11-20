@@ -611,6 +611,10 @@ name = "pinc_cancel"
 path = "pinc_cancel.rs"
 
 [[test]]
+name = "pinc_send_gate"
+path = "pinc_send_gate.rs"
+
+[[test]]
 name = "pinc_drive"
 path = "pinc_drive.rs"
 

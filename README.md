@@ -89,7 +89,10 @@ async fn main() -> pinc::Result<()> {
 
 An endpoint with no future being polled makes no progress, which is the SANS-IO contract. Every call drives the endpoint
 while it waits; a host with nothing else pending on it (a server between accepts, connections that only need their
-keepalives) awaits `Endpoint::run()`.
+keepalives) awaits `Endpoint::run()`. A call that takes its result out of the endpoint (a read, an accept, an open, a
+dial) returns it in that poll, before anything is sent, so dropping its future never loses the result; what the
+endpoint owes leaves with the next poll of any future. A call whose payload is the send (a write, a datagram, a close)
+returns after what it queued is sent, so dropping the endpoint after its last call loses nothing it owed.
 
 ## Without `std`
 

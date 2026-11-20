@@ -8,14 +8,24 @@
 (*                                                                         *)
 (* A future is off (not started, or ended), run (woken: the executor will  *)
 (* poll it), wait (its poll returned Pending) or flush (it is sending what *)
-(* the endpoint wants sent, after an Io step or before it returns). One    *)
-(* poll (PollIo, PollDone, PollWait) is one call of the poll function of   *)
-(* run_as, done in one borrow of the core except the host's I/O, which     *)
-(* only the driver touches:                                                *)
+(* the endpoint wants sent, after an Io step, or after the attempt of a    *)
+(* call whose payload is the send finished). One poll (PollIo, PollDone,   *)
+(* PollWait) is one call of the poll function of run_as, done in one       *)
+(* borrow of the core except the host's I/O, which only the driver         *)
+(* touches:                                                                *)
 (*  - PollIo: the core served something, or the attempt queued packets, so *)
 (*    the future flushes and polls again; nothing is registered;           *)
-(*  - PollDone: the attempt finished; the future flushes and returns,      *)
-(*    which drops its guard;                                               *)
+(*  - PollDone: the attempt finished. A call that took its value out of    *)
+(*    the endpoint (a read, an accept, an open, a dial) returns it in that *)
+(*    poll: nothing is taken from the transport, so no send of the         *)
+(*    endpoint can be lost with the future, and what is owed leaves with   *)
+(*    the next poll of any future (the fix of #636 and #702). A call whose *)
+(*    payload is the send (a write, a datagram, a close; its future in     *)
+(*    SENTF) keeps the order before the fix: the flush is awaited after    *)
+(*    the value was decided, its value is the send itself, and the         *)
+(*    transport sends again what a dropped flush loses (the witness        *)
+(*    FacadeTurn_donegap, where no call took its value out: PARKKEEP =     *)
+(*    FALSE).                                                              *)
 (*  - PollWait: the attempt waits; the future's ticket (allocated at its   *)
 (*    first wait) is armed with its waker, and it takes the role if it may *)
 (*    (ROLE: only OWNER, the future of Endpoint::run, may) and the flag is *)
@@ -36,7 +46,7 @@
 (*  - a future holds a ticket only while it runs, every ticket held names  *)
 (*    a live slot of its generation (no stale ticket is ever used), no two *)
 (*    futures share a slot, and the live slots are exactly the slots held, *)
-(*    so each is released once, by the future that took it (TicketsLive); *)
+(*    so each is released once, by the future that took it (TicketsLive);  *)
 (*  - a slot keeps only its holder's waker, and a waiting future's waker   *)
 (*    is kept (WakerOwner, WaitArmed);                                     *)
 (*  - the slab's own invariants (QueueOnce: StandbyOps' QueueLive and      *)
@@ -53,6 +63,11 @@
 (*  - every datagram the host delivered is either still with the host or   *)
 (*    was handed to the core, exactly once and in order (FedExact), and a  *)
 (*    poll reads at most DRAIN (DrainBound);                               *)
+(*  - the value of a finished attempt of a call that took it out of the    *)
+(*    endpoint is never in a state the host can drop: no such future sits  *)
+(*    in flush with its attempt done (DoneInline), the value leaves in the *)
+(*    poll that took it; a call whose payload is the send sends first and  *)
+(*    returns after, as before the fix;                                    *)
 (*  - while the flag is free and a future that may drive waits, some       *)
 (*    future that may drive and holds a ticket is running or flushing      *)
 (*    (RoleOffered): the role is never left with nobody to take it;        *)
@@ -66,16 +81,25 @@
 (* poll stops at DRAIN with datagrams still waiting at the host);          *)
 (* FacadeTurn_wrapkeep (the release before the fix of #419, DROP = FALSE,  *)
 (* with GENS = 3: a slot is taken at the generation of a stale entry       *)
-(* before the queue is long enough to compact it, and QueueOnce fails).    *)
+(* before the queue is long enough to compact it, and QueueOnce fails);    *)
+(* FacadeTurn_donegap (the code before the fix of #636 and #702, PARKKEEP  *)
+(* = FALSE with SENTF empty: every call took its value out and its value   *)
+(* waits in a droppable flush, DoneInline fails).                          *)
 (* Assumed of the host (#246 (c)): its executor polls every woken future;  *)
 (* a dropped receive future loses no datagram; sleep(at) does not finish   *)
 (* before at; every future runs on the thread that built the endpoint, so  *)
-(* a poll is one step and no borrow of the core is held across an await.   *)
+(* a poll is one step and no borrow of the core is held across an await;   *)
+(* a send whose future the host keeps finishes, and one dropped with its   *)
+(* future loses that packet, which the transport sends again.              *)
 (* Lean counterpart: proofs/lean/Pinc/FacadeTurn.lean.                     *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
 CONSTANTS F, OWNER, ROLE, DRAIN, DMAX, STARTS, GENS, PASS,
-          DROP   \* the release of the code (TRUE) or the release before the fix of #419 (FALSE)
+          DROP,    \* the release of the code (TRUE) or the release before the fix of #419 (FALSE)
+          PARKKEEP, \* the poll that ends the attempt of a call that took its value out of the endpoint returns the
+                    \* value (TRUE), or every call's value waits in a flush, as before the fix (FALSE)
+          SENTF    \* the futures whose call's payload is the send (a write, a datagram, a close): the flush is
+                   \* awaited after the value was decided, as before the fix, whatever PARKKEEP is
 VARIABLES sb, st, tk, drv, flag, driver, sock, fed, arrived, starts, done, took, hw
 vars == <<sb, st, tk, drv, flag, driver, sock, fed, arrived, starts, done, took, hw>>
 
@@ -110,9 +134,38 @@ PollIo(f) ==
     /\ st[f] = "run" /\ st' = [st EXCEPT ![f] = "flush"] /\ took' = 0
     /\ UNCHANGED <<sb, tk, drv, flag, driver, sock, fed, arrived, starts, done, hw>>
 
-PollDone(f) ==
-    /\ st[f] = "run" /\ st' = [st EXCEPT ![f] = "flush"] /\ done' = [done EXCEPT ![f] = TRUE] /\ took' = 0
+\* the guard's Drop
+Ended(f) ==
+    IF tk[f] = NoTicket
+    THEN /\ st' = [st EXCEPT ![f] = "off"]
+         /\ UNCHANGED <<sb, tk, drv, flag, driver>>
+    ELSE LET flag1 == IF drv[f] THEN FALSE ELSE flag
+             s1 == Rel(sb, tk[f])
+             b == IF drv[f] \/ (PASS /\ ~flag1) THEN Baton(s1) ELSE [w |-> <<>>, s |-> s1]
+         IN /\ sb' = b.s /\ flag' = flag1
+            /\ driver' = IF drv[f] THEN NoTicket ELSE driver
+            /\ st' = [Wake(st, b.w) EXCEPT ![f] = "off"]
+            /\ tk' = [tk EXCEPT ![f] = NoTicket]
+            /\ drv' = [drv EXCEPT ![f] = FALSE]
+
+\* the calls whose value waits for the flush that sends what they queued: the send-calls always, and, before the fix
+\* of #636 and #702, every call
+FlushDone(f) == f \in SENTF \/ ~PARKKEEP
+
+\* the value was taken out of the endpoint and returns in this poll: nothing is taken from the transport, and the
+\* guard's Drop ends the call in the same step
+PollTaken(f) ==
+    /\ st[f] = "run" /\ done' = [done EXCEPT ![f] = TRUE] /\ took' = 0
+    /\ Ended(f)
+    /\ UNCHANGED <<arrived, fed, hw, sock, starts>>
+
+\* the call's payload is the send: the flush runs after the poll, in a state the host can drop
+PollSent(f) ==
+    /\ st[f] = "run" /\ done' = [done EXCEPT ![f] = TRUE] /\ took' = 0
+    /\ st' = [st EXCEPT ![f] = "flush"]
     /\ UNCHANGED <<sb, tk, drv, flag, driver, sock, fed, arrived, starts, hw>>
+
+PollDone(f) == IF FlushDone(f) THEN PollSent(f) ELSE PollTaken(f)
 
 PollWait(f) ==
     /\ st[f] = "run"
@@ -137,24 +190,14 @@ PollWait(f) ==
                        /\ st' = [st EXCEPT ![f] = IF k > 0 \/ moved THEN "flush" ELSE "wait"]
     /\ UNCHANGED <<arrived, starts, done>>
 
-\* the guard's Drop
-Ended(f) ==
-    IF tk[f] = NoTicket
-    THEN /\ st' = [st EXCEPT ![f] = "off"]
-         /\ UNCHANGED <<sb, tk, drv, flag, driver>>
-    ELSE LET flag1 == IF drv[f] THEN FALSE ELSE flag
-             s1 == Rel(sb, tk[f])
-             b == IF drv[f] \/ (PASS /\ ~flag1) THEN Baton(s1) ELSE [w |-> <<>>, s |-> s1]
-         IN /\ sb' = b.s /\ flag' = flag1
-            /\ driver' = IF drv[f] THEN NoTicket ELSE driver
-            /\ st' = [Wake(st, b.w) EXCEPT ![f] = "off"]
-            /\ tk' = [tk EXCEPT ![f] = NoTicket]
-            /\ drv' = [drv EXCEPT ![f] = FALSE]
-
-\* the flush ends: the future polls again, or returns
+\* the flush ends: the future polls again, or, before the fix, returns its value
 Flush(f) ==
     /\ st[f] = "flush"
-    /\ IF done[f] THEN Ended(f) ELSE st' = [st EXCEPT ![f] = "run"] /\ UNCHANGED <<sb, tk, drv, flag, driver>>
+    /\ IF done[f]
+       THEN \* a call whose value waited for the flush: the value returns when the flush finishes
+            Ended(f)
+       ELSE /\ st' = [st EXCEPT ![f] = "run"]
+            /\ UNCHANGED <<sb, tk, drv, flag, driver>>
     /\ took' = 0
     /\ UNCHANGED <<sock, fed, arrived, starts, done, hw>>
 
@@ -210,8 +253,11 @@ FedExact == fed \o sock = [j \in 1..arrived |-> j]
 DrainBound == took <= DRAIN
 WaitAny == \E f \in F : st[f] = "wait" /\ CanDrive(f)
 RoleOffered == (~flag /\ WaitAny) => \E g \in Held : st[g] \in {"run", "flush"} /\ CanDrive(g)
+\* the value of a finished attempt of a call that took it out of the endpoint is never in a state the host can drop:
+\* it returns in the poll that took it
+DoneInline == \A f \in F : ~done[f] \/ f \in SENTF \/ st[f] # "flush"
 Inv == OneDriver /\ TicketsLive /\ WakerOwner /\ WaitArmed /\ QueueOnce /\ WakerQueued /\ FreeExact /\ SlabBound
-       /\ FedExact /\ DrainBound /\ RoleOffered
+       /\ FedExact /\ DrainBound /\ RoleOffered /\ DoneInline
 
 RoleTaken == (~flag /\ WaitAny) ~> (flag \/ ~WaitAny)
 

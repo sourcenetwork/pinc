@@ -218,7 +218,12 @@ pub(crate) enum Wait {
 
 /// The outcome of one attempt at an operation.
 pub(crate) enum Try<T> {
+    /// The attempt is done; its value is returned after the flush that sends what it queued.
     Done(T),
+    /// The attempt is done and the value was taken out of the endpoint (a read, an accept, an open, a dial): it
+    /// returns in the poll that took it, before anything is sent (pinc#636, pinc#702), and what the attempt queued
+    /// leaves with the next poll of any future.
+    Taken(T),
     Wait(Wait),
 }
 
@@ -435,10 +440,12 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
         self.relay_events = v;
     }
 
-    /// Wake the driving future if the endpoint now needs to run sooner than it sleeps.
+    /// Wake the driving future if the endpoint now needs to run sooner than it sleeps, or owes a send: a call that
+    /// queued packets returns its value without sending them (pinc#636, pinc#702), so the send leaves with the next
+    /// poll, which the driver is woken for.
     pub(crate) fn kick(&mut self) {
         if let Some(t) = self.driver
-            && self.deadline().is_some_and(|d| d < self.armed)
+            && (self.dirty || self.deadline().is_some_and(|d| d < self.armed))
         {
             self.standby.trace_kick();
             self.standby.notify(t);

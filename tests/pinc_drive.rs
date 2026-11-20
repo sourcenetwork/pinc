@@ -1,6 +1,7 @@
 //! How the futures of the facade drive the endpoint: the driving role is handed over when its holder is dropped, a task
 //! that only writes or only reads moves the endpoint, an idle endpoint is kept alive by `Endpoint::run`, one request
-//! and its response cost a bounded number of polls and no timer, and no future holds a large frame.
+//! and its response cost a bounded number of polls and no timer, no future holds a large frame, and a host whose last
+//! act is a call loses nothing when it drops the endpoint after.
 #![allow(
     clippy::semicolon_if_nothing_returned,
     clippy::zombie_processes,
@@ -402,6 +403,65 @@ fn on_a_stack(kib: usize) {
 #[test]
 fn a_default_endpoint_builds_drives_and_drops_on_a_one_mebibyte_stack() {
     on_a_stack(1024);
+}
+
+/// The last call of a host sends what it queued before its value returns, although no future is polled after it and
+/// the endpoint is dropped at once: a datagram sent as the endpoint's last act reaches the peer. On the code that
+/// returned every call before its send, what the call queued waited for a later poll that never came, and a host
+/// whose last act is the call lost it when it dropped the endpoint (pinc#636).
+#[nuclei::test]
+async fn the_last_datagram_of_an_endpoint_leaves_with_its_call() {
+    within(30, async {
+        let server = bind(pinc_common::builder().alpn(ECHO)).await;
+        // No task drives the client: its calls are the only futures on it, and the last one is the endpoint's last
+        // act.
+        let client = bind_idle(pinc_common::builder().alpn(ECHO)).await;
+        let conn = client.connect(server.addr(), ECHO).await.unwrap();
+        let (got_tx, got_rx) = nuclei::sync::oneshot::channel::<Vec<u8>>();
+        nuclei::spawn_local({
+            let server = server.clone();
+            async move {
+                let c = server.accept().await.unwrap().into_connection();
+                let _ = got_tx.send(c.read_datagram().await.unwrap_or_default());
+            }
+        })
+        .detach();
+        conn.send_datagram(b"the last call").await.unwrap();
+        drop(conn);
+        drop(client);
+        assert_eq!(within(5, got_rx).await, Ok(b"the last call".to_vec()));
+    })
+    .await;
+}
+
+/// The last call of a host is its close, and the peer sees the code although no future is polled after the close and
+/// the endpoint is dropped at once. On the code that returned every call before its send, the close frame waited for
+/// a later poll that never came, and the peer's session hung until its idle timeout (pinc#636).
+#[nuclei::test]
+async fn the_last_close_of_an_endpoint_reaches_the_peer() {
+    within(30, async {
+        let server = bind(pinc_common::builder().alpn(ECHO)).await;
+        let client = bind_idle(pinc_common::builder().alpn(ECHO)).await;
+        let conn = client.connect(server.addr(), ECHO).await.unwrap();
+        let (why_tx, why_rx) = nuclei::sync::oneshot::channel::<pinc::Error>();
+        nuclei::spawn_local({
+            let server = server.clone();
+            async move {
+                let c = server.accept().await.unwrap().into_connection();
+                let _ = why_tx.send(c.closed().await);
+            }
+        })
+        .detach();
+        conn.close(0).await;
+        drop(conn);
+        drop(client);
+        let why = within(20, why_rx).await.unwrap();
+        assert!(
+            matches!(why.kind(), pinc::ErrorKind::Closed { code: 0, by_peer: true }),
+            "the peer did not see the close: {why:?}"
+        );
+    })
+    .await;
 }
 
 #[allow(dead_code)]

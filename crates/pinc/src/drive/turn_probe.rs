@@ -46,7 +46,15 @@ pub(super) fn wait<H: Hosted>(
     }
 }
 
-/// The end of a call, after its guard released what it held: a return, or a drop if the host dropped the call.
-pub(super) fn end<H: Hosted>(sh: &Shared<H>, returned: bool) {
-    mark_free(sh, if returned { Kind::Return } else { Kind::Drop });
+/// The end of a call, after its guard released what it held: a return in the poll that took the value (`taken`), a
+/// return after the flush (`returned`), or a drop if the host dropped the call.
+pub(super) fn end<H: Hosted>(sh: &Shared<H>, returned: bool, taken: bool) {
+    let kind = if taken {
+        Kind::Taken
+    } else if returned {
+        Kind::Return
+    } else {
+        Kind::Drop
+    };
+    mark_free(sh, kind);
 }

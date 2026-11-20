@@ -96,11 +96,12 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
     pub(crate) fn dial_poll(&mut self, session: SessionId) -> Try<Result<Rc<SessInfo>>> {
         match self.dials.get(&session).map(|d| d.result.is_some()) {
             Some(true) => match self.dials.remove(&session).and_then(|d| d.result) {
-                Some(r) => Try::Done(r),
-                None => Try::Done(Err(Error::shutdown())),
+                // The session is the value taken out of the endpoint (pinc#636, pinc#702): it returns in this poll.
+                Some(r) => Try::Taken(r),
+                None => Try::Taken(Err(Error::shutdown())),
             },
             Some(false) => Try::Wait(Wait::G(GKey::Dial(session))),
-            None => Try::Done(Err(self.stopped.unwrap_or_else(Error::shutdown))),
+            None => Try::Taken(Err(self.stopped.unwrap_or_else(Error::shutdown))),
         }
     }
 
@@ -119,10 +120,11 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
     pub(crate) fn accept_route(&mut self, route: usize) -> Try<Option<Rc<SessInfo>>> {
         if let Some(i) = self.routes.get_mut(route).and_then(|r| r.queue.pop_front()) {
             self.sync_backlog();
-            return Try::Done(Some(i));
+            // The session is the value taken out of the endpoint (pinc#636): it returns in this poll.
+            return Try::Taken(Some(i));
         }
         if self.stopped.is_some() {
-            return Try::Done(None);
+            return Try::Taken(None);
         }
         Try::Wait(Wait::G(GKey::Route(route)))
     }
@@ -145,7 +147,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
 
     pub(crate) fn open(&mut self, now: u64, info: &SessInfo, bidi: bool) -> Try<Result<StreamId>> {
         if !self.sessions.contains_key(&info.id) {
-            return Try::Done(Err(info.gone()));
+            return Try::Taken(Err(info.gone()));
         }
         let session = info.id;
         let key = SKey::Open(bidi);
@@ -153,23 +155,26 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             return Try::Wait(Wait::S(session, key));
         }
         match self.cmd(now, || Command::OpenStream { session, bidi }) {
-            Ok(Value::Stream(id)) => Try::Done(Ok(id)),
-            Ok(_) => Try::Done(Err(Error::new(ErrorKind::Busy, "the stream did not open"))),
+            // The stream handle is the value taken out of the endpoint (pinc#636): it returns in this poll, and the
+            // stream is announced with the first frame that carries its id.
+            Ok(Value::Stream(id)) => Try::Taken(Ok(id)),
+            Ok(_) => Try::Taken(Err(Error::new(ErrorKind::Busy, "the stream did not open"))),
             // No stream credit or no room for the stream's window yet: wait for the connection's open-ready event.
             Err(CommandError::Stream(StreamError::StreamLimit | StreamError::Exhausted)) => {
                 Try::Wait(Wait::S(session, key))
             }
-            Err(e) => Try::Done(Err(Error::command(e))),
+            Err(e) => Try::Taken(Err(Error::command(e))),
         }
     }
 
     pub(crate) fn accept_stream(&mut self, info: &SessInfo, bidi: bool) -> Try<Result<StreamId>> {
         let Some(s) = self.sessions.get_mut(&info.id) else {
-            return Try::Done(Err(info.gone()));
+            return Try::Taken(Err(info.gone()));
         };
         let q = if bidi { &mut s.accept_bi } else { &mut s.accept_uni };
         match q.pop_front() {
-            Some(id) => Try::Done(Ok(id)),
+            // The stream handle is the value taken out of the endpoint (pinc#636): it returns in this poll.
+            Some(id) => Try::Taken(Ok(id)),
             None => Try::Wait(Wait::S(info.id, if bidi { SKey::AcceptBi } else { SKey::AcceptUni })),
         }
     }
@@ -277,10 +282,10 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
         buf: &mut [u8],
     ) -> Try<Result<(usize, Option<Result<()>>)>> {
         if !self.sessions.contains_key(&info.id) {
-            return Try::Done(Err(info.gone()));
+            return Try::Taken(Err(info.gone()));
         }
         if buf.is_empty() {
-            return Try::Done(Ok((0, None)));
+            return Try::Taken(Ok((0, None)));
         }
         self.read_with(now, info, stream, |c| {
             let n = c.len().min(buf.len());
@@ -301,7 +306,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
         mut take: impl FnMut(&[u8]) -> usize,
     ) -> Try<Result<(usize, Option<Result<()>>)>> {
         if !self.sessions.contains_key(&info.id) {
-            return Try::Done(Err(info.gone()));
+            return Try::Taken(Err(info.gone()));
         }
         let session = info.id;
         let (n, offered) = match self.node.endpoint().query(Query::Read { session, stream }) {
@@ -311,7 +316,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
         let status = match self.cmd(now, || Command::Consume { session, stream, n }) {
             Ok(Value::Recv(st)) => st,
             Ok(_) => RecvStatus::Open,
-            Err(e) => return Try::Done(Err(Error::command(e))),
+            Err(e) => return Try::Taken(Err(Error::command(e))),
         };
         let end = match status {
             RecvStatus::Open => None,
@@ -320,10 +325,11 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
         };
         if n > 0 {
             self.wake_open(session);
-            Try::Done(Ok((n, end)))
+            // The bytes are the value taken out of the endpoint (pinc#636): they return in this poll.
+            Try::Taken(Ok((n, end)))
         } else if end.is_some() || offered {
             // The end, or bytes the taker left where they are: waiting would be for nothing.
-            Try::Done(Ok((0, end)))
+            Try::Taken(Ok((0, end)))
         } else {
             Try::Wait(Wait::S(session, SKey::Read(stream)))
         }
@@ -367,12 +373,13 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
 
     pub(crate) fn read_datagram(&mut self, info: &SessInfo, out: &mut [u8]) -> Try<Result<usize>> {
         if !self.sessions.contains_key(&info.id) {
-            return Try::Done(Err(info.gone()));
+            return Try::Taken(Err(info.gone()));
         }
         match self.node.endpoint_mut().read_datagram(info.id, out) {
-            Ok(Some(n)) => Try::Done(Ok(n)),
+            // The datagram is the value taken out of the endpoint (pinc#636): it returns in this poll.
+            Ok(Some(n)) => Try::Taken(Ok(n)),
             Ok(None) => Try::Wait(Wait::S(info.id, SKey::Datagram)),
-            Err(e) => Try::Done(Err(Error::command(e))),
+            Err(e) => Try::Taken(Err(Error::command(e))),
         }
     }
 

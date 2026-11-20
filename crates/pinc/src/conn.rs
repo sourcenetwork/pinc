@@ -163,7 +163,7 @@ impl<H: Hosted> Connection<H> {
                     Some(s) => s,
                     None => match core.connect_start(now, node, alpn, &addrs) {
                         Ok(s) => *guard.session.insert(s),
-                        Err(e) => return Try::Done(Err(e)),
+                        Err(e) => return Try::Taken(Err(e)),
                     },
                 };
                 core.dial_poll(session)
@@ -251,7 +251,7 @@ impl<H: Hosted> Connection<H> {
         Ok((tag, s, r))
     }
 
-    /// Send an unreliable datagram.
+    /// Send an unreliable datagram. The call returns once the endpoint has sent it to the host.
     ///
     /// # Errors
     /// [`crate::ErrorKind::TooLarge`] if it does not fit one packet; the reason the connection ended if it did.
@@ -264,7 +264,8 @@ impl<H: Hosted> Connection<H> {
 
     /// Wait for the next datagram the peer sent into `buf`, in the order they arrived, and return its length. The
     /// endpoint holds a bounded number of datagrams for a session and drops the oldest when a new one arrives, counting
-    /// each drop. Allocates nothing. Cancel safe.
+    /// each drop. Allocates nothing. Cancel safe: the datagram is taken out in the poll that returns it, so a future
+    /// dropped after that loses nothing, and one dropped while it waits leaves the datagram queued.
     ///
     /// # Errors
     /// [`crate::ErrorKind::TooLarge`] if the datagram does not fit `buf` (it stays queued); the reason the connection
@@ -274,7 +275,7 @@ impl<H: Hosted> Connection<H> {
     }
 
     /// Wait for the next datagram the peer sent, in the order they arrived. Allocates the datagram; use
-    /// [`recv_datagram`](Self::recv_datagram) to reuse a buffer. Cancel safe.
+    /// [`recv_datagram`](Self::recv_datagram) to reuse a buffer. Cancel safe, as [`recv_datagram`](Self::recv_datagram).
     ///
     /// # Errors
     /// The reason the connection ended; datagrams still queued when it ended are dropped with it.

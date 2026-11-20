@@ -7,8 +7,11 @@
 //! futures inside its own state, so a datagram or a deadline wakes the holder's task; it feeds the datagram to the
 //! core, which wakes the futures the datagram is for. The role is sticky: the holder keeps it while it waits. When it
 //! finishes or is dropped it clears the flag and wakes the oldest waiting future, which takes the role if it still
-//! waits. A future that does not hold the role only waits on its ticket; a future that has its result sends what the
-//! endpoint wants to send before it returns.
+//! waits. A future that does not hold the role only waits on its ticket. A future whose call took its value out of the
+//! endpoint (a read, an accept, an open, a dial) returns it at once, and what the endpoint wants to send goes with the
+//! next poll of any future (pinc#636, pinc#702: a result is never kept back for a send, so a dropped future loses
+//! nothing); a call whose payload is the send (a write, a datagram, a close) sends first and returns after, so the
+//! endpoint's last packets never wait for a poll that never comes.
 //!
 //! Everything runs on the thread that built the endpoint, so the flag is a `Cell` and the core a `RefCell`.
 //!
@@ -148,7 +151,12 @@ impl Drop for Buf<'_> {
 
 /// What one poll of an operation decided.
 enum Step<T> {
-    Done(T),
+    /// The attempt is done and its call's payload is the send: the poll sends what the attempt queued before the value
+    /// returns.
+    Sent(T),
+    /// The value was taken out of the endpoint (a read, an accept, an open, a dial): it returns in this poll, before
+    /// anything is sent.
+    Taken(T),
     Io,
 }
 
@@ -198,13 +206,16 @@ struct Turn<'a, H: Hosted> {
     /// Whether the call returned (else the host dropped it), for the mark that follows the release.
     #[cfg(feature = "trace")]
     returned: bool,
+    /// Whether the call returned a value it took out of the endpoint, in the poll that took it.
+    #[cfg(feature = "trace")]
+    taken: bool,
 }
 
 impl<H: Hosted> Drop for Turn<'_, H> {
     fn drop(&mut self) {
         self.release();
         #[cfg(feature = "trace")]
-        turn_probe::end(self.sh, self.returned);
+        turn_probe::end(self.sh, self.returned, self.taken);
     }
 }
 
@@ -333,6 +344,8 @@ impl<H: Hosted> Shared<H> {
             driving: false,
             #[cfg(feature = "trace")]
             returned: false,
+            #[cfg(feature = "trace")]
+            taken: false,
         };
         let mut rx = pin!(None);
         let mut sl = pin!(None);
@@ -347,10 +360,11 @@ impl<H: Hosted> Shared<H> {
                     cx.waker().wake_by_ref();
                     return Poll::Pending;
                 };
-                // What was served is sent before the attempt runs. Not once the endpoint is stopping: an attempt that
+                // What was served, and what a previous call queued (its value returned before the send, pinc#636,
+                // pinc#702), is sent before the attempt runs. Not once the endpoint is stopping: an attempt that
                 // ends with the endpoint must not wait for the timers to have nothing due (pinc#551, pinc#569).
                 let served = self.service(&mut core, now) > 0;
-                if served && !core.stopping() {
+                if !core.stopping() && (served || core.take_dirty()) {
                     #[cfg(feature = "trace")]
                     turn_probe::mark(self, &core, crate::trace_turn::Kind::Io);
                     return Poll::Ready(Step::Io);
@@ -362,13 +376,26 @@ impl<H: Hosted> Shared<H> {
                 }
                 core.caller = turn.ticket;
                 let w = match attempt(&mut core, now) {
+                    // A call that took its value out of the endpoint (a read, an accept, an open, a dial) returns it
+                    // in this poll, before anything is sent (pinc#636, pinc#702); what the attempt queued leaves with
+                    // the next poll of any future, which the kick asks for. Its mark is written by the guard's Drop,
+                    // which ends the call in the same step.
+                    Try::Taken(v) => {
+                        #[cfg(feature = "trace")]
+                        core.standby.mark(crate::trace_waits::Mark::Try { key: 0, s: 0 });
+                        core.kick();
+                        return Poll::Ready(Step::Taken(v));
+                    }
+                    // A call whose payload is the send (a write, a datagram, a close) sends what the attempt queued
+                    // before its value returns, so a host whose last act is the call loses nothing when it drops the
+                    // endpoint after.
                     Try::Done(v) => {
                         #[cfg(feature = "trace")]
                         core.standby.mark(crate::trace_waits::Mark::Try { key: 0, s: 0 });
                         core.kick();
                         #[cfg(feature = "trace")]
                         turn_probe::mark(self, &core, crate::trace_turn::Kind::Done);
-                        return Poll::Ready(Step::Done(v));
+                        return Poll::Ready(Step::Sent(v));
                     }
                     Try::Wait(w) => w,
                 };
@@ -493,7 +520,19 @@ impl<H: Hosted> Shared<H> {
             })
             .await;
             match step {
-                Step::Done(v) => {
+                // The value a call took out of the endpoint leaves in the poll that took it, before anything is sent:
+                // a future dropped after its attempt finished keeps the result, and what the attempt queued goes with
+                // the next poll of any future on the endpoint, which the kick asks for (pinc#636, pinc#702). A call
+                // whose payload is the send flushes first, so what it queued leaves with the call that queued it,
+                // however quiet the endpoint is after.
+                Step::Taken(v) => {
+                    #[cfg(feature = "trace")]
+                    {
+                        turn.taken = true;
+                    }
+                    return v;
+                }
+                Step::Sent(v) => {
                     self.flush().await;
                     #[cfg(feature = "trace")]
                     {

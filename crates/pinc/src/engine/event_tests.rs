@@ -131,6 +131,7 @@ impl Run {
                 ("none", 0, 0)
             }
             Try::Done(Some(other)) => unreachable!("{other:?}"),
+            Try::Taken(_) => unreachable!("an event returns through Done"),
             Try::Wait(_) => {
                 assert!(!self.stopped && self.owed == 0 && self.queued.is_empty());
                 ("wait", 0, 0)

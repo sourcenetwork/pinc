@@ -22,8 +22,11 @@ pub enum Kind {
     Start,
     /// A poll served something or queued packets: the call flushes and polls again.
     Io,
-    /// The attempt finished: the call flushes and returns.
+    /// The attempt of a call whose payload is the send finished: the call flushes and returns.
     Done,
+    /// The attempt took its value out of the endpoint and the call returned it in that poll, with nothing sent first
+    /// (pinc#636): written after the guard's `Drop`, which ends the call in the same step.
+    Taken,
     /// The attempt waits.
     Wait {
         /// The call's ticket after the poll.

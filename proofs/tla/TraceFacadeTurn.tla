@@ -10,7 +10,10 @@
 (* each an Exec task 1..NF; it writes the marks of the probe module        *)
 (* pinc::trace_turn, each one step of the model:                           *)
 (*   start {f}           run_as entered for task f                         *)
-(*   io {f}  done {f}    the attempt ended in Io / Done (PollIo, PollDone) *)
+(*   io {f}  done {f}    the attempt ended in Io / Done (PollIo, PollSent) *)
+(*   taken {f}           the attempt took its value out of the endpoint    *)
+(*                       and the call returned it in that poll, written    *)
+(*                       after the guard's Drop (PollTaken, pinc#636)      *)
 (*   wait {f, tk, drv, took, flush}  the attempt waits: the ticket after   *)
 (*                       ([slot, generation]), whether f now drives, how   *)
 (*                       many datagrams the burst took, whether it goes on *)
@@ -33,6 +36,9 @@
 (* STARTS large enough not to bind, GENS 2^30 (the code's u32 generation  *)
 (* wraps at 2^32 and does not reach 2^30 in a run: the test asserts every *)
 (* generation stays below), ROLE FALSE (no Endpoint::run in the test), PASS and DROP TRUE.  *)
+(* PARKKEEP TRUE as the code; a task runs both kinds of call, so the kind  *)
+(* comes from the mark (done or taken), not from SENTF, which holds every  *)
+(* task here only so that a done line is the model's PollSent.            *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds facade_turn.ndjson.   *)
@@ -44,7 +50,8 @@ mvars == <<sb, st, tk, drv, flag, driver, sock, fed, arrived, starts, done, took
 
 NF == 8
 M == INSTANCE FacadeTurn WITH F <- 1..NF, OWNER <- 1, ROLE <- FALSE, DRAIN <- 256, DMAX <- 100000,
-                              STARTS <- 100000, GENS <- 1073741824, PASS <- TRUE, DROP <- TRUE
+                              STARTS <- 100000, GENS <- 1073741824, PASS <- TRUE, DROP <- TRUE,
+                              PARKKEEP <- TRUE, SENTF <- 1..NF
 
 Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/facade_turn.ndjson")
 Ev == Trace[i]
@@ -53,7 +60,8 @@ Tk(x) == IF x = <<>> THEN <<>> ELSE <<x[1], x[2]>>
 Step ==
     /\ CASE Ev.op = "start" -> M!Start(Ev.f)
          [] Ev.op = "io" -> M!PollIo(Ev.f)
-         [] Ev.op = "done" -> M!PollDone(Ev.f)
+         [] Ev.op = "done" -> M!PollSent(Ev.f)
+         [] Ev.op = "taken" -> M!PollTaken(Ev.f)
          [] Ev.op = "wait" -> /\ M!PollWait(Ev.f)
                               /\ tk'[Ev.f] = Tk(Ev.tk) /\ drv'[Ev.f] = Ev.drv /\ took' = Ev.took
                               /\ st'[Ev.f] = IF Ev.flush THEN "flush" ELSE "wait"

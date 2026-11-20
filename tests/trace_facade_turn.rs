@@ -1,7 +1,7 @@
 //! Trace generation for the drive's turn (`crates/pinc/src/drive.rs`: `Shared::run_as`, the guard `Turn`, `flush`, over
 //! the slab of `standby.rs`), recorded as ndjson (`facade_turn.ndjson`) for the TLA+ trace check `TraceFacadeTurn.tla`.
 //!
-//! Endpoint A runs no `Endpoint::run`: its facade calls (a dial, accepts of streams, a receive of a datagram) are
+//! Endpoint A runs no `Endpoint::run`: its facade calls (a dial, accepts of streams, a receive and a send of a datagram) are
 //! tasks 1.. of the manual executor, and whichever of them waits takes the driving role. A peer endpoint B runs on
 //! tasks from 100. The probe module `pinc::trace_turn` marks each step of a call; the test gives each mark the task
 //! that was polled (or dropped), maps the ticket of a notification to the task that holds it, and writes the datagrams
@@ -86,6 +86,13 @@ async fn recv_dg<H: Hosted + 'static>(c: Connection<H>) -> Out<H> {
     let mut buf = [0u8; 64];
     match c.recv_datagram(&mut buf).await {
         Ok(_) => Out::Unit,
+        Err(e) => Out::Fail(e.kind()),
+    }
+}
+
+async fn send_dg<H: Hosted + 'static>(c: Connection<H>) -> Out<H> {
+    match c.send_datagram(&[5u8; 8]).await {
+        Ok(()) => Out::Unit,
         Err(e) => Out::Fail(e.kind()),
     }
 }
@@ -192,12 +199,17 @@ impl Lines {
                     );
                     self.put("wait", Some(f), &rest);
                 }
-                Kind::Return | Kind::Drop => {
+                Kind::Return | Kind::Drop | Kind::Taken => {
                     self.held.retain(|_, h| *h != f);
                     if self.driver_task == Some(f) {
                         self.driver_task = None;
                     }
-                    self.put(if m.kind == Kind::Drop { "drop" } else { "flush" }, Some(f), &state);
+                    let op = match m.kind {
+                        Kind::Drop => "drop",
+                        Kind::Taken => "taken",
+                        _ => "flush",
+                    };
+                    self.put(op, Some(f), &state);
                 }
             }
         }
@@ -328,6 +340,11 @@ fn run<H: Hosted + 'static>(w: Wire, a: Endpoint<H>, b: Endpoint<H>) {
     // A datagram: the call that waits for it returns.
     t.peer(peer_dgram(pc.clone()));
     assert!(t.finished(4), "the receive of the datagram returned");
+    // A call whose payload is the send: A's datagram flushes before the call returns (a done line, then a flush),
+    // where the calls above took their value out and returned it in the poll that took it (taken lines).
+    t.spawn(7, send_dg(c.clone()));
+    t.settle();
+    assert!(t.finished(7), "the datagram of A was sent");
     // Two more calls wait; the host drops the one that drives, and a waiting one takes the role.
     t.spawn(5, accept_bi(c.clone()));
     t.spawn(6, recv_dg(c.clone()));
@@ -358,7 +375,7 @@ fn run<H: Hosted + 'static>(w: Wire, a: Endpoint<H>, b: Endpoint<H>) {
     // Every step of the turn the run reaches, and what it cannot: `notifyall` needs the core's event queue to
     // overflow, which no run of this size does and which the facade's public API cannot make one burst do.
     for op in [
-        "start", "io", "done", "wait", "flush", "drop", "notify", "arrive", "hostwake",
+        "start", "io", "done", "taken", "wait", "flush", "drop", "notify", "arrive", "hostwake",
     ] {
         assert!(l.counts.get(op).copied().unwrap_or(0) > 0, "no {op} line was written");
     }
