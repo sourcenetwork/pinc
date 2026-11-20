@@ -1,4 +1,4 @@
-//! Tests of the state machine's stream handling: refusals and the write backlog.
+//! Tests of the state machine's stream handling: refusals, the write backlog and the WebSocket control replies.
 
 #![allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "tests assert")]
 
@@ -7,6 +7,7 @@ use alloc::vec;
 use core::cell::RefCell;
 use core::net::SocketAddr;
 
+use pinc_connect::carrier::ws::{self, Opcode};
 use pinc_keystore::SoftwareStore;
 
 use super::*;
@@ -42,4 +43,20 @@ fn a_stream_refused_while_stopping_is_an_accept_error() {
     assert!(core.add_conn((), CarrierKind::Tcp, T0).is_err());
     assert_eq!(core.counters.refused_handshakes_full, 0);
     assert_eq!(core.counters.accept_errors, 1);
+}
+
+/// A peer that pings faster than it reads is closed as slow, not answered with dropped pongs.
+#[test]
+fn control_replies_past_the_cap_close_the_carrier_as_slow() {
+    let mut core = core(Limits::default());
+    let slot = core.add_conn((), CarrierKind::Ws, T0).unwrap();
+    let mut raw = Vec::new();
+    for _ in 0..9 {
+        let mut f = [0u8; 2 + 4 + 125];
+        let n = ws::encode(Opcode::Ping, &[7; 125], Some([1, 2, 3, 4]), &mut f).unwrap();
+        raw.extend_from_slice(&f[..n]);
+    }
+    core.read_ws(slot, T0, &raw, raw.len());
+    assert_eq!(core.conn(slot).unwrap().dying, Some(Closed::Slow));
+    assert_eq!(core.counters.slow_closed, 1);
 }

@@ -110,11 +110,13 @@ impl<S> Conn<S> {
         self.q.len() - self.qpos + self.unsent
     }
 
-    /// Queue a WebSocket control reply.
-    pub(crate) fn push_ctl(&mut self, frame: &[u8]) {
-        if self.ctl.len() + frame.len() <= CTL_MAX {
+    /// Queue a WebSocket control reply; false if it does not fit (the peer is not draining its replies).
+    pub(crate) fn push_ctl(&mut self, frame: &[u8]) -> bool {
+        let fits = self.ctl.len() + frame.len() <= CTL_MAX;
+        if fits {
             self.ctl.extend_from_slice(frame);
         }
+        fits
     }
 
     /// The next bytes to write and the offset to write from, if there are any and no write is in flight.
