@@ -9,7 +9,7 @@ publish.workspace = true
 
 [dependencies]
 pinc-core = { workspace = true }
-pinc-crypto = { workspace = true }
+pinc-crypto = { workspace = true, default-features = false }
 pinc-security = { workspace = true }
 pinc-transport = { workspace = true }
 

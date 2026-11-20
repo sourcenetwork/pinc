@@ -6,8 +6,13 @@
 //! domain-separated from the plain algorithms. Signing here is the software path: it is deterministic and takes any
 //! randomness from the caller.
 //!
-//! ML-DSA-65 keys hold their expanded matrix inline (about 64 KiB each, 128 KiB for a hybrid) because the crate never allocates; keep a
-//! [`Keypair`] off small stacks.
+//! ML-DSA-65 keys hold their expanded matrix inline on a target without an allocator (about 64 KiB each, 128 KiB for
+//! a hybrid): there is nowhere else for it to stay, so keep a [`Keypair`] off small stacks there. With the `alloc`
+//! feature (default) the expanded key is boxed once, at setup, and a key pair of any algorithm costs a few dozen
+//! bytes.
+
+#[cfg(feature = "alloc")]
+extern crate alloc;
 
 use ed25519_dalek::{Signer as _, SigningKey as EdSigningKey, VerifyingKey as EdVerifyingKey};
 use ml_dsa::{KeyExport as _, Keypair as _, MlDsa65, Seed, Signature as MlSignature, SigningKey as MlSigningKey};
@@ -216,15 +221,48 @@ pub fn verify_node(id: &NodeId, public_key: &[u8], msg: &[u8], signature: &[u8])
     verify(id.alg, public_key, msg, signature)
 }
 
-#[allow(clippy::large_enum_variant, reason = "keys live on the stack; boxing would allocate")]
+#[cfg_attr(
+    not(feature = "alloc"),
+    allow(
+        clippy::large_enum_variant,
+        reason = "without an allocator the expanded ML-DSA-65 key has nowhere to stay but inline"
+    )
+)]
 enum Inner {
     Ed25519(EdSigningKey),
     P256(P256SigningKey),
+    #[cfg(feature = "alloc")]
+    MlDsa65(alloc::boxed::Box<MlSigningKey<MlDsa65>>),
+    #[cfg(not(feature = "alloc"))]
     MlDsa65(MlSigningKey<MlDsa65>),
+    #[cfg(feature = "alloc")]
+    Hybrid(EdSigningKey, alloc::boxed::Box<MlSigningKey<MlDsa65>>),
+    #[cfg(not(feature = "alloc"))]
     Hybrid(EdSigningKey, MlSigningKey<MlDsa65>),
 }
 
+/// The hybrid arm of [`Keypair::from_seed`] with an allocator: the ML-DSA-65 half goes through [`ml_boxed`], so its
+/// 64 KiB never sit in this frame either.
+#[cfg(feature = "alloc")]
+#[inline(never)]
+fn hybrid_inner(seed: &[u8]) -> Result<Inner, CryptoError> {
+    let (ed, ml) = seed.split_at(32);
+    Ok(Inner::Hybrid(ed_key(ed)?, ml_boxed(ml)?))
+}
+
+/// The hybrid arm of [`Keypair::from_seed`] without an allocator: the expanded key is built in place, out of line.
+#[cfg(not(feature = "alloc"))]
+#[inline(never)]
+fn hybrid_inner(seed: &[u8]) -> Result<Inner, CryptoError> {
+    let (ed, ml) = seed.split_at(32);
+    Ok(Inner::Hybrid(ed_key(ed)?, ml_key(ml)?))
+}
+
 /// A software signing key pair, zeroized on drop.
+///
+/// With the `alloc` feature the expanded ML-DSA-65 key is boxed once, at setup, so a key pair of any algorithm is
+/// `size_of::<Keypair>()` = 240 bytes: the largest small algorithm's expanded key, plus the algorithm tag. Without an
+/// allocator the ML-DSA-65 expanded key lives inline and a key pair is 65,928 bytes for every algorithm.
 pub struct Keypair(Inner);
 
 impl core::fmt::Debug for Keypair {
@@ -238,9 +276,47 @@ fn ml_key(seed: &[u8]) -> Result<MlSigningKey<MlDsa65>, CryptoError> {
     Ok(MlSigningKey::from_seed(&Seed::from(*seed)))
 }
 
+/// The expanded ML-DSA-65 key built from `seed` and boxed, out of line: the key is 64 KiB by value, and an
+/// unoptimised build reserves its stack in the frame of every function whose code could build one. Keeping the build
+/// in this frame means a small algorithm's [`Keypair::from_seed`] never pays for it.
+#[cfg(feature = "alloc")]
+#[inline(never)]
+fn ml_boxed(seed: &[u8]) -> Result<alloc::boxed::Box<MlSigningKey<MlDsa65>>, CryptoError> {
+    Ok(alloc::boxed::Box::new(ml_key(seed)?))
+}
+
+/// The ML-DSA-65 arm of [`Keypair::from_seed`], out of line for the same reason.
+#[cfg(feature = "alloc")]
+#[inline(never)]
+fn ml_inner(seed: &[u8]) -> Result<Inner, CryptoError> {
+    Ok(Inner::MlDsa65(ml_boxed(seed)?))
+}
+
+/// The ML-DSA-65 arm of [`Keypair::from_seed`] without an allocator: the expanded key is built in place, out of line.
+#[cfg(not(feature = "alloc"))]
+#[inline(never)]
+fn ml_inner(seed: &[u8]) -> Result<Inner, CryptoError> {
+    Ok(Inner::MlDsa65(ml_key(seed)?))
+}
+
 fn ed_key(seed: &[u8]) -> Result<EdSigningKey, CryptoError> {
     let seed: &[u8; 32] = seed.try_into().map_err(|_| CryptoError::InvalidLength)?;
     Ok(EdSigningKey::from_bytes(seed))
+}
+
+/// The public key of an ML-DSA-65 key pair, out of line: the verification key carries the precomputed public matrix
+/// (tens of KiB by value), and an unoptimised build reserves its stack in the frame of every function whose code
+/// could build one. A small algorithm's [`Keypair::public_key`] never pays for it.
+#[inline(never)]
+fn ml_public_key(k: &MlSigningKey<MlDsa65>, out: &mut [u8]) -> Result<(), CryptoError> {
+    put(out, 0, &k.verifying_key().to_bytes())
+}
+
+/// The public key of a hybrid key pair, out of line for the same reason.
+#[inline(never)]
+fn hybrid_public_key(ed: &EdSigningKey, ml: &MlSigningKey<MlDsa65>, out: &mut [u8]) -> Result<(), CryptoError> {
+    put(out, 0, ed.verifying_key().as_bytes())?;
+    put(out, ED_PK, &ml.verifying_key().to_bytes())
 }
 
 fn put(out: &mut [u8], at: usize, bytes: &[u8]) -> Result<(), CryptoError> {
@@ -266,11 +342,8 @@ impl Keypair {
             IdentityAlg::EcdsaP256 => {
                 Inner::P256(P256SigningKey::from_slice(seed).map_err(|_| CryptoError::InvalidSecretKey)?)
             }
-            IdentityAlg::MlDsa65 => Inner::MlDsa65(ml_key(seed)?),
-            IdentityAlg::Hybrid => {
-                let (ed, ml) = seed.split_at(32);
-                Inner::Hybrid(ed_key(ed)?, ml_key(ml)?)
-            }
+            IdentityAlg::MlDsa65 => ml_inner(seed)?,
+            IdentityAlg::Hybrid => hybrid_inner(seed)?,
         }))
     }
 
@@ -292,11 +365,8 @@ impl Keypair {
         match &self.0 {
             Inner::Ed25519(k) => put(out, 0, k.verifying_key().as_bytes())?,
             Inner::P256(k) => put(out, 0, k.verifying_key().to_sec1_point(true).as_bytes())?,
-            Inner::MlDsa65(k) => put(out, 0, &k.verifying_key().to_bytes())?,
-            Inner::Hybrid(ed, ml) => {
-                put(out, 0, ed.verifying_key().as_bytes())?;
-                put(out, ED_PK, &ml.verifying_key().to_bytes())?;
-            }
+            Inner::MlDsa65(k) => ml_public_key(k, out)?,
+            Inner::Hybrid(ed, ml) => hybrid_public_key(ed, ml, out)?,
         }
         Ok(self.alg().public_key_len())
     }

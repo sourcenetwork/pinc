@@ -19,7 +19,7 @@ inject = []
 
 [dependencies]
 pinc-wire = { workspace = true }
-pinc-crypto = { workspace = true }
+pinc-crypto = { workspace = true, default-features = false }
 pinc-security = { workspace = true }
 
 [lints]
