@@ -234,6 +234,9 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `DtnForward_rehold` | MaxTime 2 -> 1 |
 | `DtnGf` | Init -> InitQuick: rows 0..255 -> the 10 of Spread; AllSeqs -> AllSeqsQuick: kernel slices up to length 3 -> 2 |
 | `DtnLayout` | Seeds -> SeedsQuick: 10 (k, m) pairs -> 3 (k = 0, k + m = 255 and 256), logs {0, 3, 4, 5} -> {4, 5} |
+| `DtnRequest_nomark` | MaxRun 3 -> 2 |
+| `DtnRequest_nostuck` | MaxRun 3 -> 2 |
+| `DtnRequest_shared` | MaxRun 3 -> 2 |
 | `DtnRs_a` | Vals {0, 1, 255} -> {0, 255} |
 | `DtnRs_b` | Vals {0, 1, 255} -> {0, 255} |
 | `DtnRs_c` | Vals {0, 29, 255} -> {0, 29} |
