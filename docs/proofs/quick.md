@@ -140,6 +140,7 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `ConnectLink_ridesHome` | Steps StepsF {3 s, 30 s} -> StepsFQuick {30 s}, Horizon 40 s -> 90 s (time points 0..39 s by 3 -> 0, 30, 60, 90: a keepalive check at 30 s, the reset that learns at 60 s, the ridden check's reset at 90 s) |
 | `ConnectMailbox` | MaxSeq 3 -> 2, Times {0, 2, 4} -> {0, 4}, MaxPkt 2 -> 1, B 7 -> 5 (two packets still overflow a member), plus ConnectMailboxQuickBound (behaviours of at most 5 calls) |
 | `ConnectMailbox_drain` | Times {0, 2, 4} -> {0, 4}, MaxPkt 2 -> 1, B 7 -> 5, plus ConnectMailbox_drainQuickBound (behaviours of at most 3 calls) |
+| `ConnectMailbox_wold` | MaxSeq 3 -> 2 |
 | `ConnectOwn` | home relays Relays {1, 2} -> {1}, nonces Nonces {1, 2} -> {1} |
 | `ConnectOwn_nocap` | addresses Addrs {1, 2, 3} -> {1, 2}, cap Cap 2 -> 1, home relays Relays {1, 2} -> {1}, nonces Nonces {1, 2} -> {1}, wall clocks Walls {1, 2} -> {1} |
 | `ConnectOwn_refldup` | addresses Addrs {1, 2, 3} -> {1, 2}, home relays Relays {1, 2} -> {1}, nonces Nonces {1, 2} -> {1}, wall clocks Walls {1, 2} -> {1} |
