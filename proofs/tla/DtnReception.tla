@@ -101,8 +101,25 @@ BlockSlice(v, b) == [i \in 0..(BN(b) - 1) |-> v[BStart(b) + i]]
 IsCW(v, b) == BlockSlice(v, b) = Codeword(b, [i \in 0..(BK(b) - 1) |-> v[BStart(b) + i]])
 
 (* ---- the code ---- *)
-Holds(h, s) == s < Total /\ ContainsRange(h, s * G, (s + 1) * G)
-HeldSet(h) == {s \in Syms : Holds(h, s)}
+HoldsGo(h, s) == s < Total /\ ContainsRange(h, s * G, (s + 1) * G)
+
+(* A run meets few held sets: the canonical sets of at most W intervals whose ends are symbol bounds. TLC computes a
+   definition with no argument and no variable once, and TLCEval makes it compute a function whole there, not an
+   entry at each use: so the symbols each held set holds are a table made at the start, which a step and the
+   properties checked on it look up instead of running the binary searches again. A held set outside them (one a
+   trace gives) is computed. *)
+SymBounds == {iv \in {<<x * G, y * G>> : x, y \in 0..Total} : iv[1] < iv[2]}
+RECURSIVE HavesOf(_)
+HavesOf(n) ==
+    IF n = 0 THEN {<<>>}
+    ELSE LET p == HavesOf(n - 1)
+         IN p \cup {q[1] \o <<q[2]>> : q \in {q \in p \X SymBounds : /\ Len(q[1]) = n - 1
+                                                                /\ (q[1] = <<>> \/ q[1][n - 1][2] < q[2][1])}}
+Haves == HavesOf(W)
+HeldTab == TLCEval([h \in Haves |-> {s \in Syms : HoldsGo(h, s)}])
+
+Holds(h, s) == IF h \in Haves THEN s \in HeldTab[h] ELSE HoldsGo(h, s)
+HeldSet(h) == IF h \in Haves THEN HeldTab[h] ELSE {s \in Syms : HoldsGo(h, s)}
 IsComplete(h) == ContainsRange(h, 0, Total * G)
 IsDecodable(h) == \A b \in Blocks : Cardinality({s \in BSyms(b) : Holds(h, s)}) >= BK(b)
 
@@ -115,24 +132,27 @@ NMGo(h, i, at) ==
     ELSE NMGo(h, i + 1, h[i][2])
 NextMissing(h, from) == NMGo(h, 1, from * G)
 
+(* The parameters of Verified, Sink and FeedResult are not named as the variables: TLC takes a definition that uses
+   an operator with such a parameter for one that reads the state, and makes FeedTab again at each use. *)
+
 (* the groups of a stream a verifier delivers: the longest prefix whose groups equal the sender's symbols *)
 RECURSIVE Verified(_, _, _)
-Verified(ct, a, vals) ==
-    IF vals = <<>> \/ vals[1] # ct[a] THEN <<>> ELSE <<vals[1]>> \o Verified(ct, a + 1, Tail(vals))
+Verified(c, a, vals) ==
+    IF vals = <<>> \/ vals[1] # c[a] THEN <<>> ELSE <<vals[1]>> \o Verified(c, a + 1, Tail(vals))
 
 (* the sink: copy each delivered group into the buffer, then try to record its interval; a full set records
    nothing but the copy has happened and the loop goes on *)
 RECURSIVE Sink(_, _, _, _, _)
-Sink(buf, h, full, a, vals) ==
-    IF vals = <<>> THEN [buf |-> buf, h |-> h, full |-> full]
+Sink(bf, h, full, a, vals) ==
+    IF vals = <<>> THEN [buf |-> bf, h |-> h, full |-> full]
     ELSE LET r == InsertResult(h, <<a * G, (a + 1) * G>>, W)
-         IN Sink([buf EXCEPT ![a] = vals[1]], r.items, full \/ ~r.ok, a + 1, Tail(vals))
+         IN Sink([bf EXCEPT ![a] = vals[1]], r.items, full \/ ~r.ok, a + 1, Tail(vals))
 
 (* feed of symbols [a, b) with the stream `st` (the groups, and whether bytes trail the proof) *)
-FeedResult(ct, buf, h, a, b, st) ==
-    IF a = b THEN [buf |-> buf, h |-> h, res |-> "ok"]
-    ELSE LET ver == Verified(ct, a, st.vals)
-             out == Sink(buf, h, FALSE, a, ver)
+FeedResult(c, bf, h, a, b, st) ==
+    IF a = b THEN [buf |-> bf, h |-> h, res |-> "ok"]
+    ELSE LET ver == Verified(c, a, st.vals)
+             out == Sink(bf, h, FALSE, a, ver)
              cut == Len(ver) < b - a \/ Len(st.vals) < b - a \/ st.extra
          IN [buf |-> out.buf, h |-> out.h, res |-> IF cut THEN "tree" ELSE IF out.full THEN "full" ELSE "ok"]
 
@@ -188,20 +208,32 @@ Init == /\ ct \in Contents
         /\ buf = [s \in Syms |-> 9]
         /\ res = "init"
 
-GoodVals(a, b) == [i \in 1..(b - a) |-> ct[a + i - 1]]
-Streams(a, b) ==
-    {[vals |-> GoodVals(a, b), extra |-> FALSE], [vals |-> GoodVals(a, b), extra |-> TRUE]}
-    \cup {[vals |-> SubSeq(GoodVals(a, b), 1, j), extra |-> FALSE] : j \in 0..(b - a - 1)}
-    \cup {[vals |-> [GoodVals(a, b) EXCEPT ![p] = (GoodVals(a, b)[p] + 1) % 5], extra |-> FALSE] : p \in {1, b - a}}
+GoodValsOf(c, a, b) == [i \in 1..(b - a) |-> c[a + i - 1]]
+StreamsOf(c, a, b) ==
+    {[vals |-> GoodValsOf(c, a, b), extra |-> FALSE], [vals |-> GoodValsOf(c, a, b), extra |-> TRUE]}
+    \cup {[vals |-> SubSeq(GoodValsOf(c, a, b), 1, j), extra |-> FALSE] : j \in 0..(b - a - 1)}
+    \cup {[vals |-> [GoodValsOf(c, a, b) EXCEPT ![p] = (GoodValsOf(c, a, b)[p] + 1) % 5], extra |-> FALSE]
+          : p \in IF a < b THEN {1, b - a} ELSE {}}  \* an empty range has no symbol to change
 
 \* the ranges a peer asks for: every symbol, the two blocks, the whole bundle, and an empty range
 Ranges == {<<a, a + 1>> : a \in Syms} \cup {<<0, 4>>, <<4, 7>>, <<0, 7>>, <<3, 3>>}
 
+(* A feed of every range with every stream. Its held set and result depend on the content, the held set and the
+   call only, and the buffer it leaves is the one it was given with the first n symbols of the range written with the
+   sender's (the prefix Verified keeps), so the outcomes for each content and held set are a table made at the start
+   as HeldTab is. The step is one of them, each taken once: many feeds give the same one, and TLC checks the properties
+   on each step it takes. *)
+FeedOut(c, h, a, b, st) ==
+    LET r == FeedResult(c, [s \in Syms |-> 9], h, a, b, st)
+        n == IF a = b THEN 0 ELSE Len(Verified(c, a, st.vals))
+    IN [a |-> IF n = 0 THEN 0 ELSE a, n |-> n, h |-> r.h, res |-> r.res]
+FeedTab == TLCEval([q \in Contents \X Haves |->
+               UNION {{FeedOut(q[1], q[2], rg[1], rg[2], st) : st \in StreamsOf(q[1], rg[1], rg[2])} : rg \in Ranges}])
 Feed ==
-    \E rg \in Ranges : \E a \in {rg[1]}, b \in {rg[2]} : \E st \in Streams(a, b) :
-        LET r == FeedResult(ct, buf, have, a, b, st)
-        IN /\ buf' = r.buf /\ have' = r.h /\ res' = r.res
-           /\ UNCHANGED ct
+    \E r \in {[buf |-> [s \in Syms |-> IF s \in o.a..(o.a + o.n - 1) THEN ct[s] ELSE buf[s]], h |-> o.h, res |-> o.res]
+              : o \in FeedTab[<<ct, have>>]} :
+       /\ buf' = r.buf /\ have' = r.h /\ res' = r.res
+       /\ UNCHANGED ct
 
 Finish ==
     /\ LET r == FinishGo(buf, have, 0)
