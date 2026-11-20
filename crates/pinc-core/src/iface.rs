@@ -18,9 +18,7 @@
 
 use core::net::SocketAddr;
 
-use pinc_transport::conn::PathId;
-
-use crate::endpoint::{MAX_IFACES, env, ep_impl};
+use crate::endpoint::{MAX_IFACES, env, ep_impl, path_id_at};
 use crate::keepalive::RESUME_QUIET;
 use crate::slot::State;
 use crate::trace::trace;
@@ -132,7 +130,7 @@ ep_impl! {
                 if l != old {
                     continue;
                 }
-                let lost = PathId(u64::from(generation) << 32 | j as u64);
+                let lost = path_id_at(generation, j);
                 let held = self.slots.get(i).and_then(|s| s.conn.as_ref()).is_some_and(|c| c.has_path(lost));
                 if !held {
                     continue;
@@ -261,7 +259,7 @@ ep_impl! {
         let conn = self.slots.get(i).and_then(|s| s.conn.as_ref());
         (0..D).filter_map(move |j| {
             let (key, generation) = self.paths.at_index(j)?;
-            let id = PathId(u64::from(*generation) << 32 | j as u64);
+            let id = path_id_at(*generation, j);
             conn.is_some_and(|c| c.has_path(id)).then_some(*key)
         })
     }

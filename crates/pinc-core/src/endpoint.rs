@@ -96,6 +96,11 @@ pub struct EndpointConfig {
     pub ticket_lifetime_s: u32,
 }
 
+/// The path id of entry `index` of the path table, whose entry holds `generation`.
+pub(crate) const fn path_id_at(generation: u32, index: usize) -> PathId {
+    PathId((generation as u64) << 32 | index as u64)
+}
+
 impl EndpointConfig {
     /// The defaults, hashing with `seed`. A first handshake flight that fits one datagram leaves whole; only its
     /// retransmissions are cut to the minimum datagram size, so a path that drops the larger datagram still connects.
@@ -696,13 +701,13 @@ ep_impl! {
         if let Some(i) = self.paths.index_of(&key) {
             self.paths.touch(&key);
             let generation = self.paths.at_index(i).map_or(0, |(_, g)| *g);
-            return PathId(u64::from(generation) << 32 | i as u64);
+            return path_id_at(generation, i);
         }
         let generation = self.next_path_gen;
         self.next_path_gen = self.next_path_gen.wrapping_add(1).max(1);
         self.paths.insert(key, generation);
         let i = self.paths.index_of(&key).unwrap_or(0);
-        PathId(u64::from(generation) << 32 | i as u64)
+        path_id_at(generation, i)
     }
 
     /// The addresses a path id names.
