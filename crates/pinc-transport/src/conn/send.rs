@@ -24,7 +24,7 @@ use pinc_security::amp::{FACTOR, OVERHEAD};
 use pinc_wire::Writer;
 
 use super::config::{MIN_MTU, PROBE_MTU, PathId, interface_payload};
-use super::ctl::{EXT_BODY_MAX, K_EXT, K_READY, K_REKEY, K_STREAM_CTL, K_TICKETS};
+use super::ctl::{Ctl, EXT_BODY_MAX, ExtSlot, K_EXT, K_READY, K_REKEY, K_STREAM_CTL, K_TICKETS};
 use super::event::Ev;
 use super::{Connection, Phase};
 use crate::frame::{Frame, MAX_ACK_RANGES, ack_len, stream_overhead, ty, write_ack};
@@ -32,6 +32,7 @@ use crate::packet::{
     ConnId, LongHeader, LongType, PN_LEN_BASE, PnLayout, ShortHeader, encode_pn, handshake_packet, seal,
 };
 use crate::recovery::{FrameRef, FrameRefs, MAX_FRAME_REFS, PathKind, REPAIR_FRAME_BYTES, Sent};
+use crate::stream::pool::BufferPool;
 use crate::stream::{ControlFrame, StreamSource};
 
 #[cfg(feature = "trace")]
@@ -125,7 +126,7 @@ impl Filled {
     }
 }
 
-fn put(buf: &mut [u8], pos: &mut usize, f: &Frame<'_>) -> bool {
+pub(super) fn put(buf: &mut [u8], pos: &mut usize, f: &Frame<'_>) -> bool {
     let Some(dst) = buf.get_mut(*pos..) else { return false };
     let mut w = Writer::new(dst);
     if f.write(&mut w).is_err() {
@@ -133,6 +134,13 @@ fn put(buf: &mut [u8], pos: &mut usize, f: &Frame<'_>) -> bool {
     }
     *pos += w.written().len();
     true
+}
+
+/// Write the extension frame held in `slot` (its body in `pool`) into the packet, when it fits.
+pub(super) fn put_extension(pool: &BufferPool<'_>, slot: &ExtSlot, payload: &mut [u8], pos: &mut usize) -> bool {
+    let body = pool.bytes(&slot.chunk).get(..slot.len).unwrap_or_default();
+    let f = Frame::Extension { ty: slot.ty, body };
+    f.encoded_len() <= payload.len().saturating_sub(*pos) && put(payload, pos, &f)
 }
 
 conn_impl! {
@@ -752,18 +760,10 @@ conn_impl! {
         if let Some(mtu) = self.paths.get_mut(fill.ti).and_then(|p| p.echo.take()) {
             let _ = put(payload, pos, &Frame::MtuProbeEcho { mtu });
         }
-        if self.ctl.ready && out.refs.len() < MAX_FRAME_REFS && put(payload, pos, &Frame::Ready) {
-            self.ctl.ready = false;
-            let _ = out.refs.push(FrameRef::Control { kind: K_READY, id: 0 });
+        if self.ctl.fill_ready(&mut out.refs, |f| put(payload, pos, f)) {
             out.strong();
         }
-        if self.ctl.tickets_pending
-            && out.refs.len() < MAX_FRAME_REFS
-            && let Some(batch) = self.ctl.tickets
-            && put(payload, pos, &Frame::NewTickets(batch))
-        {
-            self.ctl.tickets_pending = false;
-            let _ = out.refs.push(FrameRef::Control { kind: K_TICKETS, id: 0 });
+        if self.ctl.fill_tickets(&mut out.refs, |f| put(payload, pos, f)) {
             out.strong();
         }
         if out.refs.len() < MAX_FRAME_REFS
@@ -810,17 +810,10 @@ conn_impl! {
         self.shed_extensions();
         while self.hold_queued_extension() {}
         for slot in self.ctl.ext.iter_mut().flatten() {
-            if !slot.pending || out.refs.len() >= MAX_FRAME_REFS {
-                continue;
+            let pool = &self.pool;
+            if Ctl::fill_ext(slot, &mut out.refs, |s| put_extension(pool, s, payload, pos)) {
+                out.strong();
             }
-            let body = self.pool.bytes(&slot.chunk).get(..slot.len).unwrap_or_default();
-            let f = Frame::Extension { ty: slot.ty, body };
-            if f.encoded_len() > payload.len().saturating_sub(*pos) || !put(payload, pos, &f) {
-                continue;
-            }
-            slot.pending = false;
-            let _ = out.refs.push(FrameRef::Control { kind: K_EXT, id: slot.key });
-            out.strong();
         }
     }
 

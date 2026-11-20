@@ -687,9 +687,7 @@ conn_impl! {
                 self.confirm_dcid(slot, pn);
             }
         }
-        if out.tickets_acked {
-            self.ctl.tickets_pending = false;
-        }
+        self.ctl.on_outcome(&out);
         if out.rekey_answer_lost {
             self.keys.requeue_answer();
         }

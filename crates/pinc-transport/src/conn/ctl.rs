@@ -13,7 +13,8 @@
 
 use pinc_security::TicketBatch;
 
-use crate::recovery::{Event, FrameRef};
+use crate::frame::Frame;
+use crate::recovery::{Event, FrameRef, FrameRefs, MAX_FRAME_REFS};
 use crate::stream::pool::{BufferPool, Chunk};
 use crate::stream::{ControlFrame, StreamSource, Streams};
 
@@ -120,6 +121,61 @@ impl Ctl {
         });
         self.next_ext += 1;
         true
+    }
+
+    /// READY goes in the packet when it is owed and the packet's frame references have room. `put` writes a frame in
+    /// the packet and says whether it fitted. Returns whether READY went.
+    pub(crate) fn fill_ready(&mut self, refs: &mut FrameRefs, put: impl FnOnce(&Frame<'_>) -> bool) -> bool {
+        if self.ready && refs.len() < MAX_FRAME_REFS && put(&Frame::Ready) {
+            self.ready = false;
+            let _ = refs.push(FrameRef::Control { kind: K_READY, id: 0 });
+            return true;
+        }
+        false
+    }
+
+    /// The ticket batch goes in the packet when it is pending and the packet's frame references have room; as
+    /// [`Self::fill_ready`]. Returns whether it went.
+    pub(crate) fn fill_tickets(&mut self, refs: &mut FrameRefs, put: impl FnOnce(&Frame<'_>) -> bool) -> bool {
+        if self.tickets_pending
+            && refs.len() < MAX_FRAME_REFS
+            && let Some(batch) = self.tickets
+            && put(&Frame::NewTickets(batch))
+        {
+            self.tickets_pending = false;
+            let _ = refs.push(FrameRef::Control { kind: K_TICKETS, id: 0 });
+            return true;
+        }
+        false
+    }
+
+    /// A held extension frame goes in the packet when it waits to be sent and the packet's frame references have
+    /// room; `put` writes it and says whether it fitted. Returns whether it went.
+    pub(crate) fn fill_ext(slot: &mut ExtSlot, refs: &mut FrameRefs, put: impl FnOnce(&ExtSlot) -> bool) -> bool {
+        if !slot.pending || refs.len() >= MAX_FRAME_REFS || !put(slot) {
+            return false;
+        }
+        slot.pending = false;
+        let _ = refs.push(FrameRef::Control { kind: K_EXT, id: slot.key });
+        true
+    }
+
+    /// Hold a new ticket batch to send.
+    pub(crate) const fn hold_tickets(&mut self, batch: TicketBatch) {
+        self.tickets = Some(batch);
+        self.tickets_pending = true;
+    }
+
+    /// Owe the peer a READY.
+    pub(crate) const fn owe_ready(&mut self) {
+        self.ready = true;
+    }
+
+    /// The part of an event batch's outcome that touches the control state: the peer has the tickets.
+    pub(crate) const fn on_outcome(&mut self, out: &Outcome) {
+        if out.tickets_acked {
+            self.tickets_pending = false;
+        }
     }
 
     /// Empty extension slot `slot` and give its chunk back to `pool`.
@@ -304,6 +360,7 @@ pub(super) mod trace {
     use pinc_security::TicketBatch;
 
     use super::{Ctl, EXT_BODY_MAX as BODY_MAX, K_EXT, K_READY, K_STREAM_CTL, K_TICKETS, Outcome, apply};
+    use crate::conn::send::{put, put_extension};
     use crate::recovery::{Event, FrameRef, FrameRefs};
     use crate::stream::pool::{BufferPool, Chunk};
     use crate::stream::{Config, ControlFrame, NoSource, Streams};
@@ -340,7 +397,12 @@ pub(super) mod trace {
         generation: u64,
         mine: Vec<Chunk>,
         limit: u64,
+        /// The packet the frames are put in (one at a time, from its start), as large as a datagram.
+        packet: Vec<u8>,
     }
+
+    /// The room of the packet a probe call writes into.
+    const PACKET: usize = 1500;
 
     /// The kind code of a frame reference, by its trace name.
     fn kind_code(kind: &str) -> Option<u8> {
@@ -366,6 +428,7 @@ pub(super) mod trace {
                 generation: 0,
                 mine: Vec::new(),
                 limit: 0,
+                packet: alloc::vec![0u8; PACKET],
             }
         }
 
@@ -381,14 +444,17 @@ pub(super) mod trace {
             self.ctl.hold_ext(&mut self.pool, 0x40, &body)
         }
 
-        /// As `conn/send.rs` puts a held frame in a packet: when slot `slot` holds a pending frame, clear `pending` and
-        /// return its key (the id of the frame reference); else `None` and nothing changes.
+        /// `Ctl::fill_ext` with the real `put_extension`, as `conn/send.rs` puts a held frame in a packet: when slot
+        /// `slot` holds a pending frame that fits, clear `pending` and return its key (the id of the frame
+        /// reference); else `None` and nothing changes.
         pub fn send_ext(&mut self, slot: usize) -> Option<u64> {
             let s = self.ctl.ext.get_mut(slot)?.as_mut()?;
-            if !s.pending {
+            let (pool, packet) = (&self.pool, &mut self.packet);
+            let mut refs = FrameRefs::new();
+            let mut pos = 0;
+            if !Ctl::fill_ext(s, &mut refs, |s| put_extension(pool, s, packet, &mut pos)) {
                 return None;
             }
-            s.pending = false;
             Some(s.key)
         }
 
@@ -409,32 +475,35 @@ pub(super) mod trace {
             self.mine.pop().map(|c| self.pool.free_chunk(c)).is_some()
         }
 
-        /// As `conn/drive.rs` takes a ticket batch: `ctl.tickets = Some(TicketBatch::new())`,
-        /// `ctl.tickets_pending = true`, and the probe keeps `g` as the generation of the batch held.
+        /// As `conn/drive.rs` takes a ticket batch (`Ctl::hold_tickets`); the probe keeps `g` as the generation of
+        /// the batch held.
         pub fn issue(&mut self, g: u64) {
-            self.ctl.tickets = Some(TicketBatch::new());
-            self.ctl.tickets_pending = true;
+            self.ctl.hold_tickets(TicketBatch::new());
             self.generation = g;
         }
 
-        /// As `conn/send.rs` puts the batch in a packet: when `tickets_pending` and a batch is held, clear
-        /// `tickets_pending` and return the generation held; else `None`.
+        /// `Ctl::fill_tickets` with the real `put`, as `conn/send.rs` puts the batch in a packet: when
+        /// `tickets_pending` and a batch is held and fits, return the generation held; else `None`.
         pub fn send_tickets(&mut self) -> Option<u64> {
-            if self.ctl.tickets_pending && self.ctl.tickets.is_some() {
-                self.ctl.tickets_pending = false;
-                return Some(self.generation);
-            }
-            None
+            let mut refs = FrameRefs::new();
+            let mut pos = 0;
+            let packet = &mut self.packet;
+            self.ctl
+                .fill_tickets(&mut refs, |f| put(packet, &mut pos, f))
+                .then_some(self.generation)
         }
 
-        /// As `conn/drive.rs`: `ctl.ready = true`.
+        /// As `conn/drive.rs`: `Ctl::owe_ready`.
         pub fn send_ready(&mut self) {
-            self.ctl.ready = true;
+            self.ctl.owe_ready();
         }
 
-        /// As `conn/send.rs` builds READY: when `ready`, clear it and return true; else false.
+        /// `Ctl::fill_ready` with the real `put`, as `conn/send.rs` builds READY: whether it went in the packet.
         pub fn build_ready(&mut self) -> bool {
-            core::mem::take(&mut self.ctl.ready)
+            let mut refs = FrameRefs::new();
+            let mut pos = 0;
+            let packet = &mut self.packet;
+            self.ctl.fill_ready(&mut refs, |f| put(packet, &mut pos, f))
         }
 
         /// `apply` of an `Event::Acked` with one `FrameRef::Control { kind, id }`, then the glue of `conn/recv.rs`
@@ -485,9 +554,7 @@ pub(super) mod trace {
                 &mut self.ctl,
                 &mut out,
             );
-            if out.tickets_acked {
-                self.ctl.tickets_pending = false;
-            }
+            self.ctl.on_outcome(&out);
             if self.ctl.tickets.is_none() {
                 self.generation = 0;
             }

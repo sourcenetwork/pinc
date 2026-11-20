@@ -119,15 +119,14 @@ conn_impl! {
         let est = self.est.as_ref().ok_or(Failure::UnexpectedMessage)?;
         let batch = store.issue_batch(env, est, count, lifetime_s)?;
         if !batch.entries().is_empty() {
-            self.ctl.tickets = Some(batch);
-            self.ctl.tickets_pending = true;
+            self.ctl.hold_tickets(batch);
         }
         Ok(())
     }
 
     /// Send READY to the peer.
     pub fn send_ready(&mut self) {
-        self.ctl.ready = true;
+        self.ctl.owe_ready();
     }
 
     /// Run the handshake machine until it has nothing more to report.
