@@ -1046,3 +1046,11 @@ fn a_datagram_after_stop_is_counted() {
     pm.handle_datagram(T0, gw(), &[2, 0, 0]);
     assert_eq!(pm.stats(), only(|s| s.unexpected = 1));
 }
+
+#[test]
+fn an_empty_datagram_from_the_gateway_is_counted() {
+    let mut pm = client(Some(GW.into()), local());
+    sent(&mut pm);
+    pm.handle_datagram(T0, gw(), &[]);
+    assert_eq!(pm.stats(), only(|s| s.unexpected = 1));
+}

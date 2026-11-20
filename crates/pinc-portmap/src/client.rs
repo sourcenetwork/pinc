@@ -463,7 +463,7 @@ impl PortMap {
         match b.first() {
             Some(0) => self.natpmp_answer(now, b),
             Some(_) => self.pcp_answer(now, b),
-            None => {}
+            None => bump(&mut self.stats.unexpected),
         }
     }
 
