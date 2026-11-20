@@ -29,7 +29,8 @@
 //! periodic check is not judged: it was pushed everything since it became live, or is behind and told from there.
 //!
 //! A SUB a hub cannot hold (its topic table is full, or the topic has `TABLE_MAX` subscribers) is answered with the
-//! hub-full notice (`subs.rs`), never dropped untold. The member then asks again on a backoff of its own timer
+//! hub-full notice (`subs.rs`) when its stream to the member takes it, and counts the notices it could not send
+//! ([`RejectStats::notice_unsent`]). The member then asks again on a backoff of its own timer
 //! ([`Topics::sub_wait_retry`]) until the hub takes the subscription.
 //!
 //! Invariants: a HAVE and a GET carry at most [`HAVE_MAX`] ids; a GET names only ids the node lacks; a replay sends
@@ -453,9 +454,14 @@ impl Topics {
 
     /// Tell `from` the hub cannot hold its subscription to `topic`: one frame of the reused scratch, nothing allocated.
     fn refuse_sub<H: Host>(&mut self, h: &mut H, from: &NodeId, topic: &[u8], why: SubRefusal) {
-        self.rejects.note_sub_refused(why);
+        // vertexia: an unsent notice is not owed and resent; ceiling: the member stays untold until its next session's
+        // SUB; upgrade path: a bounded set of owed notices flushed when the member's stream drains.
         if wire::build(&mut self.scratch, ty::SUBS, topic, &[&[HUB_FULL]]).is_ok() {
-            h.send(from, Lane::Reply, &self.scratch);
+            if h.send(from, Lane::Reply, &self.scratch) {
+                self.rejects.note_sub_refused(why);
+            } else {
+                self.rejects.note_notice_unsent();
+            }
         }
         self.trace(|| Trace::SubRefused {
             member: *from,

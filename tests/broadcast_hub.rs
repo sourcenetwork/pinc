@@ -493,7 +493,8 @@ fn a_refused_resubscribe_asks_again_from_the_old_floor() {
     net.filter = Some(Box::new(move |from, _, bytes| {
         if from == 1 && bytes.get(4) == Some(&ty::SUB) {
             let at = 6 + usize::from(bytes[5]);
-            s.borrow_mut().push(u64::from_be_bytes(bytes[at..at + 8].try_into().unwrap()));
+            s.borrow_mut()
+                .push(u64::from_be_bytes(bytes[at..at + 8].try_into().unwrap()));
         }
         true
     }));
@@ -504,7 +505,41 @@ fn a_refused_resubscribe_asks_again_from_the_old_floor() {
     let got = sinces.borrow().clone();
     assert_eq!(got.len(), 2, "the resubscribe and one retry");
     assert_eq!(got[0], got[1], "the retry asks from the floor of the resubscribe");
-    assert!(got[1] + 1000 < net.nodes[1].h.wall, "and not from the instant of the retry");
+    assert!(
+        got[1] + 1000 < net.nodes[1].h.wall,
+        "and not from the instant of the retry"
+    );
+}
+
+/// An ask the hub took but whose list leaves the member out (a list cut at `max_subscribers`) ends the wait: a later
+/// refusal raises `HubFull` again.
+#[test]
+fn a_second_refusal_after_an_accepted_ask_raises_hub_full_again() {
+    let limits = pinc_broadcast::Limits {
+        max_subscribers: 1,
+        ..pinc_broadcast::Limits::default()
+    };
+    let mut net = Net::with_limits(&[IdentityAlg::Ed25519; 3], 1, SEC, limits);
+    let (lo, hi) = if net.id(1) < net.id(2) { (1, 2) } else { (2, 1) };
+    for n in 1..TABLE_MAX {
+        sub_from(&mut net, &fake(n), T);
+    }
+    net.subscribe(lo, T);
+    net.run_until(net.now + SEC);
+    assert_eq!(net.subscribed(lo), [T.to_vec()]);
+    let t0 = net.now;
+    net.subscribe(hi, T);
+    net.run_until(t0 + SEC);
+    assert_eq!(hub_fulls(&net, hi), 1);
+    free_a_place(&mut net, 1);
+    net.run_until(t0 + 10 * SEC);
+    assert!(net.subscribed(hi).is_empty(), "the cut list leaves the member out");
+    // The hub loses the subscription and refuses the member again.
+    let (now, hub) = (net.now, net.id(0));
+    let n = &mut net.nodes[hi];
+    n.h.tick(now);
+    n.t.frame(&mut n.h, now, &hub, ty::SUBS, T, &[3]);
+    assert_eq!(hub_fulls(&net, hi), 2, "the second refusal is told");
 }
 
 /// A network of `hubs` hubs, each holding one topic at most, then `members` members attached to every hub.

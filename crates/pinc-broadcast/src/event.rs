@@ -103,6 +103,7 @@ pub struct RejectStats {
     hub_full_seen: u64,
     pub_refused_sent: u64,
     pub_refused_seen: u64,
+    notice_unsent: u64,
 }
 
 impl RejectStats {
@@ -122,7 +123,7 @@ impl RejectStats {
         self.long_walks
     }
 
-    /// How many subscriptions a hub could not hold, for `why`.
+    /// How many subscriptions a hub could not hold, for `why`, and told the member.
     pub fn sub_refused(&self, why: SubRefusal) -> u64 {
         self.sub_refused.get(why as usize).copied().unwrap_or(0)
     }
@@ -130,6 +131,11 @@ impl RejectStats {
     /// How many hub-full notices a member heard.
     pub const fn hub_full_seen(&self) -> u64 {
         self.hub_full_seen
+    }
+
+    /// How many hub-full and publish-full notices a hub could not send because its stream to the node had no room.
+    pub const fn notice_unsent(&self) -> u64 {
+        self.notice_unsent
     }
 
     /// How many publishes a hub refused for a full topic table and told the publisher.
@@ -145,6 +151,11 @@ impl RejectStats {
     #[cfg(feature = "alloc")]
     pub(crate) const fn note_pub_refused_sent(&mut self) {
         self.pub_refused_sent = self.pub_refused_sent.saturating_add(1);
+    }
+
+    #[cfg(feature = "alloc")]
+    pub(crate) const fn note_notice_unsent(&mut self) {
+        self.notice_unsent = self.notice_unsent.saturating_add(1);
     }
 
     #[cfg(feature = "alloc")]

@@ -50,8 +50,11 @@ impl Topics {
 
     fn send_pfull<H: Host>(&mut self, h: &mut H, to: &NodeId, topic: &[u8], mid: [u8; 8]) {
         if wire::build(&mut self.scratch, ty::PFULL, topic, &[&mid]).is_ok() {
-            h.send(to, Lane::Reply, &self.scratch);
-            self.rejects.note_pub_refused_sent();
+            if h.send(to, Lane::Reply, &self.scratch) {
+                self.rejects.note_pub_refused_sent();
+            } else {
+                self.rejects.note_notice_unsent();
+            }
         }
     }
 

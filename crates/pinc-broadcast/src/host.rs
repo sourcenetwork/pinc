@@ -112,7 +112,8 @@ pub enum Event<'a> {
     },
     /// Member: the hub cannot hold this node's subscription to the topic now: it holds as many topics, or as many
     /// subscribers of the topic, as it can. The node stays subscribed and asks again, after 2 s and then up to every
-    /// 64 s, until `Subscribed`. Once per wait.
+    /// 64 s, until the hub holds the subscription; `Subscribed` follows when the hub's list names the node, under the
+    /// subscriber limit it states. Once per wait.
     HubFull {
         /// The hub.
         hub: &'a NodeId,

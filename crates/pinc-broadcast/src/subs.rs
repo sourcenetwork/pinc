@@ -474,6 +474,14 @@ impl Topics {
         if !self.is_boot(from) {
             return Some(SubsDrop::NotHub);
         }
+        // A list from the primary answers an ask without a notice: the hub holds the subscription and the wait is over,
+        // whether or not the list names this node (a list cut at `max_subscribers` may not).
+        if !self.is_hub
+            && self.primary == Some(*from)
+            && let Some(st) = self.topics.get_mut(topic).filter(|st| st.sub && st.wait_at.is_none())
+        {
+            st.end_wait();
+        }
         let parsed = read_ver(rest).and_then(|(ver, r)| read_ids(r).map(|(ids, tail)| (ver, ids, tail)));
         let Some((ver, ids, tail)) = parsed else {
             return Some(SubsDrop::Malformed);

@@ -95,7 +95,8 @@ pub enum NodeEvent {
         /// The topic.
         topic: Vec<u8>,
     },
-    /// A hub cannot hold this node's subscription to a topic now; the node asks again until it can
+    /// A hub cannot hold this node's subscription to a topic now; the node keeps asking, and
+    /// `Subscribed` follows when the hub's list names it, under the limit `pinc_broadcast::Event::Subscribed` states
     /// (`pinc_broadcast::Event::HubFull`).
     HubFull {
         /// The hub.

@@ -22,7 +22,7 @@ use crate::host::Hosted;
 impl<H: Hosted, D: Discovery> Endpoint<H, D> {
     /// Join `topic`: from now on its messages arrive as [`Event::Message`]. The peers of `hints` are dialed and taken as
     /// members of the topic, so a publish reaches them with no hub. Returns whether the topic was new. A hub that cannot
-    /// hold the subscription tells the endpoint with [`Event::HubFull`], and [`Event::Joined`] follows once it can.
+    /// hold the subscription tells the endpoint with [`Event::HubFull`], and the endpoint keeps asking, with [`Event::Joined`] following when the hub's list names it (see its limit).
     ///
     /// # Errors
     /// [`crate::ErrorKind::Config`] for a topic name over 255 bytes, [`crate::ErrorKind::Busy`] when the endpoint tracks
