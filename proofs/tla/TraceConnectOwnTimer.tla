@@ -40,11 +40,12 @@
 (*                                                                         *)
 (* Checked (AllOK): the first before is the new node's state, each before  *)
 (* is the previous after, and each after is one outcome of the call.       *)
-(* Also checked (TraceConnectOwnTimer_change.cfg, NoLostChange): a change *)
-(* made while a record job is outstanding (next_publish set to now from    *)
-(* none) is kept by the answer, which arms the republish 1800 s on only    *)
-(* when nothing armed it meanwhile (Signed; the Lean afterSent), so it is  *)
-(* published at the next publish, not 1800 s later (code fix K10).        *)
+(* Also checked (NoLostChange): a change made while a record job is        *)
+(* outstanding (next_publish set to now from none) is kept by the answer,  *)
+(* which arms the republish 1800 s on only when nothing armed it meanwhile *)
+(* (Signed; the Lean afterSent), so it is published at the next publish,   *)
+(* not 1800 s later (code fix K10); and ChangeSeen: the trace holds such a *)
+(* change followed by its answer, so NoLostChange is not vacuous.          *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds                       *)
@@ -100,6 +101,10 @@ LostChange(j, k) ==
     /\ Trace[k].op = "sign" /\ Trace[k].after.np = Trace[k].now + REPUB
     /\ \A m \in (j + 1)..(k - 1) : Trace[m].op # "sign"
 NoLostChange == ~\E j, k \in 1..Len(Trace) : LostChange(j, k)
+\* the scenario NoLostChange is about is in the trace: a change while a job is out, then the answer
+ChangeOut(j) == Trace[j].op # "sign" /\ Trace[j].before.job /\ Trace[j].before.np = NONE /\ Trace[j].after.np = Trace[j].now
+ChangeSeen == \E j, k \in 1..Len(Trace) :
+                  j < k /\ ChangeOut(j) /\ Trace[k].op = "sign" /\ \A m \in (j + 1)..(k - 1) : Trace[m].op # "sign"
 
 VARIABLE x
 Init == x = 0
