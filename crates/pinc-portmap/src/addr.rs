@@ -23,7 +23,7 @@ pub const fn usable_host(ip: Ipv4Addr) -> bool {
 }
 
 /// Whether `ip` may be the external address of a mapping: one a peer on the internet could send to. Unspecified,
-/// loopback, multicast, link-local and private addresses (RFC 1918, 100.64.0.0/10, IPv6 unique local) are not.
+/// loopback, multicast, broadcast, link-local and private addresses (RFC 1918, 100.64.0.0/10, IPv6 unique local) are not.
 pub const fn external_ok(ip: IpAddr) -> bool {
     match ip.to_canonical() {
         IpAddr::V4(v4) => usable_host(v4) && !is_private(v4),

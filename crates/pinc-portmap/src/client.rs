@@ -1,9 +1,9 @@
 //! The port-mapping client: one UDP mapping of the node's socket, asked for with PCP, then NAT-PMP, then `UPnP`-IGD.
 //!
 //! **Asking.** With the gateway's address known, the client sends a PCP MAP request to it (three tries, 250 ms apart
-//! and doubling). A NAT-PMP answer to it, an unsupported-version result, or silence moves on to NAT-PMP: the external
-//! address request, then the UDP mapping request. Silence or a refusal there moves on to `UPnP`: an SSDP search, the
-//! gateway's description, its external address and `AddPortMapping`, over HTTP the host carries ([`PortMap::poll_http`]).
+//! and doubling). A NAT-PMP error answer to it (the only answer a NAT-PMP server gives a PCP request), an
+//! unsupported-version result, or silence moves on to NAT-PMP: the external address request, then the UDP mapping
+//! request. Silence or a refusal there moves on to `UPnP`: an SSDP search, the gateway's description, its external address and `AddPortMapping`, over HTTP the host carries ([`PortMap::poll_http`]).
 //! PCP and `UPnP` need the client's own address (it is in their messages), so a socket on the unspecified address tries
 //! NAT-PMP only; with no gateway known only `UPnP` is tried, and an answer from another address than the gateway's is
 //! not taken (with none known, a search answer is taken only from a private address). `UPnP` searches only from a private IPv4 address, takes a description only from the host that answered
@@ -194,7 +194,8 @@ pub struct PortMap {
 }
 
 impl PortMap {
-    /// A client that starts asking at `now`.
+    /// A client that starts asking at `now`. With no gateway and no private address to search from, the client stops
+    /// at once; the host starts it again when the network changes.
     pub fn new(cfg: Config, now: u64) -> Self {
         let mut pm = Self {
             cfg,
@@ -436,6 +437,7 @@ impl PortMap {
             return;
         }
         if self.step == Step::Stopped {
+            bump(&mut self.stats.unexpected);
             return;
         }
         if self.step == Step::Ssdp {
@@ -453,6 +455,8 @@ impl PortMap {
                     conflicts: 0,
                 });
                 self.enter(Step::Desc, now);
+            } else if desc.is_none() {
+                bump(&mut self.stats.unexpected);
             }
             return;
         }

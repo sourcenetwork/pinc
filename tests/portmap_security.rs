@@ -1029,3 +1029,20 @@ fn a_restart_then_a_stop_keeps_both_releases() {
     assert!(nat_release, "the NAT-PMP mapping's release was lost: {out:?}");
     assert!(pcp_release, "the request in flight was not released");
 }
+
+#[test]
+fn a_search_answer_without_a_location_is_counted() {
+    let mut pm = client(None, local());
+    sent(&mut pm);
+    pm.handle_datagram(T0, from([192, 168, 1, 77]), b"HTTP/1.1 200 OK\r\n\r\n");
+    assert_eq!(pm.stats(), only(|s| s.unexpected = 1));
+}
+
+#[test]
+fn a_datagram_after_stop_is_counted() {
+    let mut pm = client(Some(GW.into()), local());
+    sent(&mut pm);
+    pm.stop(T0);
+    pm.handle_datagram(T0, gw(), &[2, 0, 0]);
+    assert_eq!(pm.stats(), only(|s| s.unexpected = 1));
+}
