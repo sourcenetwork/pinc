@@ -294,9 +294,7 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
             EpEvent::Closed { session, .. } => {
                 if let Some(node) = t.remove_member(session) {
                     self.sm.udp_gone(&node);
-                    if !t.members.values().any(|n| *n == node) {
-                        self.fx.set_direct(&node, false);
-                    }
+                    self.fx.set_direct(&node, t.remote(&*ep, &node).is_some());
                 }
             }
             EpEvent::PathChanged { session, .. } => {
