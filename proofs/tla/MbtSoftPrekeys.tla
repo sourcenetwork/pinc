@@ -47,7 +47,8 @@ Next == \/ \E t \in TS, h \in 0..(GMAX + 1) : CallAcquire(t, h)
 Spec == Init /\ [][Next]_st
 
 Bound == R!Newest(st.held) <= GMAX
-\* every call of a state inside the bound has its result in the set Next ranges over
-Complete == /\ Len(st.held) = 1
-            /\ \A t \in TS : R!Newest(R!SoftAcquire(st, t, LIFE, USES, GENS).held) \in 0..(GMAX + 1)
+\* every call of a state inside the bound has its result in the set Next ranges over; a leaf past the bound (TLC checks
+\* the invariant on it before the constraint drops it) has no edge out, so nothing is promised of its calls
+Complete == Bound => /\ Len(st.held) = 1
+                     /\ \A t \in TS : R!Newest(R!SoftAcquire(st, t, LIFE, USES, GENS).held) \in 0..(GMAX + 1)
 =============================================================================
