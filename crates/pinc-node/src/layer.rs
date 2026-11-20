@@ -6,7 +6,8 @@
 //! which the node registers only for a layer the host enabled.
 //!
 //! Invariants: a session belongs to exactly one layer, found by its protocol id; the tables are bounded by
-//! [`TABLE_MAX`](crate::config); a peer that is revoked has no session of any layer.
+//! [`TABLE_MAX`](crate::config); a peer that is revoked has no session of any layer
+//! once its sessions are reported closed.
 
 use pinc_core::{Command, Event, Role, SessionId};
 use pinc_membership::NodeId;

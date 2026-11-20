@@ -90,7 +90,8 @@ pub(crate) enum Due {
 
 /// The earliest deadline of the layers above the endpoint, and the node's clock when it was worked out. A layer's
 /// deadline is good from one of its inputs to the next, as the node's is for its host; a call that only moves the
-/// endpoint is no input of theirs.
+/// endpoint is no input of theirs. It is never later than the true deadline; it may be earlier by what the
+/// connectivity layer's own deadline moved with the clock since.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Layers {
     at: Nanos,
@@ -562,6 +563,8 @@ where
                 return d;
             }
             Due::Endpoint(l) => {
+                // Compared at the clock the cache was made at: the connectivity layer's deadline moves later with the
+                // clock, so the cache may answer early, never late.
                 debug_assert_eq!(
                     l.due,
                     self.layers_deadline(l.at),

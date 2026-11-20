@@ -182,7 +182,8 @@ where
         ok
     }
 
-    /// Raise the sequence number of the last record to `seq`, as read with `Connectivity::record_seq`.
+    /// Raise the sequence number of the last record to `seq`, as read with `Connectivity::record_seq`. It moves no
+    /// deadline.
     pub fn restore_record_seq(&mut self, seq: u64) {
         self.conn.restore_record_seq(seq);
     }

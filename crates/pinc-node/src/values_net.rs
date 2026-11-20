@@ -3,8 +3,8 @@
 //!
 //! Invariants: every table is bounded by [`TABLE_MAX`]. A provider number is a slot of the provider table and means one
 //! peer for as long as any holder (a running fetch, a stream of the layer) holds a use of it; the last use given back
-//! frees the slot, and a free slot is reused before the table grows, so the table is bounded by the providers in use,
-//! not by the node's history. Every use is given back in one of five places: [`Net::drop_stream`] for a stream's use
+//! frees the slot, and a free slot is reused before the table grows, so the table's length is the most providers in use
+//! at once (it never shrinks), at most [`TABLE_MAX`], and not the node's history. Every use is given back in one of five places: [`Net::drop_stream`] for a stream's use
 //! (the only way out of the stream tables), [`Net::add`] for the use handed to it when the stream table is full, the
 //! rollback in [`Net::acquire_all`] for the uses taken for a fetch the table cannot hold whole, [`Net::end_fetch`] for
 //! what a fetch holds when it finishes, fails or is cancelled, and [`Net::release_all`] for the start path of the node
@@ -117,8 +117,9 @@ impl Net {
 
     /// The provider number of `peer`, with one more use taken, or `None` if the table is full: [`TABLE_MAX`] peers
     /// are in use and `peer` is not one of them. The number of a peer already in use is the one it has; otherwise the
-    /// first free slot is taken, and the table grows only when none is free. The table never holds more than the
-    /// providers in use (each use is given back by [`Net::release`]) and a scan finds a peer or a free slot in at most
+    /// first free slot is taken, and the table grows only when none is free. The table is never longer than the
+    /// most providers in use at once (each use is given back by [`Net::release`]; free slots are reused, the table never
+    /// shrinks) and a scan finds a peer or a free slot in at most
     /// [`TABLE_MAX`] steps.
     pub(crate) fn acquire(&mut self, peer: &NodeId) -> Option<Provider> {
         let mut free = None;
