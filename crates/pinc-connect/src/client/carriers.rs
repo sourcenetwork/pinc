@@ -75,6 +75,13 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
     }
 
     /// Check that the carrier of `i` still answers, as a session packet or a PING would.
+    /// Ask relay `i`'s link for a dial. A relay with no carrier address has no stream to dial, so its link stays as it
+    /// is.
+    pub(super) fn want_dial(&mut self, now: u64, i: usize, ctx: &Ctx) -> Option<Act> {
+        let r = self.rly.get_mut(i).filter(|r| r.cfg.is_some_and(|c| c.has_carrier()))?;
+        r.link.want_dial(now, &mut self.shared, ctx)
+    }
+
     pub(super) fn check_carrier(&mut self, now: u64, i: usize) {
         self.act(now, i, Act::Check);
     }
@@ -455,11 +462,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
         self.notice(Notice::Home(h));
         self.next_publish = Some(now);
         let ctx = self.ctx(h);
-        let act = self
-            .rly
-            .get_mut(h)
-            .and_then(|r| r.link.want_dial(now, &mut self.shared, &ctx));
-        if let Some(a) = act {
+        if let Some(a) = self.want_dial(now, h, &ctx) {
             self.act(now, h, a);
         }
     }

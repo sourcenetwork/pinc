@@ -14,6 +14,7 @@ use std::net::SocketAddr;
 
 use connect_common::{Rec, SEC, big_stack};
 use connect_rig::Rig;
+use pinc_connect::client::link::State;
 use pinc_crypto::Software;
 use pinc_security::Env;
 use pinc_tests::Host;
@@ -149,5 +150,9 @@ fn a_relay_reached_over_udp_only_costs_no_dial_loop() {
                 "a stream request for a relay with no carrier at {now}"
             );
         }
+        // A node that resumes does not dial it either, and its link stays where it was.
+        conn.resume(now);
+        assert!(conn.poll_io().is_none(), "a stream request for a relay with no carrier");
+        assert_eq!(conn.carrier_state(0), State::Down, "the link of a relay with no carrier moved");
     });
 }

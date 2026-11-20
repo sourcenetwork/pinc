@@ -805,11 +805,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
                 self.notice(Notice::Home(h));
                 // The home carrier is dialed as soon as the home is known.
                 let ctx = self.ctx(h);
-                let act = self
-                    .rly
-                    .get_mut(h)
-                    .and_then(|r| r.link.want_dial(now, &mut self.shared, &ctx));
-                if let Some(a) = act {
+                if let Some(a) = self.want_dial(now, h, &ctx) {
                     self.act_pub(now, h, a);
                 }
             }

@@ -615,8 +615,7 @@ drive_impl! {
             queued: true,
             ..self.ctx(relay)
         };
-        let act = self.rly.get_mut(relay).and_then(|r| r.link.want_dial(now, &mut self.shared, &ctx));
-        if let Some(a) = act {
+        if let Some(a) = self.want_dial(now, relay, &ctx) {
             self.act_pub(now, relay, a);
         }
     }

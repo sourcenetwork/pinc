@@ -191,13 +191,11 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
         self.duty.restart(now);
         for i in 0..R {
             let ctx = self.ctx(i);
-            let act = self.rly.get_mut(i).and_then(|r| {
-                if r.link.is_open() {
-                    r.link.check(now, &ctx, false)
-                } else {
-                    r.link.want_dial(now, &mut self.shared, &ctx)
-                }
-            });
+            let act = if self.rly.get(i).is_some_and(|r| r.link.is_open()) {
+                self.rly.get_mut(i).and_then(|r| r.link.check(now, &ctx, false))
+            } else {
+                self.want_dial(now, i, &ctx)
+            };
             if let Some(a) = act {
                 self.act_pub(now, i, a);
             }
