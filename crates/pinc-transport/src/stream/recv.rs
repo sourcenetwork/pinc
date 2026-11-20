@@ -197,9 +197,10 @@ impl<const C: usize> Recv<C> {
         span.saturating_sub(self.ring.held() as u64).saturating_mul(chunk)
     }
 
-    /// The limit the window is due to move to, when at least an eighth of the window was freed.
+    /// The limit the window is due to move to, when at least an eighth of the window was freed. None for a stream asked
+    /// to stop: its sender was told to reset and needs no credit for that, and what it still sends is dropped.
     pub(super) fn due(&self) -> Option<u64> {
-        if !self.open {
+        if !self.open || self.stop != Stop::None {
             return None;
         }
         let cap = self.final_size.unwrap_or(MAX_OFFSET);

@@ -469,3 +469,26 @@ fn a_lost_stop_is_not_sent_again_once_the_end_arrived() {
         "a stop for a finished stream came back"
     );
 }
+
+/// A stream asked to stop is granted no more window as its bytes are consumed; another stream still is.
+#[test]
+fn a_stream_asked_to_stop_is_granted_no_more_window() {
+    let (mut pool, mut t) = setup(64, |c| c.initial_stream_window = 64 * 1024);
+    t.on_stream_frame(&mut pool, 0, 0, &vec![1; 48 * 1024], false).unwrap();
+    t.on_stream_frame(&mut pool, 4, 0, &vec![2; 48 * 1024], false).unwrap();
+    t.stop_sending(&mut pool, 0, 1).unwrap();
+    assert_eq!(
+        drain_control(&mut t),
+        [ControlFrame::StopSending { id: 0, error_code: 1 }]
+    );
+    assert_eq!(read_all(&mut t, &mut pool, 0).len(), 48 * 1024);
+    assert!(
+        drain_control(&mut t).is_empty(),
+        "a stream asked to stop was granted more window"
+    );
+    assert_eq!(read_all(&mut t, &mut pool, 4).len(), 48 * 1024);
+    assert_eq!(
+        drain_control(&mut t),
+        [ControlFrame::MaxStreamData { id: 4, max: 112 * 1024 }]
+    );
+}
