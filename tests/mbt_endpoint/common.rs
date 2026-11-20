@@ -828,7 +828,18 @@ pub fn run<const K: usize, const D: usize>(file: &str, case: &MbtCase, init: &Js
                 let ev = w.stray(w.map.real(num(t)));
                 let after = w.ep.node_stats();
                 assert_eq!(demuxes(&ev), [0], "{}: the demux records", at());
-                assert_eq!(ev.len(), 1, "{}: a stray left more than a demux record: {ev:?}", at());
+                // The ledger charges every datagram of a valid size before the demux peeks at the header.
+                assert_eq!(
+                    ev.len(),
+                    2,
+                    "{}: a stray left other than a ledger and a demux record: {ev:?}",
+                    at()
+                );
+                assert!(
+                    matches!(ev[0], TraceEvent::LedgerRx { .. }),
+                    "{}: a stray's first record is its address ledger: {ev:?}",
+                    at()
+                );
                 assert_eq!(
                     (
                         after.datagrams_in - before.datagrams_in,
