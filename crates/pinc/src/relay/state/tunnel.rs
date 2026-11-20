@@ -503,4 +503,185 @@ mod tests {
         core.queue_pulse(node(1));
         assert_eq!(core.counters.hub_dropped, 1, "the pulse was dropped without a count");
     }
+
+    /// An endpoint that does nothing, but reports a validated direct route for the sessions in `direct`.
+    #[derive(Default)]
+    struct Stub {
+        direct: Vec<SessionId>,
+    }
+
+    impl pinc_connect::client::Port for Stub {
+        type Src = pinc_transport::stream::NoSource;
+
+        fn command(
+            &mut self,
+            _: u64,
+            _: Command<'_, Self::Src>,
+        ) -> Result<pinc_core::Reply, pinc_core::CommandError> {
+            Ok(pinc_core::Reply {
+                value: pinc_core::Value::None,
+                events: pinc_core::Events::default(),
+            })
+        }
+
+        fn stats(&self, session: SessionId) -> Option<pinc_core::SessionStats> {
+            let route = self
+                .direct
+                .contains(&session)
+                .then(|| ("192.0.2.1:4000".parse().unwrap(), "198.51.100.7:5000".parse().unwrap()));
+            Some(pinc_core::SessionStats {
+                session,
+                node: None,
+                alpn: None,
+                role: Role::Member,
+                gossip: false,
+                dialer: false,
+                established: true,
+                allowed: true,
+                path: None,
+                route,
+                thin: false,
+                held: 0,
+                held_dropped: 0,
+                pto: 0,
+                pto_count: 0,
+                path_validated: route.is_some(),
+                heard: 0,
+                heard_any: 0,
+                pulse_due: false,
+                last_app: 0,
+                sub: false,
+                answered: false,
+                transport: pinc_transport::conn::Stats::default(),
+            })
+        }
+
+        fn node(&self) -> Option<pinc_core::NodeStats> {
+            None
+        }
+
+        fn peer(&self, _: &NodeId) -> Option<pinc_core::PeerInfo> {
+            None
+        }
+
+        fn reach_body(&self, _: SessionId, _: &mut [u8; pinc_core::REACH_BODY_MAX]) -> usize {
+            0
+        }
+
+        fn by_conn_id(&self, _: &pinc_security::ConnId) -> Option<pinc_core::SessionStats> {
+            None
+        }
+    }
+
+    impl Ep for Stub {
+        fn handle_datagram(&mut self, _: u64, _: SocketAddr, _: SocketAddr, _: &mut [u8]) {}
+
+        fn poll_transmit(&mut self, _: u64, _: &mut [u8]) -> Option<pinc_core::Transmit> {
+            None
+        }
+
+        fn poll_event(&mut self) -> Option<EpEvent> {
+            None
+        }
+
+        fn poll_timeout(&self) -> Option<u64> {
+            None
+        }
+
+        fn handle_timeout(&mut self, _: u64) {}
+
+        fn register_alpn(&mut self, _: &[u8]) -> bool {
+            true
+        }
+
+        fn read_chunk(&self, _: SessionId, _: pinc_transport::stream::StreamId) -> Option<&[u8]> {
+            None
+        }
+
+        fn read_at(&self, _: SessionId, _: pinc_transport::stream::StreamId, _: u64) -> Option<&[u8]> {
+            None
+        }
+
+        fn stored_after(
+            &self,
+            _: SessionId,
+            _: pinc_transport::stream::StreamId,
+            _: u64,
+        ) -> Option<core::ops::Range<u64>> {
+            None
+        }
+
+        fn send_state(&self, _: SessionId, _: pinc_transport::stream::StreamId) -> Option<pinc_core::SendState> {
+            None
+        }
+
+        fn in_flight(&self, _: SessionId) -> Option<u64> {
+            None
+        }
+
+        fn read_extension(&mut self, _: &mut [u8]) -> Result<Option<(SessionId, u64, usize)>, pinc_core::CommandError> {
+            Ok(None)
+        }
+
+        fn session_at(&self, _: usize) -> Option<pinc_core::SessionStats> {
+            None
+        }
+
+        fn session_from(&self, _: &SocketAddr, _: &dyn Fn(SessionId) -> bool) -> Option<SessionId> {
+            None
+        }
+
+        fn poll_trace(&mut self) -> Option<pinc_core::TraceRecord> {
+            None
+        }
+
+        fn add_iface(&mut self, _: SocketAddr) -> Option<pinc_core::IfaceId> {
+            None
+        }
+
+        fn iface_event(&mut self, _: u64, _: pinc_core::IfaceId, _: pinc_core::IfaceEvent) {}
+    }
+
+    /// A node with two sessions at the hub, one of them on a validated direct route: when that one closes the node
+    /// keeps a session with no direct route, and the relay stops tunnelling to it (the next datagram takes its carrier).
+    #[test]
+    fn a_node_whose_direct_session_closes_is_no_longer_tunnelled_to() {
+        use pinc_connect::relay::Sink;
+
+        let identity = Rc::new(RefCell::new(Identity::from_seed_with(&[7; 32], &[0; 32]).unwrap()));
+        let local: SocketAddr = "192.0.2.1:4000".parse().unwrap();
+        let mut core =
+            Core::<(), SoftwareStore, AllowAll>::new(identity, AllowAll, &[], Limits::default(), Some(local), T0)
+                .unwrap();
+        let m = node(0xe1);
+        let (direct, other) = (SessionId(1), SessionId(2));
+        let alpn = pinc_security::Alpn::new(b"x").unwrap();
+        let mut ep = Stub {
+            direct: vec![direct],
+        };
+        let mut out = Vec::new();
+        for session in [direct, other] {
+            let ev = EpEvent::Incoming {
+                session,
+                node: m,
+                alpn,
+            };
+            core.hub_event(&mut ep, T0, T0, &ev, &mut out);
+        }
+        core.fx.set_direct(&m, true);
+        assert!(core.fx.tunnel_ready(&m));
+
+        ep.direct.clear();
+        let ev = EpEvent::Closed {
+            session: direct,
+            reason: pinc_core::EndReason::Orphaned,
+        };
+        core.hub_event(&mut ep, T0, T0, &ev, &mut out);
+
+        assert!(
+            !core.fx.tunnel_ready(&m),
+            "the relay still tunnels to a node that has no direct route"
+        );
+        assert_eq!(core.hub.as_ref().unwrap().sessions(), 1, "the node's other session was closed");
+    }
 }
