@@ -42,16 +42,19 @@ Size(F) == Cardinality(Used(F))
 \* b.saturating_mul(2)
 Dbl(b) == SatAdd(b, b)
 
-\* set_failed: a full table refuses a peer it has no entry for
-SetFailed(F, now, p, back) ==
-    IF Size(F) < MAXT \/ F[p] # None
+\* set_failed: a full table refuses a peer it has no entry for. n is Size(F): SetFailed counts the table, and only
+\* for a peer without an entry (TLC passes n unevaluated); a trace that keeps the size by induction passes it
+SetFailedN(F, n, now, p, back) ==
+    IF F[p] # None \/ n < MAXT
     THEN [F EXCEPT ![p] = <<SatAdd(now, back), back>>]
     ELSE F
+SetFailed(F, now, p, back) == SetFailedN(F, Size(F), now, p, back)
 
 \* backoff: the first wait, then double up to the cap of a hub or of any other node
 BackWait(F, p, hub) ==
     IF F[p] = None THEN FIRST ELSE Min(Dbl(F[p][2]), IF hub THEN HUBCAP ELSE CAP)
-Backoff(F, now, p, hub) == LET b == BackWait(F, p, hub) IN [back |-> b, f |-> SetFailed(F, now, p, b)]
+BackoffN(F, n, now, p, hub) == LET b == BackWait(F, p, hub) IN [back |-> b, f |-> SetFailedN(F, n, now, p, b)]
+Backoff(F, now, p, hub) == BackoffN(F, Size(F), now, p, hub)
 
 \* deny_back: a wait of at least DENY_FIRST doubles up to DENY_CAP, else DENY_FIRST
 DenyWait(F, p) ==

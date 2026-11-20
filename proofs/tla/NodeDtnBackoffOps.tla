@@ -24,8 +24,9 @@ CONSTANT MAXT
 
 INSTANCE NodeBackoffOps
 
-DtnFailed(F, now, p) ==
-    LET x == Backoff(F, now, p, FALSE) IN [back |-> x.back, f |-> x.f, at |-> SatAdd(now, x.back)]
+DtnFailedN(F, n, now, p) ==
+    LET x == BackoffN(F, n, now, p, FALSE) IN [back |-> x.back, f |-> x.f, at |-> SatAdd(now, x.back)]
+DtnFailed(F, now, p) == DtnFailedN(F, Size(F), now, p)
 
 Sooner(r, at) == IF r = None THEN <<at>> ELSE <<Min(r[1], at)>>
 
