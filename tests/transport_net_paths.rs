@@ -108,7 +108,7 @@ fn a_lost_path_is_never_validated_or_followed_again() {
             "the answer to a challenge sent before the loss validated the lost path"
         );
         assert!(
-            !net.a.log[mark..].iter().any(|r| *r == Rec::PathValidated(PathId(1))),
+            !net.a.log[mark..].contains(&Rec::PathValidated(PathId(1))),
             "the lost path was reported valid"
         );
         // The peer sends data from the second route: the session follows it.
@@ -149,5 +149,39 @@ fn a_held_path_named_a_relay_by_add_path_is_valid_at_once() {
             net.a.conn.path_validated(PathId(3)),
             "a held path named a relay's stays unvalidated"
         );
+    });
+}
+
+/// The session is on a relay path and follows the peer onto a direct route whose answers never arrive: at the third
+/// probe timeout it leaves that path for a validated one, though the direct path was never validated.
+#[test]
+fn a_session_followed_onto_an_unanswered_direct_path_leaves_it_at_the_third_probe_timeout() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let mut link = two_routes(42);
+        link.add_route(PathId(5), PathId(6), Params::new(10 * MS), Params::new(10 * MS));
+        // Nothing A sends on route 5 arrives: the path stays unanswered.
+        link.route(PathId(5)).ab.drop_next(u32::MAX);
+        let mut net = connected(&mut w, &mut sa, &mut sb, link);
+        let now = net.now;
+        net.a.with_env(now, |c, env| c.add_path(env, PathId(3), RELAY)).unwrap();
+        net.a.conn.set_active(PathId(3)).unwrap();
+        net.b.with_env(now, |c, env| c.add_path(env, PathId(6), RELAY)).unwrap();
+        net.b.conn.set_active(PathId(6)).unwrap();
+        let s = net.b.conn.open_bi().unwrap();
+        net.b.conn.write(s, &pattern(2000, 43)).unwrap();
+        assert!(
+            net.run(net.now + SEC, |n| n.a.conn.active_path() == Some(PathId(5))),
+            "the session did not follow the peer onto the direct route"
+        );
+        assert!(!net.a.conn.active_is_relay());
+        let id = net.a.conn.open_uni().unwrap();
+        net.a.conn.write(id, &pattern(10_000, 44)).unwrap();
+        assert!(
+            net.run(net.now + 30 * SEC, |n| n.a.conn.active_path() != Some(PathId(5))),
+            "the session stays on the unanswered direct path"
+        );
+        assert_eq!(net.a.conn.stats().ptos, 3, "the session left the unanswered path late");
     });
 }
