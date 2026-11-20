@@ -392,7 +392,10 @@ fn a_refused_array_gives_its_block_back() {
 #[test]
 fn a_refused_pool_gives_its_block_back() {
     let refused = Pool::<()>::new(mem(15, false), 1, 4).unwrap_err();
-    assert_eq!((refused.error, refused.storage.len()), (Error::Storage { need: 16 }, 15));
+    assert_eq!(
+        (refused.error, refused.storage.len()),
+        (Error::Storage { need: 16 }, 15)
+    );
     let max = usize::try_from(u32::MAX).unwrap();
     let refused = Pool::<()>::new(refused.storage, 1, max + 1).unwrap_err();
     assert_eq!((refused.error, refused.storage.len()), (Error::Capacity, 15));

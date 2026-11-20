@@ -61,7 +61,9 @@ impl Alpn {
     /// An ALPN of `bytes`, or `None` if it is empty or longer than [`MAX_ALPN_LEN`].
     pub fn new(bytes: &[u8]) -> Option<Self> {
         let mut alpn = Self {
-            len: u8::try_from(bytes.len()).ok().filter(|l| alpn_len_ok(usize::from(*l)))?,
+            len: u8::try_from(bytes.len())
+                .ok()
+                .filter(|l| alpn_len_ok(usize::from(*l)))?,
             bytes: [0; MAX_ALPN_LEN],
         };
         alpn.bytes.get_mut(..bytes.len())?.copy_from_slice(bytes);
