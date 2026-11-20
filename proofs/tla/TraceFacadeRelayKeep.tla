@@ -46,28 +46,27 @@ View(m, e) == /\ {x.n : x \in Rng(e.recs)} = {n \in Nodes : m.rec[n].seq # 0}
 Torn(e) == IF job.k = "none" THEN st ELSE Tear(st, job, e.tear)
 TearFits(e) == IF job.k = "none" THEN e.tear = "none" ELSE TearOk(job, e.tear)
 
+\* TLC evaluates a LET value again at each of its uses in a step: each \E over a one-value set below takes a call
+\* of the model once
 RestartEv == /\ E.op = "restart" /\ TearFits(E)
-             /\ LET st1 == Torn(E)
-                    m == Restore(Machine0(E.t), E.t, st1)
-                IN st' = st1 /\ s' = m /\ View(m, E)
+             /\ \E st1 \in {Torn(E)} : \E m \in {Restore(Machine0(E.t), E.t, st1)} : st' = st1 /\ s' = m /\ View(m, E)
              /\ job' = NoJob
 
 \* Part::end gives the write out back; the part was restored, so the next run restores nothing (R2)
 RerunEv == /\ E.op = "rerun" /\ TearFits(E) /\ E.t >= s.now
-           /\ LET m == IF job.k = "none" THEN s ELSE Requeue(s, job)
-              IN st' = Torn(E) /\ s' = m /\ View(m, E)
+           /\ \E m \in {IF job.k = "none" THEN s ELSE Requeue(s, job)} : st' = Torn(E) /\ s' = m /\ View(m, E)
            /\ job' = NoJob
 
 PublishEv == /\ E.op = "publish" /\ E.t >= s.now
-             /\ LET a == Accept(At(E.t), E.n, E.seq, E.t, TRUE)
-                IN /\ a.ok = E.ok /\ s' = a.s
+             /\ \E a \in {Accept(At(E.t), E.n, E.seq, E.t, TRUE)} :
+                   /\ a.ok = E.ok /\ s' = a.s
                    /\ (a.s.rec[E.n].seq # 0) = E.has
                    /\ E.has => a.s.rec[E.n].seq = E.cur /\ a.s.rec[E.n].rcv = E.rcv
              /\ UNCHANGED <<st, job>>
 
 HoldEv == /\ E.op = "hold" /\ E.t >= s.now
-          /\ LET r == Hold(At(E.t), E.m, E.id)
-             IN r.ok = E.ok /\ s' = r.s /\ Ids(r.s.mb[E.m]) = E.held
+          /\ \E r \in {Hold(At(E.t), E.m, E.id)} :
+                r.ok = E.ok /\ s' = r.s /\ Ids(r.s.mb[E.m]) = E.held
           /\ UNCHANGED <<st, job>>
 
 HeardEv == /\ E.op = "heard" /\ E.t >= s.now
@@ -79,7 +78,7 @@ TickEv == /\ E.op = "tick" /\ E.t >= s.now
           /\ UNCHANGED <<st, job>>
 
 JobEv == /\ E.op = "job" /\ job.k = "none"
-         /\ LET r == NextJob(s) IN
+         /\ \E r \in {NextJob(s)} :
             /\ r.job.k = E.k
             /\ E.k # "none" => r.job.n = E.n
             /\ E.k = "put" => r.job.seq = E.seq /\ r.job.rcv = E.rcv
