@@ -1,9 +1,9 @@
 //! Node ids as text and the address a peer is reached at.
 //!
 //! The text form of an Ed25519 node id is the lowercase hex of its 32-byte public key, 64 characters. Any other
-//! algorithm adds its two-digit tag and a dot in front (`02.` for ECDSA P-256, and then the hex). A [`NodeAddr`] is a node id with the direct
-//! addresses and relay URLs to try, and has a one-line text form: `<id>` or `<id>@<item>,<item>` where an item is an
-//! `ip:port` or a relay URL (it contains `://`).
+//! algorithm adds its two-digit tag and a dot in front (`02.` for ECDSA P-256, and then the hex). A [`NodeAddr`] is a
+//! node id with the direct addresses and relay URLs to try, and has a one-line text form: `<id>` or
+//! `<id>@<item>,<item>` where an item is an `ip:port` or a relay URL (it contains `://`).
 //!
 //! Invariants: parsing never panics; printing then parsing returns the same value for a [`NodeAddr`] built through its
 //! functions (a struct literal can hold what the text form cannot carry); the text of a node id holds no secret.
@@ -105,7 +105,8 @@ impl NodeAddr {
     /// Add a relay URL.
     ///
     /// # Errors
-    /// [`crate::ErrorKind::Config`] if the URL is empty, has no `://` or has a `,`: the text form could not give it back.
+    /// [`crate::ErrorKind::Config`] if the URL is empty, has no `://` or has a `,`: the text form could not give it
+    /// back.
     pub fn with_relay(mut self, url: impl Into<String>) -> Result<Self> {
         let url = url.into();
         if url.is_empty() || !url.contains("://") || url.contains(',') {
