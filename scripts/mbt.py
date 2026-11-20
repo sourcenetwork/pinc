@@ -11,7 +11,9 @@ values of the bounded `\\E` variables of the next-state relation that the action
 result as parameters, so the graph has one node per state of the code and one edge per call from it, labelled with
 what the call returns. <tlc.log> is the output of that TLC run: the graph must have every successor TLC generated
 (states generated = initial states + edges) and every distinct state it found (distinct states = states inside the
-constraint), so a graph cut short fails here.
+constraint), so a graph cut short fails here. Such a spec fixes every parameter on the state before the call: a guard
+with two true branches (a disjunction or an `\\E`) is two successors of one edge, and a conjunct after the step that
+rejects it (`st'[o] = r`) makes TLC write the rejected successor as a state past the constraint; either fails here.
 
 The script reads every node and edge, computes paths from the initial state that take every edge at least once (it
 visits every state on the way), and writes them as test cases:
@@ -154,7 +156,8 @@ def read_graph(path):
     with open(path, encoding="utf-8") as f:
         text = f.read()
     for m in EDGE.finditer(text):
-        edges.add((m.group(1), m.group(3).split("\n")[0], m.group(2)))
+        # the label is escaped as a node's is (a string argument is `\"bad\"`); the location line is dropped first
+        edges.add((m.group(1), unescape(m.group(3).split("\n")[0]), m.group(2)))
     for m in NODE.finditer(text):
         fp, attrs = m.group(1), m.group(3)
         if fp not in nodes:
