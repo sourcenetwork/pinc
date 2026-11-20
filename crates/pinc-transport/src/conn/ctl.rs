@@ -360,7 +360,7 @@ fn lost<S: StreamSource, const N: usize, const C: usize>(
 pub(super) mod trace {
     use alloc::vec::Vec;
 
-    use pinc_security::TicketBatch;
+    use pinc_security::{TicketBatch, TicketEntry};
 
     use super::{Ctl, EXT_BODY_MAX as BODY_MAX, K_EXT, K_READY, K_STREAM_CTL, K_TICKETS, Outcome, apply};
     use crate::conn::send::{put, put_extension};
@@ -402,6 +402,8 @@ pub(super) mod trace {
         limit: u64,
         /// The packet the frames are put in (one at a time, from its start), as large as a datagram.
         packet: Vec<u8>,
+        /// How many frame references the packet already holds when a frame is put in it.
+        refs_held: usize,
     }
 
     /// The room of the packet a probe call writes into.
@@ -432,6 +434,7 @@ pub(super) mod trace {
                 mine: Vec::new(),
                 limit: 0,
                 packet: alloc::vec![0u8; PACKET],
+                refs_held: 0,
             }
         }
 
@@ -447,13 +450,33 @@ pub(super) mod trace {
             self.ctl.hold_ext(&mut self.pool, 0x40, &body)
         }
 
+        /// The packet of the next calls holds `len` bytes (a datagram's worth at the start), so a frame longer than
+        /// that does not fit.
+        pub fn set_room(&mut self, len: usize) {
+            self.packet = alloc::vec![0u8; len];
+        }
+
+        /// The packet of the next calls already holds `n` frame references (`MAX_FRAME_REFS` leaves no room).
+        pub const fn set_refs(&mut self, n: usize) {
+            self.refs_held = n;
+        }
+
+        /// The frame references a packet holds when a frame is put in it.
+        fn refs(&self) -> FrameRefs {
+            let mut refs = FrameRefs::new();
+            for _ in 0..self.refs_held {
+                let _ = refs.push(FrameRef::Control { kind: 0, id: 0 });
+            }
+            refs
+        }
+
         /// `Ctl::fill_ext` with the real `put_extension`, as `conn/send.rs` puts a held frame in a packet: when slot
         /// `slot` holds a pending frame that fits, clear `pending` and return its key (the id of the frame
         /// reference); else `None` and nothing changes.
         pub fn send_ext(&mut self, slot: usize) -> Option<u64> {
+            let mut refs = self.refs();
             let s = self.ctl.ext.get_mut(slot)?.as_mut()?;
             let (pool, packet) = (&self.pool, &mut self.packet);
-            let mut refs = FrameRefs::new();
             let mut pos = 0;
             if !Ctl::fill_ext(s, &mut refs, |s| put_extension(pool, s, packet, &mut pos)) {
                 return None;
@@ -478,17 +501,19 @@ pub(super) mod trace {
             self.mine.pop().map(|c| self.pool.free_chunk(c)).is_some()
         }
 
-        /// As `conn/drive.rs` takes a ticket batch (`Ctl::hold_tickets`); the probe keeps `g` as the generation of
-        /// the batch held.
+        /// As `conn/drive.rs` takes a ticket batch (`Ctl::hold_tickets`, with one ticket: `drive` holds no empty
+        /// batch); the probe keeps `g` as the generation of the batch held.
         pub fn issue(&mut self, g: u64) {
-            self.ctl.hold_tickets(TicketBatch::new());
+            let mut batch = TicketBatch::new();
+            let _ = batch.push(TicketEntry::default());
+            self.ctl.hold_tickets(batch);
             self.generation = g;
         }
 
         /// `Ctl::fill_tickets` with the real `put`, as `conn/send.rs` puts the batch in a packet: when
         /// `tickets_pending` and a batch is held and fits, return the generation held; else `None`.
         pub fn send_tickets(&mut self) -> Option<u64> {
-            let mut refs = FrameRefs::new();
+            let mut refs = self.refs();
             let mut pos = 0;
             let packet = &mut self.packet;
             self.ctl
@@ -503,7 +528,7 @@ pub(super) mod trace {
 
         /// `Ctl::fill_ready` with the real `put`, as `conn/send.rs` builds READY: whether it went in the packet.
         pub fn build_ready(&mut self) -> bool {
-            let mut refs = FrameRefs::new();
+            let mut refs = self.refs();
             let mut pos = 0;
             let packet = &mut self.packet;
             self.ctl.fill_ready(&mut refs, |f| put(packet, &mut pos, f))

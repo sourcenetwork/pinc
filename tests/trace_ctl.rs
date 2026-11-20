@@ -12,7 +12,9 @@
 //! full table refuses, `hold` refuses for the three reasons and only them, a reference is handed to the stream layer
 //! exactly when its key was in the table), so it is meaningful without the proof tools. It does not assert what the
 //! acknowledgement of an older ticket batch does: the code differs from the documented intent there, and the trace
-//! check replays both rules. The trace is written to `PINC_TRACE_DIR` when it is set.
+//! check replays both rules. The model's packet always has room, so the calls that find no room or no frame reference
+//! left are in `a_frame_without_room_stays_owed`, which records nothing. The trace is written to `PINC_TRACE_DIR` when
+//! it is set.
 #![allow(
     clippy::unwrap_used,
     clippy::too_many_lines,
@@ -444,4 +446,42 @@ fn the_control_state_matches_the_model() {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(std::path::Path::new(&dir).join("ctl.ndjson"), &out).unwrap();
     }
+}
+
+/// A frame that does not fit the packet, or has no frame reference left to go in, stays owed and changes nothing.
+/// Not recorded: the model's packet always has room, so the trace check would refuse these calls.
+#[test]
+fn a_frame_without_room_stays_owed() {
+    let mut p = CtlProbe::new(4);
+    p.send_ready();
+    p.issue(1);
+    assert!(p.hold(16));
+    for (room, refs) in [(1500, 8), (0, 0)] {
+        p.set_room(room);
+        p.set_refs(refs);
+        let before = p.view();
+        assert!(
+            !p.build_ready(),
+            "READY went with room {room} and {refs} references held"
+        );
+        assert_eq!(
+            p.send_tickets(),
+            None,
+            "tickets went with room {room} and {refs} references held"
+        );
+        assert_eq!(
+            p.send_ext(0),
+            None,
+            "an extension frame went with room {room} and {refs} references held"
+        );
+        assert_eq!(p.view(), before, "a refused frame changed the state");
+    }
+    p.set_room(1500);
+    p.set_refs(0);
+    assert!(p.build_ready() && p.send_tickets() == Some(1) && p.send_ext(0).is_some());
+    let after = p.view();
+    assert!(
+        !after.ready && !after.tp && after.ext.iter().flatten().all(|e| !e.1),
+        "a sent frame is still owed"
+    );
 }
