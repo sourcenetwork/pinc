@@ -180,6 +180,9 @@ fn repair_trace() {
         out: String::new(),
     };
     w.net.link(2, 1, false);
+    // P hands a publish to every hub it reaches (FAN) when all are up; the model's P writes to hub 1 only, so it never
+    // reaches hub 2 and the publish is mirrored between the hubs (PUB), which the hub link carries.
+    w.net.link(3, 1, false);
     w.net.subscribe(2, T);
     w.net.run_until(0);
     w.emit(0, &[("ae", r#","h":1"#.to_owned()), ("ae", r#","h":2"#.to_owned())]);
