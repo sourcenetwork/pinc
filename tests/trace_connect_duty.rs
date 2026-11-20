@@ -11,9 +11,9 @@
 //! The test checks by itself, far from the limit: the next deadline after a release, at most five releases in a
 //! burst, none in the steady phase while a mailbox serves the node, one `sent` per release, and the admission of
 //! frames (too long, a duty of zero, too early, and exactly at the off time). The runs at the limit are recorded and
-//! checked against the model only: there a release at `u64::MAX` leaves no deadline (`null` in the trace), so no
-//! later poll there releases, and an admission at `u64::MAX` closes the medium. The model that counts from the origin
-//! still saturates at `u64::MAX` and is stale for these runs.
+//! checked against the model only: there a release at `u64::MAX` leaves no deadline (-1 in the trace, the model's
+//! `Never`), so no later poll there releases, and an admission at `u64::MAX` closes the medium. The model's `Never`
+//! and its checked addition check these runs.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -84,9 +84,9 @@ impl Sched {
         self.d.deadline().map(|a| self.rel(a))
     }
 
-    /// The deadline as the trace records it: milliseconds, or `null` for none.
+    /// The deadline as the trace records it: milliseconds, or -1 for none (the model's `Never`).
     fn nx(&self) -> String {
-        self.next().map_or("null".into(), |n| n.to_string())
+        self.next().map_or("-1".into(), |n| n.to_string())
     }
 
     /// A run starting at relative time `at`: far from the limit when `top` is negative, else with `u64::MAX` at `top`.
