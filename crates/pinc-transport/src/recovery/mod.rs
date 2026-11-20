@@ -57,6 +57,13 @@ use core::fmt;
 pub const MS: u64 = 1_000_000;
 /// One second in nanoseconds.
 pub const SECOND: u64 = 1_000_000_000;
+
+/// The deadline `gap` after `now`, or `None` (never) when that instant is past the clock's last one. A deadline
+/// saturated at `u64::MAX` could never be later than a call made at `u64::MAX`, so it would fire on every call.
+#[must_use]
+pub const fn deadline_after(now: u64, gap: u64) -> Option<u64> {
+    now.checked_add(gap)
+}
 /// A path whose minimum round trip is at least this long (250 ms) is a long-RTT path.
 pub const LONG_RTT: u64 = 250 * MS;
 /// The largest packet number that can be tracked (2^62 - 1).

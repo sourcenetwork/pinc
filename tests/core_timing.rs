@@ -692,3 +692,23 @@ fn a_dialed_hub_session_acknowledges_every_fourth_packet() {
 fn an_endpoint_sends_the_first_handshake_flight_whole_by_default() {
     assert!(pinc_core::EndpointConfig::new(1).conn.flight_split);
 }
+
+#[test]
+fn a_session_due_at_the_clock_limit_runs_once_and_then_has_no_deadline() {
+    big_stack(|| {
+        let mut net = CoreNet::new(10 * MS_NS);
+        let (a, b) = (net.add(1), net.add(2));
+        net.connect_pair(a, b, ALPN_A, Role::Hub);
+        net.run_for(2 * S);
+        assert!(
+            net.nodes[a].ep.poll_timeout().is_some(),
+            "a connected session has a timer"
+        );
+        net.nodes[a].ep.handle_timeout(u64::MAX);
+        assert_eq!(
+            net.nodes[a].ep.poll_timeout(),
+            None,
+            "a timer at the last instant is not due again"
+        );
+    });
+}

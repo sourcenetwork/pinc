@@ -17,9 +17,10 @@
 //! within 90 s of the timer, not of the dial).
 //!
 //! Invariants: a session has at most one entry in the heap; a settled session that has ended is freed; a deadline
-//! after a timer is strictly later than the time of the call, so a timer cannot spin.
+//! after a timer is strictly later than the time of the call (none at the clock's last instant), so a timer cannot spin.
 
 use pinc_transport::conn::{Config, PathId, RJ_THIN_GAP};
+use pinc_transport::recovery::deadline_after;
 
 use crate::endpoint::{CLOSE_GRACE, env, ep_impl};
 #[cfg(feature = "trace")]
@@ -184,7 +185,7 @@ ep_impl! {
             // The node's round trips move a handshake's timers: ask again (the phase did not change, so there is one).
             own = conn.poll_timeout().unwrap_or(own);
         }
-        let mut deadline = Some(if closing { now.saturating_add(CLOSE_GRACE) } else { own });
+        let mut deadline = if closing { deadline_after(now, CLOSE_GRACE) } else { Some(own) };
         let mut note = |d: Option<u64>| {
             if let Some(d) = d {
                 deadline = Some(deadline.map_or(d, |c| c.min(d)));
@@ -319,7 +320,7 @@ ep_impl! {
             self.heap.set(i, None);
             self.run_timer(i, now);
             if self.heap.deadline(i).is_some_and(|d| d <= now) {
-                self.heap.set(i, Some(now.saturating_add(1)));
+                self.heap.set(i, deadline_after(now, 1));
             }
         }
     }

@@ -11,9 +11,9 @@
 //! The test checks by itself, far from the limit: the next deadline after a release, at most five releases in a
 //! burst, none in the steady phase while a mailbox serves the node, one `sent` per release, and the admission of
 //! frames (too long, a duty of zero, too early, and exactly at the off time). The runs at the limit are recorded and
-//! checked against the model only: there a release at `u64::MAX` leaves the deadline at `u64::MAX`, so every later
-//! poll there releases again, and an admission at `u64::MAX` leaves the next one free. That is the behaviour of the
-//! code today, recorded as it is.
+//! checked against the model only: there a release at `u64::MAX` leaves no deadline (`null` in the trace), so no
+//! later poll there releases, and an admission at `u64::MAX` closes the medium. The model that counts from the origin
+//! still saturates at `u64::MAX` and is stale for these runs.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -79,9 +79,14 @@ impl Sched {
         d / MS
     }
 
-    /// The relative deadline, in milliseconds.
-    fn next(&self) -> u64 {
-        self.rel(self.d.deadline())
+    /// The relative deadline, in milliseconds (`None` when the schedule has no next instant).
+    fn next(&self) -> Option<u64> {
+        self.d.deadline().map(|a| self.rel(a))
+    }
+
+    /// The deadline as the trace records it: milliseconds, or `null` for none.
+    fn nx(&self) -> String {
+        self.next().map_or("null".into(), |n| n.to_string())
     }
 
     /// A run starting at relative time `at`: far from the limit when `top` is negative, else with `u64::MAX` at `top`.
@@ -100,7 +105,7 @@ impl Sched {
         let _ = writeln!(
             t.out,
             r#"{{"t":"duty","op":"new","at":{at},"top":{top},"next":{},"sent":{}}}"#,
-            s.next(),
+            s.nx(),
             s.d.sent()
         );
         s
@@ -118,20 +123,20 @@ impl Sched {
         if !self.at_limit() {
             let in_steady = now.saturating_sub(self.burst_from) >= BURST;
             if r {
-                assert!(self.d.deadline() > now);
+                assert!(self.d.deadline().is_some_and(|d| d > now));
                 let after = now + BURST_GAP;
                 let want = if after.saturating_sub(self.burst_from) < BURST {
                     after
                 } else {
                     now + STEADY_GAP
                 };
-                assert_eq!(self.d.deadline(), want, "the next deadline after a release");
+                assert_eq!(self.d.deadline(), Some(want), "the next deadline after a release");
                 assert!(
                     !(in_steady && self.mailbox),
                     "a release in the steady phase with a mailbox"
                 );
                 t.seen.steady += u32::from(in_steady);
-            } else if self.mailbox && in_steady && now >= was_next {
+            } else if self.mailbox && in_steady && was_next.is_some_and(|w| now >= w) {
                 t.seen.skip += 1;
             }
             if !self.closed {
@@ -147,7 +152,7 @@ impl Sched {
         let _ = writeln!(
             t.out,
             r#"{{"t":"duty","op":"poll","at":{at},"r":{r},"next":{},"sent":{}}}"#,
-            self.next(),
+            self.nx(),
             self.d.sent()
         );
         r
@@ -162,7 +167,7 @@ impl Sched {
         let _ = writeln!(
             t.out,
             r#"{{"t":"duty","op":"restart","at":{at},"next":{},"sent":{}}}"#,
-            self.next(),
+            self.nx(),
             self.d.sent()
         );
     }
@@ -173,7 +178,7 @@ impl Sched {
         let _ = writeln!(
             t.out,
             r#"{{"t":"duty","op":"mailbox","v":{v},"next":{},"sent":{}}}"#,
-            self.next(),
+            self.nx(),
             self.d.sent()
         );
     }
@@ -196,10 +201,10 @@ fn schedule_runs(t: &mut T, rng: &mut SplitMix64) {
     // 2. polls exactly at each deadline, then one before it and one at it
     let mut s = Sched::start(t, -1, 0);
     for _ in 0..15 {
-        let at = s.next();
+        let at = s.next().unwrap();
         s.poll(t, at);
     }
-    let at = s.next();
+    let at = s.next().unwrap();
     s.poll(t, at - 1);
     s.poll(t, at);
     // 3. late polls
@@ -255,7 +260,7 @@ fn schedule_runs(t: &mut T, rng: &mut SplitMix64) {
             match rng.next_u64() % 100 {
                 0..=79 => {
                     let at = clamp(match rng.next_u64() % 10 {
-                        0..=2 => s.next(),
+                        0..=2 => s.next().unwrap_or(cur),
                         3..=5 => cur + rng.next_u64() % 2001,
                         6 | 7 => cur + rng.next_u64() % 70_001,
                         _ => cur.saturating_sub(rng.next_u64() % 1001),

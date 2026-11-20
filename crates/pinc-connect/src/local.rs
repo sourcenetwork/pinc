@@ -15,6 +15,9 @@
 //! reaches it). [`Radio`] is the host adapter for a medium with its own duty cycle: it admits a beacon only if the
 //! medium's frame fits and the share of air time allows it.
 //!
+//! A schedule or a medium whose next instant is past the clock's last one has no next instant: at that clock the last
+//! beacon or frame is the last.
+//!
 //! Invariants: at most `BURST / BURST_GAP` beacons in a burst and one per [`STEADY_GAP`] after it; [`Beacon::parse`]
 //! accepts exactly what [`sign`] writes; a beacon that does not verify is never returned as a candidate.
 
@@ -24,6 +27,7 @@ use core::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 
 use pinc_crypto::identity::{MAX_PUBLIC_KEY_LEN, MAX_SIGNATURE_LEN, verify_node};
 use pinc_crypto::{Keypair, NodeId};
+use pinc_transport::recovery::deadline_after;
 use pinc_wire::{Reader, WireError, Writer};
 
 use crate::carrier::node;
@@ -244,7 +248,7 @@ impl<'a> Beacon<'a> {
 #[derive(Debug, Clone, Copy)]
 pub struct Duty {
     burst_from: u64,
-    next: u64,
+    next: Option<u64>,
     sent: u64,
     mailbox: bool,
 }
@@ -254,7 +258,7 @@ impl Duty {
     pub const fn new(now: u64) -> Self {
         Self {
             burst_from: now,
-            next: now,
+            next: Some(now),
             sent: 0,
             mailbox: false,
         }
@@ -263,7 +267,7 @@ impl Duty {
     /// A start or an interface change: burst again from `now`.
     pub const fn restart(&mut self, now: u64) {
         self.burst_from = now;
-        self.next = now;
+        self.next = Some(now);
     }
 
     /// A mailbox serves the node (or stopped doing so): the steady phase is off while it does.
@@ -278,26 +282,24 @@ impl Duty {
 
     /// Whether a beacon is due at `now`. Returns true once per release and schedules the next.
     pub fn poll(&mut self, now: u64) -> bool {
-        if now < self.next {
+        if self.next.is_none_or(|n| now < n) {
             return false;
         }
         let in_burst = now.saturating_sub(self.burst_from) < BURST;
         if !in_burst && self.mailbox {
-            self.next = now.saturating_add(STEADY_GAP);
+            self.next = deadline_after(now, STEADY_GAP);
             return false;
         }
         self.sent += 1;
-        let after = now.saturating_add(BURST_GAP);
-        self.next = if after.saturating_sub(self.burst_from) < BURST {
-            after
-        } else {
-            now.saturating_add(STEADY_GAP)
+        self.next = match deadline_after(now, BURST_GAP) {
+            Some(after) if after.saturating_sub(self.burst_from) < BURST => Some(after),
+            _ => deadline_after(now, STEADY_GAP),
         };
         true
     }
 
-    /// When the schedule next wants a call.
-    pub const fn deadline(&self) -> u64 {
+    /// When the schedule next wants a call, or `None` when the next instant is past the clock's last one.
+    pub const fn deadline(&self) -> Option<u64> {
         self.next
     }
 }
@@ -311,7 +313,7 @@ pub struct Radio {
     pub ns_per_byte: u64,
     /// The permitted share of time on air, in parts per thousand.
     pub duty_permille: u64,
-    ready_at: u64,
+    ready_at: Option<u64>,
 }
 
 impl Radio {
@@ -321,18 +323,18 @@ impl Radio {
             mtu,
             ns_per_byte,
             duty_permille,
-            ready_at: 0,
+            ready_at: Some(0),
         }
     }
 
     /// Admit a frame of `len` bytes at `now`: it must fit the medium and its air time must be paid for by the duty
     /// share since the last frame. On success the next admission waits for the off time that keeps the share.
     pub fn admit(&mut self, now: u64, len: usize) -> bool {
-        if len > self.mtu || now < self.ready_at || self.duty_permille == 0 {
+        if len > self.mtu || self.ready_at.is_none_or(|r| now < r) || self.duty_permille == 0 {
             return false;
         }
         let air = (len as u64).saturating_mul(self.ns_per_byte);
-        self.ready_at = now.saturating_add(air.saturating_mul(1000) / self.duty_permille);
+        self.ready_at = deadline_after(now, air.saturating_mul(1000) / self.duty_permille);
         true
     }
 }

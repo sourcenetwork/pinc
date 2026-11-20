@@ -76,7 +76,7 @@ fn every_second_for_five_seconds_then_every_sixty() {
         if d.poll(t) {
             at.push(t / S);
         }
-        t = d.deadline().max(t + 1);
+        t = d.deadline().map_or(t + 1, |n| n.max(t + 1));
         if t > 200 * S {
             break;
         }
@@ -143,4 +143,19 @@ fn the_radio_adapter_admits_a_frame_only_inside_the_frame_size_and_the_duty_shar
     assert!(!r.admit(499_999_999, 10));
     assert!(r.admit(500_000_000, 10));
     assert!(!Radio::new(60, 100_000, 0).admit(0, 1), "no share, no air time");
+}
+
+#[test]
+fn a_beacon_released_at_the_clock_limit_is_the_last() {
+    let mut d = Duty::new(u64::MAX - 1);
+    assert!(d.poll(u64::MAX), "the beacon due at the limit is released once");
+    assert!(!d.poll(u64::MAX), "and no more after it");
+    assert_eq!(d.deadline(), None);
+}
+
+#[test]
+fn a_frame_admitted_at_the_clock_limit_closes_the_medium() {
+    let mut r = Radio::new(60, 100_000, 10);
+    assert!(r.admit(u64::MAX, 1));
+    assert!(!r.admit(u64::MAX, 1));
 }
