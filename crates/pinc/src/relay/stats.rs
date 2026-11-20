@@ -142,7 +142,7 @@ pub enum Event {
         /// The member.
         node: NodeId,
     },
-    /// The store failed to keep or load a record.
+    /// The store failed to keep a record or the packets held for a member, or a mark for a write had no room.
     StoreFailed,
 }
 
@@ -184,13 +184,14 @@ pub struct Stats {
     pub datagrams_out: u64,
     /// Datagrams that could not be sent: the queue was full or the socket failed.
     pub datagrams_dropped: u64,
-    /// Packets for the relay's own endpoint, or from it, that had nowhere to go (no hub is configured).
+    /// Packets and pulses for the relay's own endpoint, or from it, that had nowhere to go: no hub is configured, its
+    /// queue was full, or the address names nobody now.
     pub hub_dropped: u64,
     /// Members with a UDP session to the relay's hub now.
     pub hub_sessions: usize,
     /// Records stored now.
     pub records: usize,
-    /// Records the store failed to keep.
+    /// Store writes that failed (a failed write is tried again, and each try counts) and marks that had no room.
     pub store_errors: u64,
     /// Events dropped because nobody read them.
     pub events_dropped: u64,
