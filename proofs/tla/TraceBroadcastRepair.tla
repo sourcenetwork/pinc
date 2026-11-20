@@ -64,7 +64,10 @@ PublishEv == Ev.op = "publish" /\ M!Publish /\ pubd'[Ev.m] # M!NoT
 ToHubEv == Ev.op = "tohub" /\ M!ToHub /\ Ev.m \in hseen'[1] \ hseen[1]
 FlipEv == Ev.op = "flip" /\ M!Flip /\ lnk'[Ev.l] # lnk[Ev.l]
 TickEv == Ev.op = "tick" /\ M!Tick /\ now' = Ev.now
-AeEv == Ev.op = "ae" /\ M!HubAe /\ nextAe'[Ev.h] # nextAe[Ev.h]
+\* the run stays under LOG_CAP, so hub_store never refuses (LogFull): with the hub link up, the other hub holds the
+\* whole window after the exchange (a refused fetch is a branch the record cannot show until the call's last event)
+AeEv == /\ Ev.op = "ae" /\ M!HubAe /\ nextAe'[Ev.h] # nextAe[Ev.h]
+        /\ lnk["H"] => M!WindowIds(Ev.h) \subseteq hseen'[3 - Ev.h]
 GapEv == Ev.op = "gap" /\ M!GapAe
 
 Init == i = 1 /\ M!Init
