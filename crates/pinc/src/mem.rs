@@ -357,4 +357,157 @@ mod tests {
     fn a_pointer_width_of_nothing_fits_nothing() {
         assert!(!fits(&Limits::wasm(), 0));
     }
+
+    /// The limits as the model's record: its field names are the model's, not the code's.
+    fn jlimits(l: &Limits) -> alloc::string::String {
+        alloc::format!(
+            r#"{{"conn":{},"pool":{},"sw":{},"snd":{},"streams":{},"ast":{},"as":{},"tmsg":{},"tlog":{},"topics":{}}}"#,
+            l.connections,
+            l.pool_chunks,
+            l.stream_window,
+            l.send_window,
+            l.streams,
+            l.accept_streams,
+            l.accept_sessions,
+            l.topic_message,
+            l.topic_log,
+            l.topics
+        )
+    }
+
+    /// A number as 15-bit limbs, lowest first (zero is none).
+    fn limbs15(mut v: u128) -> alloc::string::String {
+        let mut limbs = alloc::vec::Vec::new();
+        while v > 0 {
+            limbs.push(alloc::format!("{}", v & 0x7fff));
+            v >>= 15;
+        }
+        alloc::format!("[{}]", limbs.join(","))
+    }
+
+    /// `worst_case`, `fits` and `check_for` written out again from their documentation, in plain 128-bit arithmetic.
+    fn reference(l: &Limits, pb: u32) -> (Option<u128>, bool, &'static str) {
+        let worst = (l.connections <= 65_536).then(|| {
+            let rung = l.connections.next_power_of_two() as u128;
+            rung * (l.pool_chunks as u128 * CHUNK_SIZE as u128 + SLOT_BYTES as u128)
+                + l.topics as u128 * l.topic_log as u128
+        });
+        let bits = (pb * 8).saturating_sub(1);
+        let bound = if bits >= 128 { u128::MAX } else { (1u128 << bits) - 1 };
+        let fits = worst.is_some_and(|w| w <= bound);
+        let in_range = (1..=65_536).contains(&l.connections)
+            && (8..=65_535).contains(&l.pool_chunks)
+            && (16 * 1024..=16 * 1024 * 1024).contains(&l.stream_window)
+            && (16 * 1024..=1 << 30).contains(&l.send_window)
+            && (1..=100).contains(&l.streams)
+            && l.accept_streams >= 1
+            && l.accept_sessions >= 1
+            && (1..=16 * 1024 * 1024).contains(&l.topic_message)
+            && (1..=1 << 30).contains(&l.topic_log)
+            && (1..=4096).contains(&l.topics);
+        (
+            worst,
+            fits,
+            if !in_range {
+                "range"
+            } else if !fits {
+                "address"
+            } else {
+                "ok"
+            },
+        )
+    }
+
+    /// `worst_case`, `fits` and `check_for` of the cases of the operator's decision and of seeded limit sets, each
+    /// checked against the plain reference and recorded for the trace check.
+    #[test]
+    fn trace_limits() {
+        use core::fmt::Write as _;
+
+        use crate::trace_util::{mix, write_trace};
+
+        let base = Limits {
+            topics: 1,
+            topic_log: 0,
+            ..Limits::wasm()
+        };
+        let room = BOUND_4 - worst_case(&base).unwrap();
+        let with = |log: u128| Limits {
+            topic_log: usize::try_from(log).unwrap(),
+            ..base
+        };
+        let sessions = |connections| Limits {
+            connections,
+            ..Limits::wasm()
+        };
+        let mut cases: alloc::vec::Vec<(&str, Limits, u32)> = alloc::vec![
+            ("default-4", Limits::default(), 4),
+            ("default-8", Limits::default(), 8),
+            ("largest-4", largest(), 4),
+            ("largest-8", largest(), 8),
+            ("wasm-4", Limits::wasm(), 4),
+            ("wasm-8", Limits::wasm(), 8),
+            ("wasm-64-4", sessions(64), 4),
+            ("wasm-65-4", sessions(65), 4),
+            ("wasm-128-4", sessions(128), 4),
+            ("wasm-128-8", sessions(128), 8),
+            ("room-4", with(room), 4),
+            ("room1-4", with(room + 1), 4),
+            ("room1-8", with(room + 1), 8),
+            (
+                "above-ladder-8",
+                Limits {
+                    connections: 65_537,
+                    ..Limits::default()
+                },
+                8
+            ),
+            ("width-0", Limits::wasm(), 0),
+        ];
+        let mut seed = 3u64;
+        let mut pick = |hi: u64| usize::try_from(mix(&mut seed) % hi).unwrap();
+        for _ in 0..60 {
+            let l = Limits {
+                connections: pick(70_000),
+                pool_chunks: pick(70_000),
+                stream_window: 16 * 1024 + u64::try_from(pick(1 << 24)).unwrap(),
+                send_window: 16 * 1024 + u64::try_from(pick(1 << 30)).unwrap(),
+                streams: u16::try_from(pick(102)).unwrap(),
+                accept_streams: pick(3),
+                accept_sessions: pick(3),
+                topic_message: 1 + pick(1 << 24),
+                topic_log: pick(1 << 30),
+                topics: pick(4100),
+            };
+            let pb = u32::try_from(pick(10)).unwrap();
+            cases.push(("", l, pb));
+        }
+        let mut out = alloc::string::String::new();
+        for (name, l, pb) in &cases {
+            let (worst, fits_ref, check_ref) = reference(l, *pb);
+            assert_eq!(worst_case(l), worst, "{name}");
+            assert_eq!(fits(l, *pb), fits_ref, "{name}");
+            let check = match l.check_for(*pb as usize) {
+                Ok(()) => "ok",
+                Err(e) if e.to_string() == "a limit is out of range" => "range",
+                Err(_) => "address",
+            };
+            assert_eq!(check, check_ref, "{name}");
+            writeln!(
+                out,
+                r#"{{"name":"{name}","l":{},"pb":{pb},"slot":{SLOT_BYTES},"chunk":{CHUNK_SIZE},"wok":{},"worst":{},"fits":{},"check":"{check}"}}"#,
+                jlimits(l),
+                worst.is_some(),
+                limbs15(worst.unwrap_or(0)),
+                fits_ref
+            )
+            .unwrap();
+        }
+        assert!(
+            cases.iter().any(|(_, l, pb)| l.check_for(*pb as usize).is_ok()),
+            "no case passes"
+        );
+        assert!(cases.iter().any(|(_, l, pb)| !fits(l, *pb)), "no case is refused");
+        write_trace("limits.ndjson", &out);
+    }
 }
