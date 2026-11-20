@@ -124,6 +124,10 @@ impl<H: Hosted> Shared<H> {
         if !pinc_core::is_relay_addr(to) {
             return false;
         }
+        // Before the role restored its mailbox the packet is taken and dropped, as a lost one: the transport resends.
+        if !self.role_ready.get() {
+            return true;
+        }
         let Some(mut role) = self.role() else { return false };
         let rnow = self.relay_now(now);
         let mut carried = false;
@@ -139,6 +143,9 @@ impl<H: Hosted> Shared<H> {
 
     /// The next datagram the relay itself sends: its remote, its length in `buf` and its segment size.
     pub(super) fn role_outgoing(&self, buf: &mut [u8]) -> Option<(SocketAddr, usize, usize)> {
+        if !self.role_ready.get() {
+            return None;
+        }
         self.role()?.outgoing(buf).map(|(to, n)| (to, n, n))
     }
 
