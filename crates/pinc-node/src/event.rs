@@ -22,7 +22,7 @@ pub enum ReconcileFailure {
     Mismatch,
     /// The peer holds no set of that name.
     UnknownSet,
-    /// Every attempt ended in a reset or a closed session.
+    /// Every attempt ended in a reset or a closed session, or no dial could be recorded (the table of dials was full).
     Exhausted,
     /// The node left the group or the peer was revoked.
     Cancelled,
