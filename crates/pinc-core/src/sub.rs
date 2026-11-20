@@ -328,13 +328,14 @@ ep_impl! {
             .flatten();
         let facts = self.probe_facts(probed, probed_gen, now);
         // A pulse session's liveness is its carrier's, so a late answer is not proof of death: it is never closed.
+        // A session an earlier lapse of the same pass closed is not closed a second time.
         // vertexia: packets in flight stand in for application data in flight, so the probe's own unanswered ping usually keeps a dead session up until its path times out; exact needs a transport count of unacknowledged stream bytes (pinc#693)
         let quiet = was_quiet
             && same
             && self.slots.get(probed).is_some_and(|s| {
                 !s.m.pulse
                     && now.saturating_sub(s.m.last_rx) >= PARENT_RX
-                    && s.conn.as_ref().is_some_and(|c| c.recovery().packets_in_flight() == 0)
+                    && s.conn.as_ref().is_some_and(|c| !c.is_closed() && c.recovery().packets_in_flight() == 0)
             });
         if quiet
             && let Some(conn) = self.slots.get_mut(probed).and_then(|s| s.conn.as_mut())
