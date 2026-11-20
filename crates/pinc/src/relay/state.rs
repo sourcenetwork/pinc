@@ -43,7 +43,7 @@ mod tunnel;
 #[cfg(feature = "trace")]
 pub(super) mod probe;
 
-pub(crate) use keep::Job;
+pub(crate) use keep::{Job, Mark};
 
 /// The most control datagrams waiting for the socket.
 const UDP_BACKLOG: usize = 256;
@@ -922,7 +922,12 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
     /// When the loop must call [`Core::on_timeout`].
     pub(crate) fn next_wake(&self) -> u64 {
         let dial = self.next_dial_at();
-        self.sm.next_deadline().unwrap_or(u64::MAX).min(self.check_at).min(dial)
+        self.sm
+            .next_deadline()
+            .unwrap_or(u64::MAX)
+            .min(self.check_at)
+            .min(dial)
+            .min(self.keep_wake())
     }
 
     pub(crate) fn store_failed(&mut self) {

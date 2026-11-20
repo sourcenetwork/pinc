@@ -36,7 +36,7 @@ use pinc_node::Ep;
 use super::access::{Access, AllowAll};
 use super::carriers::{Carriers, Tag};
 use super::limits::Limits;
-use super::state::{Core, Job};
+use super::state::{Core, Job, Mark};
 use super::stats::{Event, Stats};
 use super::store::{Kept, MemStore, Store};
 use crate::keys::Identity;
@@ -70,7 +70,8 @@ pub struct Part<C: Carriers, K: KeyStore = SoftwareStore, St: Store = MemStore, 
     pub(super) core: Core<C::Stream, K, A>,
     pub(super) carriers: Rc<C>,
     pub(super) store: Rc<St>,
-    writing: bool,
+    /// What the write out now is about; a failure or the end of the run marks it again.
+    writing: Option<Mark>,
 }
 
 impl<C: Carriers, K: KeyStore, St: Store, A: Access> core::fmt::Debug for Part<C, K, St, A> {
@@ -85,7 +86,7 @@ impl<C: Carriers, K: KeyStore, St: Store, A: Access> Part<C, K, St, A> {
             core,
             carriers,
             store: Rc::new(store),
-            writing: false,
+            writing: None,
         }
     }
 
@@ -229,22 +230,27 @@ impl<C: Carriers, K: KeyStore, St: Store, A: Access> Part<C, K, St, A> {
     /// The next write to the store, if one is due and none is out. The driver runs it ([`StoreWrite::run`]) and reports
     /// with [`Part::store_written`].
     pub fn next_store_write(&mut self) -> Option<StoreWrite<St>> {
-        if self.writing {
+        if self.writing.is_some() {
             return None;
         }
         let job = self.core.next_job()?;
-        self.writing = true;
+        self.writing = Some(job.mark());
         Some(StoreWrite {
             store: Rc::clone(&self.store),
             job,
         })
     }
 
-    /// The write taken last finished, `ok` if the store kept it. A failure is counted and reported as an event.
-    pub fn store_written(&mut self, ok: bool) {
-        self.writing = false;
+    /// The write taken last finished at `now` (the part's clock), `ok` if the store kept it. A failure is counted and
+    /// reported as an event, and the write is tried again a second later (one write a second while the store fails).
+    pub fn store_written(&mut self, ok: bool, now: u64) {
+        let mark = self.writing.take();
         if !ok {
             self.core.store_failed();
+            if let Some(mark) = mark {
+                self.core.requeue(mark);
+                self.core.retry_after(now);
+            }
         }
     }
 
@@ -314,3 +320,133 @@ pub type SharedIdentity<K> = Rc<RefCell<Identity<K>>>;
 
 /// What a builder makes: the state machine, the store, the identity and the limits.
 pub(super) type Made<S, K, St, A> = (Core<S, K, A>, St, SharedIdentity<K>, Limits);
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, reason = "tests assert")]
+mod tests {
+    use alloc::vec;
+    use core::cell::Cell;
+    use core::future::pending;
+    use core::pin::pin;
+    use core::task::Waker;
+
+    use pinc_crypto::{IdentityAlg, NodeId};
+
+    use super::*;
+    use crate::error::Error;
+    use crate::relay::Relay;
+    use crate::relay::carriers::{Completion, Tag};
+    use crate::relay::peers::Peer;
+
+    const T0: u64 = 1_000_000_000_000;
+    const SEC: u64 = 1_000_000_000;
+
+    /// Carriers that count the accepts asked of them and never complete anything.
+    struct Mock(Rc<Cell<u32>>);
+
+    impl Carriers for Mock {
+        type Stream = ();
+
+        fn submit_accept(&self, _: Tag) {
+            self.0.set(self.0.get() + 1);
+        }
+
+        fn submit_open(&self, _: Tag, _: &Peer, _: crate::carrier::CarrierKind) {}
+
+        fn submit_read(&self, _: &Rc<()>, _: Tag, _: Vec<u8>) {}
+
+        fn submit_write(&self, _: &Rc<()>, _: Tag, _: Vec<u8>, _: usize) {}
+
+        fn close(&self, _: Tag, _: Rc<()>) {}
+
+        fn poll_completed(&self, _: &mut Context<'_>) -> Poll<Completion<()>> {
+            Poll::Pending
+        }
+
+        fn drive(&self) -> impl Future<Output = ()> {
+            pending()
+        }
+    }
+
+    /// A store whose first mailbox write fails; it counts every mailbox write.
+    #[derive(Clone, Default)]
+    struct Flaky {
+        writes: Rc<Cell<u32>>,
+        fail_first: Rc<Cell<bool>>,
+    }
+
+    #[allow(clippy::unused_async_trait_impl, reason = "the test store never waits")]
+    impl Store for Flaky {
+        async fn load(&self) -> crate::Result<Kept> {
+            Ok(Kept::default())
+        }
+
+        async fn put(&self, _: &NodeId, _: &[u8], _: u64) -> crate::Result<()> {
+            Ok(())
+        }
+
+        async fn remove(&self, _: &NodeId) -> crate::Result<()> {
+            Ok(())
+        }
+
+        async fn put_mailbox(&self, _: &NodeId, _: &[u8]) -> crate::Result<()> {
+            self.writes.set(self.writes.get() + 1);
+            if self.fail_first.replace(false) {
+                Err(Error::config("the store failed"))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    fn part(store: Flaky) -> (Part<Mock, SoftwareStore, Flaky>, Rc<Cell<u32>>) {
+        let accepts = Rc::new(Cell::new(0));
+        let p = Relay::builder()
+            .identity(Identity::from_seed_with(&[7; 32], &[0; 32]).unwrap())
+            .store(store)
+            .build_part(Mock(Rc::clone(&accepts)), T0)
+            .unwrap();
+        (p, accepts)
+    }
+
+    fn done<T>(f: impl Future<Output = T>) -> T {
+        let mut f = pin!(f);
+        match f.as_mut().poll(&mut Context::from_waker(Waker::noop())) {
+            Poll::Ready(v) => v,
+            Poll::Pending => panic!("the store waited"),
+        }
+    }
+
+    /// A member whose held packets the store has, in a form that does not parse: restoring it queues one mailbox write.
+    fn owed_write() -> Kept {
+        Kept {
+            records: Vec::new(),
+            mailboxes: vec![(
+                NodeId {
+                    alg: IdentityAlg::Ed25519,
+                    bytes: [9; 32],
+                },
+                Vec::new(),
+            )],
+        }
+    }
+
+    #[test]
+    fn a_failed_write_is_tried_again_after_a_second() {
+        let store = Flaky::default();
+        store.fail_first.set(true);
+        let (mut p, _) = part(store.clone());
+        p.restore(T0, &owed_write());
+        let w = p.next_store_write().expect("one write is owed");
+        assert!(done(w.run()).is_err());
+        p.store_written(false, T0);
+        assert_eq!(p.stats().store_errors, 1);
+        assert!(p.next_store_write().is_none(), "the retry came at once");
+        p.handle_timeout(T0 + SEC);
+        let w = p.next_store_write().expect("the failed write was forgotten");
+        assert!(done(w.run()).is_ok());
+        p.store_written(true, T0 + SEC);
+        assert_eq!(store.writes.get(), 2);
+        assert!(p.next_store_write().is_none());
+    }
+}

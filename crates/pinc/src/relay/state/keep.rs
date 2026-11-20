@@ -6,7 +6,8 @@
 //! lifetime is removed from the store; a record and a packet come back with the time they arrived, so what is left of
 //! their lifetime is the same after a restart.
 //!
-//! A mark the mailbox table has no room for is counted as a store error.
+//! A write that fails or is dropped with its run is marked again, and tried again after `RETRY_NS`; a failure of the
+//! store is counted and reported, and a mark the table has no room for counts as one.
 //!
 //! Invariants: the nodes marked are at most twice the record table and four times the mailbox member table; a packet
 //! is written with its arrival time and restored oldest first; nothing past its lifetime is restored.
@@ -39,8 +40,24 @@ pub(super) struct Keep {
     mail: Vec<NodeId>,
     /// When `held` is next checked against the machine's records; `None` before the first check.
     next_sweep: Option<u64>,
+    /// Not before this time is a failed write tried again; zero when none failed.
+    retry_at: u64,
     /// Restoring: the machine reports what it restores, which is already in the store.
     restoring: bool,
+}
+
+/// How long after a failed write the next is tried.
+const RETRY_NS: u64 = 1_000_000_000;
+
+/// What a write is about, kept while it is out so a failure or a dropped run can mark the node again.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Mark {
+    /// A record was kept.
+    Put(NodeId),
+    /// A record was forgotten.
+    Remove(NodeId),
+    /// The packets held for a member were kept.
+    Mail(NodeId),
 }
 
 /// One write to the store.
@@ -52,6 +69,17 @@ pub(crate) enum Job {
     Remove(NodeId),
     /// Keep the packets held for a member (empty: none are held).
     Mail(NodeId, Vec<u8>),
+}
+
+impl Job {
+    /// The mark that gives this write back.
+    pub(crate) fn mark(&self) -> Mark {
+        match *self {
+            Self::Put(n, ..) => Mark::Put(n),
+            Self::Remove(n) => Mark::Remove(n),
+            Self::Mail(n, _) => Mark::Mail(n),
+        }
+    }
 }
 
 /// Append one packet to a member's blob: source, flag, arrival, length, body.
@@ -128,8 +156,38 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
         });
     }
 
+    /// A write that was taken did not finish: mark its node again.
+    pub(crate) fn requeue(&mut self, mark: Mark) {
+        match mark {
+            Mark::Put(n) => self.note_record(n),
+            Mark::Remove(n) => {
+                if !self.keep.removed.contains(&n) {
+                    self.keep.removed.push(n);
+                }
+            }
+            Mark::Mail(n) => self.note_mail(n),
+        }
+    }
+
+    /// The store refused a write at `now`: the next one waits for [`RETRY_NS`].
+    pub(crate) const fn retry_after(&mut self, now: u64) {
+        self.keep.retry_at = now.saturating_add(RETRY_NS);
+    }
+
+    /// When a write held back by a failure may be tried again, or the end of time.
+    pub(super) const fn keep_wake(&self) -> u64 {
+        if self.keep.retry_at > self.last_now {
+            self.keep.retry_at
+        } else {
+            u64::MAX
+        }
+    }
+
     /// The next write to the store, if any.
     pub(crate) fn next_job(&mut self) -> Option<Job> {
+        if self.last_now < self.keep.retry_at {
+            return None;
+        }
         if let Some(n) = self.keep.removed.pop() {
             return Some(Job::Remove(n));
         }

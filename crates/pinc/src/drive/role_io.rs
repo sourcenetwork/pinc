@@ -189,7 +189,7 @@ impl<H: Hosted> Shared<H> {
                 persist.set(None);
                 moved = true;
                 if let Some(mut role) = self.role() {
-                    role.written(r.is_ok());
+                    role.written(r.is_ok(), rnow);
                 }
             }
             if moved {
