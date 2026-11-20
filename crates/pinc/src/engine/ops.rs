@@ -264,6 +264,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
         if let Some(s) = self.sessions.get_mut(&session) {
             s.send_fail.retain(|(i, _)| *i != stream);
         }
+        self.wake_queued();
     }
 
     /// Read what a stream has into `buf`: how many bytes, and how the stream ended if this read saw its end.
@@ -350,6 +351,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
                 s.discard.push(stream);
             }
         }
+        self.wake_queued();
     }
 
     pub(crate) fn send_datagram(&mut self, now: u64, info: &SessInfo, data: &[u8]) -> Result<()> {
@@ -384,6 +386,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
         if self.sessions.contains_key(&session) {
             let _ = self.cmd(now, || Command::Close { session, error: code });
         }
+        self.wake_queued();
     }
 
     /// Whether the peer was heard on the session, the reason the session ended first, else a wait.
@@ -603,6 +606,14 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
     pub(crate) fn wake_driver(&mut self) {
         if let Some(t) = self.driver {
             self.standby.notify(t);
+        }
+    }
+
+    /// Wake the future that drives if a command left packets to send: a handle dropped on a thread of the host that
+    /// has no future of its own pending would else leave them until the next timer.
+    fn wake_queued(&mut self) {
+        if self.dirty {
+            self.wake_driver();
         }
     }
 

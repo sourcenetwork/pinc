@@ -218,6 +218,36 @@ async fn a_stop_cancelled_before_it_ran_leaves_the_stream_readable() {
 }
 
 #[nuclei::test]
+async fn a_dropped_send_stream_ends_the_stream_for_the_peer_at_once() {
+    within(60, async {
+        let (_server, _client, _c, _s, tx, _rx, _stx, mut srx) = {
+            let server = bind(pinc_common::builder().alpn(ECHO)).await;
+            let client = bind(pinc_common::builder().alpn(ECHO)).await;
+            let c = client.connect(server.addr(), ECHO).await.unwrap();
+            let (mut tx, rx) = c.open_bi().await.unwrap();
+            tx.write_all(b"hi").await.unwrap();
+            let s = server.accept().await.unwrap().into_connection();
+            let (stx, srx) = s.accept_bi().await.unwrap();
+            (server, client, c, s, tx, rx, stx, srx)
+        };
+        let mut buf = [0u8; 8];
+        assert_eq!(srx.read(&mut buf).await.unwrap(), Some(2));
+        // Everything is acknowledged and no timer is near: only the drop can wake the driving future.
+        nuclei::time::sleep(Duration::from_millis(400)).await;
+        let started = Instant::now();
+        drop(tx);
+        let end = within(10, srx.read(&mut buf)).await.unwrap();
+        assert_eq!(end, None);
+        assert!(
+            started.elapsed() < Duration::from_millis(100),
+            "the end arrived after {:?}",
+            started.elapsed()
+        );
+    })
+    .await;
+}
+
+#[nuclei::test]
 async fn a_stream_the_server_refused_keeps_the_entry_of_a_stream_the_peer_stopped() {
     within(120, async {
         let limits = Limits {
