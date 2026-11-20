@@ -252,7 +252,7 @@ theorem Ntc.prepare_short (cap : Nat) (r : Ntc) (hc : cap < r.head.length) :
   exact run_short CErr.wire cap r.prepareOps g [] (by simp) (by rw [b]; simpa using hc)
 
 /-- The label of the signed message of a sleep notice. -/
-def sleepLabel : List Nat := [118, 105, 110, 99, 45, 115, 108, 101, 101, 112]
+def sleepLabel : List Nat := [112, 105, 110, 99, 45, 115, 108, 101, 101, 112]
 
 /-- `message`: what a notice's signature covers, the relay it is for, the node and the clock. -/
 def sleepMessage (relay node : List Nat) (ts : Nat) : List Nat := sleepLabel ++ relay ++ node ++ beBytes 8 ts

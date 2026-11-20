@@ -399,7 +399,7 @@ NtcParse(b) ==
 NtcHead(r) == r.node \o r.ts \o r.pk
 NtcBytes(r) == NtcHead(r) \o r.sg
 NtcPrepare(cap, r) == Run("", cap, <<Put(r.node), Put(r.ts), Put(r.pk)>>, <<>>)
-SleepLabel == <<118, 105, 110, 99, 45, 115, 108, 101, 101, 112>>
+SleepLabel == <<112, 105, 110, 99, 45, 115, 108, 101, 101, 112>>  \* "pinc-sleep"
 SleepMessage(relay, node, ts) == SleepLabel \o relay \o node \o ts
 
 (* ---- the ticket ---- *)
