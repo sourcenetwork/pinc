@@ -64,3 +64,4 @@ TraceSpec == Init /\ [][Next]_x
 AllOK == /\ \A k \in DOMAIN Trace : Trace[k].t = "addr" /\ EvOK(Trace[k])
          \* an address with a flow label was given to with_direct
          /\ \E k \in DOMAIN Trace : Trace[k].op = "direct" /\ Trace[k].a.flow # 0
+=============================================================================

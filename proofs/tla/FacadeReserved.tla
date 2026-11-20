@@ -41,9 +41,9 @@ Vals(c) == {(c + 1) % 256, Xor32(c), 0} \ {c}
 
 \* the cases: a cut is proper, a change is one of Vals at a position inside the prefix
 Cut == {[d |-> p, want |-> TRUE] : p \in PSet}
-       \cup {[d |-> SubSeq(p, 1, n), want |-> FALSE] : p \in PSet, n \in {m \in 0..10 : m < Len(p)}}
-       \cup UNION {{[d |-> Changed(p, k, v), want |-> FALSE] : v \in Vals(p[k])} : <<p, k>> \in
-                   {<<q, j>> \in PSet \X (1..10) : j <= Len(q)}}
+       \cup (UNION {{[d |-> SubSeq(p, 1, n), want |-> FALSE] : n \in {m \in 0..10 : m < Len(p)}} : p \in PSet})
+       \cup (UNION {{[d |-> Changed(p, k, v), want |-> FALSE] : v \in Vals(p[k])} : <<p, k>> \in
+                    {<<q, j>> \in PSet \X (1..10) : j <= Len(q)}})
        \cup {[d |-> p \o <<x>>, want |-> TRUE] : p \in PSet, x \in {0, 32, 120, 255}}
        \cup {[d |-> Label \o <<118, x, 32, 1, 2, 3>>, want |-> TRUE] : x \in {49, 57}}
 

@@ -39,7 +39,7 @@ Conn(x) == x.id * 65536 + x.slot - 1
 \* the operation the test handed back
 OpOf(d) ==
     IF d.k = "acc" THEN AccOp
-    ELSE [k |-> d.k, id |-> d.conn \div 65536, slot |-> d.conn % 65536 + 1,
+    ELSE [k |-> d.k, id |-> d.conn \div 65536, slot |-> (d.conn % 65536) + 1,
           h |-> LET c == {x \in m.o : x.k = d.k /\ Conn(x) = d.conn} IN IF c = {} THEN 0 ELSE (CHOOSE x \in c : TRUE).h]
 
 New(m1, k) == {x \in m1.o \ m.o : x.k = k}
