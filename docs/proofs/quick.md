@@ -17,6 +17,8 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `BroadcastAuth_nots` | MaxPub 2 -> 1 |
 | `BroadcastFloors` | Members {5, 6} -> {5} |
 | `BroadcastFloors_cap1` | Hubs {1, 2} -> {1} |
+| `BroadcastFloors_future` | Members {5, 6} -> {5} |
+| `BroadcastFloors_top` | Origins {7, 8} -> {7} |
 | `BroadcastLog` | Ring 6 -> 4, Cap 3 -> 2, MaxN 4 -> 2, Mids {1, 2, 3} -> {1, 2} (as many ids as the cap, as in the deep config; BroadcastLog_cap keeps one id more) |
 | `BroadcastLog_big` | Ring 6 -> 4, Cap 3 -> 2, MaxN 7 -> 5 (still one more than the ring), Mids {1, 2, 3} -> {1, 2} (as many ids as the cap, as before) |
 | `BroadcastLog_cap` | Ring 6 -> 4, Cap 3 -> 2, MaxN 4 -> 2, Mids {1, 2, 3, 4} -> {1, 2, 3} (still one id more than the cap) |
