@@ -33,6 +33,8 @@ pub struct SendStream<H: Hosted> {
     conn: Rc<ConnInner<H>>,
     id: u64,
     finished: bool,
+    /// The code this handle reset the stream with, once the endpoint took the reset.
+    reset: Option<u64>,
 }
 
 /// The receiving half of a stream.
@@ -66,6 +68,7 @@ impl<H: Hosted> SendStream<H> {
             conn: Rc::clone(conn),
             id,
             finished: false,
+            reset: None,
         }
     }
 
@@ -79,6 +82,9 @@ impl<H: Hosted> SendStream<H> {
     /// # Errors
     /// The error that ended the stream: a reset, or a closed connection.
     pub async fn write(&mut self, buf: &[u8]) -> Result<usize> {
+        if let Some(code) = self.reset {
+            return Err(Error::new(ErrorKind::Stopped(code), "the stream was reset"));
+        }
         if self.finished {
             return Err(Error::new(ErrorKind::Stopped(0), "the stream is finished"));
         }
@@ -103,6 +109,9 @@ impl<H: Hosted> SendStream<H> {
     /// # Errors
     /// The error that ended the stream.
     pub async fn finish(&mut self) -> Result<()> {
+        if let Some(code) = self.reset {
+            return Err(Error::new(ErrorKind::Stopped(code), "the stream was reset"));
+        }
         if self.finished {
             return Ok(());
         }
@@ -150,10 +159,11 @@ impl<H: Hosted> SendStream<H> {
 
     /// Abandon the stream: bytes not yet sent are dropped and the peer sees a reset with `code`.
     pub async fn reset(&mut self, code: u64) {
-        self.finished = true;
         let (c, id) = (&self.conn, self.id);
+        let st = &mut self.reset;
         c.sh.run(|core, now| {
             core.reset(now, &c.info, id, code);
+            *st = Some(code);
             Try::Done(())
         })
         .await;
@@ -164,7 +174,7 @@ impl<H: Hosted> Drop for SendStream<H> {
     fn drop(&mut self) {
         let now = self.conn.sh.now();
         if let Some(mut core) = self.conn.sh.lock() {
-            core.drop_send(now, &self.conn.info, self.id, self.finished);
+            core.drop_send(now, &self.conn.info, self.id, self.finished || self.reset.is_some());
         }
     }
 }
