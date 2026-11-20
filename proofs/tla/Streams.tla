@@ -103,8 +103,13 @@ INSTANCE StreamsOps
 Init == T = (IF EARLY THEN SetEarly(Init0, TRUE) ELSE Init0) /\ clock = 0 /\ elo = 0
 
 Ids == RemIds \cup LocIds
+\* Whether a frame's diff (its bytes differ from those stored where they overlap) can change the step on id: only on a
+\* stream that holds a stored range. Elsewhere diff TRUE gives the step diff FALSE gives, so FrameOp leaves it out: the
+\* same successors, half the evaluations of Frame
+DiffMatters(id) == LET i == FindSlot(T, id) IN i # 0 /\ T.slots[i].rs # <<>>
 FrameOp == \E id \in Ids, off \in 0..HOR, len \in 0..LMAX, fin \in BOOLEAN, diff \in BOOLEAN :
     /\ off + len <= HOR
+    /\ diff => DiffMatters(id)
     /\ T' = Frame(T, id, off, len, fin, diff).t /\ UNCHANGED clock
 ResetOp == \E id \in Ids, fs \in 0..HOR : T' = Reset(T, id, 1, fs).t /\ UNCHANGED clock
 ConsumeOp == \E id \in Ids, n \in 0..HOR, d \in 0..DT, srtt \in SRTTS :
@@ -130,7 +135,10 @@ LostStopOp == \E id \in Ids : T' = CtlLostStop(T, id) /\ UNCHANGED clock
 AckedStopOp == \E id \in Ids : T' = CtlAckedStop(T, id) /\ UNCHANGED clock
 StopReqOp == \E id \in Ids : T' = StopReq(T, id, 7).t /\ UNCHANGED clock
 OnStopOp == \E id \in Ids, e2 \in 0..T.ext : T' = OnStop(T, id, 7, e2).t /\ UNCHANGED clock
-FinishOp == \E id \in Ids, e2 \in 0..T.ext, dn \in BOOLEAN : T' = Finish(T, id, e2, dn) /\ UNCHANGED clock
+\* done changes the step only on a send half that is neither done nor reset; elsewhere it is left out (the same successors)
+DoneMatters(id) == LET i == FindSlot(T, id) IN i # 0 /\ ~T.slots[i].sdone /\ T.slots[i].srst = 0
+FinishOp == \E id \in Ids, e2 \in 0..T.ext, dn \in BOOLEAN :
+    (dn => DoneMatters(id)) /\ T' = Finish(T, id, e2, dn) /\ UNCHANGED clock
 SendOutOp == RELEASE /\ \E i \in 1..N, f \in BOOLEAN : T' = SendOut(T, i, f) /\ UNCHANGED clock
 ExtOp == \E e2 \in 0..EXTMAX : T' = ExtTo(T, e2) /\ UNCHANGED clock
 CloseOp == \E e2 \in 0..T.ext : T' = CloseAll(T, e2) /\ UNCHANGED clock
@@ -201,7 +209,7 @@ ReleasedArePeer == \A i \in Live : ~T.slots[i].cnt => ~IsLocal(T.slots[i].id)
 CountersEveryLive == T.rl = Cardinality({i \in Live : ~IsLocal(T.slots[i].id)})
 Admitted == \A i \in Live : ~IsLocal(T.slots[i].id) => Idx(T.slots[i].id) < T.rn[Class(T.slots[i].id)]
 \* a peer stream that does not fit is held back: any error answer of locate leaves the table as it was
-LocatePure == \A id \in Ids : Locate(T, id).err # "ok" => Locate(T, id).t = T
+LocatePure == \A id \in Ids : LET L == Locate(T, id) IN L.err # "ok" => L.t = T
 \* an arriving stream opens every lower id of its kind and initiator, one slot and one count each
 ImplicitOpens == \A id \in Ids : LET L == Locate(T, id) IN
     (~IsLocal(id) /\ Idx(id) >= T.rn[Class(id)] /\ L.err = "ok") =>
@@ -213,8 +221,10 @@ ImplicitOpens == \A id \in Ids : LET L == Locate(T, id) IN
 Held4 == T.rn[0] = 1 /\ Locate(T, 4).err = "Exhausted"
 NoHeldAdmit == [](Held4 => [](FindSlot(T, 4) = 0))
 NoJump == [][~(T.rn[0] = 0 /\ T'.rn[0] >= 2)]_vars
-\* a stop that resets the send half leaves the peer's code on it
-StopEndsWithCode == \A id \in Ids, c \in 0..1, e2 \in 0..T.ext : LET R == OnStop(T, id, c, e2) IN
+\* a stop that resets the send half leaves the peer's code on it. The hold of the pool's other users the call leaves
+\* (OnStop's ext2) is taken as it is: whether the stop is fresh, which slots the settle frees (RecvDone, SendDone) and
+\* the code are the same for every ext2, which moves only grants and the credit, so the other values check nothing more
+StopEndsWithCode == \A id \in Ids, c \in 0..1 : LET R == OnStop(T, id, c, T.ext) IN
     R.fresh => (FindSlot(R.t, id) # 0 /\ R.t.slots[FindSlot(R.t, id)].scode = c)
 \* a queued stop or reset carries a code
 CodesSet == \A i \in Live : (T.slots[i].stop \in {1, 2} => T.slots[i].qcode # -1) /\ (T.slots[i].srst \in {1, 2} => T.slots[i].scode # -1)

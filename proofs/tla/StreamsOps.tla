@@ -230,9 +230,14 @@ FreeSlots(T) == Cardinality({i \in 1..N : T.slots[i].id = -1})
 AdmCharge(T) == LET f[i \in 0..N] == IF i = 0 THEN 0 ELSE f[i - 1] + Min(Unreceived(T.slots[i]), FirstW) IN f[N]
 AdmitRoom(T) == LET fit == Max(Avail(T) - AdmCharge(T), 0) \div FirstW
                 IN Min(Min(Max(CapLive - T.rl, 0), FreeSlots(T)), AdmitFit(fit))
+\* The room is at most the cap left and the free slots, so when those cannot take the credit past what was advertised
+\* nothing is raised and the pool sums are not taken (the same result, fewer evaluations: the model checker spends most
+\* of a step in them)
+RoomBound(T) == Min(Max(CapLive - T.rl, 0), FreeSlots(T))
 RefreshAdmit(T) ==
-    LET now == AdmittedN(T) + AdmitRoom(T)
-    IN IF now > T.ad.adv THEN [T EXCEPT !.ad.adv = now, !.ad.pend = TRUE] ELSE T
+    IF AdmittedN(T) + RoomBound(T) <= T.ad.adv THEN T
+    ELSE LET now == AdmittedN(T) + AdmitRoom(T)
+         IN IF now > T.ad.adv THEN [T EXCEPT !.ad.adv = now, !.ad.pend = TRUE] ELSE T
 \* the rule before 0d36b306: a raise waited until the room grew by an eighth of the credit last given (one stream at
 \* least) unless the opener had used all of it. The table no longer keeps adv_at (the streams admitted when adv was
 \* set), so it is taken as 0, its value until the first raise: exact up to the first raise, where Streams_raise_w.cfg
