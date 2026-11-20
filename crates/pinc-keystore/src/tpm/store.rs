@@ -262,9 +262,9 @@ impl<T: Transport> TpmStore<T> {
     }
 
     /// Send `cmd`, which may need a free object slot; while the TPM answers that it has none, retry the flushes it
-    /// refused earlier (once), then unload the least recently used loaded key other than `keep` and send `cmd`
-    /// again. Each pass frees a slot or ends the loop, so `cmd` is sent at most the number of loaded keys plus two
-    /// times. While the TPM has room, `cmd` is sent once and nothing else.
+    /// refused earlier (once), then unload the least recently used loaded key other than `keep` (the next one when
+    /// the TPM refuses the flush) and send `cmd` again. Each pass frees a slot or ends the loop, so `cmd` is sent at
+    /// most the number of loaded keys plus two times. While the TPM has room, `cmd` is sent once and nothing else.
     fn room<R>(
         &mut self,
         keep: Option<u64>,
@@ -281,8 +281,18 @@ impl<T: Transport> TpmStore<T> {
                 self.reclaim();
                 continue;
             }
-            let id = self.least_used(keep).ok_or(KeyStoreError::TpmFull)?;
-            self.unload(id)?;
+            // A flush the TPM refuses frees no slot: the next least recently used key is tried, and the refusal is
+            // the error only when no key could be unloaded.
+            let mut refused = None;
+            loop {
+                let Some(id) = self.least_used(keep) else {
+                    return Err(refused.unwrap_or(KeyStoreError::TpmFull));
+                };
+                match self.unload(id) {
+                    Ok(()) => break,
+                    Err(e) => refused = Some(e),
+                }
+            }
         }
     }
 
@@ -296,6 +306,9 @@ impl<T: Transport> TpmStore<T> {
             Place::Persistent(h) | Place::Transient { handle: Some(h), .. } => return Ok(*h),
             Place::Transient { handle: None, blob } => blob.clone(),
         };
+        if !self.stale.is_empty() {
+            self.reclaim();
+        }
         let handle = self.room(Some(id), |c, _, primary| c.load(primary, &[], &blob))?;
         self.adopt(handle);
         if let Some(Place::Transient { handle: h, .. }) = self.keys.get_mut(&id).map(|s| &mut s.place) {

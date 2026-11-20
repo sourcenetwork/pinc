@@ -410,3 +410,94 @@ fn a_lost_flush_answer_after_persist_does_not_make_two_keys_one_object() {
         verify(alg, &pk, b"own key", sig.as_bytes()).unwrap_or_else(|e| panic!("{name} signed with another key: {e}"));
     }
 }
+
+const REFUSED: u32 = 0x142;
+
+/// Counts `Load` commands, and answers a refusal for the next `refuse` `FlushContext` commands without running them,
+/// so the object stays in the TPM.
+struct RefuseFlush<T: Transport>(T, Arc<AtomicUsize>, Arc<AtomicUsize>);
+
+impl<T: Transport> Transport for RefuseFlush<T> {
+    fn transmit(&mut self, command: &[u8]) -> std::io::Result<Vec<u8>> {
+        let code = command.get(6..10).map(|b| u32::from_be_bytes(b.try_into().unwrap()));
+        if code == Some(0x157) {
+            self.2.fetch_add(1, Ordering::Relaxed);
+        }
+        if code == Some(0x165) && self.1.load(Ordering::Relaxed) > 0 {
+            self.1.fetch_sub(1, Ordering::Relaxed);
+            let mut rsp = vec![0x80, 0x01, 0, 0, 0, 10];
+            rsp.extend_from_slice(&REFUSED.to_be_bytes());
+            return Ok(rsp);
+        }
+        self.0.transmit(command)
+    }
+}
+
+fn refusing(tpm: &Swtpm) -> (TpmStore<RefuseFlush<SimTransport>>, Arc<AtomicUsize>, Arc<AtomicUsize>) {
+    let (refuse, loads) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+    let transport = RefuseFlush(
+        SimTransport::connect(("127.0.0.1", tpm.port)).unwrap(),
+        refuse.clone(),
+        loads.clone(),
+    );
+    (TpmStore::open(transport, TpmConfig::new()).unwrap(), refuse, loads)
+}
+
+#[test]
+fn a_refused_unload_tries_the_next_least_recently_used_key() {
+    let tpm = Swtpm::start();
+    let (mut store, refuse, _) = refusing(&tpm);
+    let k1 = store.generate(IdentityAlg::EcdsaP256).unwrap();
+    let k2 = store.generate(IdentityAlg::EcdsaP256).unwrap();
+    refuse.store(1, Ordering::Relaxed);
+    // The TPM is full: k1 is unloaded first, its flush is refused, so k2 is unloaded instead.
+    let k3 = store
+        .generate(IdentityAlg::EcdsaP256)
+        .unwrap_or_else(|e| panic!("a refused flush of one key failed a call that another key could serve: {e:?}"));
+    for k in [&k1, &k2, &k3, &k1] {
+        sign_verifies_any(&mut store, k, b"after a refused unload");
+    }
+}
+
+#[test]
+fn the_refusal_is_the_error_only_when_no_key_could_be_unloaded() {
+    let tpm = Swtpm::start();
+    let (mut store, refuse, _) = refusing(&tpm);
+    store.generate(IdentityAlg::EcdsaP256).unwrap();
+    store.generate(IdentityAlg::EcdsaP256).unwrap();
+    refuse.store(2, Ordering::Relaxed);
+    assert_eq!(
+        store.generate(IdentityAlg::EcdsaP256),
+        Err(KeyStoreError::Tpm { code: REFUSED })
+    );
+}
+
+#[test]
+fn an_unloaded_key_loads_after_the_refused_flushes_are_retried() {
+    let tpm = Swtpm::start();
+    let (mut store, refuse, loads) = refusing(&tpm);
+    let k1 = store.generate(IdentityAlg::EcdsaP256).unwrap();
+    let k2 = store.generate(IdentityAlg::EcdsaP256).unwrap();
+    let k3 = store.generate(IdentityAlg::EcdsaP256).unwrap();
+    assert_eq!(store.tpm_handle(&k1), None, "k1 was unloaded by the third key");
+    // k2 becomes persistent, but its transient copy stays in the TPM, so the TPM is full again.
+    refuse.store(1, Ordering::Relaxed);
+    store.persist(&k2, PERSISTENT_KEY).unwrap();
+    loads.store(0, Ordering::Relaxed);
+    sign_verifies_any(&mut store, &k1, b"reload");
+    assert_eq!(
+        loads.load(Ordering::Relaxed),
+        1,
+        "the load was sent into a full TPM before the refused flush was retried"
+    );
+    assert!(
+        store.tpm_handle(&k3).is_some(),
+        "the loaded key was unloaded although the retried flush freed a slot"
+    );
+}
+
+fn sign_verifies_any<T: Transport>(store: &mut TpmStore<T>, key: &KeyHandle, msg: &[u8]) {
+    let (alg, pk) = store.public(key).unwrap();
+    let sig = store.sign(key, msg).unwrap();
+    verify(alg, &pk, msg, sig.as_bytes()).unwrap();
+}
