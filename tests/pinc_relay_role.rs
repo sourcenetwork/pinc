@@ -30,6 +30,7 @@ use std::time::{Duration, Instant};
 use pinc::relay::{CarrierFns, MemStore, Peer, Relay as RelayHost};
 use pinc::{CarrierKind, Endpoint, Error, ErrorKind, Event, Hosted, Relay};
 use pinc_common::{ECHO, eventually, serve_conn, within};
+use pinc_connect::relay::rule::HUB_TUNNEL_FRESH_NS;
 use smol::channel::{Receiver, Sender, unbounded};
 
 const RELAY_ADDR: &str = "10.0.0.1:7000";
@@ -253,6 +254,11 @@ fn relay_endpoint(
         )
         .unwrap()
 }
+
+/// The relay tunnels to a member it heard within the hub's freshness bound: wait the bound out, and a second more, so
+/// that the packets for a member that left are held. The platform of these endpoints is the system's, so its clock
+/// cannot be moved and the wait is real time.
+const FRESH_WAIT: Duration = Duration::from_nanos(HUB_TUNNEL_FRESH_NS + 1_000_000_000);
 
 /// What the tests run on: the network, the relay endpoint and the two members, all driven.
 struct Rig<R: Hosted, A: Hosted, B: Hosted> {
@@ -531,8 +537,7 @@ async fn mail_held_for_a_member_that_returns_on_an_unvalidated_route_is_handed_o
         rig.b_carrier_up.set(false);
         rig.b.suspend().await;
         settle(&rig.relay, 30, "B's carrier closed", |s| s.carriers == 1).await;
-        // the relay tunnels to a member it heard within the freshness bound (20 s): wait it out so the mail is held
-        nuclei::time::sleep(Duration::from_secs(21)).await;
+        nuclei::time::sleep(FRESH_WAIT).await;
         // A dials B: its first packets are held at the relay
         let (a, b_id) = (rig.a.clone(), rig.b.id());
         nuclei::spawn_local(async move {
@@ -564,8 +569,7 @@ async fn a_second_run_of_the_relay_endpoint_holds_a_packet_once() {
         rig.b_carrier_up.set(false);
         rig.b.suspend().await;
         settle(&rig.relay, 30, "B's carrier closed", |s| s.carriers == 1).await;
-        // the relay tunnels to a member it heard within the freshness bound (20 s): wait it out so the mail is held
-        nuclei::time::sleep(Duration::from_secs(21)).await;
+        nuclei::time::sleep(FRESH_WAIT).await;
         let (a, b_id) = (rig.a.clone(), rig.b.id());
         nuclei::spawn_local(async move {
             let _ = a.connect(b_id, ECHO).await;
