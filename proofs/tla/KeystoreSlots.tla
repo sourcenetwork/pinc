@@ -249,12 +249,13 @@ TypeOK == /\ tpm \in [Pool -> {FREE, PRIMARY, FOREIGN, SEALED} \cup Keys]
           /\ stale \subseteq Pool /\ leaked \subseteq Pool
           /\ res \in {"none", "busy", "ok", "err", "full"}
 
-Agree == /\ \A k \in Keys : place[k] > 0 => tpm[place[k]] = k
-         /\ ~dropped => tpm[PH] = PRIMARY
+\* after Drop the store is gone: its records name nothing (NoLeakOnDrop covers that state)
+Agree == ~dropped => /\ \A k \in Keys : place[k] > 0 => tpm[place[k]] = k
+                     /\ tpm[PH] = PRIMARY
 StaleNotLive == \A h \in stale : h # PH /\ tpm[h] # FOREIGN /\ \A k \in Keys : place[k] # h
 LeakedOnStale == ~dropped => leaked \subseteq stale
-NoFalseFull == pc = "idle" /\ res = "full" => ~HasRoom /\ Loaded \subseteq {rm.keep}
-Usable == pc = "idle" /\ res = "full" /\ Foreign + 2 <= Slots => leaked # {}
+NoFalseFull == ~dropped /\ pc = "idle" /\ res = "full" => ~HasRoom /\ Loaded \subseteq {rm.keep}
+Usable == ~dropped /\ pc = "idle" /\ res = "full" /\ Foreign + 2 <= Slots => leaked # {}
 Bounded == pc = "room" => rm.sends <= rm.base + 1
 NoLeakOnDrop == dropped => \A h \in Pool : tpm[h] = FOREIGN \/ tpm[h] = FREE \/ h \in leaked
 

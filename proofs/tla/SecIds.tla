@@ -79,8 +79,8 @@ A(n) == Pat(n, 7)
 CidRange == \A n \in Lens : LET r == CidNew(Pat(n, 5)) IN (r.ok <=> n <= MaxCid) /\ (r.ok => r.v = Pat(n, 5))
 AlpnRange == \A n \in Lens : LET r == AlpnNew(A(n)) IN (r.ok <=> n \in 1..MaxAlpn) /\ (r.ok => r.v = A(n))
 
-Lists == {[i \in 1..n |-> A(1 + i % 3)] : n \in 0..11}
-         \cup {[i \in 1..n |-> IF i = j THEN A(bad) ELSE A(1 + i % 3)] : n \in 1..9, j \in 1..9, bad \in {0, 33}}
+Lists == {[i \in 1..n |-> A(1 + (i % 3))] : n \in 0..11}
+         \cup {[i \in 1..n |-> IF i = j THEN A(bad) ELSE A(1 + (i % 3))] : n \in 1..9, j \in 1..9, bad \in {0, 33}}
 Wanted == {A(1), A(2), A(3), A(32), <<>>, A(33)}
 ListRule ==
     \A l \in Lists :
