@@ -84,10 +84,10 @@ Scanned == {[x |-> Received(W(77)), rs |-> <<>>],
 
 RecCases ==
     {[t |-> "base", x |-> x, rs |-> <<>>, b |-> EncOf(x)] : x \in Bases}
-    \cup {[t |-> "cut", x |-> s.x, rs |-> s.rs, b |-> SubSeq(EncOf(s.x), 1, n)] :
-            s \in Scanned, n \in 0..(Len(EncOf(s.x)) - 1)}
-    \cup {[t |-> "other", x |-> s.x, rs |-> s.rs, b |-> [EncOf(s.x) EXCEPT ![j] = v]] :
-            s \in Scanned, j \in 1..Len(EncOf(s.x)), v \in BYTES}
+    \cup (UNION {{[t |-> "cut", x |-> s.x, rs |-> s.rs, b |-> SubSeq(EncOf(s.x), 1, n)] :
+                  n \in 0..(Len(EncOf(s.x)) - 1)} : s \in Scanned})
+    \cup (UNION {{[t |-> "other", x |-> s.x, rs |-> s.rs, b |-> [EncOf(s.x) EXCEPT ![j] = v]] :
+                  j \in 1..Len(EncOf(s.x)), v \in BYTES} : s \in Scanned})
     \cup {[t |-> "other", x |-> s.x, rs |-> s.rs, b |-> EncOf(s.x) \o <<0>>] : s \in Scanned}
 
 (***************************************************************************)
@@ -109,8 +109,8 @@ NoRun == Run(Zero, Zero)
 RunCases ==
     {[t |-> "runs", rs |-> <<r>>, r2 |-> NoRun, cut |-> 0] : r \in AllRuns}
     \cup {[t |-> "runs", rs |-> <<r, q>>, r2 |-> NoRun, cut |-> 0] : r \in Fitting, q \in AllRuns}
-    \cup {[t |-> "runs", rs |-> p, r2 |-> q, cut |-> k] :
-            p \in {<<>>} \cup {<<r>> : r \in Good}, q \in AllRuns, k \in Cuts(q)}
+    \cup UNION {{[t |-> "runs", rs |-> p, r2 |-> q, cut |-> k] :
+                  p \in {<<>>} \cup {<<r>> : r \in Good}, k \in Cuts(q)} : q \in AllRuns}
 
 RunsOf(x) == RunsBytes(x.rs) \o SubSeq(RunBytes(x.r2), 1, x.cut)
 
@@ -137,8 +137,8 @@ Bodies == {Zero, One, W(16), U!Sub(BM, One), BM, U!Add(BM, One), U!Pw(24), U!Sub
 Full(body, e) == U!Add(U!Add(W(5), body), W(e))
 Short(body) == {W(0), W(1), W(4), W(5)} \cup (IF body = Zero THEN {} ELSE {U!Sub(U!Add(W(5), body), One)})
 FrameCases ==
-    {[t |-> "frame", ty |-> ty, body |-> body, len |-> l] :
-        ty \in {0, 1, 5, 255}, body \in Bodies, l \in {Full(body, e) : e \in {0, 1, 7}} \cup Short(body)}
+    UNION {{[t |-> "frame", ty |-> ty, body |-> body, len |-> l] :
+               ty \in {0, 1, 5, 255}, l \in {Full(body, e) : e \in {0, 1, 7}} \cup Short(body)} : body \in Bodies}
 \* the bytes of the input next sees: the header the writer made, as far as the input reaches
 Seen(x) == SubSeq(Finish(x.ty, x.body), 1, IF Lt(x.len, W(5)) THEN U!Val(x.len) ELSE 5)
 \* the length the header announces: the body, or u32::MAX for a body past it
