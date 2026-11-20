@@ -552,11 +552,13 @@ fn scripted(r: &mut Rec) {
     // 5 to 11. a reset in every phase
     r.new_run(true, 4 * CH);
     r.reset(1).unwrap();
+    assert_eq!(r.source(10, 10), Err(StreamError::Finished));
     r.after_reset(true);
 
     r.new_run(true, 4 * CH);
     r.write(1000, ROOM).unwrap();
     r.reset(1).unwrap();
+    assert_eq!(r.source(10, 10), Err(StreamError::Finished));
     r.after_reset(true);
 
     r.new_run(true, 4 * CH);
@@ -569,7 +571,7 @@ fn scripted(r: &mut Rec) {
     assert_eq!(r.write(10, ROOM), Err(StreamError::Finished));
     assert_eq!(r.finish(), Err(StreamError::Finished));
     assert!(r.next(false, CHUNK_SIZE).is_none() && r.next(true, CHUNK_SIZE).is_none());
-    let _ = r.source(10, 10);
+    assert_eq!(r.source(10, 10), Err(StreamError::Finished));
     r.after_reset(true);
 
     r.new_run(true, 4 * CH);

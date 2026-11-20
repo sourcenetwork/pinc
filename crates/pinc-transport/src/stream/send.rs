@@ -254,7 +254,13 @@ impl<S: StreamSource, const C: usize> Send<S, C> {
         if !self.open {
             return Err(StreamError::StreamState);
         }
-        if self.is_source || self.written > 0 || self.final_size.is_some() {
+        if self.is_source {
+            return Err(StreamError::WrongKind);
+        }
+        if !matches!(self.reset, Reset::None) {
+            return Err(StreamError::Finished);
+        }
+        if self.written > 0 || self.final_size.is_some() {
             return Err(StreamError::WrongKind);
         }
         if len > MAX_OFFSET {
@@ -470,5 +476,33 @@ impl<S: StreamSource, const C: usize> Send<S, C> {
         if matches!(self.reset, Reset::Sent { .. } | Reset::Pending { .. }) {
             self.reset = Reset::Acked;
         }
+    }
+}
+
+#[cfg(all(test, feature = "alloc"))]
+#[allow(clippy::unwrap_used, reason = "tests assert")]
+mod tests {
+    use super::*;
+    use crate::stream::NoSource;
+
+    fn half() -> Send<NoSource, 4> {
+        let mut h = Send::<NoSource, 4>::NEW;
+        h.init(1 << 20);
+        h
+    }
+
+    /// A reset half answers every writer call as `Finished`, written or not, as `write` and `finish` do.
+    #[test]
+    fn a_reset_half_refuses_a_source_as_finished() {
+        let mut pool = BufferPool::new_boxed(4);
+        let mut h = half();
+        h.reset(&mut pool, 1).unwrap();
+        assert_eq!(h.open_source(NoSource, 10), Err(StreamError::Finished));
+        assert_eq!(h.write(&mut pool, b"x", 100), Err(StreamError::Finished));
+
+        let mut h = half();
+        h.write(&mut pool, b"abc", 100).unwrap();
+        h.reset(&mut pool, 1).unwrap();
+        assert_eq!(h.open_source(NoSource, 10), Err(StreamError::Finished));
     }
 }
