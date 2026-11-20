@@ -403,8 +403,9 @@ impl<'t> PmRun<'t> {
         let pn = self.take_pn(hi)?;
         let mut r: &'static str = "ok";
         let recorded = self.ev(net, op, false, |n, now| {
-            let res =
-                n.a.with_lent(now, |c, env, l| c.inject_payload(env, l, PathId(on), now, pn.n, payload));
+            let res = n.a.with_lent(now, |c, env, l| {
+                c.inject_payload(env, l, PathId(on), now, pn.n, payload)
+            });
             n.a.service(now);
             r = match res {
                 Ok(()) => "ok",

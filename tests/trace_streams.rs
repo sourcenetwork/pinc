@@ -852,9 +852,10 @@ fn stream_table_runs_match_the_models() {
     big_stack(|| {
         let mut out = String::new();
         let (mut jumped, mut past, mut released, mut ctl_released) = (false, false, false, false);
-        // every few runs in the quick profile: the early-dial runs (ids above 24) and the reset ones (above 36) stay
+        // every few runs in the quick profile: the early-dial runs (ids above 24) and the reset ones (above 36) stay;
+        // run 1, whose script spills two streams into one arena slot, runs in every profile
         let every = trace_cases(3, 1) as u32;
-        for run_id in (1..=40u32).filter(|id| id % every == 0) {
+        for run_id in (1..=40u32).filter(|id| *id == 1 || id % every == 0) {
             let r = run(
                 0x5354_5245_414d_0000 + u64::from(run_id),
                 &mut out,

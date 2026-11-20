@@ -192,8 +192,9 @@ fn with_resumed<R>(seed: u64, f: impl FnOnce(&mut Net<'_, '_>) -> R) -> R {
 fn give(net: &mut Net<'_, '_>, mut d: Vec<u8>) -> Result<(), RxDrop> {
     let now = net.now;
     let stores = &mut *net.stores;
-    net.b
-        .with_lent(now, |c, env, l| c.handle_datagram_with(env, l, stores, PathId(2), &mut d))
+    net.b.with_lent(now, |c, env, l| {
+        c.handle_datagram_with(env, l, stores, PathId(2), &mut d)
+    })
 }
 
 /// A result as text for the `res` field, which the model ignores (no quote or backslash to escape).

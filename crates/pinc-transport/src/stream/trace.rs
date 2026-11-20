@@ -281,7 +281,7 @@ impl<S: StreamSource, const C: usize> SendProbe<S, C> {
     /// # Errors
     /// As `Send::copy_out`.
     pub fn copy_out(&mut self, chunk: &StreamChunk, dst: &mut [u8]) -> Result<usize, StreamError> {
-        self.half.copy_out(&self.pool, chunk, dst)
+        self.half.copy_out(&mut self.pool, chunk, dst)
     }
 
     /// `Send::on_lost`.

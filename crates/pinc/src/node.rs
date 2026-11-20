@@ -86,10 +86,10 @@ macro_rules! define {
         }
 
         impl AnyEp {
-            /// The endpoint of the smallest rung that holds `connections` sessions, with ten connection id entries per
-            /// session, `pool_chunks` chunks for each and an arena of `spill_slots` spill slots; `None` above the ladder.
-            /// It is not generic, so it is compiled once, here, and optimised whatever the host's types: no host's build
-            /// keeps a copy of a slot on the stack.
+            /// The endpoint of the smallest rung that holds `connections` sessions, with ten connection id entries
+            /// per session, `pool_chunks` chunks for each and an arena of `spill_slots` spill slots; `None` above the
+            /// ladder. It is not generic, so it is compiled once, here, and optimised whatever the host's types: no
+            /// host's build keeps a copy of a slot on the stack.
             #[inline(never)]
             pub(crate) fn new(
                 connections: usize,
@@ -103,7 +103,9 @@ macro_rules! define {
                 let pool = machines();
                 match rung(connections) {
                     $(Some($k) => Some(Self::$v({
-                        let mut ep = Ep::<$k, { $k * 10 }>::new_owned(now, Software, drbg, identity, cfg, pool_chunks, spill_slots);
+                        let mut ep = Ep::<$k, { $k * 10 }>::new_owned(
+                            now, Software, drbg, identity, cfg, pool_chunks, spill_slots,
+                        );
                         ep.share_machines(&pool);
                         ep
                     })),)+

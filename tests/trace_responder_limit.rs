@@ -45,7 +45,9 @@ fn drain(n: &mut Node<'_>, now: u64) -> Vec<Vec<u8>> {
 /// business, not the test's: the observation shows what became of the handshake.
 fn to_server(s: &mut Node<'_>, stores: &mut Stores, now: u64, dgrams: Vec<Vec<u8>>) {
     for mut d in dgrams {
-        let _ = s.with_lent(now, |c, env, l| c.handle_datagram_with(env, l, stores, PathId(2), &mut d));
+        let _ = s.with_lent(now, |c, env, l| {
+            c.handle_datagram_with(env, l, stores, PathId(2), &mut d)
+        });
     }
     s.service(now);
 }
