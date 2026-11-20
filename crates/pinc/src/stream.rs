@@ -10,6 +10,8 @@
 //! - [`SendStream::write`], [`SendStream::finish`], [`RecvStream::read`] and [`RecvStream::read_chunk`]: dropping the
 //!   future before it returns something changes nothing, except that the bytes of a write the endpoint already took
 //!   stay written when the future is dropped while the packets they caused are still being sent by the host.
+//! - [`SendStream::reset`] and [`RecvStream::stop`]: dropping the future before it returns changes nothing, or the
+//!   reset or stop was taken.
 //! - [`SendStream::write_all`], [`RecvStream::read_exact`] and [`RecvStream::read_to_end`]: dropping the future leaves
 //!   the stream consistent, with the bytes moved so far moved, as for any loop of reads or writes.
 //!
@@ -296,10 +298,11 @@ impl<H: Hosted> RecvStream<H> {
     /// Stop reading: what the peer still sends is discarded and later reads fail with [`crate::ErrorKind::Stopped`].
     /// The peer is told with `code`: it resets the stream and its writer sees [`crate::ErrorKind::Stopped`] with the code.
     pub async fn stop(&mut self, code: u64) {
-        self.stopped = Some(code);
         let (c, id) = (&self.conn, self.id);
+        let st = &mut self.stopped;
         c.sh.run(|core, now| {
             core.stop_recv(now, &c.info, id, code);
+            *st = Some(code);
             Try::Done(())
         })
         .await;

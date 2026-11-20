@@ -198,6 +198,26 @@ async fn a_reset_cancelled_before_it_ran_leaves_the_stream_writable() {
 }
 
 #[nuclei::test]
+async fn a_stop_cancelled_before_it_ran_leaves_the_stream_readable() {
+    within(60, async {
+        let (_server, _client, c, _s, _tx, mut rx, mut stx, _srx, hold) = gated_pair!();
+        hold.set(true);
+        poll_once_and_drop(rx.stop(5));
+        nuclei::spawn_local(async move {
+            c.closed().await;
+        })
+        .detach();
+        stx.write_all(b"data").await.unwrap();
+        let mut buf = [0u8; 8];
+        assert_eq!(rx.read(&mut buf).await.unwrap(), Some(4));
+        // The stop is still the caller's to make, and it is taken.
+        rx.stop(5).await;
+        until_stopped(&mut stx, 5).await;
+    })
+    .await;
+}
+
+#[nuclei::test]
 async fn a_stream_the_server_refused_keeps_the_entry_of_a_stream_the_peer_stopped() {
     within(120, async {
         let limits = Limits {
