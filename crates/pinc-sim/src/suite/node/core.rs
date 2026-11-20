@@ -17,8 +17,8 @@ use std::rc::Rc;
 
 use pinc_connect::client::{Config as ConnCfg, RelayCfg};
 use pinc_core::{
-    Command, CommandError, EndpointConfig, IfaceEvent as EpIfaceEvent, IfaceId, SessionId, Value, relay_parts,
-    state_len,
+    Command, CommandError, EndpointConfig, IfaceEvent as EpIfaceEvent, IfaceId, LOCAL_RELAY, SessionId, Value,
+    relay_parts, state_len,
 };
 use pinc_crypto::{Drbg, IdentityAlg, Keypair, Software};
 use pinc_node::{Config as NodeConfig, HUB_ALPN, IdKey, Node};
@@ -27,7 +27,7 @@ use pinc_security::{Env, LocalIdentity, PrekeyPolicy, SoftPrekeys};
 use super::apps::SuiteApps;
 use super::carrier::Wire;
 use super::mem::{CLIENT_TICKETS, Ep, Src, recycle, slots};
-use super::relay::{HubSide, LOCAL_RELAY};
+use super::relay::HubSide;
 use super::shared::{Shared, derive, make_identity};
 use super::{NodeEvent, SetupError};
 use crate::suite::crypto::{DeviceCosts, Tracked};

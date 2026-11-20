@@ -30,7 +30,7 @@
 
 use core::net::SocketAddr;
 
-use pinc_core::{SessionId, relay_addr, relay_parts};
+use pinc_core::{LOCAL_RELAY, SessionId, relay_addr, relay_parts};
 use pinc_crypto::{NodeId, Provider};
 use pinc_security::{Env, LocalIdentity, PrekeyInfo};
 
@@ -582,11 +582,11 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
         relay_addr(self.v6, u8::try_from(relay).unwrap_or(0), slot)
     }
 
-    /// The relay and peer a synthetic address names.
+    /// The relay and peer a synthetic address names. The host's own relay role's index names none.
     pub fn path_parts(&self, a: &SocketAddr) -> Option<(usize, NodeId)> {
         let (r, p) = relay_parts(a)?;
         let peer = self.peers.get(usize::from(p)).copied().flatten()?;
-        (usize::from(r) < R).then_some((usize::from(r), peer))
+        (usize::from(r) < R && r != LOCAL_RELAY).then_some((usize::from(r), peer))
     }
 
     // ---- observation ----

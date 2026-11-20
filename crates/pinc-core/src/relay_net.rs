@@ -7,7 +7,7 @@
 //! (the reserved class E block, never routed) and IPv6 addresses are `fd56:494e:43::relay:peer`; the port is
 //! zero as [`relay_addr`] makes it, and the hub of a relay role sets it to the generation of the slot (the address
 //! `relay_parts` reads does not depend on it). `relay` is a table position below 256 and `peer` a table position the
-//! connectivity layer assigns.
+//! connectivity layer assigns. The relay index [`LOCAL_RELAY`] is reserved for the host's own relay role.
 //!
 //! Invariants: [`relay_addr`] and [`relay_parts`] are inverses for the IP
 //! part of the address; an address outside the block is never a relay path.
@@ -16,6 +16,11 @@ use core::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
 /// The first octet of an IPv4 relay path address.
 pub const RELAY_V4: u8 = 240;
+
+/// The relay index of the paths to the members of the host's own relay role: no relay slot of the connectivity
+/// client has it, so a node returns the packets to these addresses to its host instead of routing them. It is local
+/// to a node and never on the wire or in a stored record. No relay slot of the client may ever use it.
+pub const LOCAL_RELAY: u8 = 0xFE;
 /// The first 32 bits of an IPv6 relay path address: `fd56:494e`.
 const RELAY_V6: [u16; 2] = [0xfd56, 0x494e];
 

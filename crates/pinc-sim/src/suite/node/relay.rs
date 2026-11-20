@@ -17,7 +17,7 @@ use pinc_connect::carrier::session::{self, Poll, ProtectedCarrier};
 use pinc_connect::carrier::ws::{Decoder, Role as WsRole};
 use pinc_connect::relay::datagram::Datagram;
 use pinc_connect::relay::{Config as RelayConfig, Effect, Relay, SessionId as RSession, Sink, Trace, UdpTarget};
-use pinc_core::relay_addr;
+use pinc_core::{LOCAL_RELAY, relay_addr};
 use pinc_crypto::NodeId;
 use pinc_node::{MemberNotice, is_relay_request};
 use pinc_security::{ConnId, Env, KeyHandle, LocalIdentity, ResponderStores, SoftKeys};
@@ -25,9 +25,6 @@ use pinc_security::{ConnId, Env, KeyHandle, LocalIdentity, ResponderStores, Soft
 use super::core::{Core, NodeT};
 use crate::suite::crypto::Tracked;
 use crate::{StreamId, StreamOp};
-
-/// The relay-path index the hub's own relay uses for its members: an index no client has.
-pub(super) const LOCAL_RELAY: u8 = 0xFE;
 
 pub(super) type HubRelay = Relay<{ super::SESSIONS }, 128, 16, 4096>;
 

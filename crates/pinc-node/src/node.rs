@@ -28,7 +28,7 @@ use pinc_broadcast::{Config as BcConfig, StartError as BcStartError, Topics};
 use pinc_connect::client::Connectivity;
 use pinc_connect::record::MAX_ADDRS;
 use pinc_connect::ticket::Ticket;
-use pinc_core::{Command, CommandError, Role, SessionId, Transmit, Value, is_relay_addr};
+use pinc_core::{Command, CommandError, LOCAL_RELAY, Role, SessionId, Transmit, Value, relay_parts};
 use pinc_crypto::{Drbg, IdentityAlg, Keypair, Provider};
 use pinc_membership::session::Carrier;
 use pinc_membership::{Config as MemConfig, Membership, NodeId, StartError as MemStartError, TableFull};
@@ -608,8 +608,9 @@ where
     }
 
     /// The next datagram to send. Packets that ride a relay carrier are handed to the connectivity layer and not
-    /// returned. A hub returns the packets for the members of its own relay, whose synthetic addresses its client does
-    /// not know, for the host that runs the relay.
+    /// returned. Packets for the members of the host's own relay role (relay index [`LOCAL_RELAY`]) are returned to
+    /// the host that runs the role, hub or not. A hub also returns the packets on relay paths its client does not know,
+    /// for hosts that number their members otherwise.
     pub fn poll_transmit(&mut self, now: Nanos, out: &mut [u8]) -> Option<Transmit> {
         // Nothing waits to leave: the call would change nothing, so it is not an input, and the deadline worked out
         // for the last one stands. A host asks after every operation; most of the time there is nothing.
@@ -619,8 +620,11 @@ where
         self.begin_endpoint(now);
         loop {
             let t = self.io.ep.poll_transmit(now, out)?;
-            // A hub hands the host the packets for its own relay's members; the paths of its client are routed here.
-            if is_relay_addr(&t.remote) && (self.conn.path_parts(&t.remote).is_some() || !self.io.is_hub) {
+            // The paths of the client are routed here; those of the host's own relay role go back to the host, and a
+            // hub keeps returning the paths its client does not know (a host that numbers its members otherwise).
+            if relay_parts(&t.remote).is_some_and(|(relay, _)| {
+                relay != LOCAL_RELAY && (!self.io.is_hub || self.conn.path_parts(&t.remote).is_some())
+            }) {
                 // The connectivity layer takes the packet: its deadlines may move.
                 self.deadline.set(Due::Stale);
                 let seg = t.segment_size.max(1);

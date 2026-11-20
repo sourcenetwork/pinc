@@ -42,7 +42,7 @@ static SECRETS: [u64; 7] = [
 ];
 
 /// A set of that name, always empty.
-struct Sets;
+pub(crate) struct Sets;
 
 impl SetsApp for Sets {
     type Index<'a> = NoIndex;
@@ -52,7 +52,7 @@ impl SetsApp for Sets {
 }
 
 /// Reconcile and delay-tolerant delivery on, with nothing stored.
-struct TApps {
+pub(crate) struct TApps {
     values: NoValues,
     sets: Sets,
     dtn: NoDtn,
@@ -80,7 +80,7 @@ impl Apps<Software> for TApps {
     }
 }
 
-type TNode = Node<Stub, Software, (), 4, 32, TApps>;
+pub(crate) type TNode = Node<Stub, Software, (), 4, 32, TApps>;
 
 /// The peer the node lists as its relay: a dial to it always has a way to go.
 fn hub() -> pinc_crypto::NodeId {
@@ -88,6 +88,10 @@ fn hub() -> pinc_crypto::NodeId {
 }
 
 fn node() -> Box<TNode> {
+    node_with(false)
+}
+
+pub(crate) fn node_with(is_hub: bool) -> Box<TNode> {
     let kp = Keypair::from_seed(IdentityAlg::Ed25519, &[0x11; 32]).unwrap();
     let identity = LocalIdentity::from_keypair(&kp, KeyHandle(1)).unwrap();
     let prov = Software;
@@ -119,7 +123,7 @@ fn node() -> Box<TNode> {
             v6: false,
             keep_learn: false,
         },
-        is_hub: false,
+        is_hub,
         version: 1,
         alpn: HUB_ALPN,
         limits: Limits::default(),
@@ -149,7 +153,7 @@ fn node() -> Box<TNode> {
 }
 
 /// Run `f` on a thread with the stack a node needs.
-fn big(f: impl FnOnce() + Send + 'static) {
+pub(crate) fn big(f: impl FnOnce() + Send + 'static) {
     std::thread::Builder::new()
         .stack_size(256 << 20)
         .spawn(f)

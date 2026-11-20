@@ -18,7 +18,7 @@ use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
 use core::net::SocketAddr;
 
-use pinc_core::{Command, Event as EpEvent, Role, SessionId, relay_addr, relay_parts};
+use pinc_core::{Command, Event as EpEvent, LOCAL_RELAY, Role, SessionId, relay_addr, relay_parts};
 use pinc_crypto::NodeId;
 use pinc_keystore::KeyStore;
 use pinc_node::Ep;
@@ -118,14 +118,15 @@ impl Tunnel {
     /// The relay path address that names `node`: its slot, and the slot's generation in the port.
     fn addr_of(&mut self, node: &NodeId) -> SocketAddr {
         let slot = self.slot_of(node);
-        let mut addr = relay_addr(false, 0, slot);
+        let mut addr = relay_addr(false, LOCAL_RELAY, slot);
         addr.set_port(self.slots.get(usize::from(slot)).map_or(0, |s| s.1));
         addr
     }
 
-    /// The node a relay path address names now: nobody if its slot went to another node since.
+    /// The node a relay path address of the role names now: nobody if its slot went to another node since, or if the
+    /// address is a path of the host's client.
     fn resolve(&self, addr: &SocketAddr) -> Option<NodeId> {
-        let (_, slot) = relay_parts(addr)?;
+        let (_, slot) = relay_parts(addr).filter(|(r, _)| *r == LOCAL_RELAY)?;
         self.slots
             .get(usize::from(slot))
             .filter(|(_, generation)| *generation == addr.port())
@@ -454,6 +455,23 @@ mod tests {
         }
         assert_eq!(t.resolve(&a_addr), Some(a), "the member's address names another node");
         assert_eq!(t.addr_of(&a), a_addr);
+    }
+
+    /// A member's address is on the host's own relay index, never on one of the host's client paths, and an address
+    /// of a client path names no member.
+    #[test]
+    fn a_members_address_is_never_a_client_path() {
+        let mut t = tunnel();
+        let a = nid(0);
+        let addr = t.addr_of(&a);
+        let (relay, slot) = relay_parts(&addr).unwrap();
+        assert_eq!(relay, LOCAL_RELAY);
+        assert_eq!(t.resolve(&addr), Some(a));
+        assert_eq!(
+            t.resolve(&relay_addr(false, 0, slot)),
+            None,
+            "a client path address named a member"
+        );
     }
 
     /// A slot taken from a node that is not a member names nobody under the address it had before.

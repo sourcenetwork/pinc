@@ -47,6 +47,8 @@ pub(crate) struct Stub {
     pub(crate) stops: usize,
     /// The next urgency setting is refused.
     pub(crate) fail_urgency: bool,
+    /// The packets the endpoint has to send, by destination: each goes as one byte.
+    pub(crate) transmits: alloc::collections::VecDeque<SocketAddr>,
 }
 
 impl Port for Stub {
@@ -101,8 +103,15 @@ impl Port for Stub {
 
 impl Ep for Stub {
     fn handle_datagram(&mut self, _now: u64, _local: SocketAddr, _remote: SocketAddr, _buf: &mut [u8]) {}
-    fn poll_transmit(&mut self, _now: u64, _out: &mut [u8]) -> Option<Transmit> {
-        None
+    fn poll_transmit(&mut self, _now: u64, out: &mut [u8]) -> Option<Transmit> {
+        let remote = self.transmits.pop_front()?;
+        *out.first_mut()? = 0;
+        Some(Transmit {
+            local: SocketAddr::from(([192, 0, 2, 9], 4000)),
+            remote,
+            len: 1,
+            segment_size: 1,
+        })
     }
     fn poll_event(&mut self) -> Option<Event> {
         None

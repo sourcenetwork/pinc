@@ -103,7 +103,7 @@ pub use queue::{EVENT_BASE, event_headroom, event_queue};
 pub use reach::REACH_BODY_MAX;
 #[cfg(feature = "trace")]
 pub use reach::trace::ReachProbe;
-pub use relay_net::{RELAY_V4, is_relay_addr, relay_addr, relay_parts};
+pub use relay_net::{LOCAL_RELAY, RELAY_V4, is_relay_addr, relay_addr, relay_parts};
 pub use rtt::{FIRST_RESEND, FLOOR_MAX, HUB_RESEND, NodeRtt, PEER_RTTS, SLOW_RTT};
 pub use rx::{HALF_OPEN_HOLD, HALF_OPEN_LIFE, MAX_HALF_OPEN, Taken};
 #[cfg(feature = "trace")]

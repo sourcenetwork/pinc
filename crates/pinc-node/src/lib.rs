@@ -86,6 +86,8 @@ mod reconcile;
 mod relay;
 mod timers;
 pub mod trace;
+#[cfg(test)]
+mod transmit_tests;
 mod values;
 mod values_frames;
 mod values_net;
