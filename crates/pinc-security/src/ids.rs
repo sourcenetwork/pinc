@@ -51,13 +51,17 @@ pub struct Alpn {
     bytes: [u8; MAX_ALPN_LEN],
 }
 
+/// The one rule for an ALPN length, for [`Alpn::new`] and for the parser and the writer of the messages: 1 to
+/// [`MAX_ALPN_LEN`] bytes.
+pub(crate) const fn alpn_len_ok(n: usize) -> bool {
+    1 <= n && n <= MAX_ALPN_LEN
+}
+
 impl Alpn {
     /// An ALPN of `bytes`, or `None` if it is empty or longer than [`MAX_ALPN_LEN`].
     pub fn new(bytes: &[u8]) -> Option<Self> {
         let mut alpn = Self {
-            len: u8::try_from(bytes.len())
-                .ok()
-                .filter(|l| (1..=MAX_ALPN_LEN).contains(&usize::from(*l)))?,
+            len: u8::try_from(bytes.len()).ok().filter(|l| alpn_len_ok(usize::from(*l)))?,
             bytes: [0; MAX_ALPN_LEN],
         };
         alpn.bytes.get_mut(..bytes.len())?.copy_from_slice(bytes);

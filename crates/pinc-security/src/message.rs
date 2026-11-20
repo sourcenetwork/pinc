@@ -40,7 +40,7 @@ use pinc_crypto::{Aead, IdentityAlg};
 use pinc_wire::{Reader, WireError, Writer};
 
 use crate::credit::{CREDIT_RECORD_LEN, CreditRecord};
-use crate::ids::{AeadSet, ConnId, MAX_ALPN_LEN, MAX_CID_LEN, aead_from_tag, aead_tag};
+use crate::ids::{AeadSet, ConnId, MAX_CID_LEN, aead_from_tag, aead_tag, alpn_len_ok};
 use crate::keys::prekey_hash;
 use crate::tickets::TicketBatch;
 
@@ -183,11 +183,6 @@ fn read_cid(r: &mut Reader<'_>) -> Result<ConnId, WireError> {
 fn write_cid(w: &mut Writer<'_>, cid: &ConnId) -> Result<(), WireError> {
     w.put_u8(u8::try_from(cid.as_bytes().len()).map_err(|_| WireError::VarintOverflow)?)?;
     w.put_slice(cid.as_bytes())
-}
-
-/// The one rule for an ALPN length, for the parser and the writer: 1 to [`MAX_ALPN_LEN`] bytes.
-const fn alpn_len_ok(n: usize) -> bool {
-    1 <= n && n <= MAX_ALPN_LEN
 }
 
 fn read_alpn<'a>(r: &mut Reader<'a>) -> Result<&'a [u8], WireError> {
