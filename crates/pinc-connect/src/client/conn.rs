@@ -426,8 +426,10 @@ pub(super) fn pop<T: Copy, const N: usize>(q: &mut [Option<T>; N]) -> Option<T> 
 }
 
 impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> {
-    /// A layer with no carrier open and no probe sent.
+    /// A layer with no carrier open and no probe sent. `R` is at most [`LOCAL_RELAY`] (a build error otherwise), so
+    /// that index is never a relay slot of the client and no slot index is cut short.
     pub fn new(cfg: Config<R>, prekey: PrekeyInfo, prov: P, seed: u64) -> Self {
+        const { assert!(R <= LOCAL_RELAY as usize) };
         let mut shared = Shared {
             phone: cfg.phone,
             restarted: cfg.restarted,
