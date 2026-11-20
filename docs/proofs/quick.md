@@ -561,8 +561,10 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `Streams_lazy_over_w` | MAXOFF 4 -> 3 |
 | `Streams_lazy_two` | MAXOFF 4 -> 3, MAXREM 2 -> 1 |
 | `Streams_ledger` | HOR 3 -> 1, LMAX 2 -> 1, MAXOFF 12 -> 5, DT 1 -> 0, Next -> NextQuick (Next without its stuttering steps, the same behaviours); one byte of data and one grant (limit 4 -> 5); no window grows: that needs 3 bytes read in one round trip (HOR 3) |
+| `Streams_live` | HOR 4 -> 1, LMAX 2 -> 1, MAXOFF 12 -> 5, DT 1 -> 0, Next -> NextQuick (Next without its stuttering steps, the same behaviours) |
 | `Streams_live_blocked` | CH 2 -> 1, RING 4 -> 3, MSWC 6 -> 2, MAXOFF 6 -> 4, LMAX 2 -> 1, DT 1 -> 0, Next -> NextQuick (Next without its stuttering steps, the same behaviours): a window of 2 chunks against other users of up to 3 of the 4, the smallest bounds found where a stream is blocked at its limit (`NeverBlocked` is violated) |
 | `Streams_live_ext` | CH 2 -> 1, RING 4 -> 3, MSWC 6 -> 2, MAXOFF 6 -> 4, LMAX 2 -> 1, DT 1 -> 0, Next -> NextQuick (Next without its stuttering steps, the same behaviours): a window of 2 chunks against other users of up to 3 of the 4, the smallest bounds found where a stream is blocked at its limit (the bounds of the quick `Streams_live_blocked`, whose witness shows it) |
+| `Streams_live_mid` | HOR 3 -> 1, LMAX 2 -> 1, MAXOFF 6 -> 5, DT 1 -> 0 (one byte of data and one grant; the clock is held, as HOR 1 lets no window grow from the meter); SWC 2 -> 1 (the initial window within HOR 1, so a reader can drain it) |
 | `Streams_live_stall` | CH 2 -> 1, RING 4 -> 3, SWC 4 -> 2, MSWC 6 -> 2, MAXOFF 12 -> 4, HOR 4 -> 2, LMAX 2 -> 1, DT 1 -> 0, Next -> NextQuick (Next without its stuttering steps, the same behaviours): the bounds of the quick `Streams_live_ext` with RETRY FALSE, where the lasso of the earlier behaviour is found |
 | `Streams_local` | MAXOFF 6 -> 4, Next -> NextQuick (Next without its stuttering steps); bounded by constraint: behaviours of at most 4 levels (Streams_localQuickBound) |
 | `Streams_local_ctl` | MAXOFF 6 -> 5, Next -> NextQuick (Next without its stuttering steps, the same behaviours) |
@@ -690,5 +692,4 @@ These run over their own bounds in both profiles: no smaller bounds found keep w
 
 | Config | Why it has no quick file |
 |---|---|
-| `Streams_live`, `Streams_live_mid` | `Progress` is about a stream blocked at its limit, and these never reach one at any bounds: a window is at most half the pool and the one stream's read is chunk-aligned at its limit, so with other users of at most 0 (`Streams_live`) or 1 (`Streams_live_mid`) chunk of 4 its next window always fits; their `Progress` holds vacuously in both profiles. `NeverBlocked` holds over all 1858 states of the former quick `Streams_live` bounds and all 3716 of `Streams_live_mid`'s. `Streams_live_ext` takes 3 and has a quick file |
 | `Streams_lazy_cap`, `Streams_admit_w`, `Streams_catchup_w` | new: 3 slots with the cap of 1 below the peer's limit of 2, the smallest that has a peer open past the credit, a local stream and windows that overfill the pool of 4 chunks; `Streams_lazy_cap` has 10004 states |
