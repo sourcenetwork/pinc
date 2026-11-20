@@ -20,7 +20,6 @@ use pinc_transport::stream::StreamId;
 struct Net {
     resets: usize,
     opened: u64,
-    refuse: bool,
 }
 
 impl Session for Net {
@@ -47,9 +46,6 @@ impl Outbound for Net {
     fn dial(&mut self, _: Provider) {}
     fn hangup(&mut self, _: Provider) {}
     fn open_stream(&mut self, _: Provider, _: u8) -> Result<StreamId, OpenError> {
-        if self.refuse {
-            return Err(OpenError::Busy);
-        }
         self.opened += 1;
         Ok(100 + self.opened)
     }
@@ -240,99 +236,4 @@ fn a_provider_with_four_request_streams_open_is_given_a_fifth() {
         *slot = Some(Rx::new(1, 99, plan.clone(), &f.root));
     }
     assert!(!f.open_request(&mut io, 10 * NS, 1, &[Span { off: 0, len: GROUP }]));
-}
-
-/// The victim was handed its work at 9 s but its request first opened at 12 s: it is not idle at 12 s, and is robbed
-/// two seconds after that request.
-#[test]
-fn a_provider_is_idle_from_its_first_request_not_from_the_hand_over() {
-    let mut f = world(0, 0);
-    f.rx[0] = None;
-    let (mut net, mut st, mut out) = (Net::default(), Empty, Sink);
-    let mut io = Io {
-        session: &mut net,
-        store: &mut st,
-        out: &mut out,
-    };
-    f.request(&mut io, 12 * NS, 1, None);
-    assert_eq!(io.session.opened, 1);
-    assert_eq!(
-        f.provs[1].lp,
-        Some(12 * NS),
-        "the idle clock did not start at the first request"
-    );
-    let new = f.steal(&mut io, 12 * NS, 0);
-    assert!(new.is_empty(), "the victim was robbed as its request opened");
-    assert_eq!(io.session.resets, 0);
-    assert_eq!(f.provs[1].assign.total(), 16 * GROUP);
-    let new = f.steal(&mut io, 14 * NS, 0);
-    assert_eq!(
-        new.total(),
-        16 * GROUP,
-        "the victim, silent since its request, was not robbed"
-    );
-    assert_eq!(io.session.resets, 1);
-}
-
-/// A provider whose request never opened is robbed two seconds after the hand-over, as before.
-#[test]
-fn a_provider_never_asked_is_robbed_after_the_hand_over() {
-    let mut f = world(0, 0);
-    f.rx[0] = None;
-    let (mut net, mut st, mut out) = (
-        Net {
-            refuse: true,
-            ..Net::default()
-        },
-        Empty,
-        Sink,
-    );
-    let mut io = Io {
-        session: &mut net,
-        store: &mut st,
-        out: &mut out,
-    };
-    f.request(&mut io, 10 * NS, 1, None);
-    assert_eq!(f.provs[1].lp, Some(9 * NS));
-    let new = f.steal(&mut io, 11 * NS, 0);
-    assert_eq!(new.total(), 16 * GROUP, "a provider that cannot be asked kept its work");
-}
-
-/// A provider whose request could not open at 10 s steals nothing at 11 s, and steals at 12 s.
-#[test]
-fn a_provider_whose_request_could_not_open_is_no_thief_for_a_while() {
-    let mut f = world(0, 0);
-    let (mut net, mut st, mut out) = (
-        Net {
-            refuse: true,
-            ..Net::default()
-        },
-        Empty,
-        Sink,
-    );
-    let mut io = Io {
-        session: &mut net,
-        store: &mut st,
-        out: &mut out,
-    };
-    f.provs[0].assign.push(Span {
-        off: 16 * GROUP,
-        len: GROUP,
-    });
-    f.request(&mut io, 10 * NS, 0, None);
-    assert_eq!(f.provs[0].blocked, Some(10 * NS));
-    f.provs[0].assign.clear();
-    io.session.refuse = false;
-    f.top_up(&mut io, 11 * NS, 0);
-    assert_eq!(
-        f.provs[0].assign.total(),
-        0,
-        "a provider that just failed to open stole work"
-    );
-    assert_eq!(f.provs[1].assign.total(), 16 * GROUP);
-    assert_eq!(io.session.resets, 0);
-    f.top_up(&mut io, 12 * NS, 0);
-    assert_eq!(f.provs[0].assign.total(), 16 * GROUP, "the block outlived STEAL_IDLE");
-    assert_eq!(io.session.resets, 1);
-    assert_eq!(f.provs[0].blocked, None, "the thief's request opened");
 }

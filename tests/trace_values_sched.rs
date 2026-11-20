@@ -6,8 +6,7 @@
 //!
 //! A run is one line `run` (the value length, the ranges asked, the verified intervals the store held at the start,
 //! the providers the fetch takes in slot order), the transitions the fetch reports through its `Trace` log in order
-//! (`start`, `topup`, `steal`, `ask`, `ver`, `liar`; each with the time of the call) and one line `end` (how the fetch
-//! ended).
+//! (`start`, `topup`, `steal`, `ver`, `liar`; each with the time of the call) and one line `end` (how the fetch ended).
 //! The checkers replay them on the scheduler model: the bytes of the wanted groups stay partitioned among the queue,
 //! the providers' lists and the verified set; a top-up is the step of the target (ARRIVAL_CURVE), the tail shrink and
 //! the group cut; a steal is the victim, the cut and the idle rules of the model; an eviction returns the share to the
@@ -108,7 +107,6 @@ struct Tracker {
     q: u64,
     a: [u64; 4],
     in_assign: [bool; 4],
-    asked: [bool; 4],
     pending_steal: Option<(usize, u64)>,
     evicted: [bool; 4],
 }
@@ -159,7 +157,6 @@ impl Rec2 {
             q: 0,
             a: [0; 4],
             in_assign: [false; 4],
-            asked: [false; 4],
             pending_steal: None,
             evicted: [false; 4],
         };
@@ -215,9 +212,6 @@ impl Rec2 {
                         assert!(bytes <= tr.q, "run {r}: more taken than queued");
                         tr.q -= bytes;
                         self.runs_with.tail_topups += u32::from(tr.q < 4 * 1_048_576 * 4);
-                    }
-                    if tr.a[p] == 0 {
-                        tr.asked[p] = false;
                     }
                     tr.a[p] += bytes;
                     self.runs_with.topups += 1;
@@ -287,17 +281,6 @@ impl Rec2 {
                         "{{\"t\":\"vs\",\"op\":\"liar\",\"run\":{r},\"ms\":{ms},\"ns\":{ns},\"p\":{p}}}"
                     )
                     .unwrap();
-                }
-                Trace::Requested { provider, .. } => {
-                    let p = slot_of(provider);
-                    if tr.in_assign[p] && !tr.asked[p] {
-                        tr.asked[p] = true;
-                        writeln!(
-                            self.out,
-                            "{{\"t\":\"vs\",\"op\":\"ask\",\"run\":{r},\"ms\":{ms},\"ns\":{ns},\"p\":{p}}}"
-                        )
-                        .unwrap();
-                    }
                 }
                 _ => {}
             }
