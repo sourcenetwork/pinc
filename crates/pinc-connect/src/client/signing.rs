@@ -88,6 +88,8 @@ impl Signing {
     /// for is no longer wanted: its answer is dropped.
     pub(super) fn begin_suspend(&mut self, relays: u32, wall_ms: u64) {
         self.cancel_job();
+        // The closing tick of an earlier suspension must not fire before this one's notices are signed.
+        self.close_at = None;
         self.sleep = relays;
         self.sleep_ms = wall_ms;
         self.suspending = true;

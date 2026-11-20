@@ -7,6 +7,8 @@ mod connect_rig;
 
 use connect_common::{SEC, big_stack};
 use connect_rig::{Ans, Custody, Rig};
+use pinc_connect::client::Io;
+use pinc_connect::client::link::State;
 use pinc_connect::record::Record;
 use pinc_connect::relay::datagram::Datagram;
 use pinc_connect::relay::sleep;
@@ -131,6 +133,37 @@ fn a_second_suspend_drops_the_first_notice_asked_for() {
             notices(&mut rig),
             [wall + 5000, wall + 5000],
             "exactly two, with the second clock"
+        );
+    });
+}
+
+#[test]
+fn a_second_suspend_before_the_closing_tick_keeps_the_carrier_until_its_notice_is_signed() {
+    big_stack(|| {
+        let (mut rig, mut keys, now, _) = up();
+        let wall = now / 1_000_000;
+        rig.conn.suspend(now, wall);
+        let first = take_answer(&rig, &mut keys, now);
+        rig.conn.sign_response(now, first.response());
+        // Every notice is signed: the carrier closes at the next tick, unless the node is suspended again before it.
+        rig.conn.suspend(now, wall + 5000);
+        tick(&mut rig, now + 1, Some(wall));
+        while let Some(io) = rig.conn.poll_io() {
+            assert!(
+                !matches!(io, Io::Close { .. }),
+                "the carrier closed with a notice still owed"
+            );
+        }
+        assert_eq!(rig.conn.carrier_state(0), State::Open);
+        // The signatures that wait (the notice, then the record that fell due meanwhile) are all answered.
+        while rig.conn.sign_request().is_some() {
+            let answer = take_answer(&rig, &mut keys, now + 1);
+            rig.conn.sign_response(now + 1, answer.response());
+        }
+        tick(&mut rig, now + 3, Some(wall));
+        assert!(
+            std::iter::from_fn(|| rig.conn.poll_io()).any(|io| matches!(io, Io::Close { relay: 0 })),
+            "the carrier closes once the notice is signed"
         );
     });
 }
