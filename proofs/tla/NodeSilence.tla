@@ -39,6 +39,12 @@ Edge(w) == {U!Sub(w, One), w, U!Add(w, One)}
 Pts == {U!Sub(U!Pw(j), One) : j \in 0..64} \cup {U!Pw(j) : j \in 0..63} \cup {U!Add(U!Pw(j), One) : j \in 0..63}
        \cup Edge(Of(500000)) \cup Edge(SEED) \cup Edge(SLOWSRTT) \cup Edge(PTOCAP) \cup Edge(Millis(2500))
        \cup {Millis(10), Millis(50), Millis(200), Sec(3)}
+\* the quick profile's domain (quick/NodeSilence.cfg substitutes it for Pts): the widths 2^j - 1, 2^j, 2^j + 1 only
+\* for the smallest j, the middle one and those where the products saturate, every constant's edge as in Pts
+JQuick == {0, 1, 2, 32, 61, 62, 63, 64}
+PtsQuick == {U!Sub(U!Pw(j), One) : j \in JQuick} \cup {U!Pw(j) : j \in JQuick \ {64}} \cup {U!Add(U!Pw(j), One) : j \in JQuick \ {64}}
+            \cup Edge(Of(500000)) \cup Edge(SEED) \cup Edge(SLOWSRTT) \cup Edge(PTOCAP) \cup Edge(Millis(2500))
+            \cup {Millis(10), Millis(50), Millis(200), Sec(3)}
 Keeps == {Zero, Sec(60), Sec(70), U!Sub(U!Max64, One), U!Max64}
 
 \* give_up over every case, computed once
