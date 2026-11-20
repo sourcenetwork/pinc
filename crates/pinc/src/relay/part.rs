@@ -36,7 +36,7 @@ use pinc_node::Ep;
 use super::access::{Access, AllowAll};
 use super::carriers::{Carriers, Tag};
 use super::limits::Limits;
-use super::state::{Core, Job, Mark};
+use super::state::{Core, Job};
 use super::stats::{Event, Stats};
 use super::store::{Kept, MemStore, Store};
 use crate::keys::Identity;
@@ -70,10 +70,6 @@ pub struct Part<C: Carriers, K: KeyStore = SoftwareStore, St: Store = MemStore, 
     pub(super) core: Core<C::Stream, K, A>,
     pub(super) carriers: Rc<C>,
     pub(super) store: Rc<St>,
-    /// What the write out now is about; a failure or the end of the run marks it again.
-    writing: Option<Mark>,
-    /// [`Part::restore`] ran: the machine holds what the store kept.
-    restored: bool,
 }
 
 impl<C: Carriers, K: KeyStore, St: Store, A: Access> core::fmt::Debug for Part<C, K, St, A> {
@@ -88,8 +84,6 @@ impl<C: Carriers, K: KeyStore, St: Store, A: Access> Part<C, K, St, A> {
             core,
             carriers,
             store: Rc::new(store),
-            writing: None,
-            restored: false,
         }
     }
 
@@ -128,17 +122,13 @@ impl<C: Carriers, K: KeyStore, St: Store, A: Access> Part<C, K, St, A> {
     /// Whether [`Part::restore`] ran already. The machine then holds what the store kept: a second run of the part must
     /// not load and restore again (the held packets would be held twice), and the writes still owed stay queued.
     pub const fn restored(&self) -> bool {
-        self.restored
+        self.core.restored()
     }
 
     /// Put what the store kept back: the records and the packets held for sleeping members. It does nothing once it
     /// ran ([`Part::restored`]), so a host that loads and restores at the start of every run holds no packet twice.
     pub fn restore(&mut self, now: u64, kept: &Kept) {
-        if self.restored {
-            return;
-        }
-        self.restored = true;
-        self.core.restore(now, kept);
+        self.core.restore_once(now, kept);
     }
 
     /// The work the host's carriers need polled; it never finishes. Poll it with the same waker as [`Part::poll`], first
@@ -244,11 +234,7 @@ impl<C: Carriers, K: KeyStore, St: Store, A: Access> Part<C, K, St, A> {
     /// The next write to the store, if one is due and none is out. The driver runs it ([`StoreWrite::run`]) and reports
     /// with [`Part::store_written`].
     pub fn next_store_write(&mut self) -> Option<StoreWrite<St>> {
-        if self.writing.is_some() {
-            return None;
-        }
-        let job = self.core.next_job()?;
-        self.writing = Some(job.mark());
+        let job = self.core.next_write()?;
         Some(StoreWrite {
             store: Rc::clone(&self.store),
             job,
@@ -260,13 +246,7 @@ impl<C: Carriers, K: KeyStore, St: Store, A: Access> Part<C, K, St, A> {
     /// second of the failure, behind the writes not tried yet, and never more often than once a second while the store
     /// fails. A write that keeps failing is given up after a bounded number of tries and counted once more.
     pub fn store_written(&mut self, ok: bool) {
-        let mark = self.writing.take();
-        if !ok {
-            match mark {
-                Some(mark) => self.core.write_failed(mark, self.core.now_hint()),
-                None => self.core.store_failed(),
-            }
-        }
+        self.core.written(ok);
     }
 
     /// Apply what the machine queued for the node's endpoint (packets from members' carriers, pulses for their sessions,
@@ -329,10 +309,7 @@ impl<C: Carriers, K: KeyStore, St: Store, A: Access> Part<C, K, St, A> {
     /// The run is over: drop every stream and tell the host's carriers ([`Carriers::ended`]). Call it when the driver
     /// stops without having waited for [`Part::is_stopped`]; the part also does it when dropped.
     pub fn end(&mut self, now: u64) {
-        // a write that was out is given back: the run that held it is gone
-        if let Some(mark) = self.writing.take() {
-            self.core.requeue(mark);
-        }
+        self.core.end_run();
         self.core.abort_all(now);
         self.carriers.ended();
     }
@@ -369,6 +346,7 @@ mod tests {
     use crate::relay::Relay;
     use crate::relay::carriers::{Completion, Tag};
     use crate::relay::peers::Peer;
+    use crate::relay::state::Mark;
 
     const T0: u64 = 1_000_000_000_000;
     const SEC: u64 = 1_000_000_000;

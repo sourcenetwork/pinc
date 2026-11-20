@@ -52,6 +52,10 @@ pub(super) struct Keep {
     tries: u8,
     /// Restoring: the machine reports what it restores, which is already in the store.
     restoring: bool,
+    /// What the write out now is about; a failure or the end of the run marks it again.
+    writing: Option<Mark>,
+    /// [`Core::restore_once`] ran: the machine holds what the store kept.
+    restored: bool,
 }
 
 impl Keep {
@@ -230,6 +234,49 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
         } else if !self.keep.failed.iter().any(|(m, _)| *m == mark) {
             self.keep.failed.push_back((mark, tries));
         }
+    }
+
+    /// The write out now, if any, is given back: the run that held it is gone.
+    pub(crate) fn end_run(&mut self) {
+        if let Some(mark) = self.keep.writing.take() {
+            self.requeue(mark);
+        }
+    }
+
+    /// The write taken last finished, `ok` if the store kept it; a failure is handled by [`Core::write_failed`] at the
+    /// core's clock as of its last call.
+    pub(crate) fn written(&mut self, ok: bool) {
+        let mark = self.keep.writing.take();
+        if !ok {
+            match mark {
+                Some(mark) => self.write_failed(mark, self.now_hint()),
+                None => self.store_failed(),
+            }
+        }
+    }
+
+    /// The next write to the store, if one is due and none is out.
+    pub(crate) fn next_write(&mut self) -> Option<Job> {
+        if self.keep.writing.is_some() {
+            return None;
+        }
+        let job = self.next_job()?;
+        self.keep.writing = Some(job.mark());
+        Some(job)
+    }
+
+    /// Whether [`Core::restore_once`] ran.
+    pub(crate) const fn restored(&self) -> bool {
+        self.keep.restored
+    }
+
+    /// [`Core::restore`] unless it ran already: a second run of the same core restores nothing.
+    pub(crate) fn restore_once(&mut self, now: u64, kept: &Kept) {
+        if self.keep.restored {
+            return;
+        }
+        self.keep.restored = true;
+        self.restore(now, kept);
     }
 
     /// When a write held back by a failure may be tried again, or the end of time.

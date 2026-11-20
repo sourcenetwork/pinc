@@ -43,7 +43,9 @@ mod tunnel;
 #[cfg(feature = "trace")]
 pub(super) mod probe;
 
-pub(crate) use keep::{Job, Mark};
+pub(crate) use keep::Job;
+#[cfg(test)]
+pub(crate) use keep::Mark;
 
 /// The most control datagrams waiting for the socket.
 const UDP_BACKLOG: usize = 256;
