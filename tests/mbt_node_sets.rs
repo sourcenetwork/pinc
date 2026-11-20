@@ -28,6 +28,7 @@ mod node_script;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::ops::Range;
+use std::sync::OnceLock;
 
 use node_script::{DIALED, id_of};
 use pinc_broadcast::Limits as BLimits;
@@ -52,6 +53,8 @@ const SET: &[u8] = b"s";
 const FILL: u64 = 1 << 42;
 const INC: u64 = 1 << 41;
 const TABLE: u64 = 4096;
+/// The model's two endpoint session ids (`SIDS`): a dial with both taken is refused (`DialLayer`, `FreeSid`).
+const SLOTS: usize = 2;
 
 /// The endpoint the test scripts: a node's dials, streams, writes, resets and closes are recorded.
 #[derive(Default)]
@@ -60,7 +63,6 @@ struct SetsEp {
     closed: Vec<SessionId>,
     shutdown: bool,
     dials: Vec<(SessionId, NodeId, Vec<u8>)>,
-    refuse_dials: bool,
     credit: bool,
     next_stream: u64,
     opened: BTreeMap<(SessionId, u64), Vec<u8>>,
@@ -69,6 +71,7 @@ struct SetsEp {
     finished: BTreeSet<(SessionId, u64)>,
     inbound: BTreeMap<(SessionId, u64), (Vec<u8>, RecvStatus)>,
     live: Vec<(SessionId, NodeId)>,
+    next_peer: u64,
 }
 
 impl Port for SetsEp {
@@ -77,14 +80,20 @@ impl Port for SetsEp {
         let mut value = Value::None;
         match cmd {
             Command::Connect { node, alpn, .. } => {
-                if self.refuse_dials {
+                if self.live.len() >= SLOTS {
                     return Err(CommandError::Refused);
                 }
                 let s = SessionId(DIALED + self.dials.len() as u64);
                 self.dials.push((s, node, alpn.to_vec()));
+                // a dial in flight is a session the endpoint lists (`Query::SessionAt`), not yet established
+                self.live.push((s, node));
                 value = Value::Session(s);
             }
             Command::OpenStream { session, .. } => {
+                // a closing session takes no new stream (`Connection::open_bi`, `ensure_open`); the model's `CanOpen`
+                if self.shutdown || self.closed.contains(&session) {
+                    return Err(CommandError::Stream(StreamError::UnknownStream));
+                }
                 if !self.credit {
                     return Err(CommandError::Stream(StreamError::StreamLimit));
                 }
@@ -187,8 +196,8 @@ impl Ep for SetsEp {
             alpn: Alpn::new(SETS_ALPN),
             role: Role::Other,
             gossip: false,
-            dialer: false,
-            established: true,
+            dialer: (DIALED..INC).contains(&session.0),
+            established: !(DIALED..INC).contains(&session.0),
             allowed: true,
             path: None,
             route: None,
@@ -338,8 +347,23 @@ impl Run {
 
     fn deliver(&mut self, now: u64, ev: Event) {
         self.ep().events.push_back(ev);
+        self.flush(now);
+    }
+
+    /// Lets the node take the events queued on the endpoint.
+    fn flush(&mut self, now: u64) {
         let remote = SocketAddr::from(([192, 0, 2, 1], 9));
         self.node.handle_datagram(now, self.now_local, remote, &mut [0u8]);
+    }
+
+    /// The endpoint forgets a session that ended, as the model frees its sid.
+    fn forget(&mut self, sid: u64, s: SessionId) {
+        self.map.remove(&sid);
+        let ep = self.ep();
+        ep.closed.retain(|c| *c != s);
+        ep.peer_streams.retain(|p| p.0 != s);
+        ep.reset.retain(|r| r.0 != s);
+        ep.live.retain(|l| l.0 != s);
     }
 
     fn peer(&self, p: u64) -> NodeId {
@@ -390,8 +414,6 @@ impl Run {
         let st = &case.steps[i];
         let a = &st.args;
         let m = st.state.get("st").unwrap();
-        let live = m.get("eps").and_then(Json::arr).unwrap().len();
-        self.ep().refuse_dials = live == 2;
         let p1 = self.p1;
         match (st.call.as_str(), a.as_slice()) {
             ("CallStart", [_, res]) => {
@@ -434,6 +456,7 @@ impl Run {
             }
             ("EvFailed", [sid]) => {
                 let s = self.map[&num(sid)];
+                self.ep().live.retain(|l| l.0 != s);
                 self.deliver(
                     at(0),
                     Event::ConnectFailed {
@@ -443,6 +466,7 @@ impl Run {
                         reason: pinc_core::ConnectFailure::Timeout,
                     },
                 );
+                self.forget(num(sid), s);
             }
             ("EvIncoming", [p]) => {
                 let s = SessionId(INC + self.inc_bound);
@@ -471,6 +495,7 @@ impl Run {
             }
             ("EvClosed", [sid]) => {
                 let s = self.map[&num(sid)];
+                self.ep().live.retain(|l| l.0 != s);
                 self.deliver(
                     at(0),
                     Event::Closed {
@@ -478,6 +503,7 @@ impl Run {
                         reason: pinc_core::EndReason::Transport(CloseReason::Peer { error: 0 }),
                     },
                 );
+                self.forget(num(sid), s);
             }
             ("EvReply", [id, kind]) => {
                 let round = m
@@ -533,19 +559,22 @@ impl Run {
             }
             ("EvPeerStream", [sid, ..]) => {
                 let s = self.map[&num(sid)];
-                let k = self.ep().peer_streams.iter().filter(|p| p.0 == s).count() as u64;
-                self.ep().peer_streams.insert((s, 4 * k + 1));
-                self.deliver(
-                    at(0),
-                    Event::StreamOpened {
-                        session: s,
-                        stream: 4 * k + 1,
-                    },
-                );
+                let ep = self.ep();
+                let x = 4 * ep.next_peer + 1;
+                ep.next_peer += 1;
+                ep.peer_streams.insert((s, x));
+                self.deliver(at(0), Event::StreamOpened { session: s, stream: x });
             }
             ("EvRespEnd", [sid, ..]) => {
                 let s = self.map[&num(sid)];
-                let x = self.ep().peer_streams.iter().find(|p| p.0 == s).map_or(1, |p| p.1);
+                // the stream the node answers: not one it reset busy
+                let ep = self.ep();
+                let x = ep
+                    .peer_streams
+                    .iter()
+                    .find(|p| p.0 == s && !ep.reset.iter().any(|r| (r.0, r.1) == **p))
+                    .map_or(1, |p| p.1);
+                ep.peer_streams.remove(&(s, x));
                 self.deliver(
                     at(0),
                     Event::StreamReset {
@@ -631,7 +660,11 @@ impl Run {
             .filter(|e| e.get("closing").and_then(Json::bool) == Some(true))
             .map(|e| self.map[&num(e.get("sid").unwrap())])
             .collect();
-        let closed: BTreeSet<SessionId> = self.ep().closed.iter().copied().collect();
+        let mut closed: BTreeSet<SessionId> = self.ep().closed.iter().copied().collect();
+        if self.ep().shutdown {
+            // a leave issues one Shutdown, which the model counts as closing every session
+            closed.extend(self.map.values().copied());
+        }
         assert_eq!(
             closed, closing,
             "step {i}: the sessions the node closed differ from the model's"
@@ -652,6 +685,21 @@ impl Run {
     }
 }
 
+/// The ids of the setup's 4095 filler peers, derived once: every case's setup takes the same ones.
+fn fillers() -> &'static [NodeId] {
+    static IDS: OnceLock<Vec<NodeId>> = OnceLock::new();
+    IDS.get_or_init(|| {
+        (0..TABLE - 1)
+            .map(|j| {
+                // distinct identities: a seed per filler
+                let mut seed = [0x77u8; 32];
+                seed[..8].copy_from_slice(&j.to_le_bytes());
+                Keypair::from_seed(IdentityAlg::Ed25519, &seed).unwrap().node_id()
+            })
+            .collect()
+    })
+}
+
 /// A node with its table full but one place, 15 answered streams held, and the setup's records cleared.
 fn start(seed_peers: (NodeId, NodeId)) -> Run {
     let mut node = build();
@@ -668,26 +716,19 @@ fn start(seed_peers: (NodeId, NodeId)) -> Run {
         p1: seed_peers.0,
         p2: seed_peers.1,
     };
-    let mut j = 0u64;
-    while j < TABLE - 1 {
-        // distinct identities: a seed per filler
-        let mut seed = [0x77u8; 32];
-        seed[..8].copy_from_slice(&j.to_le_bytes());
-        let id = Keypair::from_seed(IdentityAlg::Ed25519, &seed).unwrap().node_id();
+    for (j, &id) in (0u64..).zip(fillers()) {
         let s = SessionId(FILL + j);
         run.ep().events.push_back(Event::Incoming {
             session: s,
             node: id,
             alpn: Alpn::new(SETS_ALPN).unwrap(),
         });
-        j += 1;
-        if j % 256 == 0 || j == TABLE - 1 {
-            run.deliver(at(0), Event::StreamReadable { session: s, stream: 0 });
+        if (j + 1) % 256 == 0 || j + 1 == TABLE - 1 {
+            run.flush(at(0));
         }
     }
     for k in 0..15u64 {
         let s = SessionId(FILL + k);
-        run.ep().reset.clear();
         run.deliver(at(0), Event::StreamOpened { session: s, stream: 1 });
     }
     assert!(
@@ -719,9 +760,10 @@ fn the_reconcile_layer_matches_the_model() {
     let (n, steps) = std::thread::Builder::new()
         .stack_size(512 << 20)
         .spawn(move || {
+            let ids = (id_of(0x41), id_of(0x42));
             let mut steps = 0usize;
             for case in &list {
-                let mut run = start((id_of(0x41), id_of(0x42)));
+                let mut run = start(ids);
                 for i in 0..case.steps.len() {
                     run.step(i, case);
                     run.compare(i, case);
