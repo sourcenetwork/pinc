@@ -272,6 +272,10 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `Early_redrain` | KMAX 5 -> 4 |
 | `Encoder` | WalkK 8 -> 3, Seeds -> SeedsQuick (the powers of two 0..64 -> 13 around the edges, the big logs {0, 10, 20} -> {0, 20}, the overflow multiples 0..30 -> {0, 1, 2, 30}, the encoded multiples 0..4 -> 0..2) |
 | `ExtIn` | CAP 3 -> 2, PMAX 9 -> 5 |
+| `ExtIn_evict` | PMAX 9 -> 8 |
+| `ExtIn_newest` | PMAX 9 -> 8 |
+| `ExtIn_refuse` | PMAX 9 -> 8 |
+| `ExtIn_stay` | PMAX 9 -> 8 |
 | `FacadeAcpForget` | bounded by constraint: behaviours of depth 8 (FacadeAcpForgetQuickBound); one peer and two listed protocols are what it is about The code as built, one peer and two listed protocols taken either way, any hook to start with (the host may edit it). Revoke, unrevoke and admission_changed drop both answers of the peer, a dial to a revoked peer is refused before anything is sent, each session is decided on its own protocol and direction, the endpoint is told whether the peer is allowed any of the questions it is asked about, its own sessions and dials among them, and a dial the gate allows drops a refusal held for its peer. |
 | `FacadeAcpForget_two` | bounded by constraint: behaviours of depth 5 (FacadeAcpForget_twoQuickBound) |
 | `FacadeRecords` | MaxSeq 3 -> 2 |
