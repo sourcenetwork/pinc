@@ -153,9 +153,11 @@ vars == <<sess, changes, cur, tab, lab, net, lost, expired, subd, bad, closed, r
 \* the peers member n holds sessions with, now
 Nbrs(n) == {v \in Nodes : {n, v} \in sess}
 \* the members reachable from the set S over the edges E, S included (a breadth-first walk to a fixed point)
-RECURSIVE Closure(_, _)
-Closure(E, S) == LET nxt == S \union {v \in Nodes : \E u \in S : {u, v} \in E}
-                 IN IF nxt = S THEN S ELSE Closure(E, nxt)
+\* TLC evaluates an operator's argument and a LET value again at each use inside a step, so the edges and each round of
+\* the walk are bound once, as the one element of a set (UNION of a one-set set is that set)
+RECURSIVE Walk(_, _)
+Walk(E, S) == UNION {IF nxt = S THEN S ELSE Walk(E, nxt) : nxt \in {S \union {v \in Nodes : \E u \in S : {u, v} \in E}}}
+Closure(E, S) == UNION {Walk(e, S) : e \in {E}}
 \* whether u and v are in one component of the edges E
 Linked(E, u, v) == v \in Closure(E, {u})
 \* the least member of a non-empty set of members
@@ -167,7 +169,7 @@ HeldPeers(t, n) == IF t[n].seq > 0 /\ t[n].live THEN t[n].peers ELSE {}
 Edges(t) == {e \in SUBSET Nodes : Cardinality(e) = 2 /\
                 \E u, v \in e : u /= v /\ u \in HeldPeers(t, v) /\ (~Mutual \/ v \in HeldPeers(t, u))}
 \* the label of every member under the table t: the least member of its component
-Labels(t) == [n \in Nodes |-> Least(Closure(Edges(t), {n}))]
+Labels(t) == CHOOSE l \in {[n \in Nodes |-> Least(Closure(e, {n}))] : e \in {Edges(t)}} : TRUE
 \* one record's charge (reach/table.rs record_cost(peers, sig)): a live record its share with its signature and one unit
 \* for every peer; a tombstone (expired or refused) names no peer and carries no signature, record_cost(0, 0); nothing
 \* for no record
@@ -309,19 +311,19 @@ Recv(f) ==
            tombs == {v \in Nodes \ {f.n} : tab[h][v].seq > 0 /\ ~tab[h][v].live}
            \* the member whose record EvictAny drops, or 0 for none
            gone == IF full /\ EvictAny /\ tombs /= {} THEN Least(tombs) ELSE 0
-           \* the table after the drop, with the frame's record
-           t2 == IF gone > 0 THEN [t0 EXCEPT ![gone] = None] ELSE t0
            b2 == IF gone > 0 THEN b0 - Cost(tab[h][gone]) ELSE b0
            \* the record fits, or fits once EvictAny made room
            room == ~full \/ (gone > 0 /\ b2 <= TableBytes)
-           \* a refused member the hub holds a record of: left a tombstone that names no peer and carries the refused
-           \* record's number, so the record it replaced is older and a late mirror of it is not taken again
-           tomb == [tab[h] EXCEPT ![f.n] = [@ EXCEPT !.live = FALSE, !.seq = f.seq]]
            \* the refusal closes the table: a newcomer's, with Closed
            closes == takes /\ ~room /\ Closed /\ old.seq = 0
            \* the copies a member's own record is mirrored as
            mirrors == {[to |-> o, n |-> f.n, seq |-> f.seq, peers |-> f.peers, mir |-> TRUE] : o \in Hubs \ {h}}
-       IN /\ tab' = IF takes /\ room THEN [tab EXCEPT ![h] = t2]
+       IN \* t2: the table after the drop, with the frame's record; tomb: a refused member the hub holds a record of is
+          \* left a tombstone that names no peer and carries the refused record's number, so the record it replaced is
+          \* older and a late mirror of it is not taken again (each bound once, as the one element of a set)
+          \E t2 \in {IF gone > 0 THEN [t0 EXCEPT ![gone] = None] ELSE t0},
+             tomb \in {[tab[h] EXCEPT ![f.n] = [@ EXCEPT !.live = FALSE, !.seq = f.seq]]} :
+          /\ tab' = IF takes /\ room THEN [tab EXCEPT ![h] = t2]
                     ELSE IF takes /\ old.seq > 0 THEN [tab EXCEPT ![h] = tomb] ELSE tab
           /\ bytes' = IF takes /\ room THEN [bytes EXCEPT ![h] = b2]
                       ELSE IF takes /\ old.seq > 0 THEN [bytes EXCEPT ![h] = @ - Cost(old) + Cost(tomb[f.n])] ELSE bytes
@@ -339,8 +341,8 @@ Recv(f) ==
 \* component; without it the record is forgotten (sequence back to 0)
 Expire(h, n) ==
     /\ tab[h][n].seq > 0 /\ tab[h][n].live /\ expired < MaxExpire
-    /\ LET t2 == [tab[h] EXCEPT ![n] = IF Tomb THEN [@ EXCEPT !.live = FALSE] ELSE None]
-       IN /\ tab' = [tab EXCEPT ![h] = t2]
+    /\ \E t2 \in {[tab[h] EXCEPT ![n] = IF Tomb THEN [@ EXCEPT !.live = FALSE] ELSE None]} :
+          /\ tab' = [tab EXCEPT ![h] = t2]
           /\ bytes' = [bytes EXCEPT ![h] = @ - Cost(tab[h][n]) + Cost(t2[n])]
           /\ lab' = IF Rebuild THEN [lab EXCEPT ![h] = Labels(t2)] ELSE lab
     /\ expired' = expired + 1
@@ -363,8 +365,8 @@ Drain(h, n) ==
 \* hub h drops the expired record of a member that left once its log holds nothing of it (Reach::drop_gone)
 Drop(h, n) ==
     /\ n \in left /\ n \notin logged[h] /\ tab[h][n].seq > 0 /\ ~tab[h][n].live
-    /\ LET t2 == [tab[h] EXCEPT ![n] = None]
-       IN /\ tab' = [tab EXCEPT ![h] = t2]
+    /\ \E t2 \in {[tab[h] EXCEPT ![n] = None]} :
+          /\ tab' = [tab EXCEPT ![h] = t2]
           /\ bytes' = [bytes EXCEPT ![h] = @ - Cost(tab[h][n])]
           /\ lab' = IF Rebuild THEN [lab EXCEPT ![h] = Labels(t2)] ELSE lab
     /\ UNCHANGED <<sess, changes, cur, net, lost, expired, subd, bad, closed, refd, left, logged>> /\ UNCHANGED turnsAndEvents
@@ -409,11 +411,22 @@ Next == \/ \E u, v \in Nodes : Toggle(u, v)
         \/ \E h \in Hubs, o, s \in Nodes, r \in BOOLEAN : Hand(h, o, s, r)
 
 \* turns end and start again, honest members report their changes, frames in flight arrive, and members refresh;
-\* losses and expiries are bounded, so in the end every hub hears every member's newest record
+\* losses and expiries are bounded, so in the end every hub hears every member's newest record. Each is weak fairness,
+\* WF_vars(EndTurn) /\ WF_vars(NextTurn) /\ WF_vars(Report(n)) /\ WF_vars(Refresh(n)) and, per hub h and member n,
+\* WF_vars(\E f \in net : f.to = h /\ f.n = n /\ Recv(f)), written out so that TLC does not try every successor of
+\* every state to work out ENABLED. WF_vars(A) is []<>~(ENABLED <<A>>_vars) \/ []<><<A>>_vars, and ENABLED is the
+\* guard of each (each step of these changes a variable). EndTurn sets phase, NextTurn sets phase, Report(n) counts
+\* sent[n] and Refresh(n) puts Frame(n) in net, so each of them is followed by a state where it is disabled: []<><<A>>
+\* implies []<>~ENABLED, and the fairness is []<>~ENABLED alone. A frame in net can always be received and leaves net
+\* (its mirrors go to the other hubs), and only Recv and Lose take a frame out of net, Lose counting it in lost: so a
+\* step of Next that takes a frame of n to h out of net with lost unchanged is a receipt of one (RecvOf)
+InFlight(h, n) == \E f \in net : f.to = h /\ f.n = n
+RecvOf(h, n) == \E f \in net : f.to = h /\ f.n = n /\ f \notin net' /\ lost' = lost
 Spec == /\ Init /\ [][Next]_vars
-        /\ WF_vars(EndTurn) /\ WF_vars(NextTurn)
-        /\ \A n \in Nodes : WF_vars(Report(n)) /\ WF_vars(Refresh(n))
-        /\ \A h \in Hubs : \A n \in Nodes : WF_vars(\E f \in net : f.to = h /\ f.n = n /\ Recv(f))
+        /\ []<>~(phase = "events" /\ Pending)
+        /\ []<>~(phase = "report" /\ \A m \in Nodes : ~ReportReady(m))
+        /\ \A n \in Nodes : []<>~(phase = "report" /\ ReportReady(n)) /\ []<>~(n \notin left /\ Frame(n) \notin net)
+        /\ \A h \in Hubs : \A n \in Nodes : []<>~InFlight(h, n) \/ []<><<RecvOf(h, n)>>_vars
 
 (* ---------------------------- the checked properties ---------------------------- *)
 \* a hub never hands a message to a subscriber that sessions, or a word still on its way, do not link to the origin
