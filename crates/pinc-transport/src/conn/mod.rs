@@ -191,7 +191,7 @@ pub struct Connection<
     streams: Held<'a, Streams<S, N, C>>,
     loss: Shared<'a, LossEstimate>,
     dgrams: Datagrams,
-    ext: Datagrams<16, 4>,
+    ext: Datagrams<{ ctl::EXT_QUEUED }, 4>,
     early: EarlyData,
     hs: Handshake,
     est: Option<Established>,

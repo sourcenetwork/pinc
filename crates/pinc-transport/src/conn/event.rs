@@ -263,19 +263,22 @@ impl Ev {
 
 /// The places of the event queue. With `alloc` a place is written when an event first uses it, so the queue is sized
 /// for a session of 200 stream slots; without it the queue is inline in the connection and stays at 256, which
-/// [`queue_fits`] holds a session of up to 77 slots to.
+/// [`queue_fits`] holds a session of up to 72 slots to.
 #[cfg(feature = "alloc")]
 pub(crate) const QUEUE: usize = 640;
 /// The places of the event queue.
 #[cfg(not(feature = "alloc"))]
 pub(crate) const QUEUE: usize = 256;
-/// Events that cannot be recovered and may be queued at once besides one `Opened`, one `Reset` and one `Stopped` per stream slot and
-/// one validated and one failed event per path: connected, key request, tickets, ready, asleep, awake, wake
-/// unanswered, closed and the undeliverable extension frames of the 8 extension slots.
-pub(crate) const FIXED_EVENTS: usize = 16;
+/// Events that cannot be recovered and may be queued at once besides one `Opened`, one `Reset` and one `Stopped` per
+/// stream slot and one validated and one failed event per path: connected, key request, tickets, ready, asleep, awake, wake
+/// unanswered, closed, and one undeliverable event per extension frame held or queued at once (8 held, 16 queued).
+pub(crate) const FIXED_EVENTS: usize = 8 + super::ctl::EXT_SLOTS + super::ctl::EXT_QUEUED;
 
 /// Whether `streams` stream slots and `paths` paths leave room for every unrecoverable event: with the repeats of
 /// [`Ev::same_as`] dropped, no more than this many can be queued, so a full queue always holds a notification to give up.
+/// The bound counts one fall of the path MTU between two reads of the queue: frames queued after a fall fit the new
+/// MTU, so a second batch of undeliverable events needs the MTU to rise and fall again before the host reads (not
+/// shown impossible inside one call; the excess is then counted in [`EvQueue::lost`]).
 pub(crate) const fn queue_fits(streams: usize, paths: usize) -> bool {
     3 * streams + 2 * paths + FIXED_EVENTS <= QUEUE
 }
@@ -535,5 +538,46 @@ pub(super) mod trace {
         fn default() -> Self {
             Self::new()
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, reason = "tests assert")]
+mod tests {
+    use super::*;
+
+    /// A queue filled with every unrecoverable event of the largest session the shape holds (a stream's three, a
+    /// path's two, the eight fixed ones) still takes one undeliverable event for each extension frame that is held or
+    /// queued at once, and loses none.
+    #[test]
+    fn undeliverable_extensions_of_a_full_shape_are_never_lost() {
+        const PATHS: usize = 4;
+        let streams = (1..=1024).rev().find(|n| queue_fits(*n, PATHS)).unwrap_or(0);
+        let mut q = EvQueue::new(EventTable::new());
+        for id in 0..streams as u64 {
+            q.push(Ev::Opened(id));
+            q.push(Ev::Reset(id, 0));
+            q.push(Ev::Stopped(id, 0));
+        }
+        for id in 0..PATHS as u64 {
+            q.push(Ev::PathValidated(PathId(id)));
+            q.push(Ev::PathFailed(PathId(id)));
+        }
+        for ev in [
+            Ev::KeyRequest,
+            Ev::Connected(true),
+            Ev::Tickets,
+            Ev::Ready,
+            Ev::PeerAsleep,
+            Ev::PeerAwake,
+            Ev::WakeUnanswered,
+            Ev::Closed(CloseReason::Unanswered),
+        ] {
+            q.push(ev);
+        }
+        for n in 0..super::super::ctl::EXT_SLOTS + super::super::ctl::EXT_QUEUED {
+            q.push(Ev::ExtensionUndeliverable(n as u64, 0));
+        }
+        assert_eq!(q.lost, 0, "with {streams} streams unrecoverable events were lost");
     }
 }

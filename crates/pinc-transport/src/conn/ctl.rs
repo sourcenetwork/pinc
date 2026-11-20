@@ -32,6 +32,8 @@ pub(crate) const K_EXT: u8 = 8;
 const TABLE: usize = 24;
 /// Extension frames kept for retransmission at once.
 pub(crate) const EXT_SLOTS: usize = 8;
+/// Extension frames queued behind the held ones.
+pub(crate) const EXT_QUEUED: usize = 16;
 /// The room a held extension frame body has: a packet at the largest path MTU never carries more.
 pub(crate) const EXT_BODY_MAX: usize = super::config::JUMBO_MTU as usize;
 
