@@ -748,7 +748,7 @@ ep_impl! {
                 last_app: slot.m.last_app,
                 sub: false,
                 answered: false,
-                transport: Default::default(),
+                transport: pinc_transport::conn::Stats::default(),
             });
         };
         let transport = conn.stats();
