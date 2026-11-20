@@ -19,7 +19,9 @@
 (* that checks every line in one state (a pure function per line) names    *)
 (* that state, or TRUE when its only state checks them all. A spec that    *)
 (* replays independent runs of the trace marks the end of each run with    *)
-(* ReplayMark and asks for all of them with ReplayReadAll.                 *)
+(* ReplayMark and asks for all of them with ReplayReadAll. A spec whose     *)
+(* trace joins several files asks with ReplayReadFiles that each has a     *)
+(* line.                                                                   *)
 (*                                                                         *)
 (* TLC keeps one list of registers per worker and reads the first          *)
 (* worker's after the search, so a trace check runs with one worker.       *)
@@ -38,4 +40,6 @@ ReplaySeen(atEnd) == ReplayMark(atEnd, "end")
 \* after the search: the trace has a line and every mark of marks was added
 ReplayReadAll(lines, marks) == lines > 0 /\ marks \subseteq TLCGet(Reg)
 ReplayRead(lines) == ReplayReadAll(lines, {"end"})
+\* after the search, for a trace joined from files of lens[1], lens[2], ... lines: each has a line, the end was added
+ReplayReadFiles(lens) == (\A k \in DOMAIN lens : lens[k] > 0) /\ ReplayRead(1)
 =============================================================================

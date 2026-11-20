@@ -28,8 +28,9 @@ E == INSTANCE Encoder WITH WalkK <- 0, c <- 0
 U == INSTANCE U64
 L == INSTANCE Layout WITH SmallLen <- 0, PreN <- 0, c <- 0
 
-Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/tla/encoder.ndjson")
-         \o ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/tla/encout.ndjson")
+EncRuns == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/tla/encoder.ndjson")
+EncOuts == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/tla/encout.ndjson")
+Trace == EncRuns \o EncOuts
 
 Init == c = [t |-> "root"]
 
@@ -72,7 +73,7 @@ TraceSpec == Init /\ [][Next]_c
 
 (* every recorded event equals the specification *)
 EventsOK == c.t = "event" => IF Trace[c.i].t = "enc" THEN EncEv(Trace[c.i]) ELSE OutEv(Trace[c.i])
-\* the end check (TraceEnd.tla): the state of the last line was reached in a trace that has one
+\* the end check (TraceEnd.tla): the state of the last line was reached, and each of the two files has a line
 ReplayAtEnd == ReplaySeen(c.t = "event" /\ c.i = Len(Trace))
-ReplayEnded == ReplayRead(Len(Trace))
+ReplayEnded == ReplayReadFiles(<<Len(EncRuns), Len(EncOuts)>>)
 =============================================================================

@@ -31,8 +31,9 @@ vars == <<i, st, cf>>
 
 P == INSTANCE FacadeBufsOps WITH POOLED <- 8
 
-Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/facade_bufs_std.ndjson")
-         \o ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/facade_bufs_nostd.ndjson")
+BufsStd == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/facade_bufs_std.ndjson")
+BufsNoStd == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/facade_bufs_nostd.ndjson")
+Trace == BufsStd \o BufsNoStd
 Ev0 == Trace[i]
 
 \* the endpoint of holder h in the run (holders 1..h1 are endpoint 1's)
@@ -89,7 +90,7 @@ TraceSpec == Init /\ [][TNext]_vars
 \* along the trace: no pool holds more than POOLED, a held buffer has its endpoint's length
 Inv == /\ \A q \in 1..2 : Len(st.pools[q]) <= 8
        /\ \A h \in DOMAIN st.held : st.held[h] # P!NoBuf => st.held[h].len = cf.lens[Ep(cf, h)]
-\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+\* the end check (TraceEnd.tla): some behaviour consumed every line, and each of the two files has one
 ReplayAtEnd == ReplaySeen(i > Len(Trace))
-ReplayEnded == ReplayRead(Len(Trace))
+ReplayEnded == ReplayReadFiles(<<Len(BufsStd), Len(BufsNoStd)>>)
 =============================================================================

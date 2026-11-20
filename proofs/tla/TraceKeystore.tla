@@ -27,8 +27,9 @@ EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils, TraceEnd
 VARIABLES i, st
 vars == <<i, st>>
 
-Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/keystore.ndjson")
-         \o ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/keystore_tpm.ndjson")
+KsSoft == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/keystore.ndjson")
+KsTpm == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/keystore_tpm.ndjson")
+Trace == KsSoft \o KsTpm
 
 T == INSTANCE KeystoreTpm WITH FlushCanFail <- FALSE, tpm <- 0, primary <- 0, keys <- 0, leaked <- 0, log <- 0, op <- 0, nh <- 0, steps <- 0
 I == INSTANCE CryptoIdentity WITH x <- 0
@@ -216,7 +217,7 @@ TNext == Step \/ Done
 TraceSpec == Init /\ [][TNext]_vars /\ WF_vars(TNext)
 
 TraceAccepted == <>(i = Len(Trace) + 1)
-\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+\* the end check (TraceEnd.tla): some behaviour consumed every line, and each of the two files has one
 ReplayAtEnd == ReplaySeen(i > Len(Trace))
-ReplayEnded == ReplayRead(Len(Trace))
+ReplayEnded == ReplayReadFiles(<<Len(KsSoft), Len(KsTpm)>>)
 =============================================================================

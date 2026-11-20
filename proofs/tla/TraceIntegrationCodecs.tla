@@ -21,8 +21,10 @@ EXTENDS IntegrationCodecsOps, Json, IOUtils, TraceEnd
 VARIABLE c
 
 Dir == IOEnv.PINC_TRACE_DIR
-Trace == ndJsonDeserialize(Dir \o "/codecs_relay.ndjson") \o ndJsonDeserialize(Dir \o "/codecs_tag.ndjson")
-         \o ndJsonDeserialize(Dir \o "/codecs_sid.ndjson")
+CodecsRelay == ndJsonDeserialize(Dir \o "/codecs_relay.ndjson")
+CodecsTag == ndJsonDeserialize(Dir \o "/codecs_tag.ndjson")
+CodecsSid == ndJsonDeserialize(Dir \o "/codecs_sid.ndjson")
+Trace == CodecsRelay \o CodecsTag \o CodecsSid
 
 Init == c = [t |-> "root"]
 
@@ -59,7 +61,7 @@ Next ==
 TraceSpec == Init /\ [][Next]_c
 
 EventsOK == c.t = "event" => EventOK(Trace[c.i])
-\* the end check (TraceEnd.tla): the state of the last line was reached in a trace that has one
+\* the end check (TraceEnd.tla): the state of the last line was reached, and each of the three files has a line
 ReplayAtEnd == ReplaySeen(c.t = "event" /\ c.i = Len(Trace))
-ReplayEnded == ReplayRead(Len(Trace))
+ReplayEnded == ReplayReadFiles(<<Len(CodecsRelay), Len(CodecsTag), Len(CodecsSid)>>)
 =============================================================================
