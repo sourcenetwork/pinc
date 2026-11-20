@@ -7,7 +7,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 tc=() lcov=target/cov.lcov br=()
 if [ "${BRANCH:-0}" = 1 ]; then tc=(+nightly) br=(--branch) lcov=target/cov-branch.lcov; fi
-tests=$(grep -o -- '--test trace_[a-z_]*' scripts/proofs.sh | sort -u | tr '\n' ' ')
+tests=$(grep -oh -- '--test trace_[a-z_]*' scripts/proofs.sh scripts/proofs/*.sh | sort -u | tr '\n' ' ')
 ignore='(tests|pinc-sim)/'
 cargo "${tc[@]}" llvm-cov clean --workspace
 # shellcheck disable=SC2086

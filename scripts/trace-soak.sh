@@ -32,14 +32,14 @@ replay=proofs/lean/.lake/build/bin/replay
 [ -x "$replay" ] || { echo "trace-soak: build the replay binary first: (cd proofs/lean && lake build)" >&2; exit 1; }
 
 # The trace tests are the ones the gate runs: its cargo line names them.
-tests=$(grep -o -- '--test trace_[a-z_]*' scripts/proofs.sh | sort -u | tr '\n' ' ')
+tests=$(grep -oh -- '--test trace_[a-z_]*' scripts/proofs.sh scripts/proofs/*.sh | sort -u | tr '\n' ' ')
 # shellcheck disable=SC2086
 cargo test -q -p pinc-tests --features hwenc --no-run $tests >/dev/null 2>&1 || true
 
 tlc_check() { # tlc_check <dir> : the TLC trace checks of the gate over the ndjson in <dir>
     local tla="${TLA_HOME:-$HOME/.local/share/tla}" spec out st
     st=$(mktemp -d)
-    for spec in $(grep -o '^trace_tlc Trace[A-Za-z]*' scripts/proofs.sh | cut -d' ' -f2); do
+    for spec in $(grep -ohE '^(par )?trace_tlc Trace[A-Za-z]*' scripts/proofs/trace.sh | awk '{print $NF}'); do
         # a -x name that is the spec's name without "Trace" (membership, streams) skips its TLC check too
         lower=$(echo "${spec#Trace}" | tr 'A-Z' 'a-z')
         case "$skip" in *,"$lower",*) continue ;; esac
