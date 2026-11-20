@@ -700,6 +700,18 @@ mod tests {
         assert_eq!(ep.relay_stats().unwrap().hub_dropped, 1, "the drop was not counted");
     }
 
+    /// A batch of several datagrams dropped before the role is restored counts every datagram.
+    #[test]
+    fn a_batch_dropped_before_the_role_is_restored_counts_every_datagram() {
+        let ep = rolled(3 * SEC);
+        let sh = &ep.0.shared;
+        let to = pinc_core::relay_addr(false, 0, 1);
+        let mut core = sh.lock().unwrap();
+        assert!(sh.role_carries(&mut core, T0, &to, b"abcdef", 2));
+        drop(core);
+        assert_eq!(ep.relay_stats().unwrap().hub_dropped, 3, "the drop was not counted per datagram");
+    }
+
     /// A member the role's hub knows by its relay path address, on an endpoint whose role is not restored yet.
     fn rolled_with_member() -> (Endpoint<impl Hosted>, SocketAddr) {
         let ep = rolled(3 * SEC);

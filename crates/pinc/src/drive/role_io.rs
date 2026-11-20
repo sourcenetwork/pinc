@@ -127,7 +127,7 @@ impl<H: Hosted> Shared<H> {
         let Some(mut role) = self.role() else { return false };
         // Before the role restored its mailbox the packet is taken and dropped, as a lost one: the transport resends.
         if !self.role_ready.get() {
-            role.lost();
+            bytes.chunks(segment.max(1)).for_each(|_| role.lost());
             return true;
         }
         let rnow = self.relay_now(now);
