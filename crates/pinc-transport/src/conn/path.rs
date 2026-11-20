@@ -41,7 +41,8 @@
 //! the member.
 //!
 //! Invariants: the active path index always names a live slot; an unvalidated path never sends past its
-//! amplification budget; a direct path is validated only by an answer to a challenge sent to it; a path whose address
+//! amplification budget; a direct path is validated only by an answer to a challenge sent to it, or by another
+//! session to the same peer validating the same address again ([`Connection::path_returned`]); a path whose address
 //! is gone is never validated again, unless the endpoint adds its id again.
 
 use pinc_crypto::Provider;
