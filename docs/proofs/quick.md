@@ -10,6 +10,11 @@ the bounds it changes and what the smaller bounds no longer reach.
 |---|---|
 | `Amp` | U 100 -> 25 (the least U at which a send allowed before validation still saturates tx) |
 | `BroadcastAuth` | MaxPub 2 -> 1 |
+| `BroadcastAuth_nobody` | MaxPub 2 -> 1 |
+| `BroadcastAuth_noisb` | MaxPub 2 -> 1 |
+| `BroadcastAuth_nomid` | MaxPub 2 -> 1 |
+| `BroadcastAuth_notopic` | MaxPub 2 -> 1 |
+| `BroadcastAuth_nots` | MaxPub 2 -> 1 |
 | `BroadcastFloors` | Members {5, 6} -> {5} |
 | `BroadcastFloors_cap1` | Hubs {1, 2} -> {1} |
 | `BroadcastLog` | Ring 6 -> 4, Cap 3 -> 2, MaxN 4 -> 2, Mids {1, 2, 3} -> {1, 2} (as many ids as the cap, as in the deep config; BroadcastLog_cap keeps one id more) |
