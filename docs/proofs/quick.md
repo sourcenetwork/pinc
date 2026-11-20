@@ -194,6 +194,12 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `CoreRouteIndex_nosync` | Slots {1, 2, 3} -> {1, 2} |
 | `CoreRouteIndex_noverify` | Slots {1, 2, 3} -> {1, 2} |
 | `CoreState` | Lives -> LivesQuick (endpoints 3 -> 2: the full one left out), Positions -> PositionsQuick (middle bytes every 7th -> every 21st) |
+| `CoreState_NoAcceptedMutant` | KR 2 -> 1 |
+| `CoreState_NoEviction` | KR 2 -> 1 |
+| `CoreState_NoFullTables` | KR 2 -> 1 |
+| `CoreState_lazy` | KR 2 -> 1 |
+| `CoreState_tail` | KR 2 -> 1 |
+| `CoreState_tailstrict` | KR 2 -> 1 |
 | `CoreTable` | N 3 -> 2, KeySet {1, 2, 3} -> {1, 2} |
 | `CoreTable_chain` | N 3 -> 2, KeySet {1, 2, 3} -> {1, 2} |
 | `CoreTable_evict` | N 3 -> 2, KeySet {1, 2, 3, 4} -> {1, 2, 3} |
