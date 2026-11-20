@@ -176,11 +176,11 @@ impl Outbox {
     }
 }
 
-/// A test handle on an [`Outbox`], for the model-based tests of the output queue (`MbtOutbox.tla`).
+/// A test handle on an `Outbox`, for the model-based tests of the output queue (`MbtOutbox.tla`).
 #[cfg(feature = "trace")]
 pub struct OutboxProbe(Outbox);
 
-/// What an [`Outbox`] holds, as the model's state reads it.
+/// What an `Outbox` holds, as the model's state reads it.
 #[cfg(feature = "trace")]
 #[derive(Debug, Clone)]
 pub struct OutboxView {
