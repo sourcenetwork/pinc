@@ -33,7 +33,7 @@ par witness_tlc platform_time_back PlatformTime PlatformTime_back NowNotBack
 par witness_tlc platform_time_wdue PlatformTime PlatformTime_wdue WakeDueAll
 par run_tlc facadeprekeys FacadePrekeys FacadePrekeys
 par witness_tlc facadeprekeys_drop FacadePrekeys FacadePrekeys_drop NothingDropped
-par witness_tlc facadeprekeys_top FacadePrekeys FacadePrekeys_top NotDueAtBirth
+par run_tlc facadeprekeys_top FacadePrekeys FacadePrekeys_top
 par run_tlc facade_records_bounded FacadeRecords FacadeRecords_bounded
 par witness_tlc facade_records_evict FacadeRecords FacadeRecords_evict NoReplayBelieved
 par run_tlc facade_records_relay FacadeRecords FacadeRecords_relay

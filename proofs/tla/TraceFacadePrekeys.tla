@@ -32,16 +32,17 @@ P == INSTANCE FacadePrekeys WITH LIFE <- 0, USES <- 64, TOP <- 0, TS <- {}, UTOP
 \* PREKEY_LIFE = 600_000_000_000 ns and PREKEY_USES = 64
 LIFEW == U!FromLimbs(<<28672, 45769, 139, 0>>)
 USESN == 64
-SatAdd64(a, b) == LET r == U!CAdd(a, b) IN IF r.ok THEN r.v ELSE U!Max64
+Deadline(t) == LET r == U!CAdd(t, LIFEW) IN IF r.ok THEN <<r.v>> ELSE <<>>
 
-WNew == [held |-> <<>>, next |-> 1, at |-> U!Zero, used |-> 0]
+\* rotate_at as <<word>>, or <<>> when none (past the clock's last instant: deadline_after)
+WNew == [held |-> <<>>, next |-> 1, at |-> <<U!Zero>>, used |-> 0]
 \* Prekeys::due and the state after a rotation whose draws succeeded, over words
-DueW(x, t) == U!Le(x.at, t) \/ x.used >= USESN
-RotW(x, t) == [held |-> R!Push(x.held, x.next, 2), next |-> x.next + 1, at |-> SatAdd64(t, LIFEW), used |-> 0]
+DueW(x, t) == (x.at # <<>> /\ U!Le(x.at[1], t)) \/ x.used >= USESN
+RotW(x, t) == [held |-> R!Push(x.held, x.next, 2), next |-> x.next + 1, at |-> Deadline(t), used |-> 0]
 
 Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/prekeys.ndjson")
 Ev == Trace[i]
-Rec(st) == [held |-> st.held, next |-> st.next, at |-> U!FromLimbs(st.at), used |-> st.used]
+Rec(st) == [held |-> st.held, next |-> st.next, at |-> IF st.at = <<>> THEN <<>> ELSE <<U!FromLimbs(st.at)>>, used |-> st.used]
 Same(st) == s' = Rec(st)
 
 NewEv == Ev.op = "new" /\ s' = WNew /\ Same(Ev.st)
