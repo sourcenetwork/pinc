@@ -6,7 +6,8 @@ use crate::error::{Error, Result};
 
 /// The most member sessions the relay holds: the table size of the state machine.
 pub const CARRIERS: usize = 1024;
-/// The most signed records the relay stores.
+/// The most signed records the relay holds. The store may hold more while it refuses removals; they are removed at
+/// the next start, and the relay's memory does not depend on them.
 pub const RECORDS: usize = 1024;
 /// The most sleeping members whose packets the mailbox holds.
 pub const MAILBOX_MEMBERS: usize = 256;

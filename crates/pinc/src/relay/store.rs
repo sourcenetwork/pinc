@@ -28,7 +28,7 @@ pub struct KeptRecord {
 /// Everything a store kept.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Kept {
-    /// The records, bounded by [`RECORDS`](super::RECORDS).
+    /// The records the store kept. The relay keeps at most [`RECORDS`](super::RECORDS) of them and removes the rest.
     pub records: Vec<KeptRecord>,
     /// The packets held for sleeping members, as [`Store::put_mailbox`] was given them.
     pub mailboxes: Vec<(NodeId, Vec<u8>)>,
@@ -38,6 +38,9 @@ pub struct Kept {
 ///
 /// A write may be repeated (a failed one is tried again, and one in flight when a run ends is tried again in the
 /// next), so every write must be idempotent: `remove` of a node the store does not hold is `Ok`.
+///
+/// The relay holds at most [`RECORDS`](super::RECORDS) records, but while the store refuses removals it may hold more,
+/// by at most the removals still owed or given up; the relay's own memory does not grow with it.
 pub trait Store {
     /// Everything stored so far.
     fn load(&self) -> impl Future<Output = Result<Kept>>;
@@ -45,7 +48,8 @@ pub trait Store {
     /// Keep `record`, the newest signed record of `node`, received at `received`.
     fn put(&self, node: &NodeId, record: &[u8], received: u64) -> impl Future<Output = Result<()>>;
 
-    /// Forget the record of `node`.
+    /// Forget the record of `node`. A removal the store refuses is tried again a bounded number of times and then left for the
+    /// next start, and each refusal is counted in the relay's store errors.
     fn remove(&self, node: &NodeId) -> impl Future<Output = Result<()>>;
 
     /// Keep the packets held for `node`; an empty `packets` means none are held and forgets them.
