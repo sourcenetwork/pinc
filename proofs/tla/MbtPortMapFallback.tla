@@ -36,7 +36,8 @@
 (* gateway. MbtBound makes a state with both release slots full before a   *)
 (* stop a leaf (the third release, which takes the last slot, is checked   *)
 (* by PortMapFallback.cfg, not here), and one past two failed renewals a   *)
-(* leaf (the timer abstraction). About 1300 states and 35,000 edges.       *)
+(* leaf (the timer abstraction). 1081 states inside the bound, 55 past it, *)
+(* 29429 edges.                                                            *)
 (***************************************************************************)
 EXTENDS PortMapFallbackOps
 
@@ -47,16 +48,19 @@ Init == s = Blank /\ rf = 0
 
 Do(o, r) == r = o.r /\ s' = o.s /\ rf' = RfNext(rf, o)
 Live == s.st # "none"
+\* a stopped client gets only the answer kind `one`; an IF, not a disjunction: TLC takes each true disjunct as a step
+\* of its own, and scripts/mbt.py counts one edge per step TLC generated
+Only(one, k) == IF s.st # "stopped" THEN TRUE ELSE k = one
 
 CallNew(g, l) == s.st = "none" /\ s' = New(g, l).s /\ rf' = 0
 CallDgram(r) == Live /\ Do(Dgram(s), r)
 CallHttpPoll(r) == Live /\ Do(HttpPoll(s), r)
 CallTick(r) == Live /\ Do(Tick(s), r)
 CallLate == Live /\ s.hd # "none" /\ Do(Late(s), "none")
-CallPcp(k, r) == Live /\ s.cfg.g /\ (s.st # "stopped" \/ k = "grant") /\ Do(Pcp(s, k), r)
-CallNat(k, r) == Live /\ s.cfg.g /\ (s.st # "stopped" \/ k = "addr") /\ Do(NatStep(s, k), r)
-CallSsdp(k, r) == Live /\ (s.st # "stopped" \/ k = "ok") /\ Do(Ssdp(s, k), r)
-CallHttp(k, r) == Live /\ (s.ht = "sent" \/ k = "ok") /\ Do(Http(s, k), r)
+CallPcp(k, r) == Live /\ s.cfg.g /\ Only("grant", k) /\ Do(Pcp(s, k), r)
+CallNat(k, r) == Live /\ s.cfg.g /\ Only("addr", k) /\ Do(NatStep(s, k), r)
+CallSsdp(k, r) == Live /\ Only("ok", k) /\ Do(Ssdp(s, k), r)
+CallHttp(k, r) == Live /\ (IF s.ht = "sent" THEN TRUE ELSE k = "ok") /\ Do(Http(s, k), r)
 CallStop == Live /\ Do(Stop(s), "none")
 CallRestart == Live /\ Do(Restart(s), "none")
 
