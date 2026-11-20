@@ -3,6 +3,7 @@
 use pinc_core::LATE_START;
 use pinc_crypto::Provider;
 use pinc_security::Env;
+use pinc_transport::recovery::deadline_after;
 
 use super::conn::{Connectivity, Notice};
 use super::netcheck::{HOME_RETRY_NS, HomeStep};
@@ -14,13 +15,19 @@ const NETCHECK_DELAY: u64 = 50_000_000;
 impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> {
     /// The first instant [`Connectivity::tick`] has something to do.
     pub fn next_deadline(&self, now: u64) -> Option<u64> {
-        let mut t = if self.has_relays() { self.next_probe } else { u64::MAX };
+        let mut t = None::<u64>;
+        let mut soonest = |d: u64| t = Some(t.map_or(d, |c| c.min(d)));
+        if self.has_relays()
+            && let Some(p) = self.next_probe
+        {
+            soonest(p);
+        }
         for i in 0..R {
             let ctx = self.ctx(i);
             if let Some(r) = self.rly.get(i).filter(|r| r.cfg.is_some_and(|c| c.has_carrier()))
                 && let Some(d) = r.link.next_deadline(now, &self.shared, &ctx)
             {
-                t = t.min(d);
+                soonest(d);
             }
         }
         for d in [
@@ -34,7 +41,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
         .into_iter()
         .flatten()
         {
-            t = t.min(d);
+            soonest(d);
         }
         // Until a class is known, the watchdog that declares UDP blocked is a deadline of its own.
         if self.class.is_none()
@@ -44,10 +51,10 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
                 .saturating_add(super::link::dial_wait(self.net.best_rtt()))
                 .saturating_add(1);
             if at > now {
-                t = t.min(at);
+                soonest(at);
             }
         }
-        (t != u64::MAX).then_some(t)
+        t
     }
 
     /// Set the node's round trip figures: the larger of the endpoint's `tgr` and `lrtt`, and `tgr` itself.
@@ -92,10 +99,10 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
                 }
             }
         }
-        if now >= self.next_probe {
+        if self.next_probe.is_some_and(|p| now >= p) {
             self.probe_all(now, env);
             self.check_failover(now);
-            self.next_probe = now.saturating_add(HOME_RETRY_NS);
+            self.next_probe = deadline_after(now, HOME_RETRY_NS);
             if self.net.home().is_none() {
                 // A node none of whose relays takes UDP (a browser) has no probe to wait for: the pinned relay is home,
                 // else the relay with the lowest id, the same for every node that sees the same relays.
@@ -117,7 +124,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
                 }
             } else {
                 // Probing goes on at the record's pace once a home is known.
-                self.next_probe = now.saturating_add(rule::RECORD_REPUBLISH_NS / 30);
+                self.next_probe = deadline_after(now, rule::RECORD_REPUBLISH_NS / 30);
             }
         }
         let due: [Option<pinc_crypto::NodeId>; 4] = {
@@ -188,7 +195,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
         self.sign.cancel_suspend();
         self.net.restart();
         self.refresh_mapped(now);
-        self.next_probe = now.saturating_add(10_000_000);
+        self.next_probe = deadline_after(now, 10_000_000);
         self.duty.restart(now);
         for i in 0..R {
             let ctx = self.ctx(i);
@@ -208,7 +215,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
     pub fn link_changed(&mut self, now: u64) {
         self.net.restart();
         self.refresh_mapped(now);
-        self.next_probe = now.saturating_add(NETCHECK_DELAY);
+        self.next_probe = deadline_after(now, NETCHECK_DELAY);
         self.duty.restart(now);
         for i in 0..R {
             self.check_carrier(now, i);

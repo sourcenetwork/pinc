@@ -17,7 +17,8 @@
 //! within 90 s of the timer, not of the dial).
 //!
 //! Invariants: a session has at most one entry in the heap; a settled session that has ended is freed; a deadline
-//! after a timer is strictly later than the time of the call (none at the clock's last instant), so a timer cannot spin.
+//! after a timer is strictly later than the time of the call (none at the clock's last instant), so a timer cannot spin;
+//! a closing session at the clock's last instant is therefore not freed.
 
 use pinc_transport::conn::{Config, PathId, RJ_THIN_GAP};
 use pinc_transport::recovery::deadline_after;

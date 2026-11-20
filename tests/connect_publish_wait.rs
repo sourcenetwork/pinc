@@ -15,6 +15,8 @@ use std::net::SocketAddr;
 use connect_common::{Rec, SEC, big_stack};
 use connect_rig::Rig;
 use pinc_connect::client::link::State;
+use pinc_connect::client::netcheck::HOME_RETRY_NS;
+use pinc_connect::relay::datagram::Datagram;
 use pinc_crypto::Software;
 use pinc_security::Env;
 use pinc_tests::Host;
@@ -153,6 +155,61 @@ fn a_relay_reached_over_udp_only_costs_no_dial_loop() {
         // A node that resumes does not dial it either, and its link stays where it was.
         conn.resume(now);
         assert!(conn.poll_io().is_none(), "a stream request for a relay with no carrier");
-        assert_eq!(conn.carrier_state(0), State::Down, "the link of a relay with no carrier moved");
+        assert_eq!(
+            conn.carrier_state(0),
+            State::Down,
+            "the link of a relay with no carrier moved"
+        );
+    });
+}
+
+/// The probes the layer queued for the relay since the last call.
+fn probes(rig: &mut Rig) -> usize {
+    let mut buf = vec![0u8; 2048];
+    let mut n = 0;
+    while let Some((_, len)) = rig.conn.poll_udp(&mut buf) {
+        n += usize::from(matches!(Datagram::decode(&buf[..len]), Ok(Datagram::Qad { .. })));
+    }
+    n
+}
+
+fn tick_at(rig: &mut Rig, now: u64) {
+    let Rig { conn, drbg, .. } = rig;
+    let mut env = Env {
+        provider: &Software,
+        now,
+        drbg,
+    };
+    conn.tick(now, &mut env, Some(now / 1_000_000));
+}
+
+#[test]
+fn a_client_at_the_clocks_last_instant_probes_once() {
+    big_stack(|| {
+        let host = Box::new(Host::new(0x31, "192.168.1.2:4433".parse().unwrap(), 1000 * SEC));
+        let (identity, prekey) = (host.identity, host.prekey_info.clone());
+        let mut rig = Rig::new(&identity, prekey);
+        tick_at(&mut rig, u64::MAX);
+        let first = probes(&mut rig);
+        tick_at(&mut rig, u64::MAX);
+        assert!(first <= 1, "{first} probes in one tick");
+        assert_eq!(
+            probes(&mut rig),
+            0,
+            "the client probed again at the clock's last instant"
+        );
+    });
+}
+
+#[test]
+fn a_probe_due_exactly_at_the_clocks_last_instant_is_a_deadline() {
+    big_stack(|| {
+        let host = Box::new(Host::new(0x31, "192.168.1.2:4433".parse().unwrap(), 1000 * SEC));
+        let (identity, prekey) = (host.identity, host.prekey_info.clone());
+        // A relay with no carrier has no link deadline of its own, and with local discovery off no beacon is due.
+        let mut rig = Rig::with_tcp(&identity, prekey, None);
+        rig.conn.set_local_discovery(false);
+        tick_at(&mut rig, u64::MAX - HOME_RETRY_NS);
+        assert_eq!(rig.conn.next_deadline(u64::MAX - 1), Some(u64::MAX));
     });
 }
