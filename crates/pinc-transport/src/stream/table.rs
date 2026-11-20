@@ -675,7 +675,7 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
     ///
     /// # Errors
     /// [`StreamError::UnknownStream`], or [`StreamError::StreamState`] for a stream we cannot receive on.
-    pub fn stop_sending(&mut self, id: StreamId, error_code: u64) -> Result<(), StreamError> {
+    pub fn stop_sending(&mut self, _pool: &mut BufferPool<'_>, id: StreamId, error_code: u64) -> Result<(), StreamError> {
         let i = self.require(id)?;
         let slot = self.slots.get_mut(i).ok_or(StreamError::UnknownStream)?;
         if !slot.recv.open {

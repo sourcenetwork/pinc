@@ -183,7 +183,7 @@ fn control_frames_of_streams_opened_before_the_peers_limit_wait_for_it() {
     let first = t.open_stream(&pool, true).unwrap();
     let second = t.open_stream(&pool, true).unwrap();
     t.reset(&mut pool, first, 1).unwrap();
-    t.stop_sending(second, 2).unwrap();
+    t.stop_sending(&mut pool, second, 2).unwrap();
     assert!(
         stream_controls(&mut t).is_empty(),
         "a control frame went out before the peer's limit was known"

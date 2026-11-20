@@ -239,7 +239,7 @@ conn_impl! {
     /// # Errors
     /// The errors of [`Streams::stop_sending`](crate::stream::Streams::stop_sending).
     pub fn stop_sending(&mut self, id: StreamId, error: u64) -> Result<(), StreamError> {
-        self.streams.stop_sending(id, error)
+        self.streams.stop_sending(&mut self.pool, id, error)
     }
 
     /// The readable bytes of a stream, borrowed from the pool. Release them with [`consume`](Self::consume).

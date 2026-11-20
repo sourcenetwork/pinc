@@ -213,14 +213,14 @@ fn closing_every_stream_returns_every_chunk() {
 fn a_stop_request_is_one_control_frame_sent_again_only_when_lost() {
     let (mut pool, mut t) = setup(1024, |c| c.initial_stream_window = 64 * 1024);
     t.on_stream_frame(&mut pool, 0, 0, b"hello", false).unwrap();
-    t.stop_sending(0, 5).unwrap();
+    t.stop_sending(&mut pool, 0, 5).unwrap();
     let frame = ControlFrame::StopSending { id: 0, error_code: 5 };
     assert_eq!(drain_control(&mut t), [frame]);
     assert!(
         drain_control(&mut t).is_empty(),
         "the request was repeated without a loss"
     );
-    t.stop_sending(0, 6).unwrap();
+    t.stop_sending(&mut pool, 0, 6).unwrap();
     assert!(drain_control(&mut t).is_empty(), "a second request replaced the first");
     t.on_control_lost(&frame);
     assert_eq!(drain_control(&mut t), [frame], "a lost request is not sent again");
@@ -233,10 +233,10 @@ fn a_stop_request_is_one_control_frame_sent_again_only_when_lost() {
 fn a_stop_request_is_dropped_once_the_peer_ended_the_stream() {
     let (mut pool, mut t) = setup(1024, |c| c.initial_stream_window = 64 * 1024);
     t.on_stream_frame(&mut pool, 4, 0, b"x", true).unwrap();
-    t.stop_sending(4, 1).unwrap();
+    t.stop_sending(&mut pool, 4, 1).unwrap();
     assert!(drain_control(&mut t).is_empty(), "a finished stream was asked to stop");
     t.on_stream_frame(&mut pool, 8, 0, b"y", false).unwrap();
-    t.stop_sending(8, 2).unwrap();
+    t.stop_sending(&mut pool, 8, 2).unwrap();
     let frame = ControlFrame::StopSending { id: 8, error_code: 2 };
     assert_eq!(drain_control(&mut t), [frame]);
     t.on_reset_stream(&mut pool, 8, 2, 1).unwrap();
@@ -267,8 +267,8 @@ fn a_stop_request_resets_a_send_half_once_and_refuses_what_has_no_send_half() {
     // A unidirectional stream of the peer has no send half here; one of ours has no receive half.
     assert_eq!(t.on_stop_sending(&mut pool, 2, 1), Err(StreamError::StreamState));
     let uni = t.open_stream(&pool, false).unwrap();
-    assert_eq!(t.stop_sending(uni, 1), Err(StreamError::StreamState));
-    assert_eq!(t.stop_sending(99, 1), Err(StreamError::UnknownStream));
+    assert_eq!(t.stop_sending(&mut pool, uni, 1), Err(StreamError::StreamState));
+    assert_eq!(t.stop_sending(&mut pool, 99, 1), Err(StreamError::UnknownStream));
     // A stream of the peer that was never heard of is opened by the stop (with the ones below it), and reset at once.
     assert_eq!(t.on_stop_sending(&mut pool, 8, 3), Ok(true));
     assert_eq!(t.peer_opened(8), 3);

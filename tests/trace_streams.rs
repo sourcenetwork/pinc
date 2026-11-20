@@ -456,7 +456,7 @@ impl Run<'_> {
             return;
         }
         let id = ids[self.below(ids.len() as u64) as usize];
-        let res = self.t.stop_sending(id, 7);
+        let res = self.t.stop_sending(&mut self.pool, id, 7);
         let err = res.as_ref().err().map_or("ok", |e| err_name(*e));
         self.log(&format!(r#""op":"stopreq","id":{id},"code":7,"err":"{err}""#));
     }
