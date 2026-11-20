@@ -358,6 +358,7 @@ impl Run {
                         ReconcileFailure::Protocol => "protocol",
                         ReconcileFailure::UnknownSet => "unknownset",
                         ReconcileFailure::Exhausted => "exhausted",
+                        ReconcileFailure::Cancelled => "cancelled",
                         other => panic!("the node failed a round for a reason the model has no word for: {other:?}"),
                     };
                     s.ends.insert((u64::from(round), why.to_owned()));
