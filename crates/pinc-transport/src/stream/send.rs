@@ -297,7 +297,11 @@ impl<S: StreamSource, const C: usize> Send<S, C> {
         if len == 0 {
             return self.fin == Fin::Acked;
         }
-        self.acked.gaps(offset..offset.saturating_add(len)).next().is_none()
+        // Bytes past the offset space were never sent, so never acknowledged.
+        let Some(end) = offset.checked_add(len) else {
+            return false;
+        };
+        self.acked.gaps(offset..end).next().is_none()
     }
 
     /// Whether the stream sends from application storage instead of a buffer.
