@@ -54,7 +54,7 @@ CallHttpPoll(r) == Live /\ Do(HttpPoll(s), r)
 CallTick(r) == Live /\ Do(Tick(s), r)
 CallLate == Live /\ s.hd # "none" /\ Do(Late(s), "none")
 CallPcp(k, r) == Live /\ s.cfg.g /\ (s.st # "stopped" \/ k = "grant") /\ Do(Pcp(s, k), r)
-CallNat(k, r) == Live /\ s.cfg.g /\ (s.st # "stopped" \/ k = "addr") /\ Do(Nat(s, k), r)
+CallNat(k, r) == Live /\ s.cfg.g /\ (s.st # "stopped" \/ k = "addr") /\ Do(NatStep(s, k), r)
 CallSsdp(k, r) == Live /\ (s.st # "stopped" \/ k = "ok") /\ Do(Ssdp(s, k), r)
 CallHttp(k, r) == Live /\ (s.ht = "sent" \/ k = "ok") /\ Do(Http(s, k), r)
 CallStop == Live /\ Do(Stop(s), "none")
@@ -82,7 +82,7 @@ Complete ==
         /\ Dgram(s).r \in DgramRes /\ HttpPoll(s).r \in PollRes /\ Tick(s).r \in Counters
         /\ Stop(s).r = "none" /\ Restart(s).r = "none" /\ (s.hd # "none" => Late(s).r = "none")
         /\ \A k \in PcpKinds : Pcp(s, k).r \in Counters
-        /\ \A k \in NatKinds : Nat(s, k).r \in Counters
+        /\ \A k \in NatKinds : NatStep(s, k).r \in Counters
         /\ \A k \in SsdpKinds : Ssdp(s, k).r \in Counters
         /\ \A k \in HttpKinds : Http(s, k).r \in Counters
 =============================================================================

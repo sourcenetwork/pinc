@@ -155,7 +155,7 @@ Pcp(s, k) ==
            [] OTHER -> IF s.hd = "none" THEN Unexp(s) ELSE Same(s, "none")      \* announce
 
 \* PortMap::handle_datagram of a NAT-PMP datagram from the gateway's port (natpmp_answer)
-Nat(s, k) ==
+NatStep(s, k) ==
     IF s.st \in {"stopped", "ssdp"} THEN Same(s, "none")
     ELSE CASE k \in {"err0", "err1"} ->
                 IF s.st = "pcp" /\ ~s.rn THEN Same(Enter(s, "nataddr"), "none")
@@ -220,11 +220,11 @@ RfNext(rf, o) == IF o.s.hd = "none" \/ o.ev = "grant" THEN 0 ELSE IF o.ev = "rfa
 Outs(s) ==
     {Dgram(s), HttpPoll(s), Tick(s), Stop(s), Restart(s)}
     \cup (IF s.hd # "none" THEN {Late(s)} ELSE {})
-    \cup (IF s.cfg.g THEN {Pcp(s, k) : k \in PcpKinds} \cup {Nat(s, k) : k \in NatKinds} ELSE {})
+    \cup (IF s.cfg.g THEN {Pcp(s, k) : k \in PcpKinds} \cup {NatStep(s, k) : k \in NatKinds} ELSE {})
     \cup {Ssdp(s, k) : k \in SsdpKinds} \cup {Http(s, k) : k \in HttpKinds}
 \* the same without stop, restart and the expiry, which begin again by design
 Moves(s) ==
     {Dgram(s), HttpPoll(s), Tick(s)}
-    \cup (IF s.cfg.g THEN {Pcp(s, k) : k \in PcpKinds} \cup {Nat(s, k) : k \in NatKinds} ELSE {})
+    \cup (IF s.cfg.g THEN {Pcp(s, k) : k \in PcpKinds} \cup {NatStep(s, k) : k \in NatKinds} ELSE {})
     \cup {Ssdp(s, k) : k \in SsdpKinds} \cup {Http(s, k) : k \in HttpKinds}
 =============================================================================

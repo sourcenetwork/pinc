@@ -270,7 +270,7 @@ Small == {W32(n) : n \in 0..999}
 \* eleven digits
 Al == {47, 48, 49, 53, 57, 58, 32}
 Short == UNION {[1..n -> Al] : n \in 0..3}
-Forms == UNION {{DecBytes(v), <<48>> \o DecBytes(v), DecBytes(v) \o <<58>>} : v \in Edges}
+Forms == (UNION {{DecBytes(v), <<48>> \o DecBytes(v), DecBytes(v) \o <<58>>} : v \in Edges})
          \cup {<<52, 50, 57, 52, 57, 54, 55, 50, 57, 54>>,             \* 4294967296
                <<57, 57, 57, 57, 57, 57, 57, 57, 57, 57>>,             \* 9999999999
                <<49, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48>>,         \* 10000000000

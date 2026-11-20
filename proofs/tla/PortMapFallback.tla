@@ -101,7 +101,8 @@ Renewal ==
     /\ s.rn => \A o \in Moves(s) : ProtoOf(o.s.st) # s.hd => o.s.st = "held" /\ o.s.hd = s.hd
 
 PrivateRefused ==
-    /\ s.cfg.g => Pcp(s, "grantpriv").ev # "grant" /\ Nat(s, "addrpriv").s.st # "natmap"
+    \* a private address does not move the machine to the mapping step (in it already, the answer is out of scope)
+    /\ s.cfg.g => Pcp(s, "grantpriv").ev # "grant" /\ (s.st # "natmap" => NatStep(s, "addrpriv").s.st # "natmap")
     /\ s.st = "extip" => Http(s, "ippriv").s.st # "add" /\ Http(s, "ippriv").ev # "grant"
 
 StopFinal ==
@@ -126,10 +127,10 @@ NatMatch(k) ==
 AnswerScope ==
     /\ s.cfg.g =>
          /\ \A k \in PcpKinds : Pcp(s, k).s # s => PcpMatch(k)
-         /\ \A k \in NatKinds : Nat(s, k).s # s => NatMatch(k)
+         /\ \A k \in NatKinds : NatStep(s, k).s # s => NatMatch(k)
          /\ s.st \notin {"ssdp", "stopped"} =>
               /\ \A k \in PcpKinds \ {"announce"} : ~PcpMatch(k) => Pcp(s, k).r # "none"
-              /\ \A k \in NatKinds : ~NatMatch(k) => Nat(s, k).r # "none"
+              /\ \A k \in NatKinds : ~NatMatch(k) => NatStep(s, k).r # "none"
     /\ \A k \in SsdpKinds : Ssdp(s, k).s # s => s.st = "ssdp" /\ k = "ok"
     /\ \A k \in HttpKinds : Http(s, k).s # s => s.ht = "sent"
 
