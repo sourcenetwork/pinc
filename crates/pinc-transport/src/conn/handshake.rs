@@ -212,6 +212,14 @@ impl Machines {
         }
     }
 
+    /// Whether `other` is a handle of the same pool, for tests.
+    #[cfg(feature = "trace")]
+    #[doc(hidden)]
+    #[must_use]
+    pub fn shares(&self, other: &Self) -> bool {
+        alloc::rc::Rc::ptr_eq(&self.free, &other.free)
+    }
+
     fn take(&self) -> Option<alloc::boxed::Box<Machine>> {
         self.free.iter().find_map(core::cell::Cell::take)
     }

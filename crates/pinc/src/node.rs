@@ -108,6 +108,11 @@ macro_rules! define {
                     _ => None,
                 }
             }
+            /// The endpoint's pool of handshake machine boxes, for tests.
+            #[cfg(all(test, feature = "trace"))]
+            fn machines(&self) -> Option<Machines> {
+                match self { $(Self::$v(ep) => ep.machines(),)+ }
+            }
             pub(crate) fn add_iface(&mut self, local: SocketAddr) -> Option<IfaceId> {
                 match self { $(Self::$v(e) => e.add_iface(local),)+ }
             }
@@ -253,5 +258,81 @@ mod tests {
         for (size, max) in endpoint.into_iter().zip(ENDPOINT_MAX) {
             assert!(size <= max, "an endpoint is {size} B, above {max}");
         }
+    }
+}
+
+// The pool rule is read through probes of the `trace` feature, so the test is built only with it.
+#[cfg(all(test, feature = "trace"))]
+#[allow(clippy::unwrap_used, reason = "tests assert")]
+mod machines_trace {
+    use super::*;
+    use alloc::string::String;
+    use alloc::vec::Vec;
+    use core::fmt::Write as _;
+
+    use pinc_core::EndpointConfig;
+    use pinc_crypto::Drbg;
+
+    use crate::trace_util::write_trace;
+
+    fn one(connections: usize, k: u8) -> AnyEp {
+        let id = crate::keys::Identity::from_seed_with(&[k; 32], &[0; 32]).unwrap();
+        AnyEp::new(
+            connections,
+            0,
+            Drbg::new(&[k; 32]),
+            id.local().unwrap(),
+            EndpointConfig::new(u64::from(k)),
+            1,
+        )
+        .unwrap()
+    }
+
+    /// The lines of one thread: each endpoint's pool against the thread's and the earlier endpoints'.
+    fn machines_thread(thread: usize, first: usize) -> String {
+        let std = cfg!(feature = "std");
+        let thread_pool = machines();
+        let mut out = String::new();
+        let mut handles: Vec<Machines> = Vec::new();
+        let mut eps = Vec::new();
+        for (i, connections) in [1, 4, 64, 1].into_iter().enumerate() {
+            let n = first + i;
+            let ep = one(connections, u8::try_from(n).unwrap());
+            let m = ep.machines().unwrap();
+            let pool = handles.iter().position(|h| h.shares(&m)).map_or(n, |j| first + j);
+            let thr = m.shares(&thread_pool);
+            assert_eq!(
+                pool == first,
+                std,
+                "with std every endpoint of a thread shares the first's pool"
+            );
+            assert_eq!(thr, std);
+            writeln!(
+                out,
+                r#"{{"t":"machines","std":{std},"thread":{thread},"ep":{n},"has":true,"pool":{pool},"thr":{thr}}}"#
+            )
+            .unwrap();
+            handles.push(m);
+            eps.push(ep);
+        }
+        out
+    }
+
+    /// Which pool of handshake machine boxes each endpoint takes, on two threads.
+    #[test]
+    fn trace_facade_machines() {
+        assert_eq!(machines().shares(&machines()), cfg!(feature = "std"));
+        let mut out = String::new();
+        for (thread, first) in [(1, 1), (2, 5)] {
+            out += &std::thread::spawn(move || machines_thread(thread, first))
+                .join()
+                .unwrap();
+        }
+        let name = if cfg!(feature = "std") {
+            "facade_machines_std.ndjson"
+        } else {
+            "facade_machines_nostd.ndjson"
+        };
+        write_trace(name, &out);
     }
 }

@@ -354,6 +354,15 @@ where
             f.machines = machines.clone();
         }
     }
+
+    /// A handle of the pool of handshake machine boxes the slots made from now on take; `None` when the host gave every
+    /// slot its own memory. For tests.
+    #[cfg(feature = "trace")]
+    #[doc(hidden)]
+    #[must_use]
+    pub fn machines(&self) -> Option<pinc_transport::conn::Machines> {
+        self.fresh.as_ref().map(|f| f.machines.clone())
+    }
 }
 
 /// What an endpoint that owns its table makes a slot's memory from, the first time the slot is taken.

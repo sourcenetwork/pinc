@@ -37,7 +37,7 @@ std = ["pinc-keystore/std"]
 hwenc = ["std", "pinc-keystore/hwenc"]
 # A slab of tickets of its own (`StandbyProbe`), driven call by call, for the trace check of the proofs, and the
 # node's probes.
-trace = ["std", "pinc-node/trace"]
+trace = ["std", "pinc-node/trace", "pinc-transport/trace"]
 
 [lints]
 workspace = true
