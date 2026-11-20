@@ -322,15 +322,26 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `Frame_sep` | MAXRANGES 3 -> 2 |
 | `HalfOpen` | LIFE = HOLD 2 -> 1 (still a thin node), TMAX 4 -> 2, LENS {0, 1, 2, 3} -> {0, 3} |
 | `HalfOpen_answer` | TMAX 4 -> 3 (an answered session still reaches its end, created + HOLD + 1) |
+| `HalfOpen_flood` | LIFE 2 -> 1, HOLD 2 -> 1 |
 | `HalfOpen_gone` | TMAX 2 -> 0, LENS {0, 1, 2, 3} -> {3} |
 | `HalfOpen_half` | TMAX 1 -> 0 |
 | `HalfOpen_held` | TMAX 3 -> 0, LENS {0, 1, 2, 3} -> {3} (no session reaches its end by the clock: that end is met by the deep config, TMAX 3; a timer call still frees a connection that ended) GREEN: the bound on the holders of one id at three slots and a cap of two, every length of every type, one id. |
+| `HalfOpen_hold` | TMAX 4 -> 3 |
+| `HalfOpen_holders` | TMAX 4 -> 3 |
+| `HalfOpen_late` | TMAX 3 -> 2 |
+| `HalfOpen_le` | TMAX 4 -> 3 |
+| `HalfOpen_le_held` | LENS {0, 1, 2, 3} -> {0, 3} |
 | `HalfOpen_noroom` | TMAX 2 -> 0, LENS {0, 1, 2, 3} -> {3} |
 | `HalfOpen_owedest` | TMAX 2 -> 0, LENS {0, 1, 2, 3} -> {3} |
+| `HalfOpen_reach` | TMAX 4 -> 3 |
+| `HalfOpen_rej` | TMAX 4 -> 3 |
 | `HalfOpen_rejfill` | TMAX 4 -> 0, LENS {0, 1, 2, 3} -> {3} |
 | `HalfOpen_room` | TMAX 3 -> 1, LENS {0, 1, 2, 3} -> {3} (no session reaches its end by the clock: that end is met by the deep config, TMAX 3) |
 | `HalfOpen_room2` | TMAX 3 -> 0, LENS {0, 1, 2, 3} -> {3} (no session reaches its end by the clock: that end is met by the deep config, TMAX 3; a timer call still frees a connection that ended) |
+| `HalfOpen_roomreach` | LENS {0, 1, 2, 3} -> {0, 3} |
+| `HalfOpen_strict` | TMAX 4 -> 3 |
 | `HalfOpen_sub` | TMAX 2 -> 0, LENS {0, 1, 2, 3} -> {3} |
+| `HalfOpen_supersede` | TMAX 4 -> 3 |
 | `Handshake` | byte budgets RB 9 -> 4, LB 30 -> 3; bounded by constraint: at most 3 messages sent (HandshakeQuickBound) |
 | `Handshake_kbroken` | byte budgets RB 9 -> 4, LB 30 -> 3; bounded by constraint: at most 3 messages sent and 6 levels (Handshake_kbrokenQuickBound) |
 | `Handshake_late` | byte budgets RB 9 -> 4, LB 30 -> 3; bounded by constraint: behaviours of at most 6 levels (Handshake_lateQuickBound) |
