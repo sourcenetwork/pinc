@@ -152,6 +152,27 @@ fn a_held_path_named_a_relay_by_add_path_is_valid_at_once() {
     });
 }
 
+/// The endpoint names the address of a path it lost again (the interface came back): the held slot starts over, is
+/// challenged and validated, and carries the session.
+#[test]
+fn a_lost_path_added_again_carries_the_session() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let mut net = connected(&mut w, &mut sa, &mut sb, Link::new(40, Params::new(10 * MS)));
+        net.a.conn.path_lost(PathId(1)).unwrap();
+        assert!(!net.a.conn.path_validated(PathId(1)), "a lost path is not validated");
+        let now = net.now;
+        net.a.with_env(now, |c, env| c.add_path(env, PathId(1), PathInfo::default())).unwrap();
+        assert!(
+            net.run(net.now + 5 * SEC, |n| n.a.conn.path_validated(PathId(1))),
+            "the path the endpoint added again never validated"
+        );
+        let data = pattern(20_000, 41);
+        bulk(&mut net, &data, 30 * SEC);
+    });
+}
+
 /// The session is on a relay path and follows the peer onto a direct route whose answers never arrive: at the third
 /// probe timeout it leaves that path for a validated one, though the direct path was never validated.
 #[test]
@@ -186,23 +207,38 @@ fn a_session_followed_onto_an_unanswered_direct_path_leaves_it_at_the_third_prob
     });
 }
 
-/// The endpoint names the address of a path it lost again (the interface came back): the held slot starts over, is
-/// challenged and validated, and carries the session.
+/// The only path stops answering, is dropped as validated and is being re-joined; its address is then gone. A gone
+/// path arms no more probes: none left, no re-join, no challenge waiting.
 #[test]
-fn a_lost_path_added_again_carries_the_session() {
+fn a_lost_path_arms_no_more_probes() {
     big_stack(|| {
         let mut w = World::new(IdentityAlg::Ed25519);
         let (mut sa, mut sb) = (Store::new(true), Store::new(false));
-        let mut net = connected(&mut w, &mut sa, &mut sb, Link::new(40, Params::new(10 * MS)));
+        let mut net = connected(&mut w, &mut sa, &mut sb, Link::new(45, Params::new(10 * MS)));
+        net.link.route(PathId(1)).up = false;
+        let id = net.a.conn.open_uni().unwrap();
+        net.a.conn.write(id, &pattern(10_000, 46)).unwrap();
+        assert!(net.run(net.now + 30 * SEC, |n| n.a.conn.stats().ptos >= 3));
+        let slot = |n: &Net<'_, '_>| {
+            n.a.conn
+                .trace_paths()
+                .slots
+                .into_iter()
+                .flatten()
+                .find(|s| s.id == 1)
+                .expect("the path is held")
+        };
+        let before = slot(&net);
+        assert!(before.rejoin && before.probes_left > 0, "the silent path is being re-joined");
         net.a.conn.path_lost(PathId(1)).unwrap();
-        assert!(!net.a.conn.path_validated(PathId(1)), "a lost path is not validated");
-        let now = net.now;
-        net.a.with_env(now, |c, env| c.add_path(env, PathId(1), PathInfo::default())).unwrap();
+        let after = slot(&net);
+        assert!(after.gone);
         assert!(
-            net.run(net.now + 5 * SEC, |n| n.a.conn.path_validated(PathId(1))),
-            "the path the endpoint added again never validated"
+            after.probes_left == 0 && !after.rejoin && !after.send_challenge,
+            "a gone path still arms probes: {} left, rejoin {}, challenge waiting {}",
+            after.probes_left,
+            after.rejoin,
+            after.send_challenge
         );
-        let data = pattern(20_000, 41);
-        bulk(&mut net, &data, 30 * SEC);
     });
 }

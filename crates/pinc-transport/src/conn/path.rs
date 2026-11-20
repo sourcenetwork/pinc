@@ -507,6 +507,10 @@ conn_impl! {
         if let Some(p) = self.paths.get_mut(i) {
             p.gone = true;
             p.validated = false;
+            // A gone path sends nothing more: no probe, re-join or challenge is left armed on it.
+            p.probes_left = 0;
+            p.rejoin = false;
+            p.send_challenge = false;
         }
         self.choose_path();
         self.forget_gone();
