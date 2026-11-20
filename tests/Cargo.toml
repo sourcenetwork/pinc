@@ -1243,6 +1243,10 @@ name = "trace_facade_waits"
 path = "trace_facade_waits.rs"
 
 [[test]]
+name = "trace_facade_stream"
+path = "trace_facade_stream.rs"
+
+[[test]]
 name = "trace_halfopen"
 path = "trace_halfopen.rs"
 

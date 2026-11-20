@@ -359,4 +359,14 @@ impl<H: Hosted> Connection<H> {
     pub fn close_reason(&self) -> Option<Error> {
         self.0.info.ended.get().copied()
     }
+
+    /// Whether the endpoint holds unread bytes of `stream` (test probe).
+    #[cfg(feature = "trace")]
+    #[doc(hidden)]
+    pub fn trace_held(&self, stream: u64) -> bool {
+        self.0
+            .sh
+            .lock()
+            .is_some_and(|core| core.trace_held(&self.0.info, stream))
+    }
 }

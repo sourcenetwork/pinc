@@ -20,6 +20,15 @@ use super::{Admit, Core, Dial, GKey, Gate, Route, SHUTDOWN_GRACE, SKey, SessInfo
 use crate::error::{Error, ErrorKind, Result};
 
 impl<S: KeyStore, A: Admit> Core<S, A> {
+    /// Whether the endpoint holds unread bytes of `stream` of the session (a probe of the trace tests).
+    #[cfg(feature = "trace")]
+    pub(crate) fn trace_held(&self, info: &SessInfo, stream: StreamId) -> bool {
+        matches!(
+            self.node.endpoint().query(Query::Read { session: info.id, stream }),
+            Answer::Chunk(c) if !c.is_empty()
+        )
+    }
+
     /// Whether the endpoint still takes new work, else why not.
     pub(crate) fn running(&self) -> Result<()> {
         if let Some(e) = self.stopped {
