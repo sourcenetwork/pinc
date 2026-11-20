@@ -112,8 +112,8 @@ and close run on 1 MiB of stack and fail on 512 KiB. `Limits::wasm()` is the pre
 | `crates/` | the library, one crate per component |
 | `proofs/` | TLA+ specifications (TLC) and Lean 4 proofs, both validated against traces of the real code |
 | `tests/` | every test (integration, property, scenario, trace), run with [cargo-nextest](https://nexte.st) |
-| `benches/` | micro benchmarks (per packet, allocations, copies) and the loopback comparison with iroh and rust-libp2p; a workspace of its own |
-| `distributed/` | the distributed test harness: one binary that builds an emulated network of containers, runs PINC, iroh and rust-libp2p nodes on it with faults, measures them and serves a dashboard; a workspace of its own |
+| `benches/` | micro benchmarks (per packet, allocations, copies) and the loopback comparison with two other libraries; a workspace of its own |
+| `distributed/` | the distributed test harness: one binary that builds an emulated network of containers, runs PINC and two other libraries' nodes on it with faults, measures them and serves a dashboard; a workspace of its own |
 | `docs/` | [PROOFS.md](docs/PROOFS.md): what is proven, how it is checked, the assumptions |
 | `scripts/` | the gate and the proof runner |
 
@@ -154,10 +154,11 @@ just              # list the recipes
 just gate         # everything a change must pass: checks, tests, doctests, proofs
 just checks       # dependency rules, format, lints, docs, no_std builds, pure Rust
 just test         # every test with cargo-nextest (the hwenc TPM tests need swtpm); just test-default skips hwenc
-just proofs       # Lean proofs, TLC model checking, trace validation and model-based tests
+just proofs       # the quick proofs: Lean, TLC over the smaller bounds of proofs/tla/quick, trace validation, model-based tests
+just proofs-deep  # the deep proofs: the same with every model over its full bounds (hours of processor time; not in the gate)
 just tla-tools    # install the pinned TLA+ tools the proofs use
 just bench        # micro benchmarks
-just compare      # PINC against iroh and rust-libp2p on loopback (run it on an otherwise idle machine; needs sudo and tc)
+just compare      # PINC against two other libraries on loopback (run it on an otherwise idle machine; needs sudo and tc)
 just distributed run distributed/scenarios/wan.toml   # a scenario on an emulated network (Docker and sudo)
 just distributed run distributed/scenarios/wan.toml --hosts fleet.toml   # the same on real machines over SSH (see distributed/infra)
 just distributed serve                                # the dashboard, on http://127.0.0.1:7878
@@ -166,19 +167,11 @@ just distributed summarize distributed/results/<run>  # rebuild a run's summary 
 just e2e          # the harness end to end: a two-node scenario, every stack (Docker and sudo)
 ```
 
-The distributed harness gives every node its own container and network stack on one machine, shapes each link with
-`tc netem`, and runs PINC, iroh and rust-libp2p through the same tests: transport (setup, resumed setup, round trips,
-bulk, many connections) and the layers above (publish and subscribe, fetching a value, reconciling two sets,
-delay-tolerant delivery). Scenarios are TOML files in `distributed/scenarios/`; a run writes its raw rows, its
-conditions and a summary to `distributed/results/`, measures only on a quiet machine and says so when it could not.
-With `--hosts` the same run places the nodes on real machines over SSH; that has run on one machine only
-([#530](https://github.com/sourcenetwork/pinc/issues/530)).
-
-`just compare` and `just distributed` compile every library for the machine that runs them (`-C target-cpu=native`)
-and say so in their results. Every dependency is declared once, in its workspace's root `Cargo.toml`. The benchmarks
-and the harness are workspaces of their own, so the other libraries and their runtimes never enter PINC's graph; the
-gate checks that no crate under `crates/` depends on an async runtime and that nothing in the library's build
-compiles C.
+`just distributed` gives every node its own container and network stack on one machine (with `--hosts`, a real
+machine over SSH, tried on one machine only: [#530](https://github.com/sourcenetwork/pinc/issues/530)), shapes each
+link with `tc netem`, runs the scenarios of `distributed/scenarios/` and writes raw rows and a summary to
+`distributed/results/`. The benchmarks and the harness are workspaces of their own, built for the machine that runs
+them (`-C target-cpu=native`), so nothing they depend on enters the library's graph.
 
 ## Proofs
 
@@ -192,11 +185,11 @@ still being closed.
 
 ## Performance
 
-Measured on one build host (AMD EPYC 7R13, 16 cores), PINC, iroh and rust-libp2p in one quiet window, medians of the
-session of 15 November 2026 at commit `9dd66f05`. The best value of a row is in bold; a row PINC does not lead is
-tracked in [#579](https://github.com/sourcenetwork/pinc/issues/579), which lists every such row, not only these.
+Measured on one build host (AMD EPYC 7R13, 16 cores), PINC and two other peer-to-peer libraries in one quiet window,
+medians of the session of 15 November 2026 at commit `9dd66f05`. The best value of a row is in bold; a row PINC does
+not lead is tracked in [#579](https://github.com/sourcenetwork/pinc/issues/579), which lists every such row, not only these.
 
-| | PINC | iroh | rust-libp2p |
+| | PINC | Library A | Library B |
 |---|---|---|---|
 | Bulk on loopback, one stream (MiB/s) | **710** | 507 | 471 |
 | CPU per byte moved, both ends (ns) | **2.66** | 4.83 | 5.03 |
@@ -211,5 +204,5 @@ tracked in [#579](https://github.com/sourcenetwork/pinc/issues/579), which lists
 | Memory per connection, client and server (KiB) | 177 and 113 | 178 and 120 | **107 and 88** |
 
 The 1% loss row is an 8 MiB transfer; a 64 MiB fetch on the same path runs at 1.16 MiB/s against 0.31 and 0.32
-([#564](https://github.com/sourcenetwork/pinc/issues/564)). `just compare` and the harness print every row, the ones
-PINC loses included.
+([#564](https://github.com/sourcenetwork/pinc/issues/564)). `just compare` and the harness print every row under each library's
+name, the ones PINC loses included.
