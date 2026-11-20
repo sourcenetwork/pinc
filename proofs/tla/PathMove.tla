@@ -83,15 +83,20 @@ Init == c = C0 /\ wire = {} /\ ev = E0
 
 \* the connection a step starts from: the per-step ghosts cleared
 Pre == [c EXCEPT !.mv = "none", !.dg = FALSE]
-Do(nc, e) == /\ c' = Mark(c, nc)
-             /\ ev' = [e EXCEPT !.nvd = NewDirect(c, nc)]
+\* A step to one of the connections ncs with the ghost e. A call's arguments that the ghost does not name are folded
+\* into ncs, so a connection several of them give is one step (TLC checks the properties on each step it takes); a
+\* value used more than once is bound with `\E`, not a LET or an operator argument, which TLC evaluates at each use.
+DoAny(ncs, e) == \E n \in ncs : /\ c' = Mark(c, n)
+                               /\ ev' = [e EXCEPT !.nvd = NewDirect(c, n)]
+Do(nc, e) == DoAny({nc}, e)
 
 AddAct == /\ "add" \in OPS
-          /\ \E id \in Ids, k \in KINDS, six \in SIXES, rn \in BOOLEAN :
-                Do(AddPath(Pre, id, k, six, rn).c, [E0 EXCEPT !.op = "add", !.id = id])
+          /\ \E id \in Ids :
+                DoAny({AddPath(Pre, id, k, six, rn).c : k \in KINDS, six \in SIXES, rn \in BOOLEAN},
+                      [E0 EXCEPT !.op = "add", !.id = id])
           /\ UNCHANGED wire
 RebindAct == /\ "rebind" \in OPS
-             /\ \E id0, id1 \in Ids : Do(Rebind(Pre, id0, id1).c, [E0 EXCEPT !.op = "rebind", !.id = id1])
+             /\ \E id1 \in Ids : DoAny({Rebind(Pre, id0, id1).c : id0 \in Ids}, [E0 EXCEPT !.op = "rebind", !.id = id1])
              /\ UNCHANGED wire
 RemoveAct == /\ "remove" \in OPS
              /\ \E id \in Ids : Do(Remove(Pre, id).c, [E0 EXCEPT !.op = "remove", !.id = id])
@@ -103,13 +108,14 @@ SetAct == /\ "set" \in OPS
           /\ \E id \in Ids : Do(SetActive(Pre, id).c, [E0 EXCEPT !.op = "set", !.id = id])
           /\ UNCHANGED wire
 InfoAct == /\ "info" \in OPS
-           /\ \E id \in Ids, k \in KINDS, six \in SIXES : Do(SetInfo(Pre, id, k, six), [E0 EXCEPT !.op = "info", !.id = id])
+           /\ \E id \in Ids : DoAny({SetInfo(Pre, id, k, six) : k \in KINDS, six \in SIXES},
+                                    [E0 EXCEPT !.op = "info", !.id = id])
            /\ UNCHANGED wire
 ProbeAct == /\ "probe" \in OPS
-            /\ \E id \in Ids, rn \in BOOLEAN : Do(Probe(Pre, id, rn).c, [E0 EXCEPT !.op = "probe", !.id = id])
+            /\ \E id \in Ids : DoAny({Probe(Pre, id, rn).c : rn \in BOOLEAN}, [E0 EXCEPT !.op = "probe", !.id = id])
             /\ UNCHANGED wire
 PunchAct == /\ "punch" \in OPS
-            /\ \E rn \in BOOLEAN : Do(PunchKnown(Pre, rn), [E0 EXCEPT !.op = "punch"])
+            /\ DoAny({PunchKnown(Pre, rn) : rn \in BOOLEAN}, [E0 EXCEPT !.op = "punch"])
             /\ UNCHANGED wire
 SilenceAct == /\ "silence" \in OPS
               /\ \E x \in 1..NP : /\ c.t[x].id # 0 /\ c.t[x].hd = "fresh"
@@ -124,51 +130,49 @@ SendAct == /\ "send" \in OPS
 \* one of the last CH drawn on that slot since its table was cleared
 RespAct ==
     /\ "resp" \in OPS
-    /\ \E id \in Ids, tok \in wire \cup {FORGED}, r \in RTTS :
-         LET j == Learn(Pre, id).i
-             held == j # 0 /\ c.t[j].id = id
-         IN Do(Resp(Pre, id, tok, r),
+    /\ \E id \in Ids, tok \in wire \cup {FORGED} : \E j \in {Learn(Pre, id).i} :
+         LET held == j # 0 /\ c.t[j].id = id
+         IN DoAny({Resp(Pre, id, tok, r) : r \in RTTS},
                [E0 EXCEPT !.op = "resp", !.id = id, !.s = j, !.tok = tok,
                           !.ok = (held /\ tok \in c.t[j].o),
                           !.rep = (held /\ tok # c.t[j].ch),
                           !.rc = (held /\ tok \in c.t[j].ps /\ Cardinality({u \in c.t[j].ps : u > tok}) < CH)])
     /\ UNCHANGED wire
 ChalAct == /\ "chal" \in OPS
-           /\ \E id \in Ids, cb \in BOOLEAN, rn \in BOOLEAN : Do(Chal(Pre, id, cb, rn), [E0 EXCEPT !.op = "chal", !.id = id])
+           /\ \E id \in Ids : DoAny({Chal(Pre, id, cb, rn) : cb, rn \in BOOLEAN}, [E0 EXCEPT !.op = "chal", !.id = id])
            /\ UNCHANGED wire
 \* fol: follow_peer's rule says the active path moves to the packet's; sg: the packet's path was held and gone before
 \* the step (read before it, since a step that forgets the slot would leave nothing to read)
 DataAct ==
     /\ "data" \in OPS
-    /\ \E id \in Ids, hi \in BOOLEAN, wake \in BOOLEAN, fresh \in BOOLEAN, rn \in BOOLEAN :
-         LET l == Learn(Pre, id)
-             fol == hi /\ l.i # 0 /\ l.i # c.act
+    /\ \E id \in Ids, hi \in BOOLEAN, wake \in BOOLEAN : \E l \in {Learn(Pre, id)} :
+         LET fol == hi /\ l.i # 0 /\ l.i # c.act
                     /\ ~l.c.t[l.i].gone
                     /\ (l.c.t[c.act].id = 0 \/ l.c.t[c.act].k = "r" \/ l.c.t[l.i].k = "d" \/ wake)
-         IN Do(Data(Pre, id, hi, wake, fresh, rn),
+         IN DoAny({Data(Pre, id, hi, wake, fresh, rn) : fresh, rn \in BOOLEAN},
                [E0 EXCEPT !.op = "data", !.id = id, !.s = l.i, !.hi = hi, !.fol = fol, !.pact = c.act,
                          !.wake = wake, !.sg = (l.i # 0 /\ l.c.t[l.i].gone)])
     /\ UNCHANGED wire
-\* handle_timeout without fail_over: idle-out and the relay escape, then the probes that are due
+\* handle_timeout without fail_over: idle-out and the relay escape (d), then the probes that are due: those of F fire,
+\* those of W wait, those of L were the last
+Fires(d, thin) == UNION {UNION {{FireFrom(d, 1, F, W, L, thin) : L \in SUBSET F} : W \in SUBSET F}
+                         : F \in SUBSET {x \in 1..NP : FireDue(d.t[x])}}
 TimerAct ==
     /\ "timer" \in OPS
-    /\ \E thin \in BOOLEAN, rn \in BOOLEAN :
-         LET d == Timers(Pre, thin, rn)
-         IN \E F \in SUBSET {x \in 1..NP : FireDue(d.t[x])} : \E W \in SUBSET F, L \in SUBSET F :
-               Do(FireFrom(d, 1, F, W, L, thin), [E0 EXCEPT !.op = "timer"])
+    /\ DoAny(UNION {UNION {Fires(d, thin) : d \in {Timers(Pre, thin, rn)}} : thin, rn \in BOOLEAN},
+             [E0 EXCEPT !.op = "timer"])
     /\ UNCHANGED wire
 \* run_recovery_timer with three probe timeouts in a row or more
 FailAct ==
     /\ "failover" \in OPS
-    /\ \E rn \in BOOLEAN :
-         Do(FailOver(Pre, rn),
-            [E0 EXCEPT !.op = "failover", !.pact = c.act,
-                       !.pd = (c.t[c.act].id # 0 /\ c.t[c.act].k = "d" /\ c.t[c.act].v),
-                       !.pk = IF c.t[c.act].id = 0 THEN "none" ELSE c.t[c.act].k,
-                       !.hr = (Fallbacks(c.t) # {})])
+    /\ DoAny({FailOver(Pre, rn) : rn \in BOOLEAN},
+             [E0 EXCEPT !.op = "failover", !.pact = c.act,
+                        !.pd = (c.t[c.act].id # 0 /\ c.t[c.act].k = "d" /\ c.t[c.act].v),
+                        !.pk = IF c.t[c.act].id = 0 THEN "none" ELSE c.t[c.act].k,
+                        !.hr = (Fallbacks(c.t) # {})])
     /\ UNCHANGED wire
 ReturnedAct == /\ "returned" \in OPS
-               /\ \E id \in Ids, r \in RTTS : Do(Returned(Pre, id, r).c, [E0 EXCEPT !.op = "returned", !.id = id])
+               /\ \E id \in Ids : DoAny({Returned(Pre, id, r).c : r \in RTTS}, [E0 EXCEPT !.op = "returned", !.id = id])
                /\ UNCHANGED wire
 \* the recovery's smoothed round trip moves (an acknowledgement)
 MeasureAct == /\ "measure" \in OPS
