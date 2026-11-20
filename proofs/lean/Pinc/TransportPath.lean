@@ -37,10 +37,18 @@ these functions.
 
 namespace Pinc.TransportPath
 
-/-- A held path: its id and whether it is validated. -/
+/-- A path's kind: direct, or through a relay. A relay path is born validated and nothing ever validates one
+again (#598), so the path a session leaves is un-validated only when it is direct. -/
+inductive PKind where
+  | direct
+  | relay
+  deriving DecidableEq, Repr
+
+/-- A held path: its id, whether it is validated, and its kind. -/
 structure P where
   id : Nat
   v : Bool
+  k : PKind
   deriving DecidableEq, Repr
 
 /-- The table: slot `i` holds a path or nothing; only the slots below `np` are used (`Bounded`). -/
@@ -128,10 +136,10 @@ def slot (np : Nat) (t : T) (act : Nat) : Option Nat :=
   | some i => some i
   | none => first (standby t act) np
 
-/-- `learnNew_path`: the path joins the table at `slot`, unvalidated; `none` when the table has no room. -/
+/-- `learnNew_path`: the path joins the table at `slot`, direct and unvalidated; `none` when the table has no room. -/
 def learnNew (np : Nat) (t : T) (act pid : Nat) : T × Option Nat :=
   match slot np t act with
-  | some i => (set t i (some ⟨pid, false⟩), some i)
+  | some i => (set t i (some ⟨pid, false, .direct⟩), some i)
   | none => (t, none)
 
 /-- `learn_path` (`new_path_slot`): the slot of a path already held, its state untouched, else `learnNew`. -/
@@ -231,7 +239,7 @@ theorem learnNew_snd {np : Nat} {t : T} {act pid : Nat} : (learnNew np t act pid
 
 /-- The slot the path joins holds it, unvalidated. -/
 theorem learnNew_at {np : Nat} {t : T} {act pid i : Nat} (h : (learnNew np t act pid).2 = some i) :
-    (learnNew np t act pid).1 i = some ⟨pid, false⟩ := by
+    (learnNew np t act pid).1 i = some ⟨pid, false, .direct⟩ := by
   rw [learnNew_snd] at h
   unfold learnNew
   rw [h]
@@ -388,11 +396,17 @@ structure C where
   smp : Bool := false
   hd : Nat := 0
 
-/-- The table of a dialing side when it dials on path `pid`: the path validated and active in slot 0. -/
-def dial (pid : Nat) : C := { t := fun j => if j = 0 then some ⟨pid, true⟩ else none }
+/-- The table of a dialing side when it dials on path `pid` (`k`, what the endpoint knows of it: the path validated
+and active in slot 0). -/
+def dial (pid : Nat) (k : PKind := .direct) : C := { t := fun j => if j = 0 then some ⟨pid, true, k⟩ else none }
+
+/-- Whether the path of slot `act` keeps its validity when the session leaves it: a relay path does (#598), a direct
+one does not. -/
+def keptV (t : T) (act : Nat) : Bool := match t act with | some p => p.k = .relay | none => false
 
 /-- `follow_reply`: the reply's path is found or learnt; the session moves to it, validated, and the path it leaves
-is no longer validated. With no room it stays on its path. -/
+is no longer validated unless it is a relay's (nothing ever validates a relay path again, #598). With no room it
+stays on its path. -/
 def follow (np : Nat) (c : C) : C :=
   match c.rf with
   | none => c
@@ -402,7 +416,7 @@ def follow (np : Nat) (c : C) : C :=
     | none => { c with rf := none }
     | some i =>
       if i = c.act then { c with rf := none, t := r.1 }
-      else { c with rf := none, t := setV (setV r.1 c.act false) i true, act := i }
+      else { c with rf := none, t := setV (setV r.1 c.act (keptV c.t c.act)) i true, act := i }
 
 /-- `pump` at the establishment: `follow_reply`, and the round trip sample `feed` took (`s`). -/
 def establish (np : Nat) (c : C) (s : Bool) : C := follow np { c with hs := .done, pend := none, smp := c.smp || s }
@@ -480,7 +494,7 @@ structure Inv (np : Nat) (c : C) : Prop where
 def On (c' : C) (pid : Nat) : Prop := ∃ p, c'.t c'.act = some p ∧ p.id = pid ∧ p.v = true
 
 theorem inv_dial (np pid : Nat) (h : 0 < np) : Inv np (dial pid) := by
-  refine ⟨?_, ?_, h, ⟨⟨pid, true⟩, by simp [dial], rfl⟩, by simp [dial]⟩
+  refine ⟨?_, ?_, h, ⟨⟨pid, true, .direct⟩, by simp [dial], rfl⟩, by simp [dial]⟩
   · intro j hj; simp [dial]; omega
   · intro i j x hi hj
     simp [dial, idOf] at hi hj
@@ -493,13 +507,13 @@ theorem follow_none (np : Nat) (c : C) (h : c.rf = none) : follow np c = c := by
 
 theorem follow_found {np : Nat} {c : C} {pid i : Nat} (hrf : c.rf = some pid) (hf : find np c.t pid = some i) :
     follow np c = if i = c.act then { c with rf := none, t := c.t }
-      else { c with rf := none, t := setV (setV c.t c.act false) i true, act := i } := by
+      else { c with rf := none, t := setV (setV c.t c.act (keptV c.t c.act)) i true, act := i } := by
   unfold follow; rw [hrf]; dsimp only; rw [learn_found hf]
 
 theorem follow_learnt {np : Nat} {c : C} {pid i : Nat} (hrf : c.rf = some pid) (hf : find np c.t pid = none)
     (hl : (learnNew np c.t c.act pid).2 = some i) :
     follow np c = if i = c.act then { c with rf := none, t := (learnNew np c.t c.act pid).1 }
-      else { c with rf := none, t := setV (setV (learnNew np c.t c.act pid).1 c.act false) i true, act := i } := by
+      else { c with rf := none, t := setV (setV (learnNew np c.t c.act pid).1 c.act (keptV c.t c.act)) i true, act := i } := by
   unfold follow; rw [hrf]; dsimp only; rw [learn_fresh hf, hl]
 
 theorem follow_noroom {np : Nat} {c : C} {pid : Nat} (hrf : c.rf = some pid) (hf : find np c.t pid = none)
@@ -542,7 +556,7 @@ theorem follow_taken {np : Nat} {c : C} {pid : Nat} (hi : Inv np c) (hrf : c.rf 
       exact ⟨p, hp, hpid, hva⟩
     · rw [ite_eq_right hia]
       refine ⟨{ p with v := true }, ?_, hpid, rfl⟩
-      show setV (setV c.t c.act false) i true i = _
+      show setV (setV c.t c.act (keptV c.t c.act)) i true i = _
       rw [setV_at, setV_other _ _ _ hia, hp]
       rfl
   | none =>
@@ -552,8 +566,8 @@ theorem follow_taken {np : Nat} {c : C} {pid : Nat} (hi : Inv np c) (hrf : c.rf 
     have hia : i ≠ c.act := slot_ne_act hpa hs
     have hl : (learnNew np c.t c.act pid).2 = some i := by rw [learnNew_snd, hs]
     rw [follow_learnt hrf hf hl, ite_eq_right hia]
-    refine ⟨⟨pid, true⟩, ?_, rfl, rfl⟩
-    show setV (setV (learnNew np c.t c.act pid).1 c.act false) i true i = _
+    refine ⟨⟨pid, true, .direct⟩, ?_, rfl, rfl⟩
+    show setV (setV (learnNew np c.t c.act pid).1 c.act (keptV c.t c.act)) i true i = _
     rw [setV_at, setV_other _ _ _ hia, learnNew_at hl]
     rfl
 
@@ -584,7 +598,7 @@ theorem inv_follow {np : Nat} {c : C} (hi : Inv np c) (hhs : c.hs ≠ .key) : In
           by rw [he]; exact unique_setV (unique_setV hi.unique _ _) _ _, by rw [he]; exact hil,
           ⟨{ p with v := true }, ?_, rfl⟩, hw⟩
         rw [he]
-        show setV (setV c.t c.act false) i true i = _
+        show setV (setV c.t c.act (keptV c.t c.act)) i true i = _
         rw [setV_at, setV_other _ _ _ hia, hp]
         rfl
     | none =>
@@ -601,9 +615,9 @@ theorem inv_follow {np : Nat} {c : C} (hi : Inv np c) (hhs : c.hs ≠ .key) : In
         rw [ite_eq_right hia] at he
         refine ⟨by rw [he]; exact bounded_setV (bounded_setV (learnNew_bounded hi.bounded) _ _) _ _,
           by rw [he]; exact unique_setV (unique_setV (learnNew_unique hi.bounded hi.unique hf) _ _) _ _,
-          by rw [he]; exact hil, ⟨⟨pid, true⟩, ?_, rfl⟩, hw⟩
+          by rw [he]; exact hil, ⟨⟨pid, true, .direct⟩, ?_, rfl⟩, hw⟩
         rw [he]
-        show setV (setV (learnNew np c.t c.act pid).1 c.act false) i true i = _
+        show setV (setV (learnNew np c.t c.act pid).1 c.act (keptV c.t c.act)) i true i = _
         rw [setV_at, setV_other _ _ _ hia, learnNew_at hl]
         rfl
 

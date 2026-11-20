@@ -39,7 +39,11 @@
 (*              full table gives up one path, not the one it moves from;   *)
 (*  Unique      no path is held twice, also when a 1-RTT packet follows    *)
 (*              the reply that learnt the path in the same datagram;       *)
-(*              ActiveHeld, ActiveValid, KeyWaits.                         *)
+(*              ActiveHeld, ActiveValid, KeyWaits;                         *)
+(*  RelayValid  a relay path is validated for as long as it is held: the   *)
+(*              path the session leaves is un-validated only when it is    *)
+(*              direct (#598); a relay slot is born validated and nothing  *)
+(*              in the model takes its validity away.                      *)
 (* The bound itself is the table's shape: NP slots, and every path the     *)
 (* connection holds takes one (TypeOK).                                    *)
 (*                                                                         *)
@@ -56,6 +60,12 @@
 (*              which still has the slot handle_inner found at the start   *)
 (*              of the datagram (none), adds it a second time; Unique      *)
 (*              fails. The model found it; the code now looks the id up.  *)
+(*  _relay_lost the rule before #598, Direct = FALSE: follow_reply took    *)
+(*              the validity of the path the session left whatever its     *)
+(*              kind. A dial through a relay whose reply comes back on     *)
+(*              another path leaves the relay path unvalidated, and        *)
+(*              nothing ever validates a relay path again; TypeOK fails    *)
+(*              (a relay slot is not a state), RelayValid with it.        *)
 (***************************************************************************)
 EXTENDS PathOps, TLC
 
@@ -70,10 +80,15 @@ vars == <<role, c>>
 
 \* a datagram carries a 1-RTT packet behind its handshake packet, or not
 Coals == BOOLEAN
-SlotVals == {Empty} \cup [id : Ids \ {1}, v : BOOLEAN]
+\* a held slot: the empty place, a direct path (validated or not), or a relay path, which is born validated and
+\* stays so
+SlotVals ==
+    {s \in [id : {0} \cup (Ids \ {1}), v : BOOLEAN, k : {"d", "r"}] : s.id = 0 \/ s.k = "d" \/ s.v}
+    \* an empty slot is neither kind: the operators read only its id, and RelayValid reads held slots only
 UniqueT(t) == \A i, j \in 1..NP : (t[i].id # 0 /\ t[i].id = t[j].id) => i = j
 DialTables ==
-    {t \in {[i \in 1..NP |-> IF i = 1 THEN [id |-> 1, v |-> TRUE] ELSE f[i]] : f \in [1..NP -> SlotVals]} : UniqueT(t)}
+    {t \in {[i \in 1..NP |-> IF i = 1 THEN [id |-> 1, v |-> TRUE, k |-> k1] ELSE f[i]] :
+                f \in [1..NP -> SlotVals], k1 \in {"d", "r"}} : UniqueT(t)}
 C0(t) == [t |-> t, act |-> 1, hs |-> "wait", rf |-> 0, pend |-> 0, smp |-> FALSE, hd |-> 0]
 
 Init ==
@@ -88,8 +103,8 @@ DKey == role = "dial" /\ \E r \in {"ok", "more", "bad"}, s \in BOOLEAN : c' = Ke
 RRxA == role = "resp" /\ \E id \in Ids, est \in BOOLEAN : c' = RRx(c, id, est)
 \* a 1-RTT datagram on a path the established session does not hold
 AppA == \E id \in Ids : c' = App(c, id)
-\* the host adds or removes a path
-AddA == \E id \in Ids : c' = [c EXCEPT !.t = AddPath(c.t, c.act, id).t]
+\* the host adds or removes a path, telling the endpoint what it knows of it (direct, or a relay's)
+AddA == \E id \in Ids, k \in {"d", "r"} : c' = [c EXCEPT !.t = AddPath(c.t, c.act, id, k).t]
 RmA == \E id \in Ids : c' = [c EXCEPT !.t = RemovePath(c.t, c.act, id).t]
 
 Next == (DRx \/ DKey \/ RRxA \/ AppA \/ AddA \/ RmA) /\ UNCHANGED role
@@ -98,7 +113,7 @@ Bound == c.hd <= HDMAX
 
 TypeOK ==
     /\ role \in {"dial", "resp"}
-    /\ c.t \in [1..NP -> SlotVals \cup {[id |-> 1, v |-> b] : b \in BOOLEAN}]
+    /\ c.t \in [1..NP -> SlotVals \cup {[id |-> 1, v |-> b, k |-> kk] : b \in BOOLEAN, kk \in {"d", "r"}}]
     /\ c.act \in 1..NP /\ c.hs \in {"wait", "key", "done"}
     /\ c.rf \in Ids \cup {0} /\ c.pend \in Ids \cup {0} /\ c.smp \in BOOLEAN /\ c.hd \in Nat
 
@@ -106,6 +121,8 @@ Unique == UniqueT(c.t)
 ActiveHeld == (\E i \in 1..NP : c.t[i].id # 0) => c.t[c.act].id # 0
 \* a dialing side's active path is validated: the dialed one, then the reply's
 ActiveValid == role = "dial" => c.t[c.act].v
+\* a relay path is validated for as long as it is held (#598): nothing un-validates one
+RelayValid == \A i \in 1..NP : c.t[i].id # 0 => (c.t[i].k = "r" => c.t[i].v)
 \* a Reply that waits for the key host is the message the handshake took last
 KeyWaits == (role = "dial" /\ c.hs = "key") => (c.pend # 0 /\ c.rf = c.pend)
 
@@ -144,5 +161,5 @@ GiveUpRule ==
     /\ role = "dial" => \A id \in Ids, k \in Kinds, co \in Coals, s \in BOOLEAN : Kept(c, Rx(c, id, k, co, s, Old, Lookup))
     /\ role = "dial" => \A r \in {"ok", "more", "bad"}, s \in BOOLEAN : Kept(c, Key(c, r, s))
     /\ role = "resp" => \A id \in Ids, est \in BOOLEAN : Kept(c, RRx(c, id, est))
-    /\ \A id \in Ids : Kept(c, App(c, id)) /\ Kept(c, [c EXCEPT !.t = AddPath(c.t, c.act, id).t])
+    /\ \A id \in Ids, k \in {"d", "r"} : Kept(c, App(c, id)) /\ Kept(c, [c EXCEPT !.t = AddPath(c.t, c.act, id, k).t])
 =============================================================================

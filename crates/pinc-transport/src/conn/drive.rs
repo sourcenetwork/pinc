@@ -13,6 +13,7 @@ use super::params::{CreditRecord, peer_limits};
 use super::recv::Rx;
 use super::{Connection, Phase};
 use crate::packet::packets;
+use crate::recovery::PathKind;
 use crate::stream::StreamSource;
 
 /// The largest early packet replayed: the biggest datagram a path carries.
@@ -239,7 +240,14 @@ conn_impl! {
             return;
         }
         let old = self.paths.active;
-        if let Some(p) = self.paths.get_mut(old) {
+        // A direct path is un-validated: the session left it before any challenge on it was answered, and it is
+        // validated again when one is. A relay path is born validated and nothing ever validates one again, so
+        // taking its validity away here loses the path for good: it is never kept alive, never chosen again and is
+        // the first an eviction gives up. The session left it because the peer answered elsewhere, not because the
+        // path stopped working, so it stays a validated standby.
+        if let Some(p) = self.paths.get_mut(old)
+            && p.info.kind == PathKind::Direct
+        {
             p.validated = false;
         }
         if let Some(p) = self.paths.get_mut(pi) {

@@ -674,6 +674,7 @@ par run_tlc reply_path ReplyPath ReplyPath
 par run_tlc reply_path_one ReplyPath ReplyPath_one
 par witness_tlc reply_path_held ReplyPath ReplyPath_held ReplyTaken
 par witness_tlc reply_path_coalesced ReplyPath ReplyPath_coalesced Unique
+par witness_tlc reply_path_relay_lost ReplyPath ReplyPath_relay_lost TypeOK
 par run_tlc timers Timers Timers
 par witness_tlc timers_close Timers Timers_close NoCloseSent
 par witness_tlc timers_nowake Timers Timers_nowake PollLeLife

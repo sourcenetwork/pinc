@@ -25,19 +25,20 @@ EXTENDS Integers, Sequences, TLC, Json, IOUtils
 CONSTANTS NP
 VARIABLES i, c
 vars == <<i, c>>
-INSTANCE PathOps
+INSTANCE PathOps WITH Direct <- TRUE
 
 Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/reply_path.ndjson")
 Ev0 == Trace[i]
 
-\* the dialing side on path id: the path validated and active in the first slot
-C0(id) == [t |-> [j \in 1..NP |-> IF j = 1 THEN [id |-> id, v |-> TRUE] ELSE Empty], act |-> 1, hs |-> "wait",
-           rf |-> 0, pend |-> 0, smp |-> FALSE, hd |-> 0]
+\* the dialing side on path id, a direct path or one through a relay (k): the path validated and active in the first slot
+C0(id, k) == [t |-> [j \in 1..NP |-> IF j = 1 THEN [id |-> id, v |-> TRUE, k |-> k] ELSE Empty], act |-> 1, hs |-> "wait",
+              rf |-> 0, pend |-> 0, smp |-> FALSE, hd |-> 0]
 
 \* the held paths in slot order, as path_list gives them
 RECURSIVE HeldFrom(_, _)
 HeldFrom(t, j) == IF j > NP THEN <<>>
-                  ELSE (IF t[j].id # 0 THEN <<[id |-> t[j].id, v |-> t[j].v]>> ELSE <<>>) \o HeldFrom(t, j + 1)
+                  ELSE (IF t[j].id # 0 THEN <<[id |-> t[j].id, v |-> t[j].v, k |-> t[j].k]>> ELSE <<>>)
+                       \o HeldFrom(t, j + 1)
 
 Same(x, v) == /\ HeldFrom(x.t, 1) = v.paths
               /\ x.t[x.act].id = v.act
@@ -45,8 +46,8 @@ Same(x, v) == /\ HeldFrom(x.t, 1) = v.paths
               /\ x.smp = v.smp
               /\ x.hd = v.hd
 
-InitEv == Ev0.op = "init" /\ Ev0.np = NP /\ c' = C0(Ev0.id) /\ Same(c', Ev0.v)
-AddEv == Ev0.op = "add" /\ LET a == AddPath(c.t, c.act, Ev0.id)
+InitEv == Ev0.op = "init" /\ Ev0.np = NP /\ c' = C0(Ev0.id, Ev0.dk) /\ Same(c', Ev0.v)
+AddEv == Ev0.op = "add" /\ LET a == AddPath(c.t, c.act, Ev0.id, Ev0.k)
                            IN /\ (IF a.i = 0 THEN "toomany" ELSE "ok") = Ev0.r
                               /\ c' = [c EXCEPT !.t = a.t] /\ Same(c', Ev0.v)
 RmEv == Ev0.op = "rm" /\ LET a == RemovePath(c.t, c.act, Ev0.id)
@@ -55,7 +56,7 @@ RmEv == Ev0.op = "rm" /\ LET a == RemovePath(c.t, c.act, Ev0.id)
 RxEv == Ev0.op = "rx" /\ Ev0.k \in Kinds /\ c' = Rx(c, Ev0.id, Ev0.k, Ev0.coal, Ev0.v.smp, FALSE, TRUE) /\ Same(c', Ev0.v)
 KeyEv == Ev0.op = "key" /\ c' = Key(c, Ev0.r, Ev0.v.smp) /\ Same(c', Ev0.v)
 
-Init == i = 1 /\ c = C0(1)
+Init == i = 1 /\ c = C0(1, "d")
 Step == /\ i <= Len(Trace) /\ Ev0.t = "rp"
         /\ (InitEv \/ AddEv \/ RmEv \/ RxEv \/ KeyEv) /\ i' = i + 1
 Finished == i > Len(Trace) /\ UNCHANGED vars
