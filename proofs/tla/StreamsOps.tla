@@ -351,12 +351,18 @@ Frame(T, id, off, len, fin, diff) ==
             IN [t |-> Settle(SetSlot(L.t, L.i, D.r), L.i), err |-> D.err]
 
 (* ---- on_reset (recv.rs) ---- *)
-OnResetR(r, code, fs) ==
+(* the peer's reset; ack says whether an accepted reset ends a stop request that waits or was sent *)
+OnResetRWith(r, code, fs, ack) ==
     IF fs > MAXOFF \/ (r.fin # -1 /\ r.fin # fs) \/ fs < r.hi THEN [r |-> r, err |-> "FinalSize"]
     ELSE IF fs > r.limit THEN [r |-> r, err |-> "FlowControl"]
     ELSE IF r.rst # -1 THEN [r |-> r, err |-> "ok"]
-    ELSE [r |-> [r EXCEPT !.hi = fs, !.fin = fs, !.rst = code, !.read = fs, !.contig = fs, !.held = {}, !.rs = <<>>],
-          err |-> "ok"]
+    ELSE LET d == [r EXCEPT !.hi = fs, !.fin = fs, !.rst = code, !.read = fs, !.contig = fs, !.held = {}, !.rs = <<>>]
+         IN [r |-> IF ack /\ r.stop \in {1, 2} THEN [d EXCEPT !.stop = 3, !.qcode = -1] ELSE d, err |-> "ok"]
+\* the sender ended the stream: a stop request that waits or was sent is over (c4a4ad9a), so one not yet sent is never
+\* sent and a lost one is not sent again
+OnResetR(r, code, fs) == OnResetRWith(r, code, fs, TRUE)
+\* the rule before c4a4ad9a (the witnesses Streams_stop_frame.cfg, Streams_stop_reset_w.cfg): the stop state is left
+OnResetROld(r, code, fs) == OnResetRWith(r, code, fs, FALSE)
 Reset(T, id, code, fs) ==
     LET L == Locate(T, id)
     IN IF L.err # "ok" \/ L.i = 0 THEN [t |-> L.t, err |-> L.err]

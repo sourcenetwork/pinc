@@ -419,6 +419,7 @@ par run_tlc streams_stop Streams Streams_stop
 par witness_tlc streams_stop_end_w Streams Streams_stop_end_w StopOverAtEnd
 par witness_tlc streams_stop_raise_w Streams Streams_stop_raise_w NoRaiseAfterStop
 par witness_tlc streams_stop_frame Streams Streams_stop_frame NoStopFrameAfterEnd
+par witness_tlc streams_stop_reset_w Streams Streams_stop_reset_w StopOverAtReset
 par run_tlc recovery Recovery Recovery
 par run_tlc recovery_count Recovery Recovery_count
 par run_tlc recovery_flags Recovery Recovery_flags

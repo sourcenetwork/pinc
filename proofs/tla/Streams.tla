@@ -49,9 +49,11 @@
 (*    that arrives resets the send half with the peer's code (StopEndsWithCode), *)
 (*    and the code of a reset never changes (CodeKept); once the end      *)
 (*    arrives on a stream asked to stop the request is over, none waits    *)
-(*    and none is sent again (StopOverAtEnd, 9a410adf); a stream asked to  *)
-(*    stop is given no more window (NoRaiseAfterStop, aabe075c), and it    *)
-(*    still ends once its sender answers (StopEndable);                    *)
+(*    and none is sent again (StopOverAtEnd, 9a410adf), and so once the    *)
+(*    sender's reset arrives (StopOverAtReset, c4a4ad9a): no stop frame    *)
+(*    leaves for a stream whose end is known (NoStopFrameAfterEnd); a      *)
+(*    stream asked to stop is given no more window (NoRaiseAfterStop,      *)
+(*    aabe075c), and it still ends once its sender answers (StopEndable);  *)
 (*  - RESET: a reset fixes the final size, frees the buffered bytes and    *)
 (*    leaves the stream readable to its end (nothing more is readable).    *)
 (* Streams_local (a pool with no other user, a peer stream and a local    *)
@@ -237,8 +239,12 @@ GiveUpHoleDiscards == \A id \in Ids :
 \* once the end arrived on a stream asked to stop (its data, not a reset), no request waits to be sent and none is in
 \* flight to be sent again (9a410adf; Streams_stop_end_w.cfg finds the rule before it)
 StopOverAtEnd == \A i \in Live : LET r == T.slots[i] IN (r.fin # -1 /\ r.rst = -1) => r.stop \in {0, 3}
-\* no stop request leaves for a stream whose end is known, by its data or by a reset: the frame Pending gives next. A
-\* finding (Streams_stop_frame.cfg violates it): a request queued before the sender's reset arrived is still sent
+\* once the sender's reset is accepted no stop request waits to be sent and none is in flight to be sent again
+\* (c4a4ad9a; Streams_stop_reset_w.cfg finds the rule before it)
+StopOverAtReset == \A i \in Live : LET r == T.slots[i] IN r.rst # -1 => r.stop \in {0, 3}
+\* no stop request leaves for a stream whose end is known, by its data or by a reset: the frame Pending gives next
+\* (c4a4ad9a; Streams_stop_frame.cfg finds the rule before it, where a request queued before the sender's reset arrived
+\* was still sent)
 NoStopFrameAfterEnd == LET P == Pending(T) IN P.kind = "stop" => T.slots[FindSlot(T, P.id)].fin = -1
 \* a window due to move was moved or deferred (credit follows consumption)
 NoMissedGrant == \A i \in Live : T.slots[i].open => (Due(T.slots[i]) = -1 \/ T.slots[i].defer)
