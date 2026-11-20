@@ -347,3 +347,8 @@ fn refused(r: pinc_broadcast::Refused) -> Error {
         ),
     }
 }
+
+// A sibling file of the other engine tests; declared here because `engine.rs` is at its line limit.
+#[cfg(test)]
+#[path = "event_tests.rs"]
+mod event_tests;
