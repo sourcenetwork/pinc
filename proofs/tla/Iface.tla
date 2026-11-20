@@ -74,7 +74,7 @@ Init == n = [ifs |-> [j \in 1..NI |-> j], dark |-> FALSE, susp |-> FALSE, moved 
 Home(i) == n.ifs[((i - 1) % NI) + 1]
 Other(a) == IF a = 1 THEN 3 ELSE 1
 
-IfEvent == \E id \in 1..NI, ev \in {Down, Up, Susp, Res(FALSE), Res(TRUE)} \cup
+IfEvent == \E id \in 1..NI : \E ev \in {Down, Up, Susp, Res(FALSE), Res(TRUE)} \cup
                                    (IF id = 1 THEN {Ev("addr", Other(n.ifs[1]), FALSE)} ELSE {}) :
                n' = I!Event(n, id, ev).nd
 Command == \E ev \in {Susp, Res(FALSE), Res(TRUE)} : n' = I!Event(n, 0, ev).nd

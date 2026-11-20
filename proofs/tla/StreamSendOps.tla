@@ -178,7 +178,7 @@ RingWriteFrom(r, k, last, av) ==
 
 Credit(s) == Max(s.limit - s.wr, 0)
 RingRoom(s) == Max((s.ap \div CH) * CH + RING * CH - s.wr, 0)
-TailRoom(s) == IF s.wr % CH = 0 THEN 0 ELSE CH - s.wr % CH
+TailRoom(s) == IF s.wr % CH = 0 THEN 0 ELSE CH - (s.wr % CH)
 PoolRoom(s) == AvailC(s) * CH + TailRoom(s)
 
 Write(s, want, room) ==

@@ -110,6 +110,8 @@ EarlyRule == \A s \in Seqs : (Decide(TRUE, s) = "refused") = Has(s, EstOnly)
 ShortTakesAll == \A s \in Seqs : Decide(FALSE, s) = "applied"
 MoversRule == \A s \in Seqs : Scan(s).nonprobing = Has(s, Movers) /\ Scan(s).wake = Has(s, {"WAKE"})
 OrderFree == \A a, b \in Frames : Scan(<<a, b>>) = Scan(<<b, a>>)
-SenderAgrees ==
+\* `c = 0` holds in every state; it makes this a state invariant, which TLC reports as violated (the witness
+\* PacketKind_facts looks for that) instead of a constant found FALSE at start-up
+SenderAgrees == c = 0 /\
     \A st \in States : (Reach(st) /\ Kind(st) = "zrtt") => \A f \in Fill(st) : Decide(TRUE, <<f>>) = "applied"
 =============================================================================
