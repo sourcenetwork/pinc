@@ -35,6 +35,9 @@
 EXTENDS Integers, ConnectDutyOps
 
 CONSTANTS UNIT, TOP, T, STEPS, RS
+\* a config file takes no negative number: the configs substitute these
+NoTop == -1
+DutySteps == {-1, 0, 1, 4, 60}
 
 VARIABLES c, d, nb, ls, lr, ev
 vars == <<c, d, nb, ls, lr, ev>>

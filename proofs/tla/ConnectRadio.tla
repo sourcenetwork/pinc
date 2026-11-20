@@ -25,6 +25,8 @@
 EXTENDS Integers, ConnectDutyOps
 
 CONSTANTS TOP, MAXU, T, LENS, MTUS, NSPBS, DUTIES
+\* a config file takes no negative number: the configs substitute it
+NoTop == -1
 
 VARIABLES rd, la, ev
 vars == <<rd, la, ev>>

@@ -61,7 +61,8 @@ CallE ==
                 (pw => ~RecordWanted(s)) /\ Obs(TickStep(W0(s), Ev.now, Ev.w, pw, rj, bj, K))
       [] Ev.op = "drive" ->
             \E pw \in BOOLEAN, rj \in BOOLEAN, bj \in BOOLEAN, rj2 \in BOOLEAN, bj2 \in BOOLEAN, bc \in BOOLEAN :
-                /\ pw => ~RecordWanted(s) /\ bc => Ev.w
+                /\ pw => ~RecordWanted(s)
+                /\ bc => Ev.w
                 /\ Obs(DriveStep(W0(s), Ev.now, Ev.w, pw, rj, bj, rj2, bj2, bc, K))
       [] Ev.op = "suspend" -> \E rj \in BOOLEAN, bj \in BOOLEAN : Obs(SuspendStep(W0(s), Ev.now, rj, bj, K))
       [] Ev.op = "resume" -> \E wr \in BOOLEAN : Obs(ResumeStep(W0(s), wr, K))

@@ -20,8 +20,9 @@
 (*                      every notice was signed or failed                  *)
 (*  PriorityOrder       a job starts in the order sleep notices, record,  *)
 (*                      beacon                                             *)
-(*  NoticesNotIdle      notices owed always have a request outstanding     *)
-(*                      (the host asks after any call)                     *)
+(*  NoticesNotIdle      with a wall clock, notices owed always have a     *)
+(*                      request outstanding (the host asks after any      *)
+(*                      call); without one they wait (K8, NoWallNoSign)    *)
 (*  NoWallNoSign        no signature starts without a wall clock           *)
 (*  RefusedNotSent      a refused or failed signature sends nothing and is *)
 (*                      reported as SignFailed                              *)
@@ -126,7 +127,7 @@ Spec == Init /\ [][Next]_vars
 
 CloseAfterNotices == ~badClose
 PriorityOrder == ~badPrio
-NoticesNotIdle == s.job.k = "none" => s.sleep = {}
+NoticesNotIdle == s.job.k = "none" /\ s.wall => s.sleep = {}
 RefusedNotSent == ~badRefuse
 SleepNotRetried == failed \cap (s.sleep \cup SleepJob(s)) = {}
 RecordRetry == ~badRetry
