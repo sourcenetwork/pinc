@@ -128,6 +128,7 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `ConnectCarrier_w_max` | JunkLens {0, 1, 3} -> {0, 3} |
 | `ConnectClient_lookups` | Times {0, 100000, 300001, 2000000, 2300001} -> {0, 300001}, Peers {1, 2, 3} -> {1, 2}, plus ConnectClient_lookupsQuickBound (behaviours of at most 3 calls) |
 | `ConnectClient_net` | DoNet -> DoNetQuick (probes sent at 0 only, answers carry address 1 only), CONSTRAINT Bounded (counters to threshold + 1) -> BoundedQuick (to the threshold), plus ConnectClient_netQuickBound (behaviours of at most 4 calls) |
+| `ConnectClient_pending` | Peers {1, 2, 3} -> {1, 2} |
 | `ConnectCodec` | the mutation values Vals {0, 2, 13, 32, 255} -> ValsQuick {0, 13, 255}, the frames of the canonical-form check Small (up to 80 bytes) -> SmallQuick (up to 40 bytes) |
 | `ConnectDuty` | T 130 -> 65 (two steady beacons, at 5 and 65, after a burst cut short by a step of 4 s), RS {0, 2, 5, 64} -> {2} (a restart in the burst, and after the steady beacons once the clock stepped back to 2) |
 | `ConnectDuty_sat` | TOP = T 68 -> 9 (a burst restarted at 5 whose last deadline is the clock's last instant, and probe deadlines that land on it), RS {0, 2, 5, 64} -> {5} |
