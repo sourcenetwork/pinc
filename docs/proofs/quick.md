@@ -162,6 +162,11 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `ConnectPack_w_count` | F 3 -> 2 |
 | `ConnectPack_w_long` | F 3 -> 2 |
 | `ConnectRecords` | MaxCalls 4 -> 2 |
+| `ConnectRecords_equal` | MaxCalls 4 -> 3 |
+| `ConnectRecords_lookall` | MaxCalls 4 -> 3 |
+| `ConnectRecords_lower` | MaxCalls 4 -> 3 |
+| `ConnectRecords_nocheck` | MaxCalls 4 -> 3 |
+| `ConnectRecords_nosweep` | MaxCalls 4 -> 3 |
 | `ConnectRecords_own` | MaxCalls 4 -> 2 |
 | `ConnectRelay` | Depth 6 -> 3, Times {0, 16, 31} -> {0, 31}, window quota cf.Bytes 3 -> 1 (cfQuick), MAX_PEERS and ALIAS_MAX 32 -> 2 and 4 (MAXPEERSQuick, AMQuick: the tables never hold more) |
 | `ConnectRelay_full` | Depth 6 -> 4, Times {0, 16, 31} -> {0, 31}, MaxNs 2 -> 1, carrier nodes {1, 2} -> {2} (ClQuick2), peers {5, 6} -> {5} (PeersQuick), MAX_PEERS and ALIAS_MAX 32 -> 2 and 4 (MAXPEERSQuick, AMQuick: the tables never hold more) The UDP table starts full of other nodes (3 and 4, two slots): an uploaded packet from member 1 finds no room for its stamp, which is no refusal, and the datagram goes on. |
