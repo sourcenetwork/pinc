@@ -202,6 +202,8 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `CoreState_tailstrict` | KR 2 -> 1 |
 | `CoreTable` | N 3 -> 2, KeySet {1, 2, 3} -> {1, 2} |
 | `CoreTable_chain` | N 3 -> 2, KeySet {1, 2, 3} -> {1, 2} |
+| `CoreTable_cut` | Vals {1, 2} -> {1} |
+| `CoreTable_dup` | Vals {1, 2} -> {1} |
 | `CoreTable_evict` | N 3 -> 2, KeySet {1, 2, 3, 4} -> {1, 2, 3} |
 | `CryptoIdentity` | Flags -> FlagsQuick: verifier flag vectors 16 -> 6 (all on, each off alone, all off) |
 | `DgramSize` | the input domain Inputs (1587600 inputs) -> InputsQuick (20736): path 3 -> 2 sizes, interface 5 -> 2, buffer 7 -> 3, amplification 5 -> 3, flight 6 -> 4, handshake 7 -> 4, application 6 -> 3 |
