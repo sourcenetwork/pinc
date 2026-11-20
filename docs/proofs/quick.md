@@ -367,7 +367,9 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `HubCodec_snap` | Snaps -> SnapsQuick: snapshot entries up to 3 -> 2 |
 | `HubCodec_snapn` | MutPos -> MutPosQuick, CutPos -> CutPosQuick (entry boundaries mutated and cut: all 64 or 65 entries -> the first 3 and the last 3) |
 | `Incarnation` | MaxSteps 4 -> 3 |
+| `Incarnation_clock` | MaxSteps 4 -> 3 |
 | `Incarnation_hlc` | MaxSteps 5 -> 4 |
+| `Incarnation_pers` | MaxSteps 5 -> 4 |
 | `IntegrationCodecs` | the IPv6 relay addresses Addrs (all 390625 over 0..4) -> AddrsQuick (1600: each segment over the values relay_parts tells apart) |
 | `IntegrationCodecs_sid` | Addrs, Built and TagStrs (billions of values) -> UnreadQuick ({}) and the properties RelayRT, RelayInv, RelayNone, TagAll and TagBoundary (2 * 256 * 65536 cases for RelayRT) -> UncheckedQuick (TRUE): none is read by the sid properties, TLC evaluates them at start; the stream ids Wd 14 widths -> WdQuick 6, the old ids Olds 7 -> OldsQuick 3 (of 1, 2 and 9 bytes), the rests SRests 15 -> SRestsQuick 9 (around where a new id stops fitting) |
 | `IntegrationCodecs_tag64` | the bounds are those of the deep config; the definitions cTagBoundary does not read, which TLC evaluates at start (RelayRT alone is 2 * 256 * 65536 cases, Addrs, Built and TagStrs billions of values, SRests and Bodies sequences of up to 1217 bytes), are substituted: the properties by UncheckedQuick (TRUE), the sets by UnreadQuick ({}) |
