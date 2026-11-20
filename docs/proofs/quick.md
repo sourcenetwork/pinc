@@ -104,6 +104,8 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `BuilderBytes` | Seeds -> SeedsQuick: group sizes {1, 2, 4} -> {1, 2}, lengths up to 4 groups + 1 -> 3 groups + 1, KiB groups {1024, 2048} -> {1024}, arith j 0..54 -> {0, 1, 32, 54} |
 | `Cc` | KMAX 3 -> 2 (a loss then an acknowledgement in congestion avoidance) |
 | `Cc_pacer` | KMAX 8 -> 5 (one full burst of 3 and two packets of the next: the rate and burst-start checks apply from the 4th packet) |
+| `Cc_pacer_limited` | DELAYS {0, 2, 30} -> {0, 30} |
+| `Cc_pacer_strict` | DELAYS {0, 2, 30} -> {0, 30} |
 | `Cid` | KMAX 9 -> 6, IDXMAX 9 -> 4 (an eviction at index 4; six calls reach a claim of the window again) |
 | `Cid_coll` | KMAX 9 -> 5, IDXMAX 9 -> 6 (indices 1 and 4 with the first id are both passed over by the refills) |
 | `Cid_collevict` | KMAX 9 -> 5, IDXMAX 9 -> 8 (install and authentications at 2, 4, 6, 8 reach the refill of index 9 and the eviction after it) Index 9 has the id of index 1, at the code's 8 slots: the refill that reaches index 9 makes the entry of index 1 stand for it too, so it is kept while index 9 may be used (the rule before #398 lost it: Cid_skipevict.cfg). |
