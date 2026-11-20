@@ -49,7 +49,8 @@ Marks(st, steps) ==
        ELSE Marks([st EXCEPT !.qs = T!Enq(@, s.slot, s.q + 1), !.k = @ + 1], steps)
 
 (* session x, first of queue qi, produced a datagram: it goes to the back of the queue of its class (its open has
-   left); the code records the move as a mark, except when the session is alone and stays where it is *)
+   left); the code records the move as a mark, except when the session is alone and its class still names its queue,
+   and it stays where it is (fix C2: a lone session whose class changed moves, with a mark) *)
 Served(st, steps, qi, x) ==
     LET c == IF st.gos[x] THEN 2 ELSE 1
         s == Nxt(st, steps)
@@ -124,10 +125,16 @@ WF(q0, q1) == /\ \A j, k \in 1..Len(q0) : q0[j] = q0[k] => j = k
               /\ \A j, k \in 1..Len(q1) : q1[j] = q1[k] => j = k
               /\ \A j \in 1..Len(q0) : ~T!InQ(q1, q0[j])
 
+(* only broadcast sessions wait in the broadcast queue: a session that stops being one, or in which an open is
+   queued, is promoted to the ordinary queue at once (dirty_promote, fix C2); the open's flag is not recorded, so a
+   broadcast session with an open waiting in the broadcast queue is not seen here *)
+BcastOnly(st, q1) == \A j \in 1..Len(q1) : q1[j] \in DOMAIN st.gos /\ st.gos[q1[j]]
+
 CallOK(ev) ==
     LET r == Run(Start(ev), ev)
     IN /\ ev.t = "tx"
        /\ WF(ev.q0, ev.q1) /\ WF(ev.q0a, ev.q1a)
+       /\ BcastOnly(Start(ev), ev.q1) /\ BcastOnly(Start(ev), ev.q1a)
        /\ r.ph = "done"
        /\ r.k = Len(ev.steps) + 1
        /\ r.res = ev.res
