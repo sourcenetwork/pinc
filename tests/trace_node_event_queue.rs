@@ -26,7 +26,7 @@ use std::collections::VecDeque;
 use std::fmt::Write as _;
 
 use pinc_node::{EventQueueProbe, Popped};
-use pinc_tests::SplitMix64;
+use pinc_tests::{SplitMix64, trace_cases};
 
 const CAP: usize = EventQueueProbe::CAP;
 const HIGH: usize = EventQueueProbe::HIGH;
@@ -292,7 +292,7 @@ fn fill_drain(r: u64, out: String) -> String {
     assert!(!run.take(), "the node still takes events at the stop point");
     run.extend(CAP - HIGH);
     assert_eq!(run.p.lost(), 0, "a queue filled as the node loop does lost an event");
-    for _ in 0..20 {
+    for _ in 0..trace_cases(4, 20) {
         run.push_drawn();
     }
     assert!(run.p.lost() > 0);
@@ -317,8 +317,22 @@ fn fill_drain(r: u64, out: String) -> String {
 
 /// A full queue of events nothing can recover, but the one at `recoverable_at`.
 fn fill_full(run: &mut Run, recoverable_at: Option<usize>) {
-    for i in 0..CAP {
-        run.push(recoverable_at == Some(i));
+    if trace_cases(1, 0) == 1 {
+        // the quick profile fills in batches of 512, as the node loop does: the same queue in 17 lines, not 8192
+        let fill = |run: &mut Run, to: usize| {
+            while run.p.len() < to {
+                run.extend(512.min(to - run.p.len()));
+            }
+        };
+        if let Some(at) = recoverable_at {
+            fill(run, at);
+            run.push(true);
+        }
+        fill(run, CAP);
+    } else {
+        for i in 0..CAP {
+            run.push(recoverable_at == Some(i));
+        }
     }
     assert_eq!(run.p.len(), CAP);
 }
@@ -328,8 +342,9 @@ fn nothing_recoverable(r: u64, out: String) -> String {
     let mut run = Run::new(out, 0x6576_0200 + r, 0);
     fill_full(&mut run, None);
     let first = run.n.q.front().map(|e| e.0).unwrap();
-    for i in 0..10 {
-        let lossy = if r == 0 { i >= 5 } else { i % 2 == 1 };
+    let pushes = trace_cases(4, 10);
+    for i in 0..pushes {
+        let lossy = if r == 0 { i >= pushes / 2 } else { i % 2 == 1 };
         let (head, len) = (run.n.q.front().map(|e| e.0), run.p.len());
         run.push(lossy);
         assert_eq!(run.p.len(), len);
@@ -337,7 +352,7 @@ fn nothing_recoverable(r: u64, out: String) -> String {
             assert_ne!(run.n.q.front().map(|e| e.0), head, "the oldest event was kept");
         }
     }
-    assert_eq!(run.p.lost(), 10);
+    assert_eq!(run.p.lost() as usize, pushes);
     let tags = run.drain_all();
     assert!(!tags.contains(&first), "the oldest unrecoverable event survived");
     assert!(run.empty());
@@ -472,10 +487,12 @@ fn run_quarters(r: u64) -> u64 {
 #[test]
 fn event_queue() {
     let mut out = String::new();
-    for r in 0..30 {
+    for r in 0..trace_cases(3, 30) as u64 {
         out = small(r, out);
     }
-    for r in 0..6 {
+    // the quick profile runs two of the six lossy mixes: with no recoverable event each overflow push scans the whole
+    // queue
+    for r in (0..6).filter(|r| trace_cases(0, 1) == 1 || r % 3 == 2) {
         out = fill_drain(r, out);
     }
     for r in 0..2 {
@@ -487,7 +504,7 @@ fn event_queue() {
     for r in 0..4 {
         out = edges(r, out);
     }
-    for r in 0..10 {
+    for r in 0..trace_cases(0, 10) as u64 {
         out = random(r, out);
     }
     if let Ok(dir) = std::env::var("PINC_TRACE_DIR") {

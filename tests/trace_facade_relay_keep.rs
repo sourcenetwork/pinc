@@ -25,7 +25,7 @@ use std::fmt::Write as _;
 use pinc::relay::{KeepJob, KeepProbe, MemStore, Store};
 use pinc_connect::record::{self, Reach, RecordFields};
 use pinc_crypto::{IdentityAlg, Keypair, NodeId};
-use pinc_tests::SplitMix64;
+use pinc_tests::{SplitMix64, trace_cases};
 use smol::block_on;
 
 /// One time unit in nanoseconds: a quarter of a record lifetime.
@@ -636,7 +636,7 @@ fn facade_relay_keep_trace() {
             boundary(&mut r);
             r.finish();
             let mut out = std::mem::take(&mut r.out);
-            for seed in 1..=20 {
+            for seed in 1..=trace_cases(4, 20) as u64 {
                 r = seeded(seed, r);
                 out.push_str(&std::mem::take(&mut r.out));
             }

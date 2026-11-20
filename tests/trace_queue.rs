@@ -32,7 +32,7 @@ use std::fmt::Write as _;
 use pinc_core::{EndReason, Event, EventProbe, SessionId};
 use pinc_crypto::{IdentityAlg, NodeId};
 use pinc_security::Alpn;
-use pinc_tests::SplitMix64;
+use pinc_tests::{SplitMix64, trace_cases};
 
 const CAP: usize = EventProbe::CAP;
 const H: usize = EventProbe::HEADROOM;
@@ -330,14 +330,21 @@ fn the_event_queue_matches_the_models() {
     let mut rng = SplitMix64::new(0x7175_6575);
     let mut out = String::new();
     let mut seen = Seen::default();
-    for id in 1..=60u32 {
+    for id in 1..=trace_cases(8, 60) as u32 {
         run(&mut rng, &mut out, id, 120, false, 0, &mut seen);
     }
-    for id in 100..104u32 {
+    // the quick profile leaves out the ring-full runs but the last, which drops recoverable pushes: with no recoverable
+    // push a full ring is scanned whole at every push, minutes of replay
+    let deep = trace_cases(0, 1) == 1;
+    for id in (100..104u32).filter(|id| deep || *id == 103) {
         // enough pushes to fill the ring, push on into it and take the head round
         run(&mut rng, &mut out, id, 2 * CAP as u32 + 300, true, 0, &mut seen);
     }
-    for id in 110..114u32 {
+    if !deep {
+        // the ring-full runs that take the head round are left out; a long run of short queues does it by pops
+        run(&mut rng, &mut out, 61, 3000, false, 0, &mut seen);
+    }
+    for id in 110..110 + trace_cases(1, 4) as u32 {
         // a ring full of events that cannot be recovered but one, far from the head, which the next push evicts
         let deep_at = CAP as u64 / 2 + rng.next_u64() % (CAP as u64 / 2 - 8);
         run(&mut rng, &mut out, id, CAP as u32 + 40, true, deep_at, &mut seen);

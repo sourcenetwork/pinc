@@ -667,3 +667,7 @@ The trace tests record fewer generated cases in the quick profile (`trace_cases`
 | `halfopen.ndjson` | 1,681 | 3,369 | random runs 40 -> 6, one of the two long seeded runs |
 | `streams.ndjson` | 5,127 | 13,921 | every 3rd of the 40 seeded runs |
 | `loss_estimate.ndjson` | 8,518 | 16,168 | random cases 200 -> 50 |
+| `event_queue.ndjson` | 1,596 | 75,477 | small cases 30 -> 3, random mixes 10 -> 0, the 8192-push fills batched 512 per line, 2 of the 6 lossy mixes, 4 pushes of 20 and of 10 in the full-queue cases |
+| `queue.ndjson` | 7,430 | 21,128 | light runs 60 -> 8, ring-full runs 100..102 left out (run 103 kept), one long run of short queues added, one deep run of 4 |
+| `membership.ndjson` | 25,391 | 25,391 | nothing: every run is scripted |
+| `relay-keep.ndjson` | 6,082 | 9,298 | seeds 20 -> 4 |
