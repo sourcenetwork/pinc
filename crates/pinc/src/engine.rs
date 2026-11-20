@@ -49,6 +49,7 @@ mod state;
 #[allow(clippy::unwrap_used, reason = "tests assert")]
 mod taken_tests;
 mod topics;
+pub(crate) mod waits_probe;
 pub use state::Restored;
 
 pub use gate::AllowAll;
@@ -425,6 +426,8 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
         if let Some(t) = self.driver
             && self.deadline().is_some_and(|d| d < self.armed)
         {
+            #[cfg(feature = "trace")]
+            self.standby.mark(crate::trace_waits::Mark::Kick);
             self.standby.notify(t);
         }
     }
@@ -463,6 +466,8 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             if dropped != self.last_dropped {
                 // A dropped event may have been for any waiter: they all look again.
                 self.last_dropped = dropped;
+                #[cfg(feature = "trace")]
+                self.standby.mark(crate::trace_waits::Mark::All);
                 self.standby.notify_all();
             }
         }
@@ -631,7 +636,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
         1
     }
 
-    fn on_event(&mut self, now: u64, ev: Event) {
+    fn on_event_body(&mut self, now: u64, ev: Event) {
         match ev {
             Event::Connected {
                 session,
@@ -986,6 +991,8 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
 
 /// End a session record for `err`: the reason is set before every waiting future is woken.
 fn end_session(standby: &mut Standby, rec: Sess, err: Error) {
+    #[cfg(feature = "trace")]
+    standby.mark_end(&err);
     let _ = rec.info.ended.set(err);
     for (_, t) in rec.waits {
         standby.notify(t);

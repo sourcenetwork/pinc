@@ -822,6 +822,15 @@ impl<H: Hosted, D: Discovery> Endpoint<H, D> {
         }
     }
 
+    /// Log this endpoint's waiters in `trace_waits`, as a probe (with the `trace` feature, which the tests enable).
+    #[cfg(feature = "trace")]
+    #[doc(hidden)]
+    pub fn trace_waits(&self) {
+        if let Some(mut core) = self.0.shared.lock() {
+            core.standby.traced = true;
+        }
+    }
+
     /// The relay this endpoint is homed on now: the one its record names and a relayed path's first stop. A relay pinned
     /// with [`Relay::home`](crate::Relay::home) is it once that relay answers. `None` before any relay answered.
     pub fn home_relay(&self) -> Option<NodeId> {

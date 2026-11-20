@@ -199,9 +199,13 @@ impl<H: Hosted> Drop for Turn<'_, H> {
         if self.driving {
             core.driver = None;
             core.armed = u64::MAX;
+            #[cfg(feature = "trace")]
+            core.standby.mark(crate::trace_waits::Mark::Pass);
             core.standby.baton();
         } else if !self.sh.driving.get() {
             // This future may have been the one the baton was offered to: offer it on.
+            #[cfg(feature = "trace")]
+            core.standby.mark(crate::trace_waits::Mark::Pass);
             core.standby.baton();
         }
     }
@@ -327,6 +331,8 @@ impl<H: Hosted> Shared<H> {
                 core.caller = turn.ticket;
                 let w = match attempt(&mut core, now) {
                     Try::Done(v) => {
+                        #[cfg(feature = "trace")]
+                        core.standby.mark(crate::trace_waits::Mark::Try { key: 0, s: 0 });
                         core.kick();
                         return Poll::Ready(Step::Done(v));
                     }
@@ -343,6 +349,11 @@ impl<H: Hosted> Shared<H> {
                 }
                 core.add_wait(w, t);
                 core.standby.arm(t, cx.waker());
+                #[cfg(feature = "trace")]
+                {
+                    let (key, s) = crate::engine::waits_probe::wait_code(&w);
+                    core.standby.mark(crate::trace_waits::Mark::Try { key, s });
+                }
                 if !turn.driving && (owner || !H::Role::ON) && !self.driving.replace(true) {
                     turn.driving = true;
                     core.driver = Some(t);

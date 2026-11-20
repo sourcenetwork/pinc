@@ -1239,6 +1239,10 @@ name = "trace_standby"
 path = "trace_standby.rs"
 
 [[test]]
+name = "trace_facade_waits"
+path = "trace_facade_waits.rs"
+
+[[test]]
 name = "trace_halfopen"
 path = "trace_halfopen.rs"
 

@@ -107,6 +107,9 @@ mod role;
 mod standby;
 mod start;
 pub mod stream;
+#[cfg(feature = "trace")]
+#[doc(hidden)]
+pub mod trace_waits;
 
 pub use addr::{NodeAddr, node_from_str, node_to_string};
 pub use body::Body;

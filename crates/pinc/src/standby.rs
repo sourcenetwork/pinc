@@ -39,6 +39,9 @@ pub(crate) struct Standby {
     slots: Vec<Slot>,
     free: Vec<u32>,
     queue: VecDeque<Ticket>,
+    /// Whether the marks of the waiters probe are logged (`trace_waits`).
+    #[cfg(feature = "trace")]
+    pub(crate) traced: bool,
 }
 
 impl Standby {
