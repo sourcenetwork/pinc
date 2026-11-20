@@ -27,9 +27,15 @@ For the model of `ConnectOwn.lean`, over unbounded naturals and any `MAX_ADDRS` 
 * When a record is signed: the candidates enter a job only when it starts (`start_job`), nothing else changes the job
   (`run_job_fixed`) and only the answer to the signature hands it on (`run_sent_fixed`, `signed_sent`), so a reflexive
   address learnt after the job started waits for the next one (`later_address_waits`). The record is asked for by a
-  class or home change, an opened carrier (`changed_then_publish`), new hints (`want_rises`), or 1800 s after the last
-  record handed to the carrier when nothing armed it meanwhile (`republish_not_before`, `republish_at`). A change made
-  while a job is out is kept by its answer (`change_kept`) and asked for once due (`change_published_after`).
+  class or home change, an opened carrier (`changed_then_publish`, at clock zero too: `changed_at_zero_published`),
+  new hints (`want_rises`), or 1800 s after the last record handed to the carrier when nothing armed it meanwhile
+  (`republish_not_before`, `republish_at`; a republish past the clock's last instant is none:
+  `republish_none_past_end`). A change made while a job is out is kept by its answer (`change_kept`) and asked for
+  once due (`change_published_after`), whatever its time.
+* The publish time is an option, none never fires (`publish_none_quiet`), and every deadline follows `deadline_after`:
+  the answer that hands the record on sets it 1800 s on (`signed_sent_np`, `signed_sent_deadline`), a failed signature
+  a retry period on (`signed_failed_deadline`), and a deadline is never past the clock's last instant
+  (`deadline_le_end`).
 -/
 
 namespace Pinc.ConnectOwn
@@ -430,7 +436,7 @@ theorem start_job (cf : Cf) (s : St) (now : Nat) (home cls : Option Nat) (w : Na
 /-- Without a home or a class the wanted record is dropped and tried again a retry period later. -/
 theorem start_blocked (cf : Cf) (s : St) (now : Nat) (home cls : Option Nat) (w : Nat)
     (h0 : s.job = none) (hw : s.wall = some w) (hwant : s.want = true) (hj : recordJob cf s home cls = none) :
-    step cf s (.start now home cls) = { s with want := false, np := sadd now retry } := by
+    step cf s (.start now home cls) = { s with want := false, np := deadlineAfter now retry } := by
   simp [step, start, h0, hw, hwant, hj]
 
 /-- Nothing starts without the wanted record, with a job outstanding, or before the first wall clock. -/
@@ -524,81 +530,137 @@ theorem later_address_waits (cf : Cf) (s : St) (now now' : Nat) (home cls : Opti
   have hj2 : (run cf (step cf s (.start now home cls)) ops).job = some j := by rw [hjob, e]
   exact (signed_sent _ now' j hj2).1
 
-/-- A record is asked for 1800 s after the last one handed to the carrier, not before. -/
-theorem republish_not_before (s : St) (j : Rec) (now now' : Nat) (c : Bool) (h : s.job = some j)
-    (hd : s.np = 0 ∨ s.np = uMax) (hl : now + repub < uMax) (hn : now' < now + repub) :
-    publish (signed s now true true) now' c = signed s now true true := by
-  have e : (signed s now true true).np = now + repub := by
-    simp [signed, h, afterSent_disarmed now hd, sadd, Nat.min_eq_left (Nat.le_of_lt hl)]
+/-- The answer that hands the record on sets the publish time by `afterSent`. -/
+theorem signed_sent_np (s : St) (j : Rec) (now : Nat) (h : s.job = some j) :
+    (signed s now true true).np = afterSent s.np now := by
+  simp [signed, h]
+
+/-- A deadline is never past the clock's last instant: `deadline_after` answers none instead. -/
+theorem deadline_le_end {now gap t : Nat} (h : deadlineAfter now gap = some t) : t ≤ uMax := by
+  by_cases hc : now + gap ≤ uMax
+  · rw [deadlineAfter_within hc] at h
+    cases h
+    exact hc
+  · rw [deadlineAfter_past hc] at h
+    cases h
+
+/-- The answer that hands the record on, with no time set while the job was out, sets the publish time by
+`deadline_after`, 1800 s on. -/
+theorem signed_sent_deadline (s : St) (j : Rec) (now : Nat) (h : s.job = some j) (hd : s.np = none) :
+    (signed s now true true).np = deadlineAfter now repub := by
+  rw [signed_sent_np s j now h, hd, afterSent_disarmed]
+
+/-- A failed signature sets the publish time by `deadline_after`, a retry period on. -/
+theorem signed_failed_deadline (s : St) (j : Rec) (now : Nat) (sent : Bool) (h : s.job = some j) :
+    (signed s now false sent).np = deadlineAfter now retry := by
+  simp [signed, h]
+
+/-- A publish time of none never fires: the publish step changes nothing. -/
+theorem publish_none_quiet (cf : Cf) (s : St) (now : Nat) (c : Bool) (h : s.np = none) :
+    step cf s (.publish now c) = s := by
+  show publish s now c = s
   unfold publish
   rw [if_pos]
-  rw [e]; right; right; left; exact hn
+  rw [h]; left; rfl
 
-theorem republish_at (s : St) (j : Rec) (now now' : Nat) (h : s.job = some j) (hwant : s.want = false)
-    (hd : s.np = 0 ∨ s.np = uMax) (hl : now + repub < uMax) (hn : now + repub ≤ now') :
-    (publish (signed s now true true) now' true).want = true := by
-  have e : (signed s now true true).np = now + repub := by
-    simp [signed, h, afterSent_disarmed now hd, sadd, Nat.min_eq_left (Nat.le_of_lt hl)]
-  have e2 : (signed s now true true).want = false := by simp [signed, h, hwant]
-  have e3 : (signed s now true true).job = none := by simp [signed, h]
+/-- A publish time not yet due changes nothing. Stated for any time `t`, so that a time such as `now + repub` reaches
+it as a variable: asked whether `decide (now' < now + repub)` is the decision the goal holds, the kernel otherwise
+unrolls the numeral of `repub` one successor at a time and runs out of memory. -/
+theorem publish_waits (s : St) (t now : Nat) (c : Bool) (h : s.np = some t) (hn : now < t) :
+    publish s now c = s := by
+  unfold publish
+  rw [if_pos]
+  rw [h]; left; exact decide_eq_true hn
+
+/-- A due publish time asks for the record when none is wanted or out and the carrier is open (any `t`, as above). -/
+theorem publish_fires (s : St) (t now : Nat) (h : s.np = some t) (hn : t ≤ now) (hw : s.want = false)
+    (hj : s.job = none) : (publish s now true).want = true := by
   unfold publish
   rw [if_neg]
   · rw [if_pos rfl]
-  · rw [e, e2, e3]
-    have : repub > 0 := by decide
-    simp only [not_or]
-    refine ⟨by omega, by omega, by omega, by simp, by simp⟩
+  · rw [h, hw, hj]
+    simpa using hn
 
-/-- A change made while the record job is out is kept by the answer that hands the record on (K10). -/
-theorem change_kept (s : St) (j : Rec) (now now' : Nat) (h : s.job = some j) (h0 : now ≠ 0) (hm : now ≠ uMax) :
-    (signed (changed s now) now' true true).np = now := by
-  simp [signed, changed, h, afterSent_kept now' h0 hm]
+/-- A record is asked for 1800 s after the last one handed to the carrier, not before. -/
+theorem republish_not_before (s : St) (j : Rec) (now now' : Nat) (c : Bool) (h : s.job = some j)
+    (hd : s.np = none) (hl : now + repub ≤ uMax) (hn : now' < now + repub) :
+    publish (signed s now true true) now' c = signed s now true true := by
+  have e : (signed s now true true).np = some (now + repub) := by
+    rw [signed_sent_np s j now h, hd, afterSent_disarmed, deadlineAfter_within hl]
+  exact publish_waits _ (now + repub) now' c e hn
+
+theorem republish_at (s : St) (j : Rec) (now now' : Nat) (h : s.job = some j) (hwant : s.want = false)
+    (hd : s.np = none) (hl : now + repub ≤ uMax) (hn : now + repub ≤ now') :
+    (publish (signed s now true true) now' true).want = true := by
+  have e : (signed s now true true).np = some (now + repub) := by
+    rw [signed_sent_np s j now h, hd, afterSent_disarmed, deadlineAfter_within hl]
+  have e2 : (signed s now true true).want = false := by simp [signed, h, hwant]
+  have e3 : (signed s now true true).job = none := by simp [signed, h]
+  exact publish_fires _ (now + repub) now' e hn e2 e3
+
+/-- Past the clock's last instant there is no republish: the answer leaves the publish time none. -/
+theorem republish_none_past_end (s : St) (j : Rec) (now : Nat) (h : s.job = some j) (hd : s.np = none)
+    (hl : uMax < now + repub) : (signed s now true true).np = none := by
+  rw [signed_sent_np s j now h, hd, afterSent_disarmed, deadlineAfter_past (Nat.not_le.mpr hl)]
+
+/-- A change made while the record job is out is kept by the answer that hands the record on (K10), whatever its
+time. -/
+theorem change_kept (s : St) (j : Rec) (now now' : Nat) (h : s.job = some j) :
+    (signed (changed s now) now' true true).np = some now := by
+  rw [signed_sent_np (changed s now) j now' (by simpa [changed] using h)]
+  rfl
 
 /-- So that change is asked for as soon as it is due after the answer, not 1800 s later. -/
 theorem change_published_after (s : St) (j : Rec) (now now' now'' : Nat) (h : s.job = some j)
-    (hw : s.want = false) (h0 : now ≠ 0) (hm : now ≠ uMax) (hn : now ≤ now'') :
+    (hw : s.want = false) (hn : now ≤ now'') :
     (publish (signed (changed s now) now' true true) now'' true).want = true := by
-  have e := change_kept s j now now' h h0 hm
+  have e := change_kept s j now now' h
   have e2 : (signed (changed s now) now' true true).want = false := by simp [signed, changed, h, hw]
   have e3 : (signed (changed s now) now' true true).job = none := by simp [signed, changed, h]
   unfold publish
   rw [if_neg]
   · rw [if_pos rfl]
   · rw [e, e2, e3]
-    simp only [not_or]
-    refine ⟨h0, hm, by omega, by simp, by simp⟩
+    simpa using hn
 
 /-- A class or home change, or an opened carrier, sets the next publish to now: it is asked for at once. -/
-theorem changed_then_publish (s : St) (now now' : Nat) (h0 : now ≠ 0) (hm : now ≠ uMax) (hn : now ≤ now')
-    (hw : s.want = false) (hj : s.job = none) :
-    (publish (changed s now) now' true).want = true := by
+theorem changed_then_publish (s : St) (now now' : Nat) (hn : now ≤ now') (hw : s.want = false)
+    (hj : s.job = none) : (publish (changed s now) now' true).want = true := by
   unfold publish changed
   rw [if_neg]
   · rw [if_pos rfl]
-  · simp only [not_or]
-    refine ⟨h0, hm, by omega, by simp [hw], by simp [hj]⟩
+  · simpa [hw, hj] using hn
+
+/-- A home carrier opened at clock zero asks for the record at once (the code before read a time of 0 as none). -/
+theorem changed_at_zero_published (s : St) (now' : Nat) (hw : s.want = false) (hj : s.job = none) :
+    (publish (changed s 0) now' true).want = true :=
+  changed_then_publish s 0 now' (Nat.zero_le now') hw hj
 
 /-- The record is wanted anew only by new hints or by the publish timer, which needs a due time, an open home carrier
 and no record already wanted. -/
 theorem want_rises (cf : Cf) (s : St) (o : Op) (hw : s.want = false) (h : (step cf s o).want = true) :
-    (∃ x, o = .hints x) ∨ (∃ now, o = .publish now true ∧ s.np ≠ 0 ∧ s.np ≠ uMax ∧ s.np ≤ now ∧ s.job = none) := by
+    (∃ x, o = .hints x) ∨ (∃ now t, o = .publish now true ∧ s.np = some t ∧ t ≤ now ∧ s.job = none) := by
   cases o with
   | hints x => exact Or.inl ⟨x, rfl⟩
   | publish now c =>
     right
-    refine ⟨now, ?_⟩
     unfold step publish at h
-    by_cases hc : s.np = 0 ∨ s.np = uMax ∨ now < s.np ∨ s.want = true ∨ s.job.isSome = true
+    by_cases hc : s.np.all (fun t => decide (now < t)) = true ∨ s.want = true ∨ s.job.isSome = true
     · simp only [hc, if_true] at h; simp [hw] at h
     · simp only [hc, if_false] at h
       cases c with
       | false => simp [hw] at h
       | true =>
         simp only [not_or] at hc
-        refine ⟨rfl, hc.1, hc.2.1, by omega, ?_⟩
-        cases hj : s.job with
-        | none => rfl
-        | some _ => simp [hj] at hc
+        obtain ⟨h1, -, h3⟩ := hc
+        cases hn : s.np with
+        | none => simp [hn] at h1
+        | some t =>
+          refine ⟨now, t, rfl, rfl, ?_, ?_⟩
+          · simp [hn] at h1; omega
+          · cases hj : s.job with
+            | none => rfl
+            | some _ => simp [hj] at h3
   | setLocal a => simp [step, setLocal, hw] at h
   | probe ns => simp [step, probeAll, hw] at h
   | answer f n a =>

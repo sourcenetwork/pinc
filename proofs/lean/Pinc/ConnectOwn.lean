@@ -22,13 +22,25 @@ port mapping (`set_mapped`: a mapped address a relay vouches for would lead the 
 
 namespace Pinc.ConnectOwn
 
-/-- `RECORD_REPUBLISH_NS` and `HOME_RETRY_NS`; `u64::MAX`. -/
-def repub : Nat := 1800 * 1000000000
-def retry : Nat := 2 * 1000000000
-def uMax : Nat := 2 ^ 64 - 1
+/-- `RECORD_REPUBLISH_NS` and `HOME_RETRY_NS`; `u64::MAX`. Irreducible, so elaboration never unfolds them: no proof
+needs their values. The kernel does unfold them, and a decision such as `now' < now + repub` on a symbolic clock is then
+reduced one successor at a time: proofs reach such a time as a variable (`publish_waits` in `ConnectOwnThm.lean`). -/
+@[irreducible] def repub : Nat := 1800 * 1000000000
+@[irreducible] def retry : Nat := 2 * 1000000000
+@[irreducible] def uMax : Nat := 2 ^ 64 - 1
 
 /-- `saturating_add` on `u64`. -/
 def sadd (a b : Nat) : Nat := min (a + b) uMax
+
+/-- `deadline_after` (`pinc-transport`, a `checked_add` on `u64`): none past the clock's last instant. -/
+def deadlineAfter (now gap : Nat) : Option Nat := if now + gap ≤ uMax then some (now + gap) else none
+
+/- The two cases by the hypothesis alone, so no proof unfolds `deadlineAfter` near the `u64` numerals. -/
+theorem deadlineAfter_within {now gap : Nat} (h : now + gap ≤ uMax) : deadlineAfter now gap = some (now + gap) :=
+  if_pos h
+
+theorem deadlineAfter_past {now gap : Nat} (h : ¬ now + gap ≤ uMax) : deadlineAfter now gap = none :=
+  if_neg h
 
 structure Cf where
   cap : Nat
@@ -51,8 +63,8 @@ structure St where
   /-- `last_seq`, the number of the last record built (0 before the first) -/
   last : Nat := 0
   hints : List Nat := []
-  /-- `next_publish` -/
-  np : Nat := 0
+  /-- `next_publish`: none before the first change and while a record is asked for -/
+  np : Option Nat := none
   /-- `sign.record`, the record is wanted -/
   want : Bool := false
   /-- the record job outstanding, if the signing slot holds one -/
@@ -134,13 +146,14 @@ def restoreSeq (s : St) (n : Nat) : St := { s with last := max s.last n }
 record wanted. -/
 def setHints (s : St) (h : List Nat) : St := { s with hints := h, want := true }
 
-/-- `publish`: ask for the record when it is due and the home carrier is open. -/
+/-- `publish`: ask for the record when it is due (`next_publish.is_none_or(|t| now < t)` is false) and the home
+carrier is open; the time is disarmed until the answer. -/
 def publish (s : St) (now : Nat) (canPublish : Bool) : St :=
-  if s.np = 0 ∨ s.np = uMax ∨ now < s.np ∨ s.want ∨ s.job.isSome then s
-  else if canPublish then { s with want := true, np := uMax } else s
+  if s.np.all (fun t => decide (now < t)) ∨ s.want ∨ s.job.isSome then s
+  else if canPublish then { s with want := true, np := none } else s
 
-/-- The class or home changed, a carrier opened (`next_publish = now`). -/
-def changed (s : St) (now : Nat) : St := { s with np := now }
+/-- The class or home changed, a carrier opened (`next_publish = Some(now)`, a time of 0 included). -/
+def changed (s : St) (now : Nat) : St := { s with np := some now }
 
 /-- `start_jobs` for a record: nothing while a job is outstanding or before the first wall clock; a wanted record
 starts a job and its number becomes the last one, or, when it cannot (no home or class), waits a retry period. -/
@@ -152,19 +165,20 @@ def start (cf : Cf) (s : St) (now : Nat) (home cls : Option Nat) : St :=
       if s.want then
         match recordJob cf s home cls with
         | some j => { s with want := false, job := some j, last := j.seq }
-        | none => { s with want := false, np := sadd now retry }
+        | none => { s with want := false, np := deadlineAfter now retry }
       else s
 
 /-- The next publish once a record was handed to the carrier: the republish 1800 s on when nothing armed it while
-the job was out (`np` is `0` or `uMax`, the code's `None`), else the deadline a change or a retry wrote then, which
-wins (`complete`, the code fix K10 on top of K1's `Option`). -/
-def afterSent (np now : Nat) : Nat := if np = 0 ∨ np = uMax then sadd now repub else np
+the job was out (`np` is none), else the deadline a change or a retry wrote then, which wins (`complete`, the code
+fix K10). -/
+def afterSent (np : Option Nat) (now : Nat) : Option Nat :=
+  match np with
+  | none => deadlineAfter now repub
+  | some t => some t
 
-theorem afterSent_disarmed {np : Nat} (now : Nat) (h : np = 0 ∨ np = uMax) : afterSent np now = sadd now repub := by
-  unfold afterSent; exact if_pos h
+theorem afterSent_disarmed (now : Nat) : afterSent none now = deadlineAfter now repub := rfl
 
-theorem afterSent_kept {np : Nat} (now : Nat) (h0 : np ≠ 0) (hm : np ≠ uMax) : afterSent np now = np := by
-  unfold afterSent; exact if_neg (fun h => h.elim h0 hm)
+theorem afterSent_kept (t now : Nat) : afterSent (some t) now = some t := rfl
 
 /-- `sign_response` for the record job: `ok` is a signature of the right length that `finish` accepted, `sent` that
 `frame_to` put the record on the home carrier. A change made while the job was out is kept (`afterSent`). -/
@@ -174,8 +188,8 @@ def signed (s : St) (now : Nat) (ok sent : Bool) : St :=
   | some j =>
     if ok then
       if sent then { s with job := none, sent := some j, np := afterSent s.np now }
-      else { s with job := none, np := now }
-    else { s with job := none, np := sadd now retry }
+      else { s with job := none, np := some now }
+    else { s with job := none, np := deadlineAfter now retry }
 
 inductive Op
   | setLocal (a : List Nat)

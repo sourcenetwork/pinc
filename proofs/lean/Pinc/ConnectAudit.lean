@@ -237,9 +237,16 @@ import Pinc.ConnectOwnThm
 #audit_axioms Pinc.ConnectOwn.run_sent_fixed
 #audit_axioms Pinc.ConnectOwn.signed_sent
 #audit_axioms Pinc.ConnectOwn.later_address_waits
+#audit_axioms Pinc.ConnectOwn.signed_sent_np
+#audit_axioms Pinc.ConnectOwn.deadline_le_end
+#audit_axioms Pinc.ConnectOwn.signed_sent_deadline
+#audit_axioms Pinc.ConnectOwn.signed_failed_deadline
+#audit_axioms Pinc.ConnectOwn.publish_none_quiet
 #audit_axioms Pinc.ConnectOwn.republish_not_before
 #audit_axioms Pinc.ConnectOwn.republish_at
+#audit_axioms Pinc.ConnectOwn.republish_none_past_end
 #audit_axioms Pinc.ConnectOwn.changed_then_publish
+#audit_axioms Pinc.ConnectOwn.changed_at_zero_published
 #audit_axioms Pinc.ConnectOwn.change_kept
 #audit_axioms Pinc.ConnectOwn.change_published_after
 #audit_axioms Pinc.ConnectOwn.want_rises
