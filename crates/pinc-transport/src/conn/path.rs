@@ -11,18 +11,19 @@
 //! small and unpadded: the datagram size is found by the separate probe.
 //!
 //! Both ends follow the peer at once: the highest-numbered packet that carries STREAM, DATAGRAM or WAKE data moves the
-//! active path to the path it came from, and a new UDP path is challenged in parallel (a new path gets three times what
-//! it sent us until its challenge is answered). An end that sends through a relay and is challenged on a direct path it
-//! has not validated, and has no challenge out on, answers with its own challenge in the same datagram, so both ends
-//! validate the path in one round trip and the session leaves the relay then (the reference model's responder starts
-//! its challenge only when the peer's candidate list arrives, a hop behind the peer's first challenge, where the
-//! address limit then holds it back until the next probe; a node declared thin keeps that cadence, and an end whose
-//! session moved no application data for 20 s only answers, as the reference model looks for no direct path on an idle
-//! session). The active path is chosen by cost: the smoothed round trip of the path, plus one second for a relay, minus
-//! 3 ms for IPv6; a validated UDP path that was silent for 15 s is left out; from a relay, or from a path whose address
-//! is gone, the connection moves at once, otherwise only for a gain above 5 ms. After three probe timeouts in a row on
-//! a direct path the path is dropped as validated, challenged on the re-join cadence, and the connection falls back to
-//! a relay path if it has one.
+//! active path to the path it came from unless that path's local address is gone (a gone path is never followed), and a
+//! new UDP path is challenged in parallel (a new path gets three times what it sent us until its challenge is
+//! answered). An end that sends through a relay and is challenged on a direct path it has not validated, and has no
+//! challenge out on, answers with its own challenge in the same datagram, so both ends validate the path in one round
+//! trip and the session leaves the relay then (the reference model's responder starts its challenge only when the
+//! peer's candidate list arrives, a hop behind the peer's first challenge, where the address limit then holds it back
+//! until the next probe; a node declared thin keeps that cadence, and an end whose session moved no application data
+//! for 20 s only answers, as the reference model looks for no direct path on an idle session). The active path is
+//! chosen by cost: the smoothed round trip of the path, plus one second for a relay, minus 3 ms for IPv6; a validated
+//! UDP path that was silent for 15 s is left out; from a relay, or from a path whose address is gone, the connection
+//! moves at once, otherwise only for a gain above 5 ms. After three probe timeouts in a row on a direct path the path
+//! is dropped as validated, challenged on the re-join cadence, and the connection falls back to a relay path if it has
+//! one.
 //!
 //! A challenge sent to a new or abandoned path follows a cadence that depends on why: a new path is probed 9 times
 //! from `max(33.3 ms, srtt / 8)`, doubling up to 2 s; a path abandoned after probe timeouts is probed at a flat gap
@@ -40,7 +41,8 @@
 //! the member.
 //!
 //! Invariants: the active path index always names a live slot; an unvalidated path never sends past its
-//! amplification budget; a direct path is validated only by an answer to a challenge sent to it.
+//! amplification budget; a direct path is validated only by an answer to a challenge sent to it; a path whose address
+//! is gone is never validated again, unless the endpoint adds its id again.
 
 use pinc_crypto::Provider;
 use pinc_security::{AmpBudget, ConnId, Env};
@@ -305,17 +307,24 @@ conn_impl! {
     /// # Errors
     /// [`PathError::TooMany`] if the table is full and no unused path can make room.
     pub fn add_path(&mut self, env: &mut Env<'_, P>, id: PathId, info: PathInfo) -> Result<(), PathError> {
-        if let Some(i) = self.paths.find(id) {
-            if let Some(p) = self.paths.get_mut(i) {
-                p.info = info;
+        let i = match self.paths.find(id) {
+            Some(i) if !self.paths.get(i).is_some_and(|p| p.gone) => {
+                if let Some(p) = self.paths.get_mut(i) {
+                    p.info = info;
+                }
+                self.sync_kind(i);
+                if self.paths.active().is_none_or(|p| p.gone) {
+                    self.choose_path();
+                }
+                return Ok(());
             }
-            self.sync_kind(i);
-            if self.paths.active().is_none_or(|p| p.gone) {
-                self.choose_path();
+            // The endpoint names a live local address for the id of a lost path again: the slot starts over.
+            Some(i) => {
+                self.put_path(i, id, info, env.now);
+                i
             }
-            return Ok(());
-        }
-        let i = self.new_path_slot(id, info, env.now).ok_or(PathError::TooMany)?;
+            None => self.new_path_slot(id, info, env.now).ok_or(PathError::TooMany)?,
+        };
         // The endpoint chose this address itself, so the amplification limit that guards against spoofed sources
         // does not apply to challenging it.
         if let Some(p) = self.paths.get_mut(i) {
@@ -616,15 +625,20 @@ conn_impl! {
             .iter()
             .position(Option::is_none)
             .or_else(|| self.paths.iter().find(|(i, p)| *i != active && !p.validated).map(|(i, _)| i))?;
+        self.put_path(free, id, info, now);
+        Some(free)
+    }
+
+    /// Start slot `i` over as the new path `id`.
+    fn put_path(&mut self, i: usize, id: PathId, info: PathInfo, now: u64) {
         let mut path = Path::new(id, info);
         path.mtu.started = self.phase == Phase::Connected;
         path.last_rx = now;
-        if let Some(slot) = self.paths.slots.get_mut(free) {
+        if let Some(slot) = self.paths.slots.get_mut(i) {
             *slot = Some(path);
         }
         self.paths.recount();
-        self.sync_kind(free);
-        Some(free)
+        self.sync_kind(i);
     }
 
     /// Put a fresh random challenge on path `i`, keeping the one it replaces, without sending it yet.
@@ -685,7 +699,7 @@ conn_impl! {
     /// the reference model, whose path choice is tuned to that reading.
     pub(super) fn on_path_response(&mut self, i: usize, data: [u8; 8], now: u64) {
         let Some(p) = self.paths.get_mut(i) else { return };
-        if !p.is_challenge(data) {
+        if p.gone || !p.is_challenge(data) {
             return;
         }
         let was = p.validated;
@@ -739,7 +753,7 @@ conn_impl! {
     pub fn path_returned(&mut self, id: PathId, rtt: u64, now: u64) -> bool {
         let Some(i) = self.paths.find(id) else { return false };
         let Some(p) = self.paths.get_mut(i) else { return false };
-        if !p.rejoin || p.validated {
+        if p.gone || !p.rejoin || p.validated {
             return false;
         }
         p.sent = [None; CHALLENGES];

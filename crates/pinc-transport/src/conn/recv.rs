@@ -520,12 +520,15 @@ conn_impl! {
     }
 
     /// Both ends follow the highest-numbered packet that carries data to the path it came from, and challenge a new
-    /// UDP path in parallel.
+    /// UDP path in parallel. A path whose local address is gone is never followed.
     fn follow_peer(&mut self, env: &mut Env<'_, P>, pi: usize, pn: u64, prev_largest: Option<u64>, wake: bool, now: u64) {
         if prev_largest.is_some_and(|l| pn < l) || self.phase != Phase::Connected || pi == self.paths.active {
             return;
         }
         let Some(p) = self.paths.get(pi).copied() else { return };
+        if p.gone {
+            return;
+        }
         if p.info.kind == PathKind::Direct && !p.validated {
             let node = self.rec.peak_rtt().max(if self.rec.rtt().has_sample() { self.rec.rtt().smoothed() } else { 0 });
             let fresh = self.cfg.thin

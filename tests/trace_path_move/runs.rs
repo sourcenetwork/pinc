@@ -186,6 +186,16 @@ pub fn fixed_runs(tr: &mut PmTrace) {
         r.answer(net, 1);
         r.until_pto(net, 3);
     });
+    // 19: a gone path is never followed: the active path is lost while the other is unvalidated, a data packet on
+    // the other follows, then a higher numbered data packet on the lost path's id leaves the active path alone
+    fixed(tr, 19, false, |net, r| {
+        r.add(net, 2, false, false);
+        r.set(net, 2);
+        r.lost(net, 1);
+        r.data(net, 2, true, false);
+        r.data(net, 1, true, false);
+        assert_eq!(active(net), 2, "a packet on a gone path moved the active path");
+    });
     // 14: path info
     fixed(tr, 14, false, |net, r| {
         r.add(net, 2, false, false);

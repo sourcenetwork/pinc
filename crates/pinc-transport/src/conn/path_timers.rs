@@ -164,7 +164,12 @@ conn_impl! {
 
     /// Move the active path to the newest relay path, if the connection has one.
     fn relay_fallback(&mut self) {
-        let relay = self.paths.iter().filter(|(_, p)| p.info.kind == PathKind::Relay).map(|(i, _)| i).last();
+        let relay = self
+            .paths
+            .iter()
+            .filter(|(_, p)| p.info.kind == PathKind::Relay && p.validated && !p.gone)
+            .map(|(i, _)| i)
+            .last();
         if let Some(r) = relay {
             self.switch_active(r);
         }

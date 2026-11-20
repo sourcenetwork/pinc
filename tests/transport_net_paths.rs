@@ -80,3 +80,52 @@ fn a_session_whose_direct_path_went_silent_falls_back_to_a_relay_path_added_late
         );
     });
 }
+
+/// A lost path is not validated by the answer to a challenge sent before the loss, and is not followed by the peer's
+/// data: a second direct path is followed while the lost one is held, and data on the lost one's id does not move the
+/// session back.
+#[test]
+fn a_lost_path_is_never_validated_or_followed_again() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let mut link = two_routes(34);
+        // Nothing A sends on route 3 arrives: its path stays unvalidated.
+        link.route(PathId(3)).ab.drop_next(u32::MAX);
+        let mut net = connected(&mut w, &mut sa, &mut sb, link);
+        let now = net.now;
+        net.a.with_env(now, |c, env| {
+            c.add_path(env, PathId(3), PathInfo::default()).unwrap();
+            c.probe(env, PathId(1)).unwrap();
+        });
+        net.flush();
+        net.a.conn.path_lost(PathId(1)).unwrap();
+        assert_eq!(net.a.conn.active_path(), Some(PathId(1)), "no valid path to leave for");
+        let mark = net.a.log.len();
+        net.run(net.now + 200 * MS, |_| false);
+        assert!(
+            !net.a.conn.path_validated(PathId(1)),
+            "the answer to a challenge sent before the loss validated the lost path"
+        );
+        assert!(
+            !net.a.log[mark..].iter().any(|r| *r == Rec::PathValidated(PathId(1))),
+            "the lost path was reported valid"
+        );
+        // The peer sends data from the second route: the session follows it.
+        let now = net.now;
+        net.b.with_env(now, |c, env| c.add_path(env, PathId(4), RELAY)).unwrap();
+        net.b.conn.set_active(PathId(4)).unwrap();
+        let s = net.b.conn.open_bi().unwrap();
+        net.b.conn.write(s, &pattern(2000, 35)).unwrap();
+        assert!(net.run(net.now + SEC, |n| n.a.conn.active_path() == Some(PathId(3))));
+        // Then from the first again, with higher numbers: the lost path is not followed back.
+        net.b.conn.set_active(PathId(2)).unwrap();
+        net.b.conn.write(s, &pattern(2000, 36)).unwrap();
+        net.run(net.now + SEC, |_| false);
+        assert_eq!(
+            net.a.conn.active_path(),
+            Some(PathId(3)),
+            "the session followed data onto a path whose address is gone"
+        );
+    });
+}
