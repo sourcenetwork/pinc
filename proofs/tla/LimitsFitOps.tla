@@ -8,12 +8,15 @@
 (* (<<>> is 0), so a limb times a limb stays below 2^30.                   *)
 (*                                                                         *)
 (* A limit set is a record with the fields of Limits (conn, pool, sw, snd, *)
-(* streams, ast, as, tmsg, tlog, topics); slot is SLOT_BYTES, chunk        *)
-(* CHUNK_SIZE, pb the pointer width in bytes.                              *)
+(* streams, ast, as, tmsg, tlog, topics, spill); slot is SLOT_BYTES, chunk *)
+(* CHUNK_SIZE, pb the pointer width in bytes. SpillSlot is the bytes of    *)
+(* one slot of the spill arena (SPILL_SLOT, size_of SpillSlot: 512         *)
+(* intervals of two u64), the arena counted once per endpoint.             *)
 (***************************************************************************)
 EXTENDS Integers, Sequences
 
 B == 32768
+SpillSlot == 8192
 
 RECURSIVE Norm(_)
 \* the number without its zero high limbs
@@ -50,7 +53,8 @@ Rung(c) == IF c > 65536 THEN 0 ELSE CHOOSE r \in Range(Ladder) : c <= r /\ \A s 
 Worst(l, slot, chunk) ==
     IF Rung(l.conn) = 0 THEN [ok |-> FALSE, v |-> <<>>]
     ELSE [ok |-> TRUE,
-          v |-> Add(Mul(N(Rung(l.conn)), Add(Mul(N(l.pool), N(chunk)), N(slot))), Mul(N(l.topics), N(l.tlog)))]
+          v |-> Add(Add(Mul(N(Rung(l.conn)), Add(Mul(N(l.pool), N(chunk)), N(slot))), Mul(N(l.topics), N(l.tlog))),
+                    Mul(N(l.spill), N(SpillSlot)))]
 Fits(l, pb, slot, chunk) == LET w == Worst(l, slot, chunk) IN w.ok /\ Le(w.v, Bound(pb))
 
 InRange(l) == /\ 1 <= l.conn /\ l.conn <= 65536
@@ -62,6 +66,7 @@ InRange(l) == /\ 1 <= l.conn /\ l.conn <= 65536
               /\ 1 <= l.tmsg /\ l.tmsg <= 16777216
               /\ 1 <= l.tlog /\ l.tlog <= 1073741824
               /\ 1 <= l.topics /\ l.topics <= 4096
+              /\ 0 <= l.spill /\ l.spill <= 65536
 \* check_for: a limit out of range first, then what the target can address
 Check(l, pb, slot, chunk) == IF ~InRange(l) THEN "range" ELSE IF ~Fits(l, pb, slot, chunk) THEN "address" ELSE "ok"
 =============================================================================

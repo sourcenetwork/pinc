@@ -28,7 +28,7 @@ CONSTANTS SLOTS, WRAP
 CHUNK == 16384
 
 Base == [conn |-> 1024, pool |-> 1024, sw |-> 1310720, snd |-> 16777216, streams |-> 100, ast |-> 100, as |-> 1024,
-         tmsg |-> 65536, tlog |-> 4194304, topics |-> 128]
+         tmsg |-> 65536, tlog |-> 4194304, topics |-> 128, spill |-> 128]
 Grid == {[Base EXCEPT !.conn = c, !.pool = p, !.topics = t, !.tlog = g] :
             c \in {1, 3, 64, 65, 1024, 65536}, p \in {8, 1024, 65535}, t \in {1, 128, 4096},
             g \in {1, 4194304, 1073741824}}
@@ -41,7 +41,9 @@ FT == [x \in Grid \X {4, 8} \X SLOTS |-> Fits(x[1], x[2], x[3], CHUNK)]
 \* the low 32 bits
 W32(a) == LET p == a \o <<0, 0, 0>> IN Norm(<<p[1], p[2], p[3] % 4>>)
 WorstWrap(l, slot) ==
-    W32(Add(W32(Mul(N(Rung(l.conn)), W32(Add(W32(Mul(N(l.pool), N(CHUNK))), N(slot))))), W32(Mul(N(l.topics), N(l.tlog)))))
+    W32(Add(W32(Add(W32(Mul(N(Rung(l.conn)), W32(Add(W32(Mul(N(l.pool), N(CHUNK))), N(slot))))),
+                    W32(Mul(N(l.topics), N(l.tlog))))),
+            W32(Mul(N(l.spill), N(SpillSlot)))))
 FitsImpl(l, pb, slot) == IF WRAP THEN Le(WorstWrap(l, slot), Bound(pb)) ELSE FT[<<l, pb, slot>>]
 
 Monotone == \A pb \in {4, 8}, s \in SLOTS, a, b \in Grid : LeL(a, b) /\ FT[<<b, pb, s>>] => FT[<<a, pb, s>>]

@@ -3,10 +3,11 @@
 (* Trace check of Limits::check and fits on the real code: the unit test   *)
 (* mem::tests::trace_limits (crates/pinc/src/mem.rs, branch                 *)
 (* work9/platform) writes limits.ndjson, one line per case:                *)
-(*   {name, l, pb, slot, chunk, wok, worst, fits, check}                   *)
+(*   {name, l, pb, slot, chunk, sslot, wok, worst, fits, check}            *)
 (* l the limit set (fields conn, pool, sw, snd, streams, ast, as, tmsg,    *)
-(* tlog, topics), pb the pointer width given to fits and check_for, slot   *)
-(* SLOT_BYTES and chunk CHUNK_SIZE as built, wok whether worst_case is     *)
+(* tlog, topics, spill), pb the pointer width given to fits and check_for, *)
+(* slot SLOT_BYTES, chunk CHUNK_SIZE and sslot SPILL_SLOT as built (sslot  *)
+(* must be the model's SpillSlot), wok whether worst_case is               *)
 (* Some, worst its value as 15-bit limbs lowest first, fits the answer of  *)
 (* fits, check "ok", "range" (a limit is out of range) or "address" (the   *)
 (* sentence of the address space), name "" or the name of a case the      *)
@@ -24,7 +25,8 @@ EXTENDS Integers, Sequences, Json, IOUtils, LimitsFitOps, TraceEnd
 Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/limits.ndjson")
 
 OK(e) == LET w == Worst(e.l, e.slot, e.chunk)
-         IN /\ e.wok = w.ok
+         IN /\ e.sslot = SpillSlot
+            /\ e.wok = w.ok
             /\ e.wok => Norm(e.worst) = w.v
             /\ e.fits = Fits(e.l, e.pb, e.slot, e.chunk)
             /\ e.check = Check(e.l, e.pb, e.slot, e.chunk)

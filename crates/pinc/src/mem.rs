@@ -22,9 +22,10 @@
 //! the ladder, which doubles at each step: ask for what you need, not for a round number above it.
 //!
 //! The most the limits allow an endpoint to come to hold is the number of sessions of the shape, each with a full pool
-//! and every table of its slot written, plus every topic's log full and every slot of the spill arena written. [`Limits::check`] refuses limits whose most
-//! exceeds half the target's address space, which is as much as one allocation can be; a 64-bit target accepts every
-//! limit in range, a 32-bit one needs fewer sessions or a smaller pool ([`Limits::wasm`]). The measured memory of an
+//! and every table of its slot written, plus every topic's log full and every slot of the spill arena written.
+//! [`Limits::check`] refuses limits whose most exceeds half the target's address space, which is as much as one
+//! allocation can be; a 64-bit target accepts every limit in range, a 32-bit one needs fewer sessions or a smaller pool
+//! ([`Limits::wasm`]). The measured memory of an
 //! endpoint and of a session without `std` is in the crate's own docs, with the platform it was measured on.
 //!
 //! Invariants: the memory of a session returns to its slot when the session ends; the slot table never grows.
@@ -60,6 +61,9 @@ pub(crate) type Ep<'s, 'a, const K: usize, const D: usize> =
 /// stream table, table of sent packets and event queue reserve when every entry is written. Taken from the real types.
 const SLOT_BYTES: usize = size_of::<Slot<'static, Software, crate::Body, STREAMS, RING, FLIGHT, PATHS>>()
     + Resources::<'static, crate::Body, STREAMS, RING, FLIGHT>::BYTES;
+
+/// The bytes of one slot of the endpoint's spill arena.
+const SPILL_SLOT: usize = size_of::<pinc_transport::stream::spill::SpillSlot>();
 
 /// The sizes a driver runs with; each has a default and a hard ceiling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -209,7 +213,7 @@ fn worst_case(limits: &Limits) -> Option<u128> {
         .checked_mul(u128::try_from(limits.topic_log).ok()?)?;
     let spill = u128::try_from(limits.spill_slots)
         .ok()?
-        .checked_mul(size_of::<pinc_transport::stream::spill::SpillSlot>() as u128)?;
+        .checked_mul(SPILL_SLOT as u128)?;
     sessions.checked_mul(slot)?.checked_add(logs)?.checked_add(spill)
 }
 
@@ -375,7 +379,7 @@ mod tests {
     /// The limits as the model's record: its field names are the model's, not the code's.
     fn jlimits(l: &Limits) -> alloc::string::String {
         alloc::format!(
-            r#"{{"conn":{},"pool":{},"sw":{},"snd":{},"streams":{},"ast":{},"as":{},"tmsg":{},"tlog":{},"topics":{}}}"#,
+            r#"{{"conn":{},"pool":{},"sw":{},"snd":{},"streams":{},"ast":{},"as":{},"tmsg":{},"tlog":{},"topics":{},"spill":{}}}"#,
             l.connections,
             l.pool_chunks,
             l.stream_window,
@@ -385,7 +389,8 @@ mod tests {
             l.accept_sessions,
             l.topic_message,
             l.topic_log,
-            l.topics
+            l.topics,
+            l.spill_slots
         )
     }
 
@@ -405,6 +410,7 @@ mod tests {
             let rung = l.connections.next_power_of_two() as u128;
             rung * (l.pool_chunks as u128 * CHUNK_SIZE as u128 + SLOT_BYTES as u128)
                 + l.topics as u128 * l.topic_log as u128
+                + l.spill_slots as u128 * SPILL_SLOT as u128
         });
         let bits = (pb * 8).saturating_sub(1);
         let bound = if bits >= 128 { u128::MAX } else { (1u128 << bits) - 1 };
@@ -418,7 +424,8 @@ mod tests {
             && l.accept_sessions >= 1
             && (1..=16 * 1024 * 1024).contains(&l.topic_message)
             && (1..=1 << 30).contains(&l.topic_log)
-            && (1..=4096).contains(&l.topics);
+            && (1..=4096).contains(&l.topics)
+            && l.spill_slots <= 65_536;
         (
             worst,
             fits,
@@ -492,6 +499,7 @@ mod tests {
                 topic_message: 1 + pick(1 << 24),
                 topic_log: pick(1 << 30),
                 topics: pick(4100),
+                spill_slots: pick(70_000),
             };
             let pb = u32::try_from(pick(10)).unwrap();
             cases.push(("", l, pb));
@@ -509,7 +517,7 @@ mod tests {
             assert_eq!(check, check_ref, "{name}");
             writeln!(
                 out,
-                r#"{{"name":"{name}","l":{},"pb":{pb},"slot":{SLOT_BYTES},"chunk":{CHUNK_SIZE},"wok":{},"worst":{},"fits":{},"check":"{check}"}}"#,
+                r#"{{"name":"{name}","l":{},"pb":{pb},"slot":{SLOT_BYTES},"chunk":{CHUNK_SIZE},"sslot":{SPILL_SLOT},"wok":{},"worst":{},"fits":{},"check":"{check}"}}"#,
                 jlimits(l),
                 worst.is_some(),
                 limbs15(worst.unwrap_or(0)),
