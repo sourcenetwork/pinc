@@ -308,7 +308,13 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `FinishResend_pto` | FIRES 6 -> 5 |
 | `Frame` | the frames: Frames (545) -> FramesQuick (177), the 130-byte payload in 7 frames instead of 81 |
 | `FramePack` | Normal -> NormalQuick (41472 -> 544 normal cases: every source together, every switch apart), Other -> OtherQuick (rooms {24, 40, 64} -> {24, 64}, ACKs 3 -> 2, streams 4 -> 3) |
+| `FramePack_built` | MAXRANGES 3 -> 2 |
 | `FramePack_modes` | Normal -> NormalQuick (41472 -> 544 normal cases: every source together, every switch apart), Other -> OtherQuick (rooms {24, 40, 64} -> {24, 64}, ACKs 3 -> 2, streams 4 -> 3) |
+| `FramePack_nocheck` | MAXRANGES 3 -> 2 |
+| `FramePack_reach` | MAXRANGES 3 -> 2 |
+| `FramePack_short` | MAXRANGES 3 -> 2 |
+| `FramePack_stale` | MAXRANGES 3 -> 2 |
+| `FramePack_taken` | MAXRANGES 3 -> 2 |
 | `Frame_acks` | MAXPN 5 -> 2, the range lists: every list of up to MAXRANGES ranges and 16 of MAXRANGES + 1 (RangeListsQuick) |
 | `Frame_bytes` | Strings -> StringsQuick: strings of up to 4 bytes -> 3, ack bytes after the type 5 -> 4 |
 | `Frame_nonminimal` | Strings -> StringsQuick: strings of up to 4 bytes -> 3, ack bytes after the type 5 -> 4 |
