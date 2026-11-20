@@ -18,13 +18,17 @@
 (* lease) is chosen by the check among the answers the link can give.     *)
 (*                                                                         *)
 (* An event "init" starts a run with a new slot and the run's addr, slow  *)
-(* and cap; one file holds several runs.                                   *)
+(* and cap; one file holds several runs. The recorded slow is the node's  *)
+(* figure until the first drive: drive takes the node's round trip from   *)
+(* the endpoint (set_node_rtt, drive.rs) before its tick, and the record  *)
+(* does not show it, so at each drive the check chooses whether the node  *)
+(* is slow from then on.                                                   *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds                       *)
 (* connect_carriers.ndjson.                                                 *)
 (***************************************************************************)
-EXTENDS ConnectCarriersOps, Json, IOUtils
+EXTENDS ConnectCarriersOps, TLC, Json, IOUtils
 
 VARIABLES i, c, cf
 vars == <<i, c, cf>>
@@ -35,15 +39,17 @@ Ev == Trace[i]
 Init == i = 1 /\ c = NewC /\ cf = [addr |-> "both", cap |-> 1, slow |-> FALSE]
 
 (* the call's result matches what was read back *)
-Obs(W) == /\ W.c.link = Ev.link /\ W.c.gen = Ev.gen /\ W.io = Ev.io /\ W.nt = Ev.nt
-          /\ c' = W.c /\ i' = i + 1 /\ UNCHANGED cf
+ObsIn(W, f) == /\ W.c.link = Ev.link /\ W.c.gen = Ev.gen /\ W.io = Ev.io /\ W.nt = Ev.nt
+               /\ c' = W.c /\ i' = i + 1 /\ cf' = f
+Obs(W) == ObsIn(W, cf)
 
 InitE == /\ Ev.op = "init" /\ c' = NewC /\ cf' = [addr |-> Ev.addr, cap |-> Ev.cap, slow |-> Ev.slow] /\ i' = i + 1
 
 CallE ==
     CASE Ev.op = "route" -> \E bs \in BOOLEAN, wd \in BOOLEAN : Obs(SendPacket(W0(c), Ev.pkt, bs, wd, cf))
       [] Ev.op = "tick" -> \E d \in TickChoices(c.link) : Obs(TickStep(W0(c), d, cf))
-      [] Ev.op = "drive" -> \E d \in TickChoices(c.link), wd \in BOOLEAN : Obs(DriveStep(W0(c), d, wd, cf))
+      [] Ev.op = "drive" -> \E d \in TickChoices(c.link), wd \in BOOLEAN, sl \in BOOLEAN :
+                               LET f == [cf EXCEPT !.slow = sl] IN ObsIn(DriveStep(W0(c), d, wd, f), f)
       [] Ev.op = "opened" -> Obs(StreamOpened(W0(c), Ev.ok))
       [] Ev.op = "closed" -> Obs(StreamClosed(W0(c)))
       [] Ev.op = "hs" -> \/ Obs(W0(c))
@@ -60,5 +66,8 @@ TraceSpec == Init /\ [][TNext]_vars /\ WF_vars(TNext)
 
 \* the whole recorded trace is a behaviour of ConnectCarriersOps.tla
 TraceAccepted == <>(i = Len(Trace) + 1)
+\* the check's postcondition: some behaviour took every event (the node's slowness chosen at a drive may leave the
+\* other branch without a next step: that is not an error, so the config does not check deadlock)
+Accepted == TLCGet("stats").diameter = Len(Trace) + 1
 Inv == TRUE
 =============================================================================
