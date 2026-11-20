@@ -160,7 +160,7 @@ fn dial(net: &mut CoreNet, a: usize, b: usize, role: Role, log: &mut Log) -> (Se
 fn write(net: &mut CoreNet, k: usize, session: SessionId, n: usize) -> bool {
     let now = net.now;
     let data = vec![7u8; n];
-    let Ok(rep) = net.nodes[k].cmd(now, Command::OpenStream { session, bidi: true }) else {
+    let Ok(rep) = net.nodes[k].cmd(now, Command::OpenStream { session, bidi: false }) else {
         return false;
     };
     let Value::Stream(stream) = rep.value else { return false };
@@ -174,7 +174,8 @@ fn write(net: &mut CoreNet, k: usize, session: SessionId, n: usize) -> bool {
             },
         )
         .is_ok();
-    // End the stream so its slot is free for the next write.
+    // A peer gives credit for a new stream only after it has read one to its end: a one-way stream ends with the
+    // finish, a two-way one only when the peer ends its half too.
     wrote && net.nodes[k].cmd(now, Command::Finish { session, stream }).is_ok()
 }
 
