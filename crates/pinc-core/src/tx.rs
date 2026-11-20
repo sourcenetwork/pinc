@@ -93,7 +93,7 @@ ep_impl! {
             });
             let segments = tx.len.div_ceil(tx.segment_size.max(1));
             self.note_sent(i, now, tx.path);
-            self.dirty_rotate(q);
+            self.dirty_rotate(q, now);
             self.settle_core(i, now, false);
             let Some((local, remote)) = self.path_addrs(tx.path) else {
                 self.counters.dropped_out += 1;
@@ -255,7 +255,7 @@ ep_impl! {
             });
             let more = tx.len.div_ceil(tx.segment_size.max(1));
             self.note_sent(j, now, tx.path);
-            self.dirty_rotate(q);
+            self.dirty_rotate(q, now);
             self.settle_core(j, now, false);
             let same_dest = self.path_addrs(tx.path) == Some((first.local, first.remote));
             // A run of segments of the first's size, or one shorter datagram that ends the run, may join.
@@ -306,12 +306,12 @@ ep_impl! {
     }
 
     /// Move the first session of queue `q` to its end, so the others get a turn.
-    pub(crate) fn dirty_rotate(&mut self, q: usize) {
+    pub(crate) fn dirty_rotate(&mut self, q: usize, now: u64) {
         let Some(h) = self.dirty_head.get(q).copied().filter(|h| *h != NIL) else { return };
         if self.dirty_head.get(q) == self.dirty_tail.get(q) {
             return;
         }
         self.dirty_pop(q);
-        self.mark_dirty(h as usize);
+        self.mark_dirty(h as usize, now);
     }
 }

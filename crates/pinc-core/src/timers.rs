@@ -294,7 +294,7 @@ ep_impl! {
         self.sync_cids(i, false);
         self.sync_route(i);
         if queue {
-            self.mark_dirty(i);
+            self.mark_dirty(i, now);
         }
     }
 

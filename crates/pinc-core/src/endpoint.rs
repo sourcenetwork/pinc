@@ -941,8 +941,8 @@ ep_impl! {
     // ---- sending queues ----
 
     /// Queue session `i` for a send attempt. A broadcast session without a sub-session open to send waits behind the
-    /// others.
-    pub(crate) fn mark_dirty(&mut self, i: usize) {
+    /// others. `now` stamps the trace record.
+    pub(crate) fn mark_dirty(&mut self, i: usize, now: u64) {
         let Ok(idx) = u32::try_from(i) else { return };
         let Some(s) = self.slots.get_mut(i) else { return };
         if s.m.dirty != 0 || !s.m.in_use {
@@ -963,6 +963,6 @@ ep_impl! {
         if let Some(t) = self.dirty_tail.get_mut(q) {
             *t = idx;
         }
-        crate::trace::trace!(self, self.last_now, TxMark { slot: i as u64, queue: q as u64 });
+        crate::trace::trace!(self, now, TxMark { slot: i as u64, queue: q as u64 });
     }
 }
