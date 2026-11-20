@@ -111,6 +111,15 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `Cid_collevict` | KMAX 9 -> 5, IDXMAX 9 -> 8 (install and authentications at 2, 4, 6, 8 reach the refill of index 9 and the eviction after it) Index 9 has the id of index 1, at the code's 8 slots: the refill that reaches index 9 makes the entry of index 1 stand for it too, so it is kept while index 9 may be used (the rule before #398 lost it: Cid_skipevict.cfg). |
 | `Cid_collmany` | KMAX 9 -> 6, IDXMAX 9 -> 7 (every colliding index, up to 6, is reached by the refills) Indices 1, 3 and 5 share one id, indices 2 and 4 another, and index 6 has the first id. |
 | `Cid_collwin` | KMAX 9 -> 5, IDXMAX 9 -> 5 (index 3 with the id of index 2 is reached by the first refills) Index 3 has the id of index 2: the entry of index 2 stands for index 3 too and is kept while index 3 may be used, below the highest index seen as well (the rule before #398 lost it: Cid_skipwin.cfg). |
+| `Cid_dupid` | KMAX 9 -> 8 |
+| `Cid_firstlag` | KMAX 9 -> 8 |
+| `Cid_overlate` | KMAX 9 -> 8 |
+| `Cid_overstate` | KMAX 9 -> 8 |
+| `Cid_reuse` | KMAX 9 -> 8 |
+| `Cid_skipevict` | KMAX 9 -> 8 |
+| `Cid_skipwin` | KMAX 9 -> 8 |
+| `Cid_slots` | KMAX 9 -> 8 |
+| `Cid_stale` | KMAX 9 -> 8 |
 | `ConnectCarrier` | MAXF 2 -> 1, JunkLens {0, 2, 4} -> {0, 4}, ReadSizes {1, 5} -> {5} |
 | `ConnectCarrier_limits` | WMAX 8 -> 6 |
 | `ConnectCarrier_open` | WMAX 8 -> 6, SMAX 2 -> 1 |
