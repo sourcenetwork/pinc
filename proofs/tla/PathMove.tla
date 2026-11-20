@@ -55,8 +55,12 @@
 (* GoneLeft and GoneNeverBack hold with fixes T7, T5, T4 and T6            *)
 (* (PathMove_relay, _stuck, _lost, _gone; before them TLC found each       *)
 (* violated). FollowsPeer and DocGain state the docs restated by T8 and    *)
-(* T11 and hold (PathMove_follow, PathMove_gain). Reach witnesses:         *)
-(* NoReplacedAnswer, NoWrap, NoFallback.                                   *)
+(* T11 and hold (PathMove_follow, PathMove_gain); PathMove_follow_gone     *)
+(* checks FollowsPeer where a gone path is held beside the active one (T6: *)
+(* a gone path is never followed; the doc before it had no such exception  *)
+(* and the code then followed it). Reach witnesses: NoReplacedAnswer,      *)
+(* NoWrap, NoFallback,                                                     *)
+(* NoGoneData (PathMove_w_gonedata).                                       *)
 (***************************************************************************)
 EXTENDS PathMoveOps, TLC
 
@@ -72,7 +76,8 @@ C0 == [t |-> [x \in 1..NP |-> IF x = 1 THEN [New(1, "d", FALSE, "fresh") EXCEPT 
 
 \* the ghost of the last step: the call, the slot it acted on, what the properties read of the state before it
 E0 == [op |-> "init", id |-> 0, s |-> 0, tok |-> 0, ok |-> FALSE, rep |-> FALSE, rc |-> FALSE, nvd |-> {},
-       hi |-> FALSE, fol |-> FALSE, pact |-> 0, pd |-> FALSE, pk |-> "none", hr |-> FALSE, wake |-> FALSE]
+       hi |-> FALSE, fol |-> FALSE, pact |-> 0, pd |-> FALSE, pk |-> "none", hr |-> FALSE, wake |-> FALSE,
+       sg |-> FALSE]
 
 Init == c = C0 /\ wire = {} /\ ev = E0
 
@@ -131,7 +136,8 @@ RespAct ==
 ChalAct == /\ "chal" \in OPS
            /\ \E id \in Ids, cb \in BOOLEAN, rn \in BOOLEAN : Do(Chal(Pre, id, cb, rn), [E0 EXCEPT !.op = "chal", !.id = id])
            /\ UNCHANGED wire
-\* fol: follow_peer's rule says the active path moves to the packet's
+\* fol: follow_peer's rule says the active path moves to the packet's; sg: the packet's path was held and gone before
+\* the step (read before it, since a step that forgets the slot would leave nothing to read)
 DataAct ==
     /\ "data" \in OPS
     /\ \E id \in Ids, hi \in BOOLEAN, wake \in BOOLEAN, fresh \in BOOLEAN, rn \in BOOLEAN :
@@ -141,7 +147,7 @@ DataAct ==
                     /\ (l.c.t[c.act].id = 0 \/ l.c.t[c.act].k = "r" \/ l.c.t[l.i].k = "d" \/ wake)
          IN Do(Data(Pre, id, hi, wake, fresh, rn),
                [E0 EXCEPT !.op = "data", !.id = id, !.s = l.i, !.hi = hi, !.fol = fol, !.pact = c.act,
-                         !.wake = wake])
+                         !.wake = wake, !.sg = (l.i # 0 /\ l.c.t[l.i].gone)])
     /\ UNCHANGED wire
 \* handle_timeout without fail_over: idle-out and the relay escape, then the probes that are due
 TimerAct ==
@@ -217,8 +223,9 @@ DocValid == \A x \in ev.nvd : ev.op = "resp" /\ x = ev.s /\ ev.ok
 RelayValid == \A x \in 1..NP : (c.t[x].id # 0 /\ c.t[x].k = "r" /\ ~c.t[x].gone) => c.t[x].v
 \* module doc (restated by T8): "the highest-numbered packet that carries STREAM, DATAGRAM or WAKE data moves the
 \* active path to the path it came from, except that only a packet carrying WAKE moves it from a direct path onto a
-\* relay path" (a data step changes no path's kind, so the kinds after it are the kinds before)
-FollowsPeer == (ev.op = "data" /\ ev.hi /\ ev.s # 0
+\* relay path", and (with fix T6) "unless that path's local address is gone: a gone path is never followed" (a data
+\* step changes no path's kind, so the kinds after it are the kinds before)
+FollowsPeer == (ev.op = "data" /\ ev.hi /\ ev.s # 0 /\ ~ev.sg
                 /\ ~(c.t[ev.pact].id # 0 /\ c.t[ev.pact].k = "d" /\ c.t[ev.s].k = "r" /\ ~ev.wake))
                => c.t[c.act].id = ev.id
 \* module doc and fail_over: "After three probe timeouts in a row on a direct path ... the connection falls back to a
@@ -238,4 +245,6 @@ DocGain == ~c.dg
 NoReplacedAnswer == ~(ev.op = "resp" /\ ev.rep /\ ev.s \in ev.nvd)
 NoWrap == \A x \in 1..NP : Cardinality(c.t[x].ps) <= CH
 NoFallback == ~(ev.op = "failover" /\ ev.pd /\ c.t[c.act].k = "r")
+\* a data packet with the highest number arrives on a held gone path that is not the active one (the case of T6)
+NoGoneData == ~(ev.op = "data" /\ ev.hi /\ ev.sg /\ ev.s # ev.pact)
 =============================================================================

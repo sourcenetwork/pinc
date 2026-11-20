@@ -20,8 +20,9 @@
 (* or a loss acts only on the batch it carried), which the code keeps with *)
 (* fix T1; before T1 the replay stopped at the first acknowledgement of an *)
 (* older batch while a newer one was held (the finding). DOC = FALSE       *)
-(* replays the code before T1. A loss of tickets is recorded with the id   *)
-(* of its reference, the generation after T1.                              *)
+(* replays the code before T1. An acknowledgement or a loss is recorded    *)
+(* with the id of its reference and g, the batch it carried; with DOC the  *)
+(* id of a tickets reference must equal g (fix T1: the generation).        *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds ctl.ndjson.           *)
@@ -59,13 +60,16 @@ SendTkEv == LET r == SendTickets(c)
 SendReadyEv == /\ Ev0.op = "send_ready" /\ c' = SendReady(c) /\ UNCHANGED <<pu, p>>
 BuildReadyEv == LET r == BuildReady(c)
                 IN /\ Ev0.op = "build_ready" /\ r.ok = Ev0.ok /\ c' = r.c /\ UNCHANGED <<pu, p>>
+\* g: the batch the reported frame carried (as the test issued it, from 1 in each run, which is also the count of
+\* batches the Ctl held). With fix T1 a tickets reference's id is that generation (fill_tickets writes tickets_gen):
+\* checked on every report of tickets, so the code's match by id is the model's match by batch.
+TkRef == Ev0.k = "tk" => Ev0.id = Ev0.g
 AckEv == LET a == Acked(c, pu, Ev0.k, Ev0.id, Ev0.g, DOC)
          IN /\ Ev0.op \in {"ack", "late_ack"} /\ c' = a.c /\ pu' = a.used /\ UNCHANGED p
-            /\ (Ev0.k = "sc" => (a.layer = "acked") = Ev0.handed)
-\* a tickets reference's id is its batch's generation (fix T1), so a loss of tickets names its batch by id
-LoseEv == LET l == Lost(c, Ev0.k, Ev0.id, IF Ev0.k = "tk" THEN Ev0.id ELSE 0, DOC)
+            /\ (Ev0.k = "sc" => (a.layer = "acked") = Ev0.handed) /\ (DOC => TkRef)
+LoseEv == LET l == Lost(c, Ev0.k, Ev0.id, Ev0.g, DOC)
           IN /\ Ev0.op = "lose" /\ c' = l.c /\ UNCHANGED <<pu, p>>
-             /\ (Ev0.k = "sc" => (l.layer = "lost") = Ev0.handed)
+             /\ (Ev0.k = "sc" => (l.layer = "lost") = Ev0.handed) /\ (DOC => TkRef)
 
 Init == i = 1 /\ c = CNew(1, 1) /\ pu = 0 /\ p = 0
 Step == /\ i <= Len(Trace) /\ Ev0.t = "ctl"
