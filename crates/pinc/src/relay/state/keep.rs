@@ -8,7 +8,10 @@
 //!
 //! A write that fails or is dropped with its run is marked again, and a failed one is tried again after `RETRY_NS`,
 //! behind the marks not tried yet and up to `MAX_TRIES` times; a failure of the store is counted and reported, a write
-//! given up counts once more, and so does a mark the table has no room for.
+//! given up counts once more, and so does a mark the table has no room for. A removal the store keeps refusing is given
+//! up the same way and left for the next start, where [`Core::restore`] marks every record the machine did not take
+//! for removal; so while removals are refused the store may hold more records than the table, by at most the removals
+//! owed or given up, and each of them is counted.
 //!
 //! Invariants: the nodes marked are at most twice the record table for records kept, twice for records removed, and
 //! four times the mailbox member table; a packet is written with its arrival time and restored oldest first; nothing
@@ -339,7 +342,8 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
         Job::Mail(n, blob)
     }
 
-    /// Put back what the store kept. A record or packet past its lifetime is not restored, and a record is removed from
+    /// Put back what the store kept. The machine takes the records in the order given until its table is full; a record
+    /// it does not take (past its lifetime, not verifying, or no room) is marked for removal. A record or packet past its lifetime is not restored, and a record is removed from
     /// the store; a record that does not verify is removed too. A record whose bytes do not parse names no node: it is
     /// counted as a store error and left for the store to drop.
     pub(crate) fn restore(&mut self, now: u64, kept: &Kept) {
@@ -534,5 +538,96 @@ mod tests {
             );
         }
         assert!(core.counters.store_errors >= 1, "the lost removals were not counted");
+    }
+
+    /// The machine takes the first `RECORDS` records the store gives (its table refuses the next ones, it evicts none),
+    /// so `held` is exactly the machine's records and each other record of the store is owed a removal.
+    #[test]
+    fn a_store_that_kept_more_records_than_the_table_is_restored_within_the_table() {
+        let mut core = core();
+        let home = core.node_id();
+        let extra = 40;
+        let mut kept = Kept::default();
+        let mut nodes = Vec::new();
+        for i in 0..u16::try_from(RECORDS + extra).unwrap() {
+            let (n, rec) = signed(i, home);
+            nodes.push(n);
+            kept.records.push(KeptRecord {
+                bytes: rec,
+                received: T0,
+            });
+        }
+        core.restore(T0, &kept);
+        assert_eq!(
+            core.sm.record_count(),
+            RECORDS,
+            "the machine passed or missed its table"
+        );
+        assert_eq!(core.keep.held.len(), RECORDS);
+        assert_eq!(core.keep.removed.len(), extra);
+        assert!(
+            core.keep.records.is_empty(),
+            "a restored record is marked to be written"
+        );
+        assert!(core.keep.failed.len() <= FAILED);
+        assert_eq!(
+            core.counters.store_errors, 0,
+            "the marks had room and nothing was counted"
+        );
+        for (i, n) in nodes.iter().enumerate() {
+            let key = node_key(n);
+            assert_eq!(
+                core.sm.record_received(n).is_some(),
+                i < RECORDS,
+                "record {i} held wrongly"
+            );
+            assert_eq!(
+                core.keep.held.contains_key(&key),
+                i < RECORDS,
+                "record {i} kept wrongly"
+            );
+            assert_eq!(
+                core.keep.removed.contains_key(&key),
+                i >= RECORDS,
+                "record {i} owed wrongly"
+            );
+        }
+    }
+
+    /// A removal the store refuses `MAX_TRIES` times is given up and counted once per try and once more, and the retry
+    /// is offered behind a record marked meanwhile.
+    #[test]
+    fn a_removal_the_store_refuses_is_given_up_after_its_tries_and_counted() {
+        let mut core = core();
+        let home = core.node_id();
+        let (gone, _) = signed(1, home);
+        let (other, rec) = signed(2, home);
+        assert!(Keep::mark_removed(&mut core.keep.removed, gone));
+        let errs = core.counters.store_errors;
+        let mut now = T0;
+        core.on_timeout(now);
+        assert!(matches!(core.next_job(), Some(Job::Remove(n)) if n == gone));
+        for tried in 1..=MAX_TRIES {
+            core.write_failed(Mark::Remove(gone), now);
+            now += RETRY_NS;
+            core.on_timeout(now);
+            if tried == 1 {
+                core.sm.restore_record(now, &rec, &mut core.fx).unwrap();
+                core.flush();
+                assert!(
+                    matches!(core.next_job(), Some(Job::Put(n, ..)) if n == other),
+                    "the retry was offered before a mark not tried yet"
+                );
+            }
+            if tried < MAX_TRIES {
+                assert!(
+                    matches!(core.next_job(), Some(Job::Remove(n)) if n == gone),
+                    "try {tried}"
+                );
+            }
+        }
+        assert!(core.next_job().is_none(), "the removal is still offered");
+        assert!(core.keep.failed.is_empty() && core.keep.removed.is_empty());
+        assert_eq!(core.counters.store_errors - errs, u64::from(MAX_TRIES) + 1);
     }
 }
