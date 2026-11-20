@@ -84,6 +84,11 @@ vars == <<now, live, o, q>>
 
 INSTANCE OrphanOps
 
+\* the KEYS of the witness configs (the TLC of run_tlc reads no tuple in a config file)
+KeysW == {<<1, 1>>, <<1, 2>>, <<2, 1>>}
+KeysLifeW == {<<1, 1>>, <<2, 1>>, <<3, 1>>}
+KeysStallW == {<<1, 1>>}
+
 \* the sources of the (id, source) pairs
 SRCS == {key[2] : key \in KEYS}
 
