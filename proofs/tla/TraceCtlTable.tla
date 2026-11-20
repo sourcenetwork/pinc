@@ -52,7 +52,7 @@ SendExtEv == /\ Ev0.op = "send_ext" /\ c.ext[Ev0.slot].on /\ c.ext[Ev0.slot].pen
              /\ c' = SendExt(c, Ev0.slot) /\ UNCHANGED <<pu, p>>
 ShedEv == LET f == FreeExt(c, pu, Ev0.slot)
           IN /\ Ev0.op = "shed" /\ c' = f.c /\ pu' = f.used /\ UNCHANGED p
-TakeEv == /\ Ev0.op = "take" /\ Ev0.ok = (pu < p) /\ pu' = IF pu < p THEN pu + 1 ELSE pu /\ UNCHANGED <<c, p>>
+TakeEv == /\ Ev0.op = "take" /\ Ev0.ok = (pu < p) /\ pu' = (IF pu < p THEN pu + 1 ELSE pu) /\ UNCHANGED <<c, p>>
 GiveEv == /\ Ev0.op = "give" /\ pu > 0 /\ pu' = pu - 1 /\ UNCHANGED <<c, p>>
 IssueEv == /\ Ev0.op = "issue" /\ c' = Issue(c, Ev0.g) /\ UNCHANGED <<pu, p>>
 SendTkEv == LET r == SendTickets(c)
