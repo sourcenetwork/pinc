@@ -558,9 +558,6 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `Streams_lazy_over_w` | MAXOFF 4 -> 3 |
 | `Streams_lazy_two` | MAXOFF 4 -> 3, MAXREM 2 -> 1 |
 | `Streams_ledger` | HOR 3 -> 1, LMAX 2 -> 1, MAXOFF 12 -> 5, DT 1 -> 0, Next -> NextQuick (Next without its stuttering steps, the same behaviours); one byte of data and one grant (limit 4 -> 5); no window grows: that needs 3 bytes read in one round trip (HOR 3) |
-| `Streams_live` | HOR 4 -> 1, LMAX 2 -> 1, MAXOFF 12 -> 5, DT 1 -> 0, Next -> NextQuick (Next without its stuttering steps, the same behaviours) |
-| `Streams_live_ext` | HOR 2 -> 1, LMAX 2 -> 1, MAXOFF 6 -> 5, EXTMAX 2 -> 1, DT 1 -> 0 (one byte of data and one grant; the clock is held, as HOR 1 lets no window grow from the meter); SWC 2 -> 1 (the initial window within HOR 1, so a reader can drain it and be Blocked at its limit) |
-| `Streams_live_mid` | HOR 3 -> 1, LMAX 2 -> 1, MAXOFF 6 -> 5, DT 1 -> 0 (one byte of data and one grant; the clock is held, as HOR 1 lets no window grow from the meter); SWC 2 -> 1 (the initial window within HOR 1, so a reader can drain it and be Blocked at its limit) |
 | `Streams_local` | MAXOFF 6 -> 4, Next -> NextQuick (Next without its stuttering steps); bounded by constraint: behaviours of at most 4 levels (Streams_localQuickBound) |
 | `Streams_local_ctl` | MAXOFF 6 -> 5, Next -> NextQuick (Next without its stuttering steps, the same behaviours) |
 | `Streams_mark` | Next -> NextQuick (Next without its stuttering steps); bounded by constraint: behaviours of at most 5 levels (Streams_markQuickBound) |
@@ -680,3 +677,11 @@ The trace tests record fewer generated cases in the quick profile (`trace_cases`
 | `table_array.ndjson` | 1,622 | 7,418 | runs per table size 4..12 -> 1..3 (the 64-place table 6 -> 1) |
 | `dtn_rs.ndjson` | 4,304 | 5,842 | gmul 1500 -> 300, trials 6 -> 2, the 127-by-128 solve left out |
 | `reconcile_tla.ndjson` | 22 | 132 | every 8th session |
+
+## Configs with no quick file
+
+These run over their own bounds in both profiles: no smaller bounds found keep what they check.
+
+| Config | Why it has no quick file |
+|---|---|
+| `Streams_live`, `Streams_live_mid`, `Streams_live_ext` | `Progress` is about a stream blocked at its limit, and the quick bounds these had never reach one: `NeverBlocked` holds over all 1858 states of the quick `Streams_live` bounds and all 3716 of `Streams_live_mid`'s, so their `Progress` held vacuously. The smallest bounds found that reach one (CH 1, RING 3, B 4, SWC 2, MSWC 2, MAXOFF 4, HOR 2, LMAX 1, EXTMAX 3, DT 0, Next -> NextQuick) have 19696 distinct states, whose search without the liveness check takes 48 s on one worker; with EXTMAX 2, B 3 or MAXOFF 3 in their place no stream is ever blocked |
