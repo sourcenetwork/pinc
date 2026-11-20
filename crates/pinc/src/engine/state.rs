@@ -165,12 +165,11 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
         if let Some(seq) = seq {
             self.node.restore_record_seq(seq);
         }
-        let addresses = book.len();
-        for (node, addrs) in book {
-            for a in addrs {
-                self.add_address(node, a);
-            }
-        }
+        // Every address is offered (`|` does not short-circuit); a node counts if the book kept one of them.
+        let addresses = book
+            .into_iter()
+            .filter(|(node, addrs)| addrs.iter().fold(false, |kept, a| self.add_address(*node, *a) | kept))
+            .count();
         Ok(Restored {
             tickets: r.tickets,
             peers: r.peers,
