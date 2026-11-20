@@ -58,7 +58,9 @@ pub struct PeerRecord {
 }
 
 impl PeerRecord {
-    /// The record in `bytes` if it verifies and is `node`'s.
+    /// The record in `bytes` if it verifies and is `node`'s. A record with sequence number 0 verifies too: a signer can
+    /// make one, and it is taken only as the first record of a node, since [`newest`] replaces a known record only by a
+    /// higher number, so it never replaces one and a replay of it replaces nothing.
     pub(crate) fn verified(node: &NodeId, bytes: &[u8]) -> Option<Self> {
         let rec = Record::parse_verified(bytes).ok()?;
         (rec.node == *node).then(|| Self {
