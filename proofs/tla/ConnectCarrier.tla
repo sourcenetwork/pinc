@@ -163,17 +163,19 @@ ARecv == \E n \in ReadSizes :
            /\ a' = Receive(K, a, off).c
            /\ UNCHANGED <<d, w, U, sd, sa, logs, del, hsn>>
 
+(* A value an action uses more than once is bound with `\E x \in {e}`, not a LET: TLC evaluates a LET of an action
+   again at each use. *)
 PollA == LET a1 == Release(a) IN Poll(K, a, Hdr, Opens, Fok, HsOut(a1.rd))
-APoll == LET a1 == Release(a)
-             p == PollA
-         IN /\ a' = p.c
+APoll == \E a1 \in {Release(a)} : \E p \in {Poll(K, a, Hdr, Opens, Fok, HsOut(a1.rd))} :
+            /\ a' = p.c
             /\ del' = IF p.r \in {"frame", "Frame"} THEN Append(del, B(a1.rd).u) ELSE del
             /\ hsn' = IF a1.st = "hs" /\ p.r = "kreq" THEN 1
                       ELSE IF a1.st = "hs" /\ p.r = "open" THEN 3 ELSE hsn
             /\ UNCHANGED <<d, w, U, sd, sa, logs>>
 AnsA == AnswerSoft(K, a, AnsOut)
-AAns == /\ a' = AnsA.c
-        /\ hsn' = IF a.st = "hs" /\ hsn = 1 /\ AnsA.r = "hs" THEN 2 ELSE hsn
+AAns == \E an \in {AnsA} :
+        /\ a' = an.c
+        /\ hsn' = IF a.st = "hs" /\ hsn = 1 /\ an.r = "hs" THEN 2 ELSE hsn
         /\ UNCHANGED <<d, w, U, sd, sa, logs, del>>
 ATx == \E cap \in {1, K.outn} : /\ a' = Transmit(a, cap).c
                                 /\ UNCHANGED <<d, w, U, sd, sa, logs, del, hsn>>
@@ -192,7 +194,7 @@ DSeal == \E how \in {"frame", "bytes"}, plen \in 0..(MAXF + 1), short \in BOOLEA
           /\ Len(sd) < SMAX
           /\ (how = "frame" => plen \in 1..MAXF)
           /\ (how = "bytes" => ~short)
-          /\ LET s == SealCall(d, how, plen, Cap(plen, short)) IN
+          /\ \E s \in {SealCall(d, how, plen, Cap(plen, short))} :
              /\ d' = s.c
              /\ IF s.r = "ok" THEN /\ U' = U \o Sealed(s, "D", plen, how = "frame")
                                    /\ sd' = Append(sd, Len(U) + 1)
@@ -202,7 +204,7 @@ DSeal == \E how \in {"frame", "bytes"}, plen \in 0..(MAXF + 1), short \in BOOLEA
 ASealA(plen, short) == SealCall(a, "frame", plen, Cap(plen, short))
 ASeal == \E plen \in 1..MAXF, short \in BOOLEAN :
           /\ Len(sa) < 1
-          /\ LET s == ASealA(plen, short) IN
+          /\ \E s \in {ASealA(plen, short)} :
              /\ a' = s.c
              /\ IF s.r = "ok" THEN /\ U' = U \o Sealed(s, "A", plen, TRUE)
                                    /\ sa' = Append(sa, Len(U) + 1)
@@ -235,47 +237,62 @@ Delivers(r) == r \in {"frame", "Frame", "open"}
 (* every call of A's host: the poll, the key answer, a seal (frame or short, or bytes of every length around the
    limits), a read, a transmit *)
 BytesCap(p) == 2 + p + TAG
-SealCalls == {[c |-> ASealA(p, s).c, r |-> ASealA(p, s).r] : p \in 1..MAXF, s \in BOOLEAN}
-             \cup {[c |-> SealBytes(K, a, p, BytesCap(p)).c, r |-> SealBytes(K, a, p, BytesCap(p)).r] :
-                    p \in 0..(MAXF + 1)}
-Calls == {[c |-> PollA.c, r |-> PollA.r], [c |-> AnsA.c, r |-> AnsA.r]}
-         \cup SealCalls
-         \cup {[c |-> Receive(K, a, n).c, r |-> "recv"] : n \in ReadSizes}
-         \cup {[c |-> Transmit(a, n).c, r |-> "tx"] : n \in {1, K.outn}}
-EarlyRefusal == LET a1 == Release(a) IN
-                (a1.st # "ended" /\ InLen(a1) >= 2 /\ (Hdr(a1.rd) = 0 \/ Hdr(a1.rd) > MaxOf(a1.st)))
-                => (PollA.c.st = "ended" /\ PollA.r = "UnitSize")
-EndChangesNothing == a.st # "ended" =>
-                     \A x \in Calls : x.c.st = "ended" =>
-                        (~Delivers(x.r) /\ x.r # "ok" /\ x.c.rpn = a.rpn /\ x.c.spn = a.spn
-                         /\ x.c.sk = NoKey /\ x.c.rk = NoKey)
-EndedStays == a.st = "ended" =>
-              \A x \in Calls : x.c.st = "ended" /\ ~Delivers(x.r) /\ x.r # "ok" /\ x.c.rpn = a.rpn /\ x.c.spn = a.spn
+(* The properties of the next call take the calls as parameters (the poll p, the key answer an, every call cs), so Inv
+   computes each call once per state; a zero-argument definition such as PollA is evaluated again at each use. *)
+CR(x) == [c |-> x.c, r |-> x.r]
+SealCalls == {CR(ASealA(p, s)) : p \in 1..MAXF, s \in BOOLEAN}
+             \cup {CR(SealBytes(K, a, p, BytesCap(p))) : p \in 0..(MAXF + 1)}
+CallsOf(p, an) == {CR(p), CR(an)}
+                  \cup SealCalls
+                  \cup {[c |-> Receive(K, a, n).c, r |-> "recv"] : n \in ReadSizes}
+                  \cup {[c |-> Transmit(a, n).c, r |-> "tx"] : n \in {1, K.outn}}
+Calls == CallsOf(PollA, AnsA)
+EarlyRefusalOf(p) == LET a1 == Release(a) IN
+                     (a1.st # "ended" /\ InLen(a1) >= 2 /\ (Hdr(a1.rd) = 0 \/ Hdr(a1.rd) > MaxOf(a1.st)))
+                     => (p.c.st = "ended" /\ p.r = "UnitSize")
+EarlyRefusal == EarlyRefusalOf(PollA)
+EndChangesNothingIn(cs) == a.st # "ended" =>
+                           \A x \in cs : x.c.st = "ended" =>
+                              (~Delivers(x.r) /\ x.r # "ok" /\ x.c.rpn = a.rpn /\ x.c.spn = a.spn
+                               /\ x.c.sk = NoKey /\ x.c.rk = NoKey)
+EndChangesNothing == EndChangesNothingIn(Calls)
+EndedStaysIn(cs) == a.st = "ended" =>
+                    \A x \in cs : x.c.st = "ended" /\ ~Delivers(x.r) /\ x.r # "ok" /\ x.c.rpn = a.rpn /\ x.c.spn = a.spn
+EndedStays == EndedStaysIn(Calls)
 (* (below the receive key's limits: a ChaCha20-Poly1305 key at its failed-open limit, or a packet number past
    MAX_PACKET_NUMBER, ends the carrier instead, KeyLimit and Record) *)
-InOrderAccepted == LET a1 == Release(a) IN
-                   (a1.st = "open" /\ InLen(a1) >= 2 /\ Opens(a1.rd, a1.rpn) /\ a1.wr >= a1.rd + 2 + Hdr(a1.rd)
-                    /\ a1.rpn <= MaxPn /\ ~(a1.rk.aead = "chacha" /\ a1.rk.failed >= a1.rk.chachaLim))
-                   => PollA.r \in {"frame", "Frame"}
-LimitEnds == LET a1 == Release(a) IN
-             (a1.st = "open" /\ InLen(a1) >= 2 /\ Hdr(a1.rd) > TAG /\ Hdr(a1.rd) <= K.maxu
-              /\ a1.wr >= a1.rd + 2 + Hdr(a1.rd))
-             => /\ a1.rpn > MaxPn => PollA.r = "Record"
-                /\ (a1.rpn <= MaxPn /\ a1.rk.aead = "chacha" /\ a1.rk.failed >= a1.rk.chachaLim) => PollA.r = "KeyLimit"
+InOrderAcceptedOf(p) == LET a1 == Release(a) IN
+                       (a1.st = "open" /\ InLen(a1) >= 2 /\ Opens(a1.rd, a1.rpn) /\ a1.wr >= a1.rd + 2 + Hdr(a1.rd)
+                        /\ a1.rpn <= MaxPn /\ ~(a1.rk.aead = "chacha" /\ a1.rk.failed >= a1.rk.chachaLim))
+                       => p.r \in {"frame", "Frame"}
+InOrderAccepted == InOrderAcceptedOf(PollA)
+LimitEndsOf(p) == LET a1 == Release(a) IN
+                  (a1.st = "open" /\ InLen(a1) >= 2 /\ Hdr(a1.rd) > TAG /\ Hdr(a1.rd) <= K.maxu
+                   /\ a1.wr >= a1.rd + 2 + Hdr(a1.rd))
+                  => /\ a1.rpn > MaxPn => p.r = "Record"
+                     /\ (a1.rpn <= MaxPn /\ a1.rk.aead = "chacha" /\ a1.rk.failed >= a1.rk.chachaLim) => p.r = "KeyLimit"
+LimitEnds == LimitEndsOf(PollA)
 (* the answers of the calls, as the table of the code has them *)
 Errs == {"Handshake", "UnitSize", "Authentication", "KeyLimit", "OutputFull", "Record", "Closed",
          "NotOpen", "NoKeyRequest", "NoRoom", "Frame"}
 Fatal(r) == r \in {"Handshake", "UnitSize", "Authentication", "KeyLimit", "OutputFull", "Record", "Closed"}
-FatalIffEnded == \A x \in Calls : x.r \in Errs => (Fatal(x.r) <=> x.c.st = "ended")
-EndedAnswersClosed == a.st = "ended" => \A x \in Calls : x.r \in Errs => x.r = "Closed"
-NoRequestNoChange == (a.st # "ended" /\ ~(a.st = "hs" /\ a.kr)) => (AnsA.r = "NoKeyRequest" /\ AnsA.c = a)
+FatalIffEndedIn(cs) == \A x \in cs : x.r \in Errs => (Fatal(x.r) <=> x.c.st = "ended")
+FatalIffEnded == FatalIffEndedIn(Calls)
+EndedAnswersClosedIn(cs) == a.st = "ended" => \A x \in cs : x.r \in Errs => x.r = "Closed"
+EndedAnswersClosed == EndedAnswersClosedIn(Calls)
+NoRequestNoChangeOf(an) == (a.st # "ended" /\ ~(a.st = "hs" /\ a.kr)) => (an.r = "NoKeyRequest" /\ an.c = a)
+NoRequestNoChange == NoRequestNoChangeOf(AnsA)
 SealStageFirst == a.st = "hs" => \A x \in SealCalls : x.r = "NotOpen" /\ x.c = a
 BytesRefusedLive == a.st = "open" =>
     \A p \in {0, MAXF + 1} : SealBytes(K, a, p, BytesCap(p)).r = "Frame" /\ SealBytes(K, a, p, BytesCap(p)).c = a
 FreeIsReceive == Receive(K, a, K.inl + 1).took = Free(K, a)
-Inv == Bounds /\ Aligned /\ InOrder /\ NoFrameBeforeOpen /\ PnCount /\ PnUsed /\ NoNonceReuse /\ NoStall
-       /\ EarlyRefusal /\ EndChangesNothing /\ EndedStays /\ InOrderAccepted /\ LimitEnds
-       /\ FatalIffEnded /\ EndedAnswersClosed /\ NoRequestNoChange /\ SealStageFirst /\ BytesRefusedLive /\ FreeIsReceive
+Inv == LET p == PollA
+           an == AnsA
+           cs == CallsOf(p, an)
+       IN /\ Bounds /\ Aligned /\ InOrder /\ NoFrameBeforeOpen /\ PnCount /\ PnUsed /\ NoNonceReuse /\ NoStall
+          /\ EarlyRefusalOf(p) /\ EndChangesNothingIn(cs) /\ EndedStaysIn(cs) /\ InOrderAcceptedOf(p) /\ LimitEndsOf(p)
+          /\ FatalIffEndedIn(cs) /\ EndedAnswersClosedIn(cs) /\ NoRequestNoChangeOf(an) /\ SealStageFirst
+          /\ BytesRefusedLive /\ FreeIsReceive
 
 (* reachability witness (ConnectCarrier_reach.cfg, which TLC must violate): a record is delivered after a handshake
    over the stream *)
