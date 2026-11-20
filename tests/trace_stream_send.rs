@@ -4,7 +4,7 @@
 //! (whole or short), resets (the application's, and the one a stop request from the peer makes), window raises, frames
 //! taken for retransmission and for fresh data, copies of fresh, stale and clipped frames, losses and acknowledgements
 //! in any order (past 16 lost and 64 acknowledged ranges), the reset frame taken, lost and acknowledged, and other
-//! users of the pool. Fourteen scripted runs make each case the model names; 48 seeded runs follow. Every call is a
+//! users of the pool. Fifteen scripted runs make each case the model names; 48 seeded runs follow. Every call is a
 //! line of `stream_send.ndjson` for the TLA+ trace check (`TraceStreamSend.tla`): the call, its arguments and result,
 //! and the whole state of the half after it.
 //!
@@ -307,6 +307,13 @@ impl Rec {
                     c.offset >= v0.acked_prefix,
                     "a retransmitted frame starts below the acknowledged prefix"
                 );
+                if let Some(first) = v0.lost.first() {
+                    assert_eq!(
+                        c.offset,
+                        first.0.max(v0.acked_prefix),
+                        "a retransmitted frame does not start at the first lost range or the prefix"
+                    );
+                }
                 if v0.lost.first().is_some_and(|r| c.offset > r.0) {
                     self.see("cutretx");
                 }
@@ -455,10 +462,11 @@ impl Rec {
         self.line("ext", &format!(r#","n":{count}"#), "");
     }
 
-    /// The reset frame taken, lost, taken again, acknowledged twice, taken again (none). A reset after every byte and
-    /// the end were acknowledged queues no frame (the stream is over), so there is none to lose.
-    fn after_reset(&mut self) {
-        if self.takectl().is_some() {
+    /// The reset frame taken, lost, taken again, acknowledged twice, taken again (none). `expect` is whether the reset
+    /// queued a frame: it does not after every byte and the end were acknowledged (the stream is over).
+    fn after_reset(&mut self, expect: bool) {
+        assert_eq!(self.takectl().is_some(), expect, "a reset frame queued or missing");
+        if expect {
             self.ctllost();
             self.takectl();
         }
@@ -544,12 +552,12 @@ fn scripted(r: &mut Rec) {
     // 5 to 11. a reset in every phase
     r.new_run(true, 4 * CH);
     r.reset(1).unwrap();
-    r.after_reset();
+    r.after_reset(true);
 
     r.new_run(true, 4 * CH);
     r.write(1000, ROOM).unwrap();
     r.reset(1).unwrap();
-    r.after_reset();
+    r.after_reset(true);
 
     r.new_run(true, 4 * CH);
     r.write(1000, ROOM).unwrap();
@@ -562,20 +570,20 @@ fn scripted(r: &mut Rec) {
     assert_eq!(r.finish(), Err(StreamError::Finished));
     assert!(r.next(false, CHUNK_SIZE).is_none() && r.next(true, CHUNK_SIZE).is_none());
     let _ = r.source(10, 10);
-    r.after_reset();
+    r.after_reset(true);
 
     r.new_run(true, 4 * CH);
     r.write(1000, ROOM).unwrap();
     r.finish().unwrap();
     r.reset(1).unwrap();
-    r.after_reset();
+    r.after_reset(true);
 
     r.new_run(true, 4 * CH);
     r.write(1000, ROOM).unwrap();
     r.finish().unwrap();
     r.next(false, CHUNK_SIZE).unwrap();
     r.reset(7).unwrap();
-    r.after_reset();
+    r.after_reset(true);
 
     r.new_run(true, 4 * CH);
     r.write(1000, ROOM).unwrap();
@@ -583,7 +591,7 @@ fn scripted(r: &mut Rec) {
     r.next(false, CHUNK_SIZE).unwrap();
     r.acked(1, 999, true);
     r.reset(1).unwrap();
-    r.after_reset();
+    r.after_reset(true);
 
     r.new_run(true, 4 * CH);
     r.write(1000, ROOM).unwrap();
@@ -592,7 +600,7 @@ fn scripted(r: &mut Rec) {
     r.acked(0, 1000, true);
     r.reset(1).unwrap();
     r.reset(1).unwrap();
-    r.after_reset();
+    r.after_reset(false);
 
     // 12. source-backed
     r.new_run(true, 2 * CH);
@@ -643,6 +651,25 @@ fn scripted(r: &mut Rec) {
     r.lost(g.offset, g.len as u64, true);
     r.acked(0, 40, false);
     assert!(r.next(true, CHUNK_SIZE).is_some_and(|e| e.len == 0 && e.fin));
+
+    // 15. a full lost map: an acknowledgement inside an interval cannot cut it out, and a later one that completes the
+    // prefix leaves the interval starting below the prefix, which the next frame is cut to
+    r.new_run(true, 4 * CH);
+    assert_eq!(r.write(330, ROOM), Ok(330));
+    let fr: Vec<StreamChunk> = (0..33).map(|_| r.next(false, 10).unwrap()).collect();
+    assert_eq!((fr[0].offset, fr[32].offset), (0, 320));
+    for k in [0, 1, 2].into_iter().chain((4..=32).step_by(2)) {
+        r.lost(fr[k].offset, 10, false);
+    }
+    assert_eq!(r.p.view().lost.len(), 16, "the lost map is not full");
+    assert_eq!(r.acked(10, 10, false), 1, "an acknowledgement cut the full lost map");
+    r.acked(0, 10, false);
+    let g = r.next(true, 20).unwrap();
+    assert_eq!(
+        (g.offset, g.len),
+        (20, 10),
+        "the frame is not cut by the acknowledged prefix"
+    );
 }
 
 /// A random source: the length and how much of it the storage holds.
