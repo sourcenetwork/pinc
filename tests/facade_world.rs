@@ -75,6 +75,9 @@ struct Net {
     /// Pairs whose packets are dropped on the way, and addresses that are down (nothing reaches them).
     cut: HashSet<(SocketAddr, SocketAddr)>,
     down: HashSet<SocketAddr>,
+    /// Addresses whose packets wait (`held`) instead of being delivered, and the packets that wait.
+    held: HashSet<SocketAddr>,
+    parked: VecDeque<(SocketAddr, SocketAddr, Vec<u8>)>,
 }
 
 /// The wire, the clock and the timers the endpoints sleep on.
@@ -188,6 +191,21 @@ impl Wire {
         }
     }
 
+    /// Keep the packets to `addr` back from now on (`on`), or deliver them (no longer): a delay the clock decides.
+    pub fn hold(&self, addr: SocketAddr, on: bool) {
+        let mut n = self.net.borrow_mut();
+        if on {
+            n.held.insert(addr);
+        } else {
+            n.held.remove(&addr);
+            let (mine, rest): (VecDeque<_>, VecDeque<_>) = std::mem::take(&mut n.parked)
+                .into_iter()
+                .partition(|(_, to, _)| *to == addr);
+            n.parked = rest;
+            n.outbox.extend(mine);
+        }
+    }
+
     /// Take `addr` down (`on`): what it had received is gone and nothing reaches it, or bring it back.
     pub fn down(&self, addr: SocketAddr, on: bool) {
         let mut n = self.net.borrow_mut();
@@ -223,6 +241,10 @@ impl Wire {
         let (mut moved, mut wakers) = (0, Vec::new());
         while let Some((from, to, bytes)) = n.outbox.pop_front() {
             if !n.known.contains(&to) || n.down.contains(&to) || n.cut.contains(&(from, to)) {
+                continue;
+            }
+            if n.held.contains(&to) {
+                n.parked.push_back((from, to, bytes));
                 continue;
             }
             moved += 1;

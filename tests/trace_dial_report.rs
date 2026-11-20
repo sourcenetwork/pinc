@@ -7,13 +7,15 @@
 //! connection that closed). The run: a dial answered at once; an optimistic dial that rides a cut and is answered after
 //! the heal; an optimistic dial to a peer that stopped, which ends early; one to a peer that came back as a new
 //! incarnation, which rejects the ticket; and a dial without a cached allow to a peer that stopped, which fails at the
-//! handshake's limit. Nothing is written when `PINC_TRACE_DIR` is unset.
+//! handshake's limit; and, on a node made thin by a slow round trip, a dial handed over to a peer that stopped, which has
+//! no early end and closes at the limit. Nothing is written when `PINC_TRACE_DIR` is unset.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::panic,
     clippy::indexing_slicing,
     clippy::too_many_lines,
+    clippy::many_single_char_names,
     clippy::type_complexity,
     dead_code,
     unreachable_pub,
@@ -39,6 +41,8 @@ const ALPN: &[u8] = b"dial/report";
 const TICK: u64 = 500_000_000;
 /// The handshake's limit in ticks (30 s).
 const LIMIT: u64 = 60;
+/// A little over the round trip from which a node is thin (250 ms), as nanoseconds.
+const THIN_RTT: u64 = 300_000_000;
 
 enum Out<H: Hosted> {
     Unit,
@@ -209,7 +213,12 @@ impl<H: Hosted + 'static> R<H> {
     fn tick(&mut self) {
         self.own(r#"{"op":"tick"}"#);
         self.seen.tick.set(self.seen.tick.get() + 1);
-        let to = self.seen.tick.get() * TICK;
+        self.run_to(self.seen.tick.get() * TICK);
+        self.collect();
+    }
+
+    /// Move the clock to `to`, firing the timers on the way and settling after each.
+    fn run_to(&mut self, to: u64) {
         for _ in 0..10_000 {
             let Some(ws) = self.w.advance_to(to) else { break };
             for k in ws {
@@ -217,6 +226,16 @@ impl<H: Hosted + 'static> R<H> {
             }
             self.settle();
         }
+        self.settle();
+    }
+
+    /// A dial whose first answer takes `ns` to reach A: a round trip longer than the node's thin bound, no tick.
+    fn slow_dial(&mut self, ns: u64) {
+        self.w.hold(addr(SUBJECT), true);
+        self.dial();
+        let to = self.w.virt.now.get() + ns;
+        self.run_to(to);
+        self.w.hold(addr(SUBJECT), false);
         self.settle();
         self.collect();
     }
@@ -359,6 +378,24 @@ fn trace_dial_report() {
     r.dial();
     r.until("failed", 80);
     r.done();
+    // A node whose round trip is long is thin: its dial to a peer that stopped, handed over on a cached allow, has no
+    // early end and runs to the handshake's limit.
+    let p =
+        r.w.endpoint_timed(addr(PEER), 2, &[ALPN], Limits::default(), AllowAll, None);
+    r.restart(p);
+    r.slow_dial(THIN_RTT);
+    assert_eq!(r.count("answered"), 4, "the slow dial was answered");
+    r.done();
+    r.close_session();
+    r.stop();
+    r.dial();
+    let n = r.count("closed");
+    r.until("closed", usize::try_from(2 * LIMIT + 10).unwrap());
+    assert!(
+        r.count("closed") == n + 1 && r.seen.out.borrow().contains("\"why\":\"limit\""),
+        "the dial of a thin node ended at the limit"
+    );
+    r.done();
     let out = r.seen.out.borrow().clone();
     if let Ok(dir) = std::env::var("PINC_TRACE_DIR") {
         std::fs::create_dir_all(&dir).unwrap();
@@ -371,6 +408,6 @@ fn trace_dial_report() {
         assert!(ops.contains(op), "no {op} line was written");
     }
     assert!(r.count("tick") > 61, "the limit was waited out");
-    assert_eq!(r.count("dial"), 5);
-    assert_eq!(r.count("drop"), 3);
+    assert_eq!(r.count("dial"), 7);
+    assert_eq!(r.count("drop"), 4);
 }

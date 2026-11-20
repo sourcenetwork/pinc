@@ -158,19 +158,18 @@ impl Lines {
         // A notification of the polled call's own ticket during its poll wakes its waker, which the executor polls again
         // once the poll returns: in the model, a notification right after the poll's last step.
         let mut own = false;
+        // A notification of a ticket this poll allocated: its call is known only from the poll's last mark.
+        let mut unmatched = Vec::new();
         for m in trace_turn::take() {
             let state = m.state.map_or_else(String::new, |(flag, driver)| {
                 format!(",\"flag\":{flag},\"driver\":{}", code(driver))
             });
             match m.kind {
-                Kind::Notify(tk) => {
-                    // A notification of a ticket nobody holds does nothing: it is not a step.
-                    match self.held.get(&tk).copied() {
-                        Some(h) if h == f => own = true,
-                        Some(h) => self.put("notify", Some(h), ""),
-                        None => {}
-                    }
-                }
+                Kind::Notify(tk) => match self.held.get(&tk).copied() {
+                    Some(h) if h == f => own = true,
+                    Some(h) => self.put("notify", Some(h), ""),
+                    None => unmatched.push(tk),
+                },
                 Kind::NotifyAll => self.put("notifyall", None, ""),
                 _ if f >= PEER_TASK => panic!("a mark for task {f}, which is not a call of the subject"),
                 Kind::Start => self.put("start", Some(f), &state),
@@ -200,6 +199,14 @@ impl Lines {
                     }
                     self.put(if m.kind == Kind::Drop { "drop" } else { "flush" }, Some(f), &state);
                 }
+            }
+        }
+        // A notification of a ticket nobody holds after the poll does nothing: it is not a step.
+        for tk in unmatched {
+            match self.held.get(&tk).copied() {
+                Some(h) if h == f => own = true,
+                Some(h) => self.put("notify", Some(h), ""),
+                None => {}
             }
         }
         // Held still: the call ended its poll waiting. Ended, or done: the wake finds nothing to poll.
@@ -349,7 +356,7 @@ fn run<H: Hosted + 'static>(w: Wire, a: Endpoint<H>, b: Endpoint<H>) {
         std::fs::write(std::path::Path::new(&dir).join("facade_turn.ndjson"), &l.out).unwrap();
     }
     // Every step of the turn the run reaches, and what it cannot: `notifyall` needs the core's event queue to
-    // overflow, which no run of this size does.
+    // overflow, which no run of this size does and which the facade's public API cannot make one burst do.
     for op in [
         "start", "io", "done", "wait", "flush", "drop", "notify", "arrive", "hostwake",
     ] {
