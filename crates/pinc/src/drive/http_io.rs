@@ -22,13 +22,13 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::future::Future;
 use core::task::Context;
-use std::io;
 
 use super::carrier_io::Op;
 use crate::carrier::CarrierKind;
 use crate::carriers::{Carriers, Relay};
 use crate::drive::Shared;
 use crate::host::Hosted;
+use crate::platform::HostError;
 
 /// The answer an exchange ends with: the bytes read, or none when it failed.
 type Answer = Option<Vec<u8>>;
@@ -90,15 +90,15 @@ pub(super) enum Step<S> {
 }
 
 /// What the host answered.
-pub(super) enum Done<S> {
-    Opened(io::Result<S>),
-    Wrote(io::Result<usize>),
-    Read(io::Result<usize>, Vec<u8>),
+pub(super) enum Done<S, E> {
+    Opened(Result<S, E>),
+    Wrote(Result<usize, E>),
+    Read(Result<usize, E>, Vec<u8>),
     Closed,
 }
 
 /// One host operation.
-pub(super) async fn host_step<C: Carriers>(c: &C, step: Step<C::Stream>) -> Done<C::Stream> {
+pub(super) async fn host_step<C: Carriers>(c: &C, step: Step<C::Stream>) -> Done<C::Stream, C::Error> {
     match step {
         Step::Open(r) => Done::Opened(c.open(&r, CarrierKind::Tcp).await),
         Step::Write(s, buf, from) => Done::Wrote(c.write(&s, buf, from).await.0),
@@ -120,14 +120,15 @@ impl<H: Hosted> Shared<H> {
         clippy::too_many_lines,
         reason = "one step of one state machine, a phase after the other"
     )]
-    pub(super) fn http_drive<F>(
+    pub(super) fn http_drive<F, E>(
         &self,
         cx: &mut Context<'_>,
         hop: &mut Op<F>,
         mut make: impl FnMut(Step<<H::Carriers as Carriers>::Stream>) -> F,
     ) -> bool
     where
-        F: Future<Output = Done<<H::Carriers as Carriers>::Stream>>,
+        F: Future<Output = Done<<H::Carriers as Carriers>::Stream, E>>,
+        E: HostError,
     {
         if !self.port_mapping {
             return false;

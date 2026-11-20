@@ -60,7 +60,13 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
             return Err(stream);
         };
         if self.prekeys.due(now) {
-            let Ok(info) = self.prekeys.rotate(now) else {
+            // The reseed is the identity store's own randomness, as the endpoint's rotation does.
+            let mut reseed = [0u8; 32];
+            let seeded = self.identity.borrow_mut().random(&mut reseed).is_ok();
+            let Some(info) = seeded
+                .then_some(())
+                .and_then(|()| self.prekeys.rotate(now, &reseed).ok())
+            else {
                 self.dial_failed(i, now);
                 return Err(stream);
             };

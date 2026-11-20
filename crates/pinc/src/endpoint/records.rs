@@ -14,6 +14,7 @@ use super::{Discovery, Endpoint, LOOKUP_WAIT, NoDiscovery};
 use crate::engine::Try;
 use crate::error::{Error, ErrorKind, Result};
 use crate::host::Hosted;
+use crate::platform::Platform;
 use crate::records::{MAX_HINTS, PeerRecord, Records, Rendezvous};
 
 impl<H: Hosted, R: Rendezvous> Endpoint<H, Records<R>> {
@@ -53,9 +54,14 @@ impl<H: Hosted, R: Rendezvous> Endpoint<H, Records<R>> {
     /// stopped.
     pub async fn signed_record(&self) -> Result<Vec<u8>> {
         let records = &self.0.discovery;
-        let clock = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
+        // The wall clock in milliseconds; zero when the host has none, and the sequence counts from there.
+        let clock = self
+            .0
+            .shared
+            .host
+            .platform()
+            .wall_ns()
+            .map_or(0, |ns| ns / 1_000_000);
         let seq = clock.max(records.seq.get().saturating_add(1));
         records.seq.set(seq);
         let hints = records

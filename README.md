@@ -107,7 +107,7 @@ keepalives) awaits `Endpoint::run()`.
 
 | Crate | What it does | `no_std` | Status |
 |---|---|---|---|
-| `pinc` | the facade: builder, connections, streams, datagrams, topics, lookup by id, the hub and relay roles, over the host's three closures | std ([#99](https://github.com/sourcenetwork/pinc/issues/99)) | built |
+| `pinc` | the facade: builder, connections, streams, datagrams, topics, lookup by id, the hub and relay roles, over the host's three closures | yes, with a host [`Platform`](https://docs.rs/pinc) ([#99](https://github.com/sourcenetwork/pinc/issues/99)) | built |
 | `pinc-wire` | varints and a strict canonical DAG-CBOR codec, parsed in place | yes | built; varints proven, the codec tested ([#606](https://github.com/sourcenetwork/pinc/issues/606)) |
 | `pinc-dag` | content-addressed blocks and CIDs, value roots, range proofs | yes, heap-free | built; roots and range proofs proven, CIDs, blocks and CAR tested ([#606](https://github.com/sourcenetwork/pinc/issues/606)) |
 | `pinc-crypto` | RustCrypto primitives behind one `Provider`: AEADs, X25519, ML-KEM-768, four identity algorithms, BLAKE3 | yes | built |
@@ -164,6 +164,16 @@ and say so in their results. Every dependency is declared once, in its workspace
 and the harness are workspaces of their own, so the other libraries and their runtimes never enter PINC's graph; the
 gate checks that no crate under `crates/` depends on an async runtime and that nothing in the library's build
 compiles C.
+
+## Without std
+
+The facade runs without `std` on a [`Platform`](crates/pinc/src/platform.rs) the host provides: its monotonic clock
+every deadline reads, its wall clock the records sign with, its random bytes, and the instant and error type its I/O
+closures use. A `std` host gets all of it from the operating system by default (`Pinc::builder`), and nothing in its
+code changes; a host without `std` calls `Pinc::builder_on` with a platform of its own, and without one a build does
+not type-check, because there is no clock to read. The gate builds the facade for `wasm32-unknown-unknown` and
+`thumbv7em-none-eabihf`; whether one session fits a typical Cortex-M4's memory is not measured yet — #529 and #540
+run it on a board and an emulator, and the number will be stated there.
 
 ## Proofs
 

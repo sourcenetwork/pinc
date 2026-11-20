@@ -138,7 +138,7 @@ impl Standby {
 }
 
 /// A slab of its own for the trace check, driven call by call with tickets and wakers named by numbers.
-#[cfg(feature = "trace")]
+#[cfg(all(feature = "trace", feature = "std"))]
 pub(crate) mod trace {
     use alloc::sync::Arc;
     use alloc::task::Wake;

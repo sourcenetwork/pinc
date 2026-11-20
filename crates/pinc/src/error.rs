@@ -4,6 +4,8 @@
 //! the ones an application acts on (a lost connection, a timeout, a refusal, an unreachable peer, a reset stream).
 
 use core::fmt;
+
+#[cfg(feature = "std")]
 use std::io;
 
 use pinc_core::{CommandError, ConnectFailure, EndReason};
@@ -215,6 +217,8 @@ impl fmt::Display for Error {
 
 impl core::error::Error for Error {}
 
+/// A host of `std` maps the error into its own: the kind an application matches a socket error by.
+#[cfg(feature = "std")]
 impl From<Error> for io::Error {
     fn from(e: Error) -> Self {
         let kind = match e.kind {

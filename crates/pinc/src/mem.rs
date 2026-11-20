@@ -43,6 +43,17 @@ pub(crate) const PREKEYS: usize = 8;
 pub(crate) const TICKETS: usize = 64;
 pub(crate) const CLIENT_TICKETS: usize = 32;
 
+/// An upper bound on the memory one session reserves (its slot of the stream table, the table of sent packets and the
+/// connection id entries), whatever the shape of the ladder it lands on; the system commits only what the session
+/// uses. The check below sizes a whole endpoint's reservation with it.
+const RESERVED_PER_SESSION: usize = 1024 * 1024;
+
+/// Whether a reservation fits the target's address space: a 32-bit target cannot name what a 64-bit one can, and a
+/// reservation it cannot address is a configuration error, not an abort at the build (pinc#99).
+fn fits_address_space(reserved: usize) -> bool {
+    isize::try_from(reserved).is_ok()
+}
+
 /// The endpoint a driver runs, for a table of `K` sessions and `D` connection id entries (ten per session).
 pub(crate) type Ep<'s, 'a, const K: usize, const D: usize> =
     Endpoint<'s, 'a, Software, crate::Body, STREAMS, RING, FLIGHT, PATHS, K, D, PREKEYS, TICKETS, CLIENT_TICKETS>;
@@ -134,11 +145,15 @@ impl Limits {
             && (1..=16 * 1024 * 1024).contains(&self.topic_message)
             && (1..=1 << 30).contains(&self.topic_log)
             && (1..=4096).contains(&self.topics);
-        if ok {
-            Ok(())
-        } else {
-            Err(Error::config("a limit is out of range"))
+        if !ok {
+            return Err(Error::config("a limit is out of range"));
         }
+        if !fits_address_space(self.connections.saturating_mul(RESERVED_PER_SESSION)) {
+            return Err(Error::config(
+                "the sessions' reserved memory does not fit the target's address space",
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -166,5 +181,26 @@ mod tests {
         assert!(limits(1 << 30).check().is_ok());
         assert!(limits(0).check().is_err());
         assert!(limits((1 << 30) + 1).check().is_err());
+    }
+
+    /// A reservation the target cannot address is refused at the check, before the endpoint reserves it.
+    #[test]
+    fn a_reservation_the_target_cannot_address_is_a_config_error() {
+        assert!(
+            fits_address_space(1024 * RESERVED_PER_SESSION),
+            "the default limits fit"
+        );
+        assert!(
+            !fits_address_space(usize::MAX - 3),
+            "an unaddressable reservation is refused"
+        );
+        let limits = Limits {
+            connections: MAX_CONNECTIONS,
+            ..Limits::default()
+        };
+        assert!(
+            limits.check().is_ok() == fits_address_space(MAX_CONNECTIONS * RESERVED_PER_SESSION),
+            "the ceiling's verdict follows the address space"
+        );
     }
 }

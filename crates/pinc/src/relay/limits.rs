@@ -97,7 +97,7 @@ impl Limits {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 #[allow(clippy::unwrap_used, reason = "tests assert")]
 mod tests {
     use super::*;

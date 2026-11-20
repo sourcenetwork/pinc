@@ -20,13 +20,13 @@ use alloc::vec::Vec;
 use core::future::{Future, ready};
 use core::marker::PhantomData;
 use core::net::SocketAddr;
-use std::io;
 
 use pinc_connect::client::RelayCfg;
 use pinc_crypto::NodeId;
 
 use crate::addr::node_to_string;
 use crate::carrier::CarrierKind;
+use crate::platform::HostError;
 
 /// A relay: where to reach it, by UDP and by carrier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -127,17 +127,21 @@ impl Relay {
     }
 }
 
-/// The host's carriers: open a byte stream to a relay, read it, write it, close it.
+/// The host's carriers: open a byte stream to a relay, read it, write it, close it. An error only ends the carrier:
+/// the endpoint counts it, closes the slot and opens again, so the error's type is the host's to choose, all the
+/// facade asks of it is [`HostError`].
 pub trait Carriers {
     /// A carrier the host opened.
     type Stream;
+    /// The error the carrier closures return.
+    type Error: HostError;
 
     /// Open a carrier of `kind` to `relay`.
-    fn open(&self, relay: &Relay, kind: CarrierKind) -> impl Future<Output = io::Result<Self::Stream>>;
+    fn open(&self, relay: &Relay, kind: CarrierKind) -> impl Future<Output = Result<Self::Stream, Self::Error>>;
 
     /// Fill at most `buf.len()` bytes of `buf` from its start and return the count; the length of the vector does not
     /// change and what it holds past the count is unspecified. Zero means the peer closed.
-    fn read(&self, stream: &Self::Stream, buf: Vec<u8>) -> impl Future<Output = (io::Result<usize>, Vec<u8>)>;
+    fn read(&self, stream: &Self::Stream, buf: Vec<u8>) -> impl Future<Output = (Result<usize, Self::Error>, Vec<u8>)>;
 
     /// Write `buf` from offset `from`; returns how many bytes went out.
     fn write(
@@ -145,7 +149,7 @@ pub trait Carriers {
         stream: &Self::Stream,
         buf: Vec<u8>,
         from: usize,
-    ) -> impl Future<Output = (io::Result<usize>, Vec<u8>)>;
+    ) -> impl Future<Output = (Result<usize, Self::Error>, Vec<u8>)>;
 
     /// End the carrier.
     fn close(&self, stream: Self::Stream) -> impl Future<Output = ()>;
@@ -155,23 +159,41 @@ pub trait Carriers {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NoCarriers;
 
-fn none() -> io::Error {
-    io::Error::new(io::ErrorKind::Unsupported, "the host gave no carriers")
+/// The error [`NoCarriers`] carries: the host gave no carriers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NoCarrier;
+
+impl core::fmt::Display for NoCarrier {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("the host gave no carriers")
+    }
+}
+
+impl HostError for NoCarrier {
+    fn is_transient(&self) -> bool {
+        false
+    }
 }
 
 impl Carriers for NoCarriers {
     type Stream = ();
+    type Error = NoCarrier;
 
-    fn open(&self, _relay: &Relay, _kind: CarrierKind) -> impl Future<Output = io::Result<()>> {
-        ready(Err(none()))
+    fn open(&self, _relay: &Relay, _kind: CarrierKind) -> impl Future<Output = Result<(), NoCarrier>> {
+        ready(Err(NoCarrier))
     }
 
-    fn read(&self, _stream: &(), buf: Vec<u8>) -> impl Future<Output = (io::Result<usize>, Vec<u8>)> {
-        ready((Err(none()), buf))
+    fn read(&self, _stream: &(), buf: Vec<u8>) -> impl Future<Output = (Result<usize, NoCarrier>, Vec<u8>)> {
+        ready((Err(NoCarrier), buf))
     }
 
-    fn write(&self, _stream: &(), buf: Vec<u8>, _from: usize) -> impl Future<Output = (io::Result<usize>, Vec<u8>)> {
-        ready((Err(none()), buf))
+    fn write(
+        &self,
+        _stream: &(),
+        buf: Vec<u8>,
+        _from: usize,
+    ) -> impl Future<Output = (Result<usize, NoCarrier>, Vec<u8>)> {
+        ready((Err(NoCarrier), buf))
     }
 
     fn close(&self, _stream: ()) -> impl Future<Output = ()> {
@@ -206,24 +228,26 @@ impl<O, R, W, C, St> core::fmt::Debug for CarrierFns<O, R, W, C, St> {
     }
 }
 
-impl<O, R, W, C, St> Carriers for CarrierFns<O, R, W, C, St>
+impl<O, R, W, C, St, E> Carriers for CarrierFns<O, R, W, C, St>
 where
-    O: AsyncFn(&Relay, CarrierKind) -> io::Result<St>,
-    R: AsyncFn(&St, Vec<u8>) -> (io::Result<usize>, Vec<u8>),
-    W: AsyncFn(&St, Vec<u8>, usize) -> (io::Result<usize>, Vec<u8>),
+    O: AsyncFn(&Relay, CarrierKind) -> Result<St, E>,
+    R: AsyncFn(&St, Vec<u8>) -> (Result<usize, E>, Vec<u8>),
+    W: AsyncFn(&St, Vec<u8>, usize) -> (Result<usize, E>, Vec<u8>),
     C: AsyncFn(St),
+    E: HostError,
 {
     type Stream = St;
+    type Error = E;
 
-    fn open(&self, relay: &Relay, kind: CarrierKind) -> impl Future<Output = io::Result<St>> {
+    fn open(&self, relay: &Relay, kind: CarrierKind) -> impl Future<Output = Result<St, E>> {
         (self.open)(relay, kind)
     }
 
-    fn read(&self, stream: &St, buf: Vec<u8>) -> impl Future<Output = (io::Result<usize>, Vec<u8>)> {
+    fn read(&self, stream: &St, buf: Vec<u8>) -> impl Future<Output = (Result<usize, E>, Vec<u8>)> {
         (self.read)(stream, buf)
     }
 
-    fn write(&self, stream: &St, buf: Vec<u8>, from: usize) -> impl Future<Output = (io::Result<usize>, Vec<u8>)> {
+    fn write(&self, stream: &St, buf: Vec<u8>, from: usize) -> impl Future<Output = (Result<usize, E>, Vec<u8>)> {
         (self.write)(stream, buf, from)
     }
 

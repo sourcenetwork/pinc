@@ -27,8 +27,9 @@
 //!
 //! # The shape
 //!
-//! - [`Pinc::builder`] sets the identity (a seed, or a key store), the protocols (ALPNs), relays, discovery, limits and
-//!   the access hook, then [`build`](Builder::build) takes the closures and returns the [`Endpoint`].
+//! - `Pinc::builder` (a `std` host) or `Pinc::builder_on` (a platform the host provides) sets the identity (a seed, or
+//!   a key store), the protocols (ALPNs), relays, discovery, limits and the access hook, then
+//!   [`build`](Builder::build) takes the closures and returns the [`Endpoint`].
 //! - [`Endpoint::connect`] gives a [`Connection`]; [`Endpoint::accept`] gives an [`Incoming`] with its ALPN.
 //! - A connection opens and accepts bidirectional and unidirectional streams and sends and reads datagrams.
 //! - Every call is a future of the host's executor. A future that waits also runs the endpoint, one at a time; with no
@@ -56,7 +57,8 @@
 #![forbid(unsafe_code)]
 
 extern crate alloc;
-// The host clock and I/O types are still the standard library's.
+// Under `std` the host's platform reads the operating system's clocks and randomness; without it nothing names std.
+#[cfg(feature = "std")]
 extern crate std;
 
 /// The README's examples, compiled and run as doctests so they cannot drift.
@@ -68,7 +70,6 @@ mod addr;
 mod body;
 pub mod carrier;
 mod carriers;
-mod clock;
 mod conn;
 mod drive;
 mod endpoint;
@@ -82,6 +83,7 @@ mod keys;
 mod maps;
 mod mem;
 mod node;
+mod platform;
 mod protocol;
 mod records;
 pub mod relay;
@@ -107,15 +109,16 @@ pub use host::{BatchHost, Host, Hosted, Io, IoHost};
 pub use keys::Identity;
 pub use mem::{Limits, MAX_CONNECTIONS, MAX_PROTOCOLS, RING, STREAMS};
 pub use node::CAPACITIES;
-pub use protocol::{MAX_TAG, Protocol, Registered, read_tag, write_tag};
-pub use records::{KNOWN_MAX, MAX_HINTS, PeerRecord, Records, Rendezvous};
-pub use role::{RelayRole, Role, RoleSpec};
-#[cfg(feature = "trace")]
-pub use standby::trace::{StandbyProbe, StandbySlot};
-pub use stream::{RecvStream, SendStream};
 pub use pinc_broadcast::{ReachStats, Reject, RejectStats};
 pub use pinc_core::NodeStats;
 pub use pinc_crypto::NodeId;
 pub use pinc_node::{PortMapStats, Timed, TimerStats};
 /// The urgency a stream starts with; see [`SendStream::set_urgency`].
 pub use pinc_transport::stream::DEFAULT_URGENCY;
+pub use platform::{HostError, HostInstant, Platform, System};
+pub use protocol::{MAX_TAG, Protocol, Registered, read_tag, write_tag};
+pub use records::{KNOWN_MAX, MAX_HINTS, PeerRecord, Records, Rendezvous};
+pub use role::{RelayRole, Role, RoleSpec};
+#[cfg(all(feature = "trace", feature = "std"))]
+pub use standby::trace::{StandbyProbe, StandbySlot};
+pub use stream::{RecvStream, SendStream};

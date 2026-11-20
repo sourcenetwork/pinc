@@ -36,13 +36,13 @@ use crate::mem::Limits;
 use crate::node::{FacadeNode, RELAYS};
 use crate::standby::{Standby, Ticket};
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "tests assert")]
 mod adjacent_tests;
 mod gate;
 mod ops;
 mod state;
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 #[allow(clippy::unwrap_used, reason = "tests assert")]
 mod taken_tests;
 mod topics;
@@ -429,11 +429,16 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
     /// Handle everything waiting: due timers, events and the answers they need, until none is left or the budget runs
     /// out. Returns how many items it handled; the caller goes on until it returns 0.
     pub(crate) fn service(&mut self, now: u64) -> usize {
-        if self.prekeys.due(now)
-            && let Ok(p) = self.prekeys.rotate(now)
-        {
-            self.node.endpoint_mut().set_prekey(p.clone());
-            self.node.set_prekey(p);
+        if self.prekeys.due(now) {
+            // The reseed is the identity store's own randomness: the host platform's under `std`, and without it a
+            // generator the platform seeded, so a prekey store whose state leaked does not predict the prekeys made
+            // after the rotation. (pinc#99: whether the host's own bytes must reach this path is Theo's call.)
+            let mut seed = [0u8; 32];
+            let seeded = self.identity.borrow_mut().random(&mut seed).is_ok();
+            if seeded && let Ok(p) = self.prekeys.rotate(now, &seed) {
+                self.node.endpoint_mut().set_prekey(p.clone());
+                self.node.set_prekey(p);
+            }
         }
         let mut n = 0;
         if self.node.poll_timeout().is_some_and(|d| d <= now) {

@@ -26,10 +26,25 @@ use pinc_transport::stream::StreamId;
 
 use crate::mem::Ep;
 
+#[cfg(feature = "std")]
 std::thread_local! {
     /// The boxes of handshake machines the endpoints of this thread share: an endpoint holds one only while a
     /// handshake of its runs.
     static MACHINES: pinc_transport::conn::Machines = pinc_transport::conn::Machines::new();
+}
+
+/// The handshake machines an endpoint draws its boxes from: the thread's shared pool under `std`, its own without it,
+/// where there is no thread-local state to share through.
+// vertexia: per-endpoint handshake machines without std; the thread's shared pool returns when core has a thread_local.
+fn machines() -> pinc_transport::conn::Machines {
+    #[cfg(feature = "std")]
+    {
+        MACHINES.with(core::clone::Clone::clone)
+    }
+    #[cfg(not(feature = "std"))]
+    {
+        pinc_transport::conn::Machines::new()
+    }
 }
 
 /// The relays a node can name at once.
@@ -80,7 +95,7 @@ macro_rules! define {
                 match connections {
                     $(n if n <= $k => Some(Self::$v({
                         let mut ep = Ep::<$k, { $k * 10 }>::new_owned(now, Software, drbg, identity, cfg, pool_chunks);
-                        MACHINES.with(|m| ep.share_machines(m));
+                        ep.share_machines(&machines());
                         ep
                     })),)+
                     _ => None,

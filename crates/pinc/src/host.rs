@@ -27,13 +27,12 @@
 use core::cell::RefCell;
 use core::marker::PhantomData;
 use core::net::SocketAddr;
-use std::io;
-use std::time::Instant;
 
 use pinc_keystore::KeyStore;
 
 use crate::carriers::{Carriers, NoCarriers};
 use crate::engine::Admit;
+use crate::platform::{HostError, HostInstant, Platform, System};
 use crate::role::Role;
 
 mod sealed {
@@ -50,6 +49,12 @@ pub trait Hosted: sealed::Sealed {
     type Carriers: Carriers;
     /// The relay role of the endpoint: the unit type when it has none.
     type Role: Role;
+    /// The platform the builder was given: the clock the facade reads, the error the closures return.
+    type Platform: Platform<Instant = Self::Instant, Error = Self::Error>;
+    /// The instant the sleep closure takes.
+    type Instant: HostInstant;
+    /// The error the receive, send and carrier closures return.
+    type Error: HostError;
 
     /// The most bytes one receive can fill: one datagram one byte longer than the endpoint takes (so a longer one shows
     /// itself whole and is dropped), or, for a host that may coalesce several, a whole UDP payload.
@@ -58,15 +63,19 @@ pub trait Hosted: sealed::Sealed {
 
     /// Receive into `buf`: the length filled, the sender and the size of each datagram in the filled part.
     #[doc(hidden)]
-    fn recv(&self, buf: &mut [u8]) -> impl Future<Output = io::Result<(usize, SocketAddr, usize)>>;
+    fn recv(&self, buf: &mut [u8]) -> impl Future<Output = Result<(usize, SocketAddr, usize), Self::Error>>;
 
     /// Send a transmit: equal-size datagrams of `segment` bytes (the last may be shorter) to `to`.
     #[doc(hidden)]
-    fn send(&self, buf: &[u8], to: SocketAddr, segment: usize) -> impl Future<Output = io::Result<usize>>;
+    fn send(&self, buf: &[u8], to: SocketAddr, segment: usize) -> impl Future<Output = Result<usize, Self::Error>>;
 
     /// Sleep until `at`.
     #[doc(hidden)]
-    fn sleep(&self, at: Instant) -> impl Future<Output = ()>;
+    fn sleep(&self, at: Self::Instant) -> impl Future<Output = ()>;
+
+    /// The platform: the clock the facade reads, the randomness a software key store seeds itself from.
+    #[doc(hidden)]
+    fn platform(&self) -> &Self::Platform;
 
     /// The host's carriers to relays.
     #[doc(hidden)]
@@ -77,75 +86,83 @@ pub trait Hosted: sealed::Sealed {
     fn role(&self) -> &RefCell<Self::Role>;
 }
 
-/// The host's three closures, one datagram per call, with the type of the key store and of the access hook.
-pub struct Host<R, S, Z, K, A, C = NoCarriers, P = ()> {
+/// The host's three closures, one datagram per call, with the type of the key store, of the access hook and of the
+/// platform.
+pub struct Host<R, S, Z, K, A, C = NoCarriers, Q = (), L = System> {
     recv: R,
     send: S,
     sleep: Z,
     carriers: C,
-    role: RefCell<P>,
+    role: RefCell<Q>,
+    platform: L,
     _types: PhantomData<fn() -> (K, A)>,
 }
 
 /// The host's three closures, a whole transmit per send and possibly several datagrams per receive, with the type of the
-/// key store and of the access hook.
-pub struct BatchHost<R, S, Z, K, A, C = NoCarriers, P = ()> {
+/// key store, of the access hook and of the platform.
+pub struct BatchHost<R, S, Z, K, A, C = NoCarriers, Q = (), L = System> {
     recv: R,
     send: S,
     sleep: Z,
     carriers: C,
-    role: RefCell<P>,
+    role: RefCell<Q>,
+    platform: L,
     _types: PhantomData<fn() -> (K, A)>,
 }
 
 macro_rules! host_new {
     ($($t:ident),+) => {$(
-        impl<R, S, Z, K, A, C, P> $t<R, S, Z, K, A, C, P> {
-            pub(crate) const fn new(recv: R, send: S, sleep: Z, carriers: C, role: P) -> Self {
+        impl<R, S, Z, K, A, C, Q, L> $t<R, S, Z, K, A, C, Q, L> {
+            pub(crate) const fn new(recv: R, send: S, sleep: Z, carriers: C, role: Q, platform: L) -> Self {
                 Self {
                     recv,
                     send,
                     sleep,
                     carriers,
                     role: RefCell::new(role),
+                    platform,
                     _types: PhantomData,
                 }
             }
         }
 
-        impl<R, S, Z, K, A, C, P> core::fmt::Debug for $t<R, S, Z, K, A, C, P> {
+        impl<R, S, Z, K, A, C, Q, L> core::fmt::Debug for $t<R, S, Z, K, A, C, Q, L> {
             fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
                 f.write_str(stringify!($t))
             }
         }
 
-        impl<R, S, Z, K, A, C, P> sealed::Sealed for $t<R, S, Z, K, A, C, P> {}
+        impl<R, S, Z, K, A, C, Q, L> sealed::Sealed for $t<R, S, Z, K, A, C, Q, L> {}
     )+};
 }
 host_new!(Host, BatchHost);
 
-impl<R, S, Z, K, A, C, P> Hosted for Host<R, S, Z, K, A, C, P>
+impl<R, S, Z, K, A, C, Q, L> Hosted for Host<R, S, Z, K, A, C, Q, L>
 where
-    R: AsyncFn(&mut [u8]) -> io::Result<(usize, SocketAddr)>,
-    S: AsyncFn(&[u8], SocketAddr) -> io::Result<usize>,
-    Z: AsyncFn(Instant),
+    R: AsyncFn(&mut [u8]) -> Result<(usize, SocketAddr), L::Error>,
+    S: AsyncFn(&[u8], SocketAddr) -> Result<usize, L::Error>,
+    Z: AsyncFn(L::Instant),
     K: KeyStore,
     A: Admit,
     C: Carriers,
-    P: Role,
+    Q: Role,
+    L: Platform,
 {
     type Keys = K;
     type Access = A;
     type Carriers = C;
-    type Role = P;
+    type Role = Q;
+    type Platform = L;
+    type Instant = L::Instant;
+    type Error = L::Error;
     const RECV_MAX: usize = pinc_core::MAX_DATAGRAM + 1;
 
-    async fn recv(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr, usize)> {
+    async fn recv(&self, buf: &mut [u8]) -> Result<(usize, SocketAddr, usize), L::Error> {
         let (n, from) = (self.recv)(buf).await?;
         Ok((n, from, n))
     }
 
-    async fn send(&self, buf: &[u8], to: SocketAddr, segment: usize) -> io::Result<usize> {
+    async fn send(&self, buf: &[u8], to: SocketAddr, segment: usize) -> Result<usize, L::Error> {
         let mut sent = 0;
         for datagram in buf.chunks(segment.max(1)) {
             (self.send)(datagram, to).await?;
@@ -154,52 +171,64 @@ where
         Ok(sent)
     }
 
-    async fn sleep(&self, at: Instant) {
+    async fn sleep(&self, at: L::Instant) {
         (self.sleep)(at).await;
+    }
+
+    fn platform(&self) -> &L {
+        &self.platform
     }
 
     fn carriers(&self) -> &C {
         &self.carriers
     }
 
-    fn role(&self) -> &RefCell<P> {
+    fn role(&self) -> &RefCell<Q> {
         &self.role
     }
 }
 
-impl<R, S, Z, K, A, C, P> Hosted for BatchHost<R, S, Z, K, A, C, P>
+impl<R, S, Z, K, A, C, Q, L> Hosted for BatchHost<R, S, Z, K, A, C, Q, L>
 where
-    R: AsyncFn(&mut [u8]) -> io::Result<(usize, SocketAddr, usize)>,
-    S: AsyncFn(&[u8], SocketAddr, usize) -> io::Result<usize>,
-    Z: AsyncFn(Instant),
+    R: AsyncFn(&mut [u8]) -> Result<(usize, SocketAddr, usize), L::Error>,
+    S: AsyncFn(&[u8], SocketAddr, usize) -> Result<usize, L::Error>,
+    Z: AsyncFn(L::Instant),
     K: KeyStore,
     A: Admit,
     C: Carriers,
-    P: Role,
+    Q: Role,
+    L: Platform,
 {
     type Keys = K;
     type Access = A;
     type Carriers = C;
-    type Role = P;
+    type Role = Q;
+    type Platform = L;
+    type Instant = L::Instant;
+    type Error = L::Error;
     const RECV_MAX: usize = 65_536;
 
-    async fn recv(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr, usize)> {
+    async fn recv(&self, buf: &mut [u8]) -> Result<(usize, SocketAddr, usize), L::Error> {
         (self.recv)(buf).await
     }
 
-    async fn send(&self, buf: &[u8], to: SocketAddr, segment: usize) -> io::Result<usize> {
+    async fn send(&self, buf: &[u8], to: SocketAddr, segment: usize) -> Result<usize, L::Error> {
         (self.send)(buf, to, segment).await
     }
 
-    async fn sleep(&self, at: Instant) {
+    async fn sleep(&self, at: L::Instant) {
         (self.sleep)(at).await;
+    }
+
+    fn platform(&self) -> &L {
+        &self.platform
     }
 
     fn carriers(&self) -> &C {
         &self.carriers
     }
 
-    fn role(&self) -> &RefCell<P> {
+    fn role(&self) -> &RefCell<Q> {
         &self.role
     }
 }
@@ -209,67 +238,89 @@ where
 /// size and returns how many datagrams went; `sleep` waits until an instant. A host that handles one datagram per call
 /// returns the length as the segment size and sends the buffer as one datagram when the segment size is its length.
 pub trait Io {
+    /// The instant the sleep closure takes.
+    type Instant: HostInstant;
+    /// The error the receive and send closures return.
+    type Error: HostError;
+
     /// Receive into `buf`: the length filled, the sender and the size of each datagram in the filled part.
-    fn recv(&self, buf: &mut [u8]) -> impl Future<Output = io::Result<(usize, SocketAddr, usize)>>;
+    fn recv(&self, buf: &mut [u8]) -> impl Future<Output = Result<(usize, SocketAddr, usize), Self::Error>>;
 
     /// Send equal-size datagrams of `segment` bytes (the last may be shorter) to `to`.
-    fn send(&self, buf: &[u8], to: SocketAddr, segment: usize) -> impl Future<Output = io::Result<usize>>;
+    fn send(&self, buf: &[u8], to: SocketAddr, segment: usize) -> impl Future<Output = Result<usize, Self::Error>>;
 
     /// Sleep until `at`.
-    fn sleep(&self, at: Instant) -> impl Future<Output = ()>;
+    fn sleep(&self, at: Self::Instant) -> impl Future<Output = ()>;
 }
 
-/// A host that implements [`Io`], with the type of the key store and of the access hook.
-pub struct IoHost<N, K, A, C = NoCarriers, P = ()> {
+/// A host that implements [`Io`], with the type of the key store, of the access hook and of the platform.
+pub struct IoHost<N, K, A, C = NoCarriers, Q = (), L = System> {
     io: N,
     carriers: C,
-    role: RefCell<P>,
+    role: RefCell<Q>,
+    platform: L,
     _types: PhantomData<fn() -> (K, A)>,
 }
 
-impl<N, K, A, C, P> IoHost<N, K, A, C, P> {
-    pub(crate) const fn new(io: N, carriers: C, role: P) -> Self {
+impl<N, K, A, C, Q, L> IoHost<N, K, A, C, Q, L> {
+    pub(crate) const fn new(io: N, carriers: C, role: Q, platform: L) -> Self {
         Self {
             io,
             carriers,
             role: RefCell::new(role),
+            platform,
             _types: PhantomData,
         }
     }
 }
 
-impl<N, K, A, C, P> core::fmt::Debug for IoHost<N, K, A, C, P> {
+impl<N, K, A, C, Q, L> core::fmt::Debug for IoHost<N, K, A, C, Q, L> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str("IoHost")
     }
 }
 
-impl<N, K, A, C, P> sealed::Sealed for IoHost<N, K, A, C, P> {}
+impl<N, K, A, C, Q, L> sealed::Sealed for IoHost<N, K, A, C, Q, L> {}
 
-impl<N: Io, K: KeyStore, A: Admit, C: Carriers, P: Role> Hosted for IoHost<N, K, A, C, P> {
+impl<N, K, A, C, Q, L> Hosted for IoHost<N, K, A, C, Q, L>
+where
+    N: Io<Instant = L::Instant, Error = L::Error>,
+    K: KeyStore,
+    A: Admit,
+    C: Carriers,
+    Q: Role,
+    L: Platform,
+{
     type Keys = K;
     type Access = A;
     type Carriers = C;
-    type Role = P;
+    type Role = Q;
+    type Platform = L;
+    type Instant = N::Instant;
+    type Error = N::Error;
     const RECV_MAX: usize = 65_536;
 
-    fn recv(&self, buf: &mut [u8]) -> impl Future<Output = io::Result<(usize, SocketAddr, usize)>> {
+    fn recv(&self, buf: &mut [u8]) -> impl Future<Output = Result<(usize, SocketAddr, usize), N::Error>> {
         self.io.recv(buf)
     }
 
-    fn send(&self, buf: &[u8], to: SocketAddr, segment: usize) -> impl Future<Output = io::Result<usize>> {
+    fn send(&self, buf: &[u8], to: SocketAddr, segment: usize) -> impl Future<Output = Result<usize, N::Error>> {
         self.io.send(buf, to, segment)
     }
 
-    fn sleep(&self, at: Instant) -> impl Future<Output = ()> {
+    fn sleep(&self, at: N::Instant) -> impl Future<Output = ()> {
         self.io.sleep(at)
+    }
+
+    fn platform(&self) -> &L {
+        &self.platform
     }
 
     fn carriers(&self) -> &C {
         &self.carriers
     }
 
-    fn role(&self) -> &RefCell<P> {
+    fn role(&self) -> &RefCell<Q> {
         &self.role
     }
 }

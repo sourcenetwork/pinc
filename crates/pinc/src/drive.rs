@@ -28,8 +28,6 @@ use core::net::{IpAddr, SocketAddr};
 use core::pin::pin;
 use core::task::Poll;
 use core::time::Duration;
-use std::io;
-use std::time::Instant;
 
 mod carrier_io;
 mod http_io;
@@ -41,6 +39,7 @@ use crate::carriers::{Carriers, Relay};
 use crate::engine::{Core, Try, Wait};
 use crate::error::Error;
 use crate::host::Hosted;
+use crate::platform::{HostError, HostInstant, Platform};
 use crate::role::Role;
 use crate::standby::Ticket;
 
@@ -53,6 +52,7 @@ const DRAIN: usize = 256;
 /// The most buffers each pool keeps.
 const POOLED: usize = 8;
 
+#[cfg(feature = "std")]
 std::thread_local! {
     /// The receive buffers the endpoints of this thread share.
     static RX_BUFS: Rc<RefCell<Vec<Vec<u8>>>> = Rc::default();
@@ -60,10 +60,36 @@ std::thread_local! {
     static TX_BUFS: Rc<RefCell<Vec<Vec<u8>>>> = Rc::default();
 }
 
+/// The receive buffers an endpoint's pools draw from: the thread's shared pool under `std`, its own pool without it,
+/// where there is no thread-local state to share through.
+// vertexia: per-endpoint buffer pools without std; the thread's shared pools return when core has a thread_local.
+fn rx_bufs() -> Rc<RefCell<Vec<Vec<u8>>>> {
+    #[cfg(feature = "std")]
+    {
+        RX_BUFS.with(Rc::clone)
+    }
+    #[cfg(not(feature = "std"))]
+    {
+        Rc::default()
+    }
+}
+
+/// The transmit buffers, as [`rx_bufs`].
+fn tx_bufs() -> Rc<RefCell<Vec<Vec<u8>>>> {
+    #[cfg(feature = "std")]
+    {
+        TX_BUFS.with(Rc::clone)
+    }
+    #[cfg(not(feature = "std"))]
+    {
+        Rc::default()
+    }
+}
+
 /// The state every handle of an endpoint shares.
 pub(crate) struct Shared<H: Hosted> {
     pub(crate) host: H,
-    start: Instant,
+    start: H::Instant,
     local: SocketAddr,
     driving: Cell<bool>,
     /// The access hook, the same one the core asks; it holds no endpoint state, so it is asked without the core.
@@ -118,14 +144,6 @@ enum Step<T> {
     Io,
 }
 
-/// The errors of a receive that lose one datagram and nothing else.
-fn transient(e: &io::Error) -> bool {
-    matches!(
-        e.kind(),
-        io::ErrorKind::Interrupted | io::ErrorKind::ConnectionReset | io::ErrorKind::ConnectionRefused
-    )
-}
-
 /// The address as the endpoint sees it: a mapped IPv4 address on a dual-stack socket is IPv4.
 fn canon(a: SocketAddr) -> SocketAddr {
     SocketAddr::new(a.ip().to_canonical(), a.port())
@@ -148,12 +166,15 @@ fn pooled(home: &RefCell<Vec<Vec<u8>>>, len: usize) -> Buf<'_> {
     Buf { v, home }
 }
 
-async fn recv_owned<'a, H: Hosted>(host: &H, mut buf: Buf<'a>) -> (io::Result<(usize, SocketAddr, usize)>, Buf<'a>) {
+async fn recv_owned<'a, H: Hosted>(
+    host: &H,
+    mut buf: Buf<'a>,
+) -> (Result<(usize, SocketAddr, usize), H::Error>, Buf<'a>) {
     let r = host.recv(buf.v.as_mut_slice()).await;
     (r, buf)
 }
 
-async fn sleep_owned<H: Hosted>(host: &H, at: Instant) {
+async fn sleep_owned<H: Hosted>(host: &H, at: H::Instant) {
     host.sleep(at).await;
 }
 
@@ -198,9 +219,10 @@ impl<H: Hosted> Shared<H> {
         role_off: u64,
     ) -> Self {
         let port_mapping = core.node.has_port_mapping();
+        let start = host.platform().now();
         Self {
             host,
-            start: Instant::now(),
+            start,
             local,
             driving: Cell::new(false),
             admit: core.hook(),
@@ -210,8 +232,8 @@ impl<H: Hosted> Shared<H> {
             cdirty: Cell::new(false),
             port_mapping,
             http: RefCell::new(None),
-            rx_bufs: RX_BUFS.with(Rc::clone),
-            tx_bufs: TX_BUFS.with(Rc::clone),
+            rx_bufs: rx_bufs(),
+            tx_bufs: tx_bufs(),
             tx_len: gso.clamp(1, UDP_MAX / pinc_core::MAX_DATAGRAM) * pinc_core::MAX_DATAGRAM,
             role_off,
             role_ready: Cell::new(false),
@@ -231,11 +253,11 @@ impl<H: Hosted> Shared<H> {
 
     /// The endpoint's clock: nanoseconds since the endpoint was made, after a fixed offset.
     pub(crate) fn now(&self) -> u64 {
-        T0.saturating_add(u64::try_from(self.start.elapsed().as_nanos()).unwrap_or(u64::MAX))
+        T0.saturating_add(u64::try_from(self.host.platform().now().since(self.start).as_nanos()).unwrap_or(u64::MAX))
     }
 
-    fn instant(&self, at: u64) -> Instant {
-        self.start + Duration::from_nanos(at.saturating_sub(T0))
+    fn instant(&self, at: u64) -> H::Instant {
+        self.start.add(Duration::from_nanos(at.saturating_sub(T0)))
     }
 
     fn rx_buf(&self) -> Buf<'_> {
@@ -381,7 +403,7 @@ impl<H: Hosted> Shared<H> {
                                 }
                             }
                         }
-                        Err(e) if transient(&e) => {}
+                        Err(e) if e.is_transient() => {}
                         Err(_) => {
                             if let Some(mut core) = self.lock() {
                                 core.fail(Error::new(crate::ErrorKind::Unreachable, "the socket failed"));

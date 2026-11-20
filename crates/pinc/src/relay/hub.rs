@@ -46,10 +46,14 @@ impl Hub {
     ) -> Result<Self> {
         let mut seed = [0u8; 32];
         let mut key = [0u8; 8];
+        let mut pk = [0u8; 32];
+        let mut pk_reseed = [0u8; 32];
         let local_id: LocalIdentity = {
             let mut id = identity.borrow_mut();
             id.random(&mut seed)?;
             id.random(&mut key)?;
+            id.random(&mut pk)?;
+            id.random(&mut pk_reseed)?;
             id.local()?
         };
         let mut cfg = EndpointConfig::new(u64::from_le_bytes(key));
@@ -73,8 +77,8 @@ impl Hub {
         }
         ep.add_iface(local)
             .ok_or_else(|| Error::config("the hub could not use the UDP address"))?;
-        let mut prekeys = Prekeys::new()?;
-        ep.set_prekey(prekeys.rotate(now)?);
+        let mut prekeys = Prekeys::new(pk);
+        ep.set_prekey(prekeys.rotate(now, &pk_reseed)?);
         Ok(Self {
             ep,
             prekeys,
@@ -111,10 +115,13 @@ impl Hub {
         A: Access,
     {
         for _ in 0..ROUNDS {
-            if self.prekeys.due(now)
-                && let Ok(info) = self.prekeys.rotate(now)
-            {
-                self.ep.set_prekey(info);
+            if self.prekeys.due(now) {
+                // The reseed is the shared identity store's own randomness, as the endpoint's rotation does.
+                let mut reseed = [0u8; 32];
+                let seeded = part.identity().borrow_mut().random(&mut reseed).is_ok();
+                if seeded && let Ok(info) = self.prekeys.rotate(now, &reseed) {
+                    self.ep.set_prekey(info);
+                }
             }
             let mut did = part.hub(&mut self.ep, now, &mut self.pending);
             while let Some(ev) = (!self.pending.is_empty())
