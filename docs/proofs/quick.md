@@ -125,6 +125,7 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `ConnectCarrier_open` | WMAX 8 -> 6, SMAX 2 -> 1 |
 | `ConnectCarrier_pn` | WMAX 8 -> 6 |
 | `ConnectCarrier_reach` | MAXF 2 -> 1, JunkLens {0, 2, 4} -> {0, 4}, ReadSizes {1, 5} -> {5} (WMAX 10 kept: the witness needs both handshake flights and a record in the window) |
+| `ConnectCarrier_w_max` | JunkLens {0, 1, 3} -> {0, 3} |
 | `ConnectClient_lookups` | Times {0, 100000, 300001, 2000000, 2300001} -> {0, 300001}, Peers {1, 2, 3} -> {1, 2}, plus ConnectClient_lookupsQuickBound (behaviours of at most 3 calls) |
 | `ConnectClient_net` | DoNet -> DoNetQuick (probes sent at 0 only, answers carry address 1 only), CONSTRAINT Bounded (counters to threshold + 1) -> BoundedQuick (to the threshold), plus ConnectClient_netQuickBound (behaviours of at most 4 calls) |
 | `ConnectCodec` | the mutation values Vals {0, 2, 13, 32, 255} -> ValsQuick {0, 13, 255}, the frames of the canonical-form check Small (up to 80 bytes) -> SmallQuick (up to 40 bytes) |
