@@ -287,6 +287,7 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `FacadeRelayKeep_rerun` | TMAX 3 -> 2, CLOCKS {0, 1, 3} -> {0, 2} (a restart at 0 or later, back in time or ahead), SEQS 2 -> 1 (one record per node, no higher seq), PMAX 3 -> 1 and MBP 2 -> 1 (one packet held; FacadeRelayKeep_mailq keeps the mailbox bounds) |
 | `FacadeRelayKeep_sweep` | TMAX 3 -> 2, CLOCKS {0, 1, 3} -> {0, 2} (a restart at 0 or later, back in time or ahead), SEQS 2 -> 1 (one record per node, no higher seq), PMAX 3 -> 1 and MBP 2 -> 1 (one packet held; FacadeRelayKeep_mailq keeps the mailbox bounds) |
 | `FacadeRevoke` | Peers {p1, p2} -> {p1}, Slots {1, 2} -> {1} |
+| `FacadeRevoke_failopen` | Peers {p1, p2} -> {p1} |
 | `FacadeRevoke_nobackstop` | Peers {p1, p2} -> {p1}, Slots {1, 2} -> {1} |
 | `FacadeStandby` | tickets held LIVE 3 -> 2, handed out AMAX 7 -> 4 |
 | `FacadeStandby_wrap` | wakers W {1, 2} -> {1} |
