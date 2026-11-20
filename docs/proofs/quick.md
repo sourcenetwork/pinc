@@ -281,6 +281,7 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `FacadeOpen` | Opens {o1, o2, o3, o4} -> {o1, o2, o3} |
 | `FacadeOpen_nohandoff` | Places 2 -> 1 |
 | `FacadeRecords` | MaxSeq 3 -> 2 |
+| `FacadeRelayCarriers` | MAXH 3 -> 1, TMAX 3 -> 2, HSD 2 -> 1, IDL 3 -> 2, BL 2 -> 1 (one stream accepted in all: a full handshake or carrier table is not reached here; FacadeRelayCarriers_w_full and _w_hsfull reach them, and the deep profile checks every property there) |
 | `FacadeRelayCarriers_end` | MAXH 2 -> 1 (one stream accepted in all: a full handshake or carrier table is not reached over the end of a run; the deep FacadeRelayCarriers.cfg reaches them with 3) |
 | `FacadeRelayKeep` | TMAX 3 -> 2, CLOCKS {0, 1, 3} -> {0, 2} (a restart at 0 or later, back in time or ahead), SEQS 2 -> 1 (one record per node, no higher seq), PMAX 3 -> 1 and MBP 2 -> 1 (one packet held; FacadeRelayKeep_mailq keeps the mailbox bounds) |
 | `FacadeRelayKeep_fail` | TMAX 3 -> 2, CLOCKS {0, 1, 3} -> {0, 2} (a restart at 0 or later, back in time or ahead), SEQS 2 -> 1 (one record per node, no higher seq), PMAX 3 -> 1 and MBP 2 -> 1 (one packet held; FacadeRelayKeep_mailq keeps the mailbox bounds), TORN {noverify, prefix} -> {} (a restart loses the write out or lands it whole; the torn writes are the quick FacadeRelayKeep and _rerun profiles') |
