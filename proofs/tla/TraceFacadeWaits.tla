@@ -132,8 +132,14 @@ EvStep ==
     /\ accu' = IF Active /\ Ev.k = 5 /\ Uni(Ev.s) /\ Len(accu) < ACAP THEN Append(accu, Ev.s) ELSE accu
     \* only a stream the peer stopped: a refused one has no writer to read an entry (fix F6)
     /\ fail' = IF Active /\ Ev.k = 12 THEN SendFailed(fail, Ev.s) ELSE fail
-    /\ ans' = (ans \/ (Active /\ Ev.k = 10))
-    /\ Ev.acc = acc' /\ Ev.accu = accu' /\ Ev.fail = fail'
+    \* a session comes up answered when it was accepted or its peer was already heard (session_up: !dialer ||
+    \* peer_answered); the record does not show the second, so a dialed session may come up either way
+    /\ IF ~live /\ Ev.k \in {1, 2} THEN ans' \in IF Ev.k = 2 THEN {TRUE} ELSE BOOLEAN
+       ELSE ans' = (ans \/ (Active /\ Ev.k = 10))
+    \* the lists are read after the event (waits_probe.rs); Closed ends the session inside it (session_down, whose
+    \* "end" record follows), so they are the ended session's: none
+    /\ IF Ev.k = 4 THEN Ev.acc = <<>> /\ Ev.accu = <<>> /\ Ev.fail = <<>>
+       ELSE Ev.acc = acc' /\ Ev.accu = accu' /\ Ev.fail = fail'
     /\ UNCHANGED <<ended, pend, call, sid, cur, out>>
 
 \* notify_all: the drop counter moved; every armed future is woken
@@ -223,13 +229,14 @@ Matches(o) ==
     \/ /\ o.r = Ev.r
        /\ o.r = 1 => (o.v = 0 \/ o.v = Ev.v)
        /\ o.r = 2 => o.e = Ev.e
+\* the wakes a return carries happen after it, in the peer's polls, which make no record: only Stray ones
 RetStep ==
-    /\ Ev.op = "ret" /\ cur = Ev.f /\ Woke = {}
+    /\ Ev.op = "ret" /\ cur = Ev.f /\ Stray
     /\ cur' = -1
     /\ IF Ev.r = 0
-       THEN Ev.f \in armed /\ wkey[Ev.f] # NoKey /\ UNCHANGED <<pend, out, armed, wkey>>
+       THEN Ev.f \in armed /\ wkey[Ev.f] # NoKey /\ armed' = armed \ Woke /\ UNCHANGED <<pend, out, wkey>>
        ELSE /\ out[Ev.f] # NoOut /\ Matches(out[Ev.f])
-            /\ pend' = pend \ {Ev.f} /\ armed' = armed \ {Ev.f}
+            /\ pend' = pend \ {Ev.f} /\ armed' = (armed \ {Ev.f}) \ Woke
             /\ wkey' = [wkey EXCEPT ![Ev.f] = NoKey]
             /\ UNCHANGED out
     /\ UNCHANGED <<live, ended, acc, accu, fail, ans, call, sid>>
