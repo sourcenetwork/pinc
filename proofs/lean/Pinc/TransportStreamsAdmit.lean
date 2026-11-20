@@ -43,6 +43,17 @@ theorem refreshAdmit_within_limit (p : P) (T : Tab) (h : T.adv ≤ admitted T + 
     omega
   · exact h
 
+/-- A refresh leaves nothing of the room unadvertised: whatever state it starts from, the limit it advertises covers the
+streams admitted and the room for more (`RaiseNotHeld` in `Streams.tla`), so no raise is held back for size. -/
+theorem refreshAdmit_advertises_room (p : P) (T : Tab) :
+    admitted T + admitRoom p T ≤ (refreshAdmit p T).adv := by
+  unfold refreshAdmit
+  dsimp only
+  split
+  · dsimp only
+    omega
+  · omega
+
 /-- Opening one peer stream: the ledger grows by at most one first charge, no chunk is taken, the counters the ledger
 reads stay, and every free slot stays new. -/
 theorem allocSlot_peer (p : P) (T : Tab) (id : Nat) (hch : 0 < p.ch) (hpeer : isLocal id = false)

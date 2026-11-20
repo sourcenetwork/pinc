@@ -102,8 +102,6 @@ structure Tab where
   adlim : Nat
   /-- The limit on the streams the peer may open in all, as last advertised. -/
   adv : Nat
-  /-- The streams admitted when `adv` was set. -/
-  adat : Nat
   /-- A `MAX_STREAMS` frame is waiting to be sent. -/
   adpend : Bool
   /-- Opens may pass `adlim`, which the peer has not stated yet (`Admit::early`, an optimistic dial). -/
@@ -112,7 +110,7 @@ structure Tab where
 
 def Tab.init (p : P) : Tab :=
   { slots := List.replicate p.n Slot.new, rn := (0, 0), lo := (0, 0), rl := 0, ll := 0,
-    ext := 0, adlim := p.pm, adv := p.adv0, adat := 0, adpend := false,
+    ext := 0, adlim := p.pm, adv := p.adv0, adpend := false,
     early := false }
 
 /-! ### Identifiers -/
@@ -224,12 +222,11 @@ def freeSlots (T : Tab) : Nat := (T.slots.filter (·.id == none)).length
 def admitRoom (p : P) (T : Tab) : Nat :=
   min (min (p.capLive - T.rl) (freeSlots T)) (admitFit ((avail p T - gu p T) / p.firstW))
 
-/-- `Streams::refresh_admit`: queue a raise of the credit when the room grew by an eighth of the credit last given, or at
-once when the opener used all of it. -/
+/-- `Streams::refresh_admit`: queue a raise of the credit whenever the room grew. A raise is never held back for size:
+the receiver cannot see streams the opener opened and has not written on, so a held raise could strand it. -/
 def refreshAdmit (p : P) (T : Tab) : Tab :=
   let now := admitted T + admitRoom p T
-  if now > T.adv && (decide (T.adv ≤ admitted T) || decide (now - T.adv ≥ max ((T.adv - T.adat) / 8) 1))
-  then { T with adv := now, adat := admitted T, adpend := true } else T
+  if now > T.adv then { T with adv := now, adpend := true } else T
 
 def regrant (p : P) (T : Tab) : Tab :=
   let T1 := refreshAdmit p T

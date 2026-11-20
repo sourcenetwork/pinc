@@ -246,7 +246,7 @@ def earlyReset : Slot :=
 /-- The table of an optimistic dial that opened it, before the peer's limit (0) is known. -/
 def earlyTab : Tab :=
   { slots := [earlyReset], rn := (0, 0), lo := (1, 0), rl := 0, ll := 1, ext := 0,
-    adlim := 0, adv := 0, adat := 0, adpend := false, early := true }
+    adlim := 0, adv := 0, adpend := false, early := true }
 
 /-- The witness of the rule before #432: a stream opened early past the peer's limit of 0 and reset at once. Before
 #432 `pending_control` sent its reset (the slot's reset counts as sent, for stream 1) although the limit does not

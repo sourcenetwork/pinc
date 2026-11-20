@@ -53,10 +53,10 @@ def tabOf (v : J) : Except String Tab := do
     | some a => a.toList.mapM slotOf
     | none => throw "slots is not an array"
   let ad ← natList (← field v "ad")
-  check (ad.length == 3) "ad is not a triple"
+  check (ad.length == 2) "ad is not a pair"
   pure { slots, rn := ← pairN v "rn", lo := ← pairN v "lo", rl := ← natF v "rl", ll := ← natF v "ll",
          ext := ← natF v "ext",
-         adlim := ad[0]!, adv := ad[1]!, adat := ad[2]!, adpend := ← boolF v "adp",
+         adlim := ad[0]!, adv := ad[1]!, adpend := ← boolF v "adp",
          early := ← boolF v "early" }
 
 /-- The replay state: the tables the recorded calls so far allow, and whether a run is open. The table has two fields per
