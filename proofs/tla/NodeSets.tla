@@ -74,10 +74,10 @@
 (* node ends Cancelled). Before N1, TLC found both violated (the          *)
 (* findings). CancelledDoc holds since the code decides it by one         *)
 (* function, Node::peer_gone (layer.rs, PeerGone here), on both paths     *)
-(* that ended such a round Exhausted: a dial of ours that fails after the *)
-(* revoke or the leave (ConnectFailed, layer_lost with cancel) and a      *)
-(* round whose session closes after it (sets_down ends it Cancelled       *)
-(* instead of round_retry).                                                *)
+(* that ended such a round Exhausted: a round waiting on a dial of ours   *)
+(* that fails after the revoke or the leave (ConnectFailed, layer_lost    *)
+(* with cancel) and a round active on a session that closes after it      *)
+(* (sets_down ends it Cancelled instead of round_retry).                  *)
 (* A dial that finds a table full (lconn in dial_layer, lsess in          *)
 (* layer_up: layer_unrecorded, Unrecorded here) counts an attempt of     *)
 (* every round waiting for the peer, and the round tries again after      *)
@@ -188,9 +188,10 @@ LayerFailed(s, p) == SetsFailed([s EXCEPT !.lconn = @ \ {p}], p, FALSE)
 RECURSIVE CancelEach(_, _)
 CancelEach(s, ids) == IF ids = {} THEN s ELSE LET id == Min(ids) IN CancelEach(End(s, id, "cancelled"), ids \ {id})
 \* layer_lost (fix N1): a dial of ours ends with no session; refused for good (cancel: the peer revoked or the node
-\* leaving) every round of the peer ends Cancelled, otherwise it is layer_failed (retry, backoff)
+\* leaving) the rounds waiting for the peer end Cancelled (sets_cancelled), a round active on a session of the peer
+\* ends through that session's close (SetsDown, fix A1b); otherwise it is layer_failed (retry, backoff)
 LayerLost(s, p, cancel) ==
-    IF cancel THEN CancelEach([s EXCEPT !.lconn = @ \ {p}], {r.id : r \in {x \in s.rounds : x.peer = p}})
+    IF cancel THEN CancelEach([s EXCEPT !.lconn = @ \ {p}], Waiting(s, p))
     ELSE LayerFailed(s, p)
 
 \* layer_unrecorded (fix A2): a dial that finds a table full counts an attempt of each round waiting for the peer, which
