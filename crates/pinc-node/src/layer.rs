@@ -162,7 +162,10 @@ where
             self.layer_lost(now, layer, peer, true);
             return;
         }
-        if layer == Layer::Dtn && io.dtn_waits(now, peer) {
+        if layer == Layer::Dtn
+            && let Some(d) = self.dtn.as_deref_mut()
+            && io.dtn_skip(now, peer, &mut d.redial_at)
+        {
             return;
         }
         let id = io.full_id(peer);

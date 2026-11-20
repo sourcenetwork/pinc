@@ -233,3 +233,24 @@ fn a_round_whose_session_the_full_table_sheds_retries_and_ends_exhausted() {
         assert_eq!(node.sets_running(), 0);
     });
 }
+
+#[test]
+fn a_delay_tolerant_dial_skipped_inside_its_backoff_arms_the_redial_at_its_own_end() {
+    big(|| {
+        let mut node = node();
+        let (a, b) = (hub().bytes, [0x42u8; 32]);
+        // A fails at 0 and waits 2 s; B fails at 1 s and waits 2 s, until 3 s.
+        node.layer_failed(0, Layer::Dtn, &a);
+        node.layer_failed(S, Layer::Dtn, &b);
+        assert_eq!(node.dtn.as_deref().unwrap().redial_at, Some(2 * S));
+        // The timer fires at 2 s and is cleared; A is dialed again and B is still inside its wait.
+        node.dtn.as_deref_mut().unwrap().redial_at = None;
+        node.dial_layer(2 * S, Layer::Dtn, &a);
+        node.dial_layer(2 * S, Layer::Dtn, &b);
+        assert_eq!(
+            node.dtn.as_deref().unwrap().redial_at,
+            Some(3 * S),
+            "nothing would wake the node when B's wait ends"
+        );
+    });
+}

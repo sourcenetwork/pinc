@@ -234,7 +234,7 @@ impl DtnBackoffProbe {
     /// Whether `dial_layer` waits for `peer` at `now`.
     #[must_use]
     pub fn waits(&self, now: Nanos, peer: &NodeId) -> bool {
-        self.io.dtn_waits(now, peer)
+        self.io.dtn_skip(now, peer, &mut None)
     }
 
     /// A membership event about `peer` (or a session to it that lived): its entry goes.

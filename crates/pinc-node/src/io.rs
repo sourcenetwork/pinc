@@ -705,11 +705,15 @@ impl<E: Ep, St: Store> Io<E, St> {
         now.saturating_add(back)
     }
 
-    /// Whether a delay-tolerant dial of `peer` waits out its backoff at `now`.
-    pub(crate) fn dtn_waits(&self, now: Nanos, peer: &NodeId) -> bool {
-        self.lfailed
-            .get(&(Layer::Dtn, *peer))
-            .is_some_and(|(until, _)| now < *until)
+    /// Whether a delay-tolerant dial of `peer` waits out its backoff at `now`. If it does, the redial time `redial_at`
+    /// is lowered to the end of that wait, so the skipped dial is made when its own wait ends and not only when
+    /// another peer's does.
+    pub(crate) fn dtn_skip(&self, now: Nanos, peer: &NodeId, redial_at: &mut Option<Nanos>) -> bool {
+        let Some((until, _)) = self.lfailed.get(&(Layer::Dtn, *peer)).filter(|(u, _)| now < *u) else {
+            return false;
+        };
+        *redial_at = crate::dtn::sooner(*redial_at, *until);
+        true
     }
 
     /// Forget the delay-tolerant backoff of `peer`.
