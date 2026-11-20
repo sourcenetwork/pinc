@@ -200,4 +200,7 @@ UndueDuplicate == ~undueTaken
 \* a graft due an acknowledgement for an id the hub is known to hold but holds no print for (its own id, which the
 \* log refused) is answered IdTaken and not acknowledged (GraftStored = FALSE is the witness)
 GraftTaken == ~graftLost
+\* the quick profile of BroadcastNode_floors (quick/BroadcastNode_floors.cfg names it as its CONSTRAINT): behaviours of at
+\* most 6 levels, in which the floors settle and a message is delivered after them
+BroadcastNode_floorsQuickBound == TLCGet("level") <= 6
 =============================================================================

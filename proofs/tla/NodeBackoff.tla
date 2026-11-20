@@ -58,8 +58,9 @@ INSTANCE NodeBackoffOps
 TimesDef == {Zero, Sec(70), U!Max64}
 \* the times of the quick profile (proofs/tla/quick): the bottom and the top of the clock
 TimesDefQuick == {Zero, U!Max64}
-\* the quick profile of NodeBackoff: runs of at most 8 steps
-NodeBackoffQuickBound == TLCGet("level") <= 8
+\* the quick profile of NodeBackoff: behaviours of at most 4 levels (the hub reaches its cap of 16 s, a refusal, a
+\* block, a prune, a shed and a reset all happen within them)
+NodeBackoffQuickBound == TLCGet("level") <= 4
 
 Conn == {p \in PEERS : op[p] # None}
 Hub(p) == p \in HUBS

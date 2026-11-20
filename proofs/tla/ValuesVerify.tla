@@ -275,4 +275,8 @@ VInv == IF SkipOn \/ cfg.k # "cfg" THEN TRUE ELSE VB!Inv
 FailureSticky == [][(gs # <<>> /\ gs.failed # "none") => (gs'.failed = gs.failed /\ gs'.done = gs.done /\ gs'.stack = gs.stack)]_<<gs>>
 RejectPassesNothing == [][(gs # <<>> /\ gs.failed = "none" /\ gs'.failed # "none") => gs'.done = gs.done]_<<gs>>
 RefusedSkip == [][op' = "refused" => gs' = gs]_<<gs, op>>
+\* the quick profile of ValuesVerify_small (quick/ValuesVerify_small.cfg substitutes it for MySeedsQuick): the 4-byte
+\* groups at 5 bytes only (one group and one byte; 13 bytes, three groups and one byte, is what makes it slow)
+MySeedsSmallQuick ==
+    {[f |-> "small", g |-> 2, p |-> 2, len |-> len] : len \in {0, 3, 7}} \cup {[f |-> "small", g |-> 4, p |-> 3, len |-> 5]}
 =============================================================================

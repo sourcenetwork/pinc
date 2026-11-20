@@ -563,6 +563,60 @@ Next ==
 
 Spec == Init /\ [][Next]_c
 
+(* The quick profile (quick/ValuesWire.cfg substitutes SeedsQuick for Seeds and NextQuick for Next): the edge values of
+   each family instead of every value. Request types 0, 1 (the request), 2 and 255; counts 0, 1, 33, 34 (the two cut
+   rules) and 255 (the most); GH bodies with the first and last id and the zero, one, top and odd lengths; the high byte
+   of a payload length at 0, 1, 63, 64, 127, 128, 192, 255; the bytes 0, 1, 2, 3, 64, 127, 128, 255 at each GH byte;
+   the encoders with 0, 1, 33, 255 and 256 ranges, GH encodes at the offsets 0, u64::MAX and the mixed bytes, and the
+   u64 edges 2^j - 1, 2^j, 2^j + 1 at the varint group widths j = 0, 7, 14, 56, 62, 63, 64; the session id forms 0,
+   128, 2^63 - 1 (valid) and the empty, overlong, all-0xff and unterminated ones (SidFormsQuick, indices of SidForms);
+   short strings of Alpha bytes and the types 3, 4, 254 first, Alpha strings of up to 3 bytes; through ExpandQuick, the
+   proof lengths ProofLensQuick, a GH payload length low byte from Alpha and 63, 65, and the proof cuts at every header
+   length and around the end only *)
+EdgeJsQuick == {0, 7, 14, 56, 62, 63, 64}
+EdgeWordsQuick == {EdgeW(q[1], q[2]) : q \in {r \in EdgeJsQuick \X (-1..1) : EdgeOK(r[1], r[2])}}
+QuickBytes == {0, 1, 2, 3, 64, 127, 128, 255}
+SidFormsQuick == {1, 4, 7, 8, 10, 11, 14}
+\* proof lengths: empty, not a multiple of 64, 64, the top multiple 17 * 64 = 1088 and one past it, the next multiple
+\* (over the 1100 cap); a group's proof length low byte around the multiples of 64
+ProofLensQuick == {0, 1, 63, 64, 1088, 1089, 1152}
+ExpandQuick(sd) ==
+    CASE sd.f = "ghplen" ->
+           {Cs("GH", <<2>> \o Fill(8, 9) \o <<0, 0, 1, 0, sd.hi, lo, 1>>, -1) : lo \in Alpha \cup {63, 65}}
+      [] sd.f = "pf" ->
+           LET sid == SidForms[sd.i]
+           IN {Cs("PF", sid \o FixedTails[j] \o Fill(L, j), -1) : j \in 1..4, L \in ProofLensQuick}
+      [] sd.f = "pfcut" ->
+           LET sid == SidForms[sd.i]
+               hl == Len(sid) + ProofFixed
+           IN UNION {Cuts("PF", sid \o FixedTails[j] \o Fill(L, j), IF IsValidSid(sd.i) THEN hl ELSE -1,
+                          (0..(hl + 1)) \cup {hl + L - 1, hl + L, hl + L + 1}) : j \in 1..4, L \in {0, 64}}
+      [] OTHER -> Expand(sd)
+SeedsQuick ==
+    {[f |-> "reqtype", t |-> t] : t \in {0, 1, 2, 255}}
+    \cup {[f |-> "reqcnt", n |-> n] : n \in {0, 1, 33, 34, 255}}
+    \cup {[f |-> "gh", a |-> a, b |-> b] : a \in {1, 4}, b \in {1, 4, 5, 6}}
+    \cup {[f |-> "ghplen", hi |-> hi] : hi \in {0, 1, 63, 64, 127, 128, 192, 255}}
+    \cup {[f |-> "ghbyte", x |-> x] : x \in QuickBytes}
+    \cup {[f |-> "ghcut"]}
+    \cup {[f |-> "pf", i |-> i] : i \in SidFormsQuick}
+    \cup {[f |-> "pfcut", i |-> i] : i \in SidFormsQuick}
+    \cup {[f |-> "pr", i |-> i] : i \in SidFormsQuick}
+    \cup {[f |-> "short"], [f |-> "alpha"]}
+    \cup {[f |-> "reqenc", k |-> k] : k \in {0, 1, 33, 255, 256}}
+    \cup {[f |-> "ghenc", a |-> a] : a \in {1, 3, 4}}
+    \cup {[f |-> "pfenc", w |-> w] : w \in EdgeWordsQuick}
+    \cup {[f |-> "prenc", w |-> w] : w \in EdgeWordsQuick}
+NextQuick ==
+    \/ c.t = "root" /\ \E sd \in Seeds : c' = [t |-> "seed", sd |-> sd]
+    \/ c.t = "seed" /\ ~IsEncSeed(c.sd) /\ c.sd.f \notin {"short", "alpha"} /\ \E x \in ExpandQuick(c.sd) : c' = x
+    \/ c.t = "seed" /\ IsEncSeed(c.sd) /\ \E x \in EncCases(c.sd) : c' = x
+    \/ c.t = "seed" /\ c.sd.f = "short" /\ c' = [t |-> "short", s |-> <<>>]
+    \/ c.t = "seed" /\ c.sd.f = "alpha" /\ c' = [t |-> "alpha", s |-> <<>>]
+    \/ c.t = "short" /\ Len(c.s) < 2 /\ \E b \in IF Len(c.s) = 0 THEN Alpha \cup {3, 4, 254} ELSE Alpha :
+           c' = [c EXCEPT !.s = Append(c.s, b)]
+    \/ c.t = "alpha" /\ Len(c.s) < 3 /\ \E b \in Alpha : c' = [c EXCEPT !.s = Append(c.s, b)]
+
 (* ---- the properties ---- *)
 
 EncOK(x) ==

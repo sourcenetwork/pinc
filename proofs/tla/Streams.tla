@@ -314,4 +314,8 @@ ReleaseIsFinal == [][\A i \in 1..N : (SameInc(i) /\ ~T.slots[i].cnt) => ~T'.slot
 LOCAL QuickTLC == INSTANCE TLC
 Streams_capQuickBound == QuickTLC!TLCGet("level") <= 5
 Streams_earlyQuickBound == QuickTLC!TLCGet("level") <= 5
+Streams_markQuickBound == QuickTLC!TLCGet("level") <= 5
+Streams_releaseQuickBound == QuickTLC!TLCGet("level") <= 5
+Streams_early_ctlQuickBound == QuickTLC!TLCGet("level") <= 5
+Streams_localQuickBound == QuickTLC!TLCGet("level") <= 4
 =============================================================================

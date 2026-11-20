@@ -323,4 +323,6 @@ NoCut == ~cut
 \* peers and one listed protocol are already the least that configuration is about, so the depth is the one bound left.
 LOCAL QuickTLC == INSTANCE TLC
 FacadeAcpForget_twoQuickBound == QuickTLC!TLCGet("level") <= 5
+\* the quick profile of FacadeAcpForget: one peer and two listed protocols are what it is about; behaviours up to depth 8
+FacadeAcpForgetQuickBound == QuickTLC!TLCGet("level") <= 8
 =============================================================================

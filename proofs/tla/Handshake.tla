@@ -504,5 +504,11 @@ ResendWithinBudget ==
 Handshake_storesQuickBound == TLCGet("level") <= 8
 Handshake_stores_xbrokenQuickBound == TLCGet("level") <= 8
 Handshake_pskleakQuickBound == TLCGet("level") <= 6
+\* net only grows (every message ever sent), so these bound the messages of a behaviour, and some its depth too
+HandshakeQuickBound == Cardinality(net) <= 3
+Handshake_kbrokenQuickBound == Cardinality(net) <= 3 /\ TLCGet("level") <= 6
+Handshake_xbrokenQuickBound == Cardinality(net) <= 3 /\ TLCGet("level") <= 6
+Handshake_lateQuickBound == TLCGet("level") <= 6
+Handshake_resumeQuickBound == Cardinality(net) <= 3
 
 =============================================================================
