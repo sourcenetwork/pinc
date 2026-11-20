@@ -36,13 +36,14 @@ fn a_relay_builds_on_a_two_mebibyte_stack_in_an_unoptimised_build() {
     });
 }
 
-/// The identity builds on a 64 KiB stack: an Ed25519 key pair costs tens of bytes, so a microcontroller's stack is
-/// enough. Until the key pair stops moving 64 KiB by value, this aborts with a stack overflow (the floor measured in
-/// #681 is 512 KiB in this profile).
+/// The identity builds on a 128 KiB stack: an Ed25519 key pair costs tens of bytes and is no longer moved 64 KiB by
+/// value (#706; before, the floor measured in #681 was 512 KiB in this profile, so this aborted with a stack
+/// overflow). What is left is the curve arithmetic: on x86_64 its vector code reserves 44 KiB in one frame at
+/// opt-level 0, so 64 KiB overflows there and 96 KiB is enough (64 KiB is enough on aarch64).
 #[test]
-fn an_identity_builds_on_a_64_kib_stack_in_an_unoptimised_build() {
+fn an_identity_builds_on_a_128_kib_stack_in_an_unoptimised_build() {
     std::thread::Builder::new()
-        .stack_size(64 << 10)
+        .stack_size(128 << 10)
         .spawn(|| {
             let id = Identity::from_seed(&[3; 32]).unwrap();
             assert_ne!(id.node_id().bytes, [0; 32]);
@@ -75,7 +76,7 @@ fn a_relay_polls_run_once_on_a_256_kib_stack_in_an_unoptimised_build() {
 ///
 /// Ignored for a cause the key pair no longer owns: the hub endpoint's construction reserves its tables' by-value
 /// temporaries and a whole endpoint copy on the stack in this profile (~300 KiB, #736). The identity on this path
-/// builds on 64 KiB since the key pair shrank; the test is the done-when of #706's hub leg.
+/// builds on 128 KiB since the key pair shrank; the test is the done-when of #706's hub leg.
 #[test]
 #[ignore = "the hub endpoint's construction needs ~300 KiB of stack in this profile; #736"]
 fn a_hub_relay_polls_run_once_on_a_256_kib_stack_in_an_unoptimised_build() {
