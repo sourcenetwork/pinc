@@ -523,6 +523,8 @@ impl<const K: usize, const D: usize> Core<K, D> {
             let counted = match &ev {
                 NodeEvent::PublishAcked { .. } => Some("publish_acked"),
                 NodeEvent::PublishGaveUp { .. } => Some("publish_gave_up"),
+                NodeEvent::PublishFull { .. } => Some("publish_full"),
+                NodeEvent::HubFull { .. } => Some("hub_full"),
                 NodeEvent::GapRepaired { .. } => Some("gap_repaired"),
                 NodeEvent::Lost { .. } => Some("events_lost"),
                 NodeEvent::Endpoint(Event::Closed { .. }) => Some("session_closed"),
@@ -538,6 +540,8 @@ impl<const K: usize, const D: usize> Core<K, D> {
                 NodeEvent::Message { .. }
                 | NodeEvent::PublishAcked { .. }
                 | NodeEvent::PublishGaveUp { .. }
+                | NodeEvent::PublishFull { .. }
+                | NodeEvent::HubFull { .. }
                 | NodeEvent::PublishRoom
                 | NodeEvent::GapRepaired { .. }
                 | NodeEvent::Fallback { .. }

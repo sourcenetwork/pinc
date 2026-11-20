@@ -466,7 +466,10 @@ impl<const K: usize, const D: usize> Agent<K, D> {
             match ev {
                 NodeEvent::Message { body, .. } => self.stats.record(&body, wall_ns()),
                 // The node tracks one publish fewer: a run that waited for room offers its message again.
-                NodeEvent::PublishAcked { .. } | NodeEvent::PublishGaveUp { .. } | NodeEvent::PublishRoom => {
+                NodeEvent::PublishAcked { .. }
+                | NodeEvent::PublishGaveUp { .. }
+                | NodeEvent::PublishFull { .. }
+                | NodeEvent::PublishRoom => {
                     for run in &mut self.pubs {
                         run.blocked = false;
                     }
