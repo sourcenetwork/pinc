@@ -1,8 +1,9 @@
 //! The port mappings the host holds, as the connectivity layer treats them: a mapped address is held until a relay
-//! reported the node's IP at it, is then offered first and makes the class port-mapped, and is withdrawn, with the
-//! class falling back, when nothing vouches for it any more. One rule ([`netcheck::mapped_seen`]) decides.
+//! reported the node's IP at it, is then offered first and makes the class port-mapped unless a reflexive address
+//! equals a local one (the class is then public), and is withdrawn, with the class falling back, when nothing vouches
+//! for it any more. One rule ([`netcheck::mapped_seen`]) decides.
 //!
-//! Invariants: a withdrawn mapping never leaves the node without a class (it takes the class it replaced), and the
+//! Invariants: a withdrawn mapping never leaves the node without a class (it takes the class the node would have without the mapping, `unmapped`), and the
 //! record that withdraws it is asked for at once.
 
 use core::net::SocketAddr;

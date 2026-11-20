@@ -6,7 +6,7 @@
 //! after any call into the layer and answers with [`Connectivity::sign_response`].
 //!
 //! One request is outstanding at a time; the others wait as flags (a sleep notice per relay, the record, a beacon),
-//! in that order of priority, so a suspending node's notices are never held behind a record.
+//! in that order of priority, so a suspending node's notices wait for at most the one signature already asked for.
 //!
 //! Invariants: a signature of the wrong length for the identity is refused, never sent; a refused or failed
 //! signature is reported as [`Notice::SignFailed`] and the work it served is retried at its next due time, except a

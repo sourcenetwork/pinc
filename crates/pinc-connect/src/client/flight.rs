@@ -15,7 +15,9 @@ use super::drive::{Port, Sess};
 use super::punch::Puncher;
 
 impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> {
-    /// The paths a flight to `node` can take: the caller's addresses, then the peer's relay, then (`fwd`) our home relay. With `fresh_at` set, the addresses of a record older than its time are
+    /// The paths a flight to `node` can take, in this order: the caller's hints, the addresses of the peer's beacon,
+    /// the addresses of its record, the peer's relay, then (`fwd`) our home relay. At most 16 paths are kept, so 16
+    /// addresses push the relay paths out. With `fresh_at` set, the addresses of a record older than its time are
     /// left out: a dial looks such a peer up again and the flight goes through the relay, as for a peer with no record.
     pub(super) fn candidates_for(
         &mut self,
