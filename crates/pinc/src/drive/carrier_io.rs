@@ -74,8 +74,9 @@ fn take_out(
 /// The size of a read.
 const READ_BUF: usize = 16 * 1024;
 /// The most bytes of the stream read ahead of the node, and of undecoded WebSocket frames. A ping of two bytes is
-/// answered with six, so the answers waiting to be written stay under `OUT_CAP + 3 * IN_CAP`: reading stops once they
-/// pass `OUT_CAP`, and one read of pings adds at most three times what it read.
+/// answered with six, so the answers waiting to be written stay under `OUT_CAP + 3 * IN_CAP` (plus the answers in the
+/// one write in flight, under the same bound): reading stops once the answers waiting pass `OUT_CAP`, and one read of
+/// pings adds at most three times what it read. The node's own outgoing bytes do not count: they never stop a read.
 const IN_CAP: usize = 64 * 1024;
 
 /// Where a carrier is.
@@ -97,6 +98,8 @@ pub(crate) struct Slot<S> {
     pub(crate) ver: u64,
     /// The bytes the node wants on the carrier, framed for it, not yet handed to a write.
     out: Vec<u8>,
+    /// The bytes of `out` that are answers to the peer's pings, not yet handed to a write.
+    pongs: usize,
     /// A buffer a write gave back, kept for the next `out`.
     spare: Vec<u8>,
     /// How much of the buffer of the write in flight is already out.
@@ -119,6 +122,7 @@ impl<S> Slot<S> {
             state: State::Idle,
             ver: 0,
             out: Vec::new(),
+            pongs: 0,
             spare: Vec::new(),
             wfrom: 0,
             writing: false,
@@ -134,6 +138,7 @@ impl<S> Slot<S> {
         self.state = state;
         self.ver += 1;
         self.out.clear();
+        self.pongs = 0;
         self.wfrom = 0;
         self.writing = false;
         self.inbuf.clear();
@@ -143,9 +148,10 @@ impl<S> Slot<S> {
     }
 
     /// Whether the next read may start: the node has taken what was read, a whole read fits in the bytes waiting to be
-    /// decoded, and the writes are not behind. A peer that pings faster than the host writes waits in its own socket.
+    /// decoded, and the answers to pings are not behind. A peer that pings faster than the host writes waits in its own
+    /// socket; the node's own upload does not hold a read back.
     const fn want_read(&self) -> bool {
-        self.inoff >= self.inbuf.len() && self.raw.len() + READ_BUF <= IN_CAP && self.out.len() <= OUT_CAP
+        self.inoff >= self.inbuf.len() && self.raw.len() + READ_BUF <= IN_CAP && self.pongs <= OUT_CAP
     }
 
     const fn is_ws(&self) -> bool {
@@ -467,6 +473,7 @@ impl<H: Hosted> Shared<H> {
             }
             s.writing = true;
             s.wfrom = 0;
+            s.pongs = 0;
             let spare = core::mem::take(&mut s.spare);
             Some(core::mem::replace(&mut s.out, spare))
         })
@@ -640,6 +647,7 @@ fn ws_fill<S>(s: &mut Slot<S>) -> Result<bool, ()> {
         inbuf,
         decoder,
         out,
+        pongs,
         ..
     } = s;
     while inbuf.is_empty() {
@@ -659,6 +667,7 @@ fn ws_fill<S>(s: &mut Slot<S>) -> Result<bool, ()> {
                     .and_then(|o| ws::encode(Opcode::Pong, p, Some([0x5a, 0xa5, 0x3c, 0xc3]), o).ok())
                     .unwrap_or(0);
                 out.truncate(at + n);
+                *pongs += n;
             }
             WsFrame::Pong(_) | WsFrame::Close(_) => {}
         }
@@ -732,12 +741,21 @@ mod tests {
         assert!(
             reads < 1000,
             "still reading with {} bytes of answers waiting",
-            s.out.len()
+            s.pongs
         );
         assert!(
             s.out.len() <= OUT_CAP + 3 * IN_CAP,
             "{} bytes of answers waiting",
             s.out.len()
         );
+    }
+
+    /// The node's own outgoing bytes do not stop the reads: a carrier under upload still reads, as its downlink carries
+    /// the acknowledgements the upload needs.
+    #[test]
+    fn data_waiting_to_be_written_does_not_stop_the_reads() {
+        let mut s = Slot::<()>::new();
+        s.out.resize(OUT_CAP + 1, 0);
+        assert!(s.want_read(), "a read waits behind the node's own upload");
     }
 }
