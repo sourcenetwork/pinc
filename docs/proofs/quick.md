@@ -87,6 +87,9 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `BroadcastReach_table` | MaxExpire 2 -> 1; bounded by constraint: runs of at most 8 steps (BroadcastReach_tableQuickBound); TableBytes 7 as deep (a record is refused while two members hold an edge) |
 | `BroadcastRepair` | MaxTime 45 -> 30, Mids {1, 2, 3} -> {1, 2}, LogCap 2 -> 1 (two messages over a log of one: a push still evicts) |
 | `BroadcastRepair_ae` | MaxTime 45 -> 36 (the frame logged at 30 and the GAP_AE at 35 that covers it) |
+| `BroadcastRepair_gapmark` | MaxTime 45 -> 40 |
+| `BroadcastRepair_have` | MaxTime 45 -> 40 |
+| `BroadcastRepair_quiet` | MaxTime 45 -> 40 |
 | `BroadcastSubsDelta` | MaxSteps 8 -> 4 |
 | `BroadcastSubsDelta_nocap` | Hinted {1, 2} -> {1}, MaxLives 2 -> 1 |
 | `BroadcastSubsDelta_nofrom` | Hinted {1, 2} -> {2}, MaxLives 2 -> 1 |
