@@ -87,7 +87,8 @@ By `scripts/proofs.sh` (the `== proofs` step of `scripts/gate.sh`):
   was recorded). A spec that replays independent runs (`TraceBuilder`, `TraceRangeVerifier`, `TraceValuesVerify`)
   asks for the end of every run; a spec that checks every line as its own state asks for the state of the last line.
   The registers are per worker, so `scripts/proofs.sh` runs a trace check on one worker, and it stops before the trace
-  step when a `proofs/tla/Trace*.cfg` lacks the two lines. A missing trace file fails the check.
+  step when a `proofs/tla/Trace*.cfg` or a quick `proofs/tla/quick/Trace*.cfg` lacks the two lines. A missing trace
+  file fails the check.
 - **Model-based tests**, the other direction: a trace check runs seeded random calls, which reach the rare
   interleavings a model checker enumerates only by chance, so here the model chooses the calls. So far for four
   components, the table of held first-flight fragments (the pattern for the others), the half-open cap, the
