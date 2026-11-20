@@ -17,6 +17,15 @@ par witness_tlc mbt_endpoint_stall_w MbtEndpoint MbtEndpoint_stall_w NoOverdueSt
 par run_tlc settle Settle Settle
 par run_tlc settle_watch Settle Settle_watch
 par run_tlc settle_held Settle Settle_held
+par run_tlc quiet_probe QuietProbe QuietProbe
+par run_tlc quiet_probe_stash QuietProbe QuietProbe_stash
+par run_tlc quiet_probe_bound QuietProbe QuietProbe_bound
+par run_tlc quiet_probe_live QuietProbe QuietProbe_live
+par witness_tlc quiet_probe_w_close QuietProbe QuietProbe_w_close NoLapseClose
+par witness_tlc quiet_probe_w_ride QuietProbe QuietProbe_w_ride NoProbeRide
+par witness_tlc quiet_probe_w_wait QuietProbe QuietProbe_w_wait NoLapseWait
+par witness_tlc quiet_probe_w_learned QuietProbe QuietProbe_w_learned NoLearnedFirst
+par witness_tlc quiet_probe_w_stash QuietProbe QuietProbe_w_stash NoStashApplied
 par run_tlc tx Tx Tx
 par run_tlc tx_flag Tx Tx_flag
 par witness_tlc tx_w_stash Tx Tx_w_stash NoStash
