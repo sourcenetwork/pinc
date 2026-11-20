@@ -901,7 +901,7 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
         self.last_now = now;
         self.sm.handle_timeout(now, &mut self.fx);
         self.flush();
-        self.note_sweep();
+        self.note_sweep(now);
         if now < self.check_at {
             return;
         }

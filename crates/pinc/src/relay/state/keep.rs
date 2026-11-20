@@ -8,36 +8,37 @@
 //!
 //! A mark the mailbox table has no room for is counted as a store error.
 //!
-//! Invariants: the nodes marked are bounded by the record table and the mailbox member table; a packet is written
-//! with its arrival time and restored oldest first; nothing past its lifetime is restored.
+//! Invariants: the nodes marked are at most twice the record table and four times the mailbox member table; a packet
+//! is written with its arrival time and restored oldest first; nothing past its lifetime is restored.
 
+use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
 use pinc_connect::carrier::NODE_ID_LEN;
 use pinc_connect::carrier::frame::MAX_PACKET_LEN;
 use pinc_connect::record::Record;
-use pinc_connect::relay::rule::RECORD_TTL_NS;
+use pinc_connect::relay::rule::{RECORD_TTL_NS, SWEEP_NS};
 use pinc_crypto::{IdentityAlg, NodeId};
 
 use super::Core;
 use crate::relay::access::Access;
 use crate::relay::limits::MAILBOX_MEMBERS;
-use crate::relay::store::Kept;
+use crate::relay::store::{Kept, node_key};
 use pinc_keystore::KeyStore;
 
 /// The nodes whose state is waiting to be written to the store.
 #[derive(Debug, Default)]
 pub(super) struct Keep {
-    /// Records stored and not yet written.
-    records: Vec<NodeId>,
-    /// Records the store holds and the machine may have dropped.
-    held: Vec<NodeId>,
+    /// Records stored and not yet written: at most the record table, and at most one more table between two sweeps.
+    records: BTreeMap<[u8; 33], NodeId>,
+    /// Records the store holds and the machine may have dropped: at most twice the record table.
+    held: BTreeMap<[u8; 33], NodeId>,
     /// Records to remove from the store.
     removed: Vec<NodeId>,
     /// Members whose held packets changed.
     mail: Vec<NodeId>,
-    /// The records the machine held at the last sweep.
-    count: usize,
+    /// When `held` is next checked against the machine's records; `None` before the first check.
+    next_sweep: Option<u64>,
     /// Restoring: the machine reports what it restores, which is already in the store.
     restoring: bool,
 }
@@ -88,12 +89,9 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
         if self.keep.restoring {
             return;
         }
-        if !self.keep.records.contains(&node) {
-            self.keep.records.push(node);
-        }
-        if !self.keep.held.contains(&node) {
-            self.keep.held.push(node);
-        }
+        let key = node_key(&node);
+        self.keep.records.insert(key, node);
+        self.keep.held.insert(key, node);
     }
 
     /// A packet was held for `node` or handed to it: write what is held. A mark the table has no room for leaves the
@@ -109,22 +107,25 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
         }
     }
 
-    /// The machine ran its timers: a record it dropped by lifetime is removed from the store.
-    pub(super) fn note_sweep(&mut self) {
-        let count = self.sm.record_count();
-        if count >= self.keep.count {
-            self.keep.count = count;
+    /// The machine ran its timers: a record it dropped by lifetime is removed from the store. The records the store
+    /// holds are checked once per sweep of the machine, whatever the count of records did.
+    pub(super) fn note_sweep(&mut self, now: u64) {
+        if self.keep.next_sweep.is_some_and(|at| now < at) {
             return;
         }
-        self.keep.count = count;
+        self.keep.next_sweep = Some(now.saturating_add(SWEEP_NS));
         let Self { sm, keep, .. } = self;
-        let (alive, gone): (Vec<NodeId>, Vec<NodeId>) =
-            keep.held.drain(..).partition(|n| sm.record_received(n).is_some());
-        keep.held = alive;
-        for n in gone {
-            keep.records.retain(|r| *r != n);
-            keep.removed.push(n);
-        }
+        let Keep {
+            held, records, removed, ..
+        } = keep;
+        held.retain(|key, node| {
+            let alive = sm.record_received(node).is_some();
+            if !alive {
+                records.remove(key);
+                removed.push(*node);
+            }
+            alive
+        });
     }
 
     /// The next write to the store, if any.
@@ -132,7 +133,7 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
         if let Some(n) = self.keep.removed.pop() {
             return Some(Job::Remove(n));
         }
-        while let Some(n) = self.keep.records.pop() {
+        while let Some((_, n)) = self.keep.records.pop_first() {
             if let Some(received) = self.sm.record_received(&n)
                 && let Some(rec) = self.sm.lookup(received, &n)
             {
@@ -161,7 +162,9 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
             let ok = live && self.sm.restore_record(r.received, &r.bytes, &mut self.fx).is_ok();
             self.flush();
             match (ok, node) {
-                (true, Some(n)) => self.keep.held.push(n),
+                (true, Some(n)) => {
+                    self.keep.held.insert(node_key(&n), n);
+                }
                 (false, Some(n)) => self.keep.removed.push(n),
                 (_, None) => self.counters.store_errors += 1,
             }
@@ -175,7 +178,6 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
                 self.keep.mail.push(*node);
             }
         }
-        self.keep.count = self.sm.record_count();
         self.keep.restoring = false;
     }
 }
@@ -189,22 +191,73 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
 )]
 mod tests {
     use alloc::rc::Rc;
+    use alloc::vec;
     use core::cell::RefCell;
     use core::net::SocketAddr;
 
+    use pinc_connect::record::{self, Reach, RecordFields};
+    use pinc_crypto::Keypair;
     use pinc_keystore::SoftwareStore;
 
     use super::*;
     use crate::keys::Identity;
     use crate::relay::access::AllowAll;
     use crate::relay::limits::Limits;
+    use crate::relay::store::KeptRecord;
 
     const T0: u64 = 1_000_000_000_000;
+    const SEC: u64 = 1_000_000_000;
 
     fn core() -> Core<(), SoftwareStore, AllowAll> {
         let identity = Rc::new(RefCell::new(Identity::from_seed_with(&[7; 32], &[0; 32]).unwrap()));
         let local: SocketAddr = "192.0.2.1:4000".parse().unwrap();
         Core::new(identity, AllowAll, &[], Limits::default(), Some(local), T0).unwrap()
+    }
+
+    fn signed(tag: u8, home: NodeId) -> (NodeId, Vec<u8>) {
+        let kp = Keypair::from_seed(IdentityAlg::Ed25519, &[tag; 32]).unwrap();
+        let mut out = vec![0u8; record::MAX_RECORD_LEN];
+        let n = record::sign(
+            &kp,
+            &RecordFields {
+                home,
+                seq: 1,
+                reach: Reach::UdpBlocked,
+                addrs: &[],
+                hints: &[],
+            },
+            &mut out,
+        )
+        .unwrap();
+        out.truncate(n);
+        (kp.node_id(), out)
+    }
+
+    /// A record that expires in the same sweep another arrives in leaves the store, though the count did not fall.
+    #[test]
+    fn a_record_that_expires_as_another_arrives_is_removed_from_the_store() {
+        let mut core = core();
+        let home = core.node_id();
+        let (a, rec_a) = signed(1, home);
+        let (b, rec_b) = signed(2, home);
+        let kept = Kept {
+            records: vec![KeptRecord {
+                bytes: rec_a,
+                received: T0,
+            }],
+            mailboxes: vec![],
+        };
+        core.restore(T0 + SEC, &kept);
+        assert!(core.next_job().is_none(), "a restored record is in the store already");
+        let at = T0 + RECORD_TTL_NS;
+        core.sm.restore_record(at, &rec_b, &mut core.fx).unwrap();
+        core.note_record(b);
+        core.on_timeout(at + SEC);
+        assert_eq!(core.sm.record_received(&a), None);
+        let Some(Job::Remove(gone)) = core.next_job() else {
+            panic!("the expired record stays in the store");
+        };
+        assert_eq!(gone, a);
     }
 
     /// A mark the table has no room for is a store that is behind, and is counted like a failed write.
