@@ -219,6 +219,18 @@ LostRule ==
         /\ \A x \in 1..NP : (x # c.act /\ c.t[x].id # 0) => ~c.t[x].gone
         /\ c.t[ev.s].id = ev.id => (ev.s = c.act /\ c.t[ev.s].gone /\ ~c.t[ev.s].v)
 
+\* The rules above that read a per-step ghost (ev, c.mv), as properties of every step. TLC checks an action property on
+\* each step it takes, also on a step into a state already seen, so with the VIEW below, which folds the states that
+\* differ only in those ghosts, every reachable state is still checked as the end of some step (Next reads neither ev
+\* nor c.mv nor c.dg: it starts from Pre). At Init they hold as written (ev.op = "init", ev.nvd = {}, c.mv = "none").
+ChooseValidStep == [][ChooseValid']_vars
+FollowRuleStep == [][FollowRule']_vars
+FallbackRuleStep == [][FallbackRule']_vars
+LostRuleStep == [][LostRule']_vars
+ValidCauseStep == [][ValidCause']_vars
+\* what a step depends on: the connection without its per-step ghosts, and the wire
+StepView == <<Pre, wire>>
+
 \* The doc's claims (path.rs). DocValid is violated by the code in its witness config; RelayValid, DocFallback,
 \* GoneLeft and GoneNeverBack hold with fixes T4 to T7.
 \* module doc, invariants: "a direct path is validated only by an answer to a challenge sent to it"
