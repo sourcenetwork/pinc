@@ -131,6 +131,7 @@ pub enum TraceEvent {
     },
     /// A connection was asked for a datagram with a window of `room` bytes (`len`, `seg` and `dest` are `u64::MAX`
     /// when it gave none).
+    #[cfg(feature = "trace")]
     TxConn {
         /// The session slot asked.
         slot: u64,
@@ -144,11 +145,13 @@ pub enum TraceEvent {
         dest: u64,
     },
     /// The first waiting slot was not in use or had no connection, and was taken off its queue.
+    #[cfg(feature = "trace")]
     TxGone {
         /// The session slot.
         slot: u64,
     },
     /// The gate asked the ledger for `n` bytes for `segments` datagrams of `len` bytes in total.
+    #[cfg(feature = "trace")]
     TxGate {
         /// The destination, hashed to a number.
         dest: u64,
@@ -162,11 +165,13 @@ pub enum TraceEvent {
         allowed: u64,
     },
     /// A datagram was dropped: `slot` for the loop's path with no address, `u64::MAX` for the kept datagram.
+    #[cfg(feature = "trace")]
     TxDrop {
         /// The session slot, or `u64::MAX`.
         slot: u64,
     },
     /// A session was put at the back of a send queue (0 ordinary, 1 broadcast).
+    #[cfg(feature = "trace")]
     TxMark {
         /// The session slot.
         slot: u64,
@@ -174,6 +179,7 @@ pub enum TraceEvent {
         queue: u64,
     },
     /// A reject of the endpoint's own was returned for sending.
+    #[cfg(feature = "trace")]
     TxReject {
         /// The destination, hashed to a number.
         dest: u64,
@@ -185,6 +191,7 @@ pub enum TraceEvent {
     /// The endpoint made call `call` on the connection of session `slot` for an interface event or a suspension: 1
     /// link down, 2 link back, 3 sleep, 4 wake, 5 closed for a redial, 6 a path rebound to the new address, 7 a path
     /// replaced (added from the new address, the old one lost).
+    #[cfg(feature = "trace")]
     Iface {
         /// The session slot.
         slot: u64,
@@ -210,12 +217,19 @@ impl TraceEvent {
             Self::Keepalive { .. } => "keepalive",
             Self::Rtt { .. } => "rtt",
             Self::Session { .. } => "session",
+            #[cfg(feature = "trace")]
             Self::TxConn { .. } => "tx_conn",
+            #[cfg(feature = "trace")]
             Self::TxGone { .. } => "tx_gone",
+            #[cfg(feature = "trace")]
             Self::TxGate { .. } => "tx_gate",
+            #[cfg(feature = "trace")]
             Self::TxDrop { .. } => "tx_drop",
+            #[cfg(feature = "trace")]
             Self::TxMark { .. } => "tx_mark",
+            #[cfg(feature = "trace")]
             Self::TxReject { .. } => "tx_reject",
+            #[cfg(feature = "trace")]
             Self::Iface { .. } => "iface",
         }
     }
@@ -246,9 +260,9 @@ impl TraceEvent {
                 ],
                 5,
             ),
-            Self::HalfOpenExpired { slot } | Self::TxGone { slot } | Self::TxDrop { slot } => {
-                ([("slot", slot), NONE, NONE, NONE, NONE], 1)
-            }
+            Self::HalfOpenExpired { slot } => ([("slot", slot), NONE, NONE, NONE, NONE], 1),
+            #[cfg(feature = "trace")]
+            Self::TxGone { slot } | Self::TxDrop { slot } => ([("slot", slot), NONE, NONE, NONE, NONE], 1),
             Self::Acp { slot, step } => ([("slot", slot), ("step", step), NONE, NONE, NONE], 2),
             Self::Gate { slot, release, held } => {
                 ([("slot", slot), ("release", release), ("held", held), NONE, NONE], 3)
@@ -277,6 +291,7 @@ impl TraceEvent {
             Self::Session { slot, step, dialer } => {
                 ([("slot", slot), ("step", step), ("dialer", dialer), NONE, NONE], 3)
             }
+            #[cfg(feature = "trace")]
             Self::TxConn {
                 slot,
                 room,
@@ -293,6 +308,7 @@ impl TraceEvent {
                 ],
                 5,
             ),
+            #[cfg(feature = "trace")]
             Self::TxGate {
                 dest,
                 len,
@@ -309,8 +325,11 @@ impl TraceEvent {
                 ],
                 5,
             ),
+            #[cfg(feature = "trace")]
             Self::TxMark { slot, queue } => ([("slot", slot), ("queue", queue), NONE, NONE, NONE], 2),
+            #[cfg(feature = "trace")]
             Self::TxReject { dest, len, seg } => ([("dest", dest), ("len", len), ("seg", seg), NONE, NONE], 3),
+            #[cfg(feature = "trace")]
             Self::Iface { slot, call } => ([("slot", slot), ("call", call), NONE, NONE, NONE], 2),
         }
     }
