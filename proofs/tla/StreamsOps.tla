@@ -168,13 +168,13 @@ PoolDemand(r, l) ==
 Unreceived(r) == PoolDemand(r, Charged(r, r.limit))
 
 \* the limit the window is due to move to, once an eighth of the window was freed, whether or not the stream was asked
-\* to stop: the rule before aabe075c (the witness Streams_stop_raise_w.cfg)
+\* to stop: the rule before c3ea10e1 (the witness Streams_stop_raise_w.cfg)
 DueOld(r) ==
     IF ~r.open THEN -1
     ELSE LET cap == IF r.fin = -1 THEN MAXOFF ELSE r.fin
              cand == Min(r.read + r.size, cap)
          IN IF cand > r.limit /\ cand >= r.limit + r.size \div 8 THEN cand ELSE -1
-(* due: the limit the window is due to move to; none for a stream asked to stop (aabe075c): its sender was told to
+(* due: the limit the window is due to move to; none for a stream asked to stop (c3ea10e1): its sender was told to
    reset and needs no credit for that, and what it still sends is dropped *)
 Due(r) == IF r.stop # 0 THEN -1 ELSE DueOld(r)
 
@@ -222,7 +222,7 @@ AdmitRoom(T) == LET fit == Max(Avail(T) - GU(T), 0) \div FirstW
 RefreshAdmit(T) ==
     LET now == AdmittedN(T) + AdmitRoom(T)
     IN IF now > T.ad.adv THEN [T EXCEPT !.ad.adv = now, !.ad.pend = TRUE] ELSE T
-\* the rule before f0267052: a raise waited until the room grew by an eighth of the credit last given (one stream at
+\* the rule before 0d36b306: a raise waited until the room grew by an eighth of the credit last given (one stream at
 \* least) unless the opener had used all of it. The table no longer keeps adv_at (the streams admitted when adv was
 \* set), so it is taken as 0, its value until the first raise: exact up to the first raise, where Streams_raise_w.cfg
 \* finds the hold
@@ -333,13 +333,13 @@ OnDataWith(T, r, off, len, fin, diff, End(_)) ==
        ELSE IF r.rst = -1 THEN [r |-> done, err |-> "ok"]
        ELSE [r |-> [r EXCEPT !.hi = Max(@, e), !.fin = IF fin THEN e ELSE @], err |-> "ok"]
 
-\* the end arriving on a stream asked to stop discards it (c0706819): nothing else would end it; every byte arrived, so
-\* the request is over (9a410adf): one not yet sent is never sent and a lost one is not sent again
+\* the end arriving on a stream asked to stop discards it (ff7ad474): nothing else would end it; every byte arrived, so
+\* the request is over (710afb61): one not yet sent is never sent and a lost one is not sent again
 EndStop(d) == [Discard(d) EXCEPT !.stop = 3, !.qcode = -1]
 OnData(T, r, off, len, fin, diff) == OnDataWith(T, r, off, len, fin, diff, EndStop)
-\* the rule before 9a410adf (the witness Streams_stop_end_w.cfg): the stream is discarded and its request stays
+\* the rule before 710afb61 (the witness Streams_stop_end_w.cfg): the stream is discarded and its request stays
 OnDataStopOld(T, r, off, len, fin, diff) == OnDataWith(T, r, off, len, fin, diff, Discard)
-\* the rule before c0706819 (the witness Streams_stop_w.cfg): the end arriving on a stream asked to stop is kept
+\* the rule before ff7ad474 (the witness Streams_stop_w.cfg): the end arriving on a stream asked to stop is kept
 EndKept(d) == d
 OnDataOld(T, r, off, len, fin, diff) == OnDataWith(T, r, off, len, fin, diff, EndKept)
 
@@ -358,10 +358,10 @@ OnResetRWith(r, code, fs, ack) ==
     ELSE IF r.rst # -1 THEN [r |-> r, err |-> "ok"]
     ELSE LET d == [r EXCEPT !.hi = fs, !.fin = fs, !.rst = code, !.read = fs, !.contig = fs, !.held = {}, !.rs = <<>>]
          IN [r |-> IF ack /\ r.stop \in {1, 2} THEN [d EXCEPT !.stop = 3, !.qcode = -1] ELSE d, err |-> "ok"]
-\* the sender ended the stream: a stop request that waits or was sent is over (c4a4ad9a), so one not yet sent is never
+\* the sender ended the stream: a stop request that waits or was sent is over (29fb6aa7), so one not yet sent is never
 \* sent and a lost one is not sent again
 OnResetR(r, code, fs) == OnResetRWith(r, code, fs, TRUE)
-\* the rule before c4a4ad9a (the witnesses Streams_stop_frame.cfg, Streams_stop_reset_w.cfg): the stop state is left
+\* the rule before 29fb6aa7 (the witnesses Streams_stop_frame.cfg, Streams_stop_reset_w.cfg): the stop state is left
 OnResetROld(r, code, fs) == OnResetRWith(r, code, fs, FALSE)
 Reset(T, id, code, fs) ==
     LET L == Locate(T, id)
@@ -481,7 +481,7 @@ AppReset(T, id, code, ext2) ==
 (* Streams::stop_sending (table/giving_up.rs) and recv.rs request_stop: ask the peer to stop sending on a stream we
    receive on, queued once; nothing if the sender reset the stream. A stream whose end already arrived is not asked: it
    is discarded and settled, so it leaves the table once its send half is done and its place in the peer's limit is
-   given back (c0706819) *)
+   given back (ff7ad474) *)
 StopReq(T, id, code) ==
     LET i == FindSlot(T, id)
         r == IF i = 0 THEN NewSlot ELSE T.slots[i]
@@ -491,7 +491,7 @@ StopReq(T, id, code) ==
        ELSE IF r.fin # -1 THEN [t |-> Settle(SetSlot(T, i, Discard(r)), i), err |-> "ok"]
        ELSE IF r.stop = 0 THEN [t |-> SetSlot(T, i, [r EXCEPT !.stop = 1, !.qcode = code]), err |-> "ok"]
        ELSE [t |-> T, err |-> "ok"]
-\* the rule before c0706819 (the witness Streams_stop_w.cfg): a stream whose end arrived is left as it is
+\* the rule before ff7ad474 (the witness Streams_stop_w.cfg): a stream whose end arrived is left as it is
 StopReqOld(T, id, code) ==
     LET i == FindSlot(T, id)
         r == IF i = 0 THEN NewSlot ELSE T.slots[i]

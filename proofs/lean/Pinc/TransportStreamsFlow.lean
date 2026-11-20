@@ -17,15 +17,15 @@ Unbounded theorems about the receive half and the table of `Pinc.TransportStream
   meets the table the first arrival met; an admitted stream moves the next index past its own id (STREAM_CAP).
 * `onReset_ok`, `onReset_final_fixed`, `onData_final_fixed`: a reset frees the buffered bytes, leaves nothing
   readable and fixes the final size, and a final size once fixed never changes.
-* `onReset_stop`, `onReset_ends_stop` (c4a4ad9a): the sender's reset ends a stop request that waits or was sent, so
+* `onReset_stop`, `onReset_ends_stop` (29fb6aa7): the sender's reset ends a stop request that waits or was sent, so
   none waits to be sent and none is in flight to be sent again; with `pendingBy_no_stop`
   (`Pinc.TransportStreamsLocal`), no stop frame is taken for a reset stream.
 * `Slot.discard_spec`, `onData_stopped_end_discards`, `stopReq_given_up`, `stopReq_given_up_frees`,
-  `stopReq_given_up_keeps`, `stopReq_given_up_rl` (c0706819): a stream given up after its end arrived, or whose end
+  `stopReq_given_up_keeps`, `stopReq_given_up_rl` (ff7ad474): a stream given up after its end arrived, or whose end
   arrives after a stop was asked, holds no bytes and is read to its end; the stop request asks nothing and settles it,
   so it leaves the table at once when its send half is done, and a counted peer stream gives back exactly its place in
   the peer's limit (`regrant_rl`: a regrant moves no count).
-* `onData_stopped_end_acks` (9a410adf): the end arriving on a stream asked to stop ends the request, so no stop frame
+* `onData_stopped_end_acks` (710afb61): the end arriving on a stream asked to stop ends the request, so no stop frame
   waits to be sent and `ctlLostStop` sends none again (`ctlLostStop_acked`).
 * `Content`, `exactly_once_in_order`, `stored_immutable`: with the checks of `Recv::store` (a byte received twice
   must be identical) and the rule that a consume stays inside the stored prefix, the bytes delivered are the bytes
@@ -156,7 +156,7 @@ theorem onReset_ok (p : P) (r : Slot) (code fs : Nat) (hn : r.rst = none)
     · simp [h1, h2, hn, Slot.readable, Slot.status]
 
 /-- An accepted reset of a stream not reset before acknowledges its stop request when one waits or was sent, and
-forgets its code (c4a4ad9a); a stream never asked stays unasked. -/
+forgets its code (29fb6aa7); a stream never asked stays unasked. -/
 theorem onReset_stop (p : P) (r : Slot) (code fs : Nat) (hn : r.rst = none) (h : (onReset p r code fs).2 = "ok") :
     (onReset p r code fs).1.stop = (if r.stop = 1 ∨ r.stop = 2 then 3 else r.stop) ∧
       (onReset p r code fs).1.qcode = (if r.stop = 1 ∨ r.stop = 2 then none else r.qcode) := by
@@ -171,7 +171,7 @@ theorem onReset_stop (p : P) (r : Slot) (code fs : Nat) (hn : r.rst = none) (h :
         · simp [h1, h2, hn, hs2]
         · simp [h1, h2, hn, hs1, hs2]
 
-/-- The sender's reset ends a stop request that waits or was sent (c4a4ad9a): after an accepted reset none waits to be
+/-- The sender's reset ends a stop request that waits or was sent (29fb6aa7): after an accepted reset none waits to be
 sent, so `pending` takes no stop frame for the stream (`pendingBy_no_stop`), and none is in flight, so `ctlLostStop`
 sends none again. -/
 theorem onReset_ends_stop (p : P) (r : Slot) (code fs : Nat) (hn : r.rst = none)
@@ -230,7 +230,7 @@ theorem onData_final_fixed (p : P) (T : Tab) (r : Slot) (off len f : Nat) (fin d
   repeat' split
   all_goals simp_all
 
-/-! ### Giving a stream up after its end arrived (c0706819) -/
+/-! ### Giving a stream up after its end arrived (ff7ad474) -/
 /-- The end arriving on a stream asked to stop: the stream holds no bytes, is read to its end and its receive half is
 done. -/
 theorem onData_stopped_end_discards (p : P) (T : Tab) (r : Slot) (off len : Nat) (diff : Bool) (hr : r.rst = none)
@@ -245,7 +245,7 @@ theorem onData_stopped_end_discards (p : P) (T : Tab) (r : Slot) (off len : Nat)
   repeat' split
   all_goals simp_all [Slot.discard, Slot.recvDone, Slot.status]
 
-/-- The end arriving on a stream asked to stop ends the request (9a410adf): it is acknowledged, no frame waits. -/
+/-- The end arriving on a stream asked to stop ends the request (710afb61): it is acknowledged, no frame waits. -/
 theorem onData_stopped_end_acks (p : P) (T : Tab) (r : Slot) (off len : Nat) (diff : Bool) (hr : r.rst = none)
     (hs : r.stop ≠ 0) :
     (onData p T r off len true diff).2 = "ok" → (onData p T r off len true diff).1.stop = 3 := by

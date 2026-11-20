@@ -8,7 +8,7 @@ window arithmetic of `Streams::new`, `Streams::consume` and `Recv::due`. Sizes a
 
 * `due_spec`: the limit a window is due to move to is above the old one by at least an eighth of the window, never
   beyond the read position plus the window, and never beyond a fixed final size (the 1/8 rule of flow control).
-* `due_stopped`: a stream asked to stop is due no raise (aabe075c), so a grant leaves its limit as it was.
+* `due_stopped`: a stream asked to stop is due no raise (c3ea10e1), so a grant leaves its limit as it was.
 * `grantOne_ledger`: when a grant raises a limit, the credit granted and not yet received, with the new grant,
   fits in the bytes the pool has left (POOL_GRANT).
 * `grantOne_limit_mono`, `grantSlot_eighth` (with `grantOne_proc`, which says a grant that acts is `grantSlot`): a grant
@@ -115,7 +115,7 @@ theorem due_spec (p : P) (r : Slot) (c : Nat) (h : r.due p = some c) :
       simp at hf'
       omega
 
-/-- A stream asked to stop is due no raise (aabe075c). -/
+/-- A stream asked to stop is due no raise (c3ea10e1). -/
 theorem due_stopped (p : P) (r : Slot) (hs : r.stop ≠ 0) : r.due p = none := by
   unfold Slot.due
   simp [hs]

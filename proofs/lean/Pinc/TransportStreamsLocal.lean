@@ -24,7 +24,7 @@ the credit meets in `admits`; the whole window is counted from the stream's firs
   whose ordinal the limit covers (`pending_gated`, through `pendingBy_slot`), and one held for the limit is released
   once it covers the stream: with a covered slot that has a frame, `pending` gives a frame (`pending_released`). A
   stop frame is taken only from a slot whose request waits (`pendingBy_stop`, `pendingBy_no_stop`), so none leaves
-  after the sender's reset (c4a4ad9a, `onReset_ends_stop`).
+  after the sender's reset (29fb6aa7, `onReset_ends_stop`).
   `pendingOld_leaks` is the witness of the rule before #432: a stream opened early past a limit of 0 and reset at once
   sent its reset, which names a stream the peer's limit does not cover.
 -/
@@ -215,7 +215,7 @@ theorem pendingBy_stop (due : Slot → Bool) (T : Tab) (hk : (pendingBy due T).2
   · simp [pendingBy, ha] at hk
 
 /-- No stop frame is taken from the slot `pendingBy` picks when its request does not wait: after the sender's reset
-none waits (`onReset_ends_stop`), so no stop frame leaves for a reset stream (c4a4ad9a). -/
+none waits (`onReset_ends_stop`), so no stop frame leaves for a reset stream (29fb6aa7). -/
 theorem pendingBy_no_stop (due : Slot → Bool) (T : Tab) (i : Nat) (hf : T.slots.findIdx? due = some i)
     (hs : (T.slots.getD i Slot.new).stop ≠ 1) : (pendingBy due T).2.1 ≠ "stop" := by
   intro hk

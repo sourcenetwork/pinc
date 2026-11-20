@@ -161,7 +161,7 @@ def Slot.demandTo (p : P) (r : Slot) (l : Nat) : Nat := poolDemand p r (r.charge
 def Slot.unreceived (p : P) (r : Slot) : Nat := r.demandTo p r.limit
 
 /-- `due`: the limit the window is due to move to, once an eighth of it was freed; none for a stream asked to stop
-(aabe075c): its sender was told to reset and needs no credit for that. -/
+(c3ea10e1): its sender was told to reset and needs no credit for that. -/
 def Slot.due (p : P) (r : Slot) : Option Nat :=
   if !r.open_ || r.stop != 0 then none
   else
@@ -320,7 +320,7 @@ def storeStep (p : P) (T : Tab) (r : Slot) (off len : Nat) (diff : Bool) : Slot 
                 rs := rs', contig := first0 rs' }, "ok")
 
 /-- `Recv::discard`: a stream given up whose end is known drops every byte held and counts as read to its end, as a
-reset does but without one (c0706819). -/
+reset does but without one (ff7ad474). -/
 def Slot.discard (r : Slot) : Slot :=
   match r.fin, r.rst with
   | some f, none => { r with read := f, contig := f, held := [], rs := [], obs := true }
@@ -331,7 +331,7 @@ def onData (p : P) (T : Tab) (r : Slot) (off len : Nat) (fin diff : Bool) : Slot
   let store := storeStep p T r off len diff
   let done0 := { store.1 with hi := max store.1.hi e, fin := if fin then some e else store.1.fin }
   -- the end arriving on a stream asked to stop discards it: nothing else would end it; every byte arrived, so the
-  -- request is over (9a410adf): one not yet sent is never sent and a lost one is not sent again
+  -- request is over (710afb61): one not yet sent is never sent and a lost one is not sent again
   let done := if fin && r.stop != 0 then { done0.discard with stop := 3, qcode := none } else done0
   if e > p.maxoff then (r, "FlowControl")
   else if r.fin.any (fun f => e > f || (fin && e != f)) then (r, "FinalSize")
@@ -352,7 +352,7 @@ def frame (p : P) (T : Tab) (id off len : Nat) (fin diff : Bool) : Tab × String
       (settle p (setSlot T1 i r) i, e2)
 
 /-! ### on_reset -/
-/-- The peer's reset. Once accepted, a stop request that waits or was sent is over (c4a4ad9a): it is acknowledged, so
+/-- The peer's reset. Once accepted, a stop request that waits or was sent is over (29fb6aa7): it is acknowledged, so
 one not yet sent is never sent and a lost one is not sent again. -/
 def onReset (p : P) (r : Slot) (code fs : Nat) : Slot × String :=
   if fs > p.maxoff || r.fin.any (· != fs) || fs < r.hi then (r, "FinalSize")
@@ -498,7 +498,7 @@ def appReset (p : P) (T : Tab) (id code ext2 : Nat) : Tab :=
 
 /-- `Streams::stop_sending`, `Recv::request_stop`: queue a stop request once; nothing if the sender reset the stream. A
 stream whose end already arrived is not asked: it is discarded and settled, so it leaves the table once its send half is
-done and the peer gets its place in the stream limit back (c0706819). -/
+done and the peer gets its place in the stream limit back (ff7ad474). -/
 def stopReq (p : P) (T : Tab) (id code : Nat) : Tab × String :=
   match findSlot T id with
   | none => (T, "UnknownStream")

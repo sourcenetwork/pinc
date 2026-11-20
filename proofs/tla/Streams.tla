@@ -49,11 +49,11 @@
 (*    that arrives resets the send half with the peer's code (StopEndsWithCode), *)
 (*    and the code of a reset never changes (CodeKept); once the end      *)
 (*    arrives on a stream asked to stop the request is over, none waits    *)
-(*    and none is sent again (StopOverAtEnd, 9a410adf), and so once the    *)
-(*    sender's reset arrives (StopOverAtReset, c4a4ad9a): no stop frame    *)
+(*    and none is sent again (StopOverAtEnd, 710afb61), and so once the    *)
+(*    sender's reset arrives (StopOverAtReset, 29fb6aa7): no stop frame    *)
 (*    leaves for a stream whose end is known (NoStopFrameAfterEnd); a      *)
 (*    stream asked to stop is given no more window (NoRaiseAfterStop,      *)
-(*    aabe075c), and it still ends once its sender answers (StopEndable);  *)
+(*    c3ea10e1), and it still ends once its sender answers (StopEndable);  *)
 (*  - RESET: a reset fixes the final size, frees the buffered bytes and    *)
 (*    leaves the stream readable to its end (nothing more is readable).    *)
 (* Streams_local (a pool with no other user, a peer stream and a local    *)
@@ -212,7 +212,7 @@ StopEndsWithCode == \A id \in Ids, c \in 0..1, e2 \in 0..T.ext : LET R == OnStop
 \* a queued stop or reset carries a code
 CodesSet == \A i \in Live : (T.slots[i].stop \in {1, 2} => T.slots[i].qcode # -1) /\ (T.slots[i].srst \in {1, 2} => T.slots[i].scode # -1)
 \* a stream given up (stop_sending) after its end arrived, and one asked to stop whose end then arrives, is discarded
-\* (c0706819): it holds no bytes and counts as read to its end, so its receive half is done
+\* (ff7ad474): it holds no bytes and counts as read to its end, so its receive half is done
 StoppedEndDiscarded == \A i \in Live : LET r == T.slots[i] IN
     (r.open /\ r.stop # 0 /\ r.fin # -1 /\ r.rst = -1) => r.held = {} /\ r.rs = <<>> /\ r.read = r.fin /\ RecvDone(r)
 GiveUp(id) == LET i == FindSlot(T, id) IN i # 0 /\ T.slots[i].open /\ T.slots[i].rst = -1 /\ T.slots[i].fin # -1
@@ -229,7 +229,7 @@ GiveUpDiscards == \A id \in Ids : GiveUp(id) =>
        /\ R.rl = T.rl - (IF back THEN 1 ELSE 0)
 \* a stream done on both halves is not left in the table
 DoneFreed == \A i \in Live : ~(RecvDone(T.slots[i]) /\ SendDone(T.slots[i]))
-\* witness (Streams_stop_w.cfg, the rule before c0706819, must violate it): a stream whose end arrived with a hole and
+\* witness (Streams_stop_w.cfg, the rule before ff7ad474, must violate it): a stream whose end arrived with a hole and
 \* that is given up keeps its place: it is never read to its end, so it stays until the connection closes
 GiveUpHoleDiscards == \A id \in Ids :
     (GiveUp(id) /\ T.slots[FindSlot(T, id)].contig < T.slots[FindSlot(T, id)].fin) =>
@@ -237,13 +237,13 @@ GiveUpHoleDiscards == \A id \in Ids :
             j == FindSlot(R, id)
         IN j = 0 \/ RecvDone(R.slots[j])
 \* once the end arrived on a stream asked to stop (its data, not a reset), no request waits to be sent and none is in
-\* flight to be sent again (9a410adf; Streams_stop_end_w.cfg finds the rule before it)
+\* flight to be sent again (710afb61; Streams_stop_end_w.cfg finds the rule before it)
 StopOverAtEnd == \A i \in Live : LET r == T.slots[i] IN (r.fin # -1 /\ r.rst = -1) => r.stop \in {0, 3}
 \* once the sender's reset is accepted no stop request waits to be sent and none is in flight to be sent again
-\* (c4a4ad9a; Streams_stop_reset_w.cfg finds the rule before it)
+\* (29fb6aa7; Streams_stop_reset_w.cfg finds the rule before it)
 StopOverAtReset == \A i \in Live : LET r == T.slots[i] IN r.rst # -1 => r.stop \in {0, 3}
 \* no stop request leaves for a stream whose end is known, by its data or by a reset: the frame Pending gives next
-\* (c4a4ad9a; Streams_stop_frame.cfg finds the rule before it, where a request queued before the sender's reset arrived
+\* (29fb6aa7; Streams_stop_frame.cfg finds the rule before it, where a request queued before the sender's reset arrived
 \* was still sent)
 NoStopFrameAfterEnd == LET P == Pending(T) IN P.kind = "stop" => T.slots[FindSlot(T, P.id)].fin = -1
 \* a window due to move was moved or deferred (credit follows consumption)
@@ -315,7 +315,7 @@ NeedCovered == \A i \in Live : T.slots[i].open =>
 
 (* ---- liveness: a stream whose peer is blocked at its limit, all of it read, gets a new limit once the *)
 (* other users of the pool let go: no deadlock, and the grant is not waiting for a read that cannot come     *)
-\* A stream asked to stop is not blocked in this sense: it is given no window (aabe075c) and ends when its sender
+\* A stream asked to stop is not blocked in this sense: it is given no window (c3ea10e1) and ends when its sender
 \* answers the request (StopEndable)
 Blocked(i) == LET r == T.slots[i] IN
     r.id # -1 /\ r.open /\ r.fin = -1 /\ r.rst = -1 /\ r.stop = 0 /\ r.read = r.limit /\ r.limit < MAXOFF
@@ -356,7 +356,7 @@ LedgerOnGrant == [][((\E i \in 1..N : SameInc(i) /\ T'.slots[i].limit > T.slots[
 Excess(S) == GU(S) + Resv(S) - Avail(S)
 FirstData == \E i \in 1..N : T'.slots[i].hi > 0 /\ (T.slots[i].hi = 0 \/ T.slots[i].id # T'.slots[i].id)
 OverOnlyByFirstData == [][Excess(T') > Max(Excess(T), 0) => (FirstData \/ T'.ext > T.ext)]_vars
-\* a stream asked to stop is given no more window: its limit stays where it was (aabe075c; Streams_stop_raise_w.cfg finds
+\* a stream asked to stop is given no more window: its limit stays where it was (c3ea10e1; Streams_stop_raise_w.cfg finds
 \* the rule before it). A raise queued before the request still leaves, and is sent again if lost: it gives nothing new
 NoRaiseAfterStop == [][\A i \in 1..N : (SameInc(i) /\ T.slots[i].stop # 0) => T'.slots[i].limit = T.slots[i].limit]_vars
 \* the credit and the limit on what we may open only grow

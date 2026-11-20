@@ -32,7 +32,7 @@
 (*  - NoOrphan: every stream a fetch owns belongs to a running fetch (a    *)
 (*    fetch that finished or was cancelled leaves no stream behind);       *)
 (*  - LoutSound: lout names an outgoing values session of the table;       *)
-(*  - NoLost (2d85e67e): the fetches hear of every stream of theirs a      *)
+(*  - NoLost (921eb558): the fetches hear of every stream of theirs a      *)
 (*    closed session takes: one In::Reset (CANCELLED) per stream when a     *)
 (*    session we dialed to the peer is still in lout (a stall redial hung  *)
 (*    the closed one up and dialed anew), else one In::Closed of the        *)
@@ -51,7 +51,7 @@
 (* Witnesses: NodeValues_busy (a request is refused for full server       *)
 (* slots), NodeValues_super (a peer's new incoming session supersedes an   *)
 (* older one that held a stream), NodeValues_lost (NoLost fails under the  *)
-(* rule before 2d85e67e, TellOld: only the close of lout's own session was *)
+(* rule before 921eb558, TellOld: only the close of lout's own session was *)
 (* told, as a Closed, so a fetch's streams on a session another fetch's    *)
 (* redial hung up were dropped unheard).                                   *)
 (***************************************************************************)
@@ -138,7 +138,7 @@ Up(sid, p, inc) ==
 Tell(s, ses, lout1) ==
     LET down == ~s.inc /\ ~\E x \in lout1 : x.peer = s.peer
     IN [closed |-> down, resets |-> ~down]
-\* before 2d85e67e: In::Closed only when the session was lout's own, nothing else
+\* before 921eb558: In::Closed only when the session was lout's own, nothing else
 TellOld(s, ses, lout1) == [closed |-> \E x \in lout : x.sid = ses, resets |-> FALSE]
 \* layer_closed and values_down: the session leaves the table, and every stream on it goes; the fetches are told
 Closed(sid) ==
