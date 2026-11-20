@@ -72,8 +72,21 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             NodeEvent::HubFull { hub, topic } => {
                 if self.topics.contains_key(&topic) {
                     let hub = self.node.full_id(&hub);
-                    self.push_event(Event::HubFull { topic, hub });
+                    self.push_event(Event::HubFull {
+                        topic,
+                        hub,
+                        message: None,
+                    });
                 }
+            }
+            NodeEvent::PublishFull { hub, topic, mid } => {
+                let hub = self.node.full_id(&hub);
+                self.push_event(Event::HubFull {
+                    topic,
+                    hub,
+                    message: Some(mid),
+                });
+                self.wake_g(GKey::Publish);
             }
             NodeEvent::Restored { hub, topic } => {
                 if self.topics.contains_key(&topic) {

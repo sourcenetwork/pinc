@@ -52,12 +52,14 @@ pub enum Event {
     /// A hub cannot hold this endpoint's subscription to `topic`: it holds as many topics, or as many subscribers of
     /// the topic, as it can. The endpoint stays joined and asks again (after 2 s, doubling up to 64 s) until the hub
     /// has room, and [`Event::Joined`] follows; once per join, and again after the hub changes or the session with
-    /// it starts again.
+    /// it starts again. For a publish (`message` is `Some`), no hub could store the message and it is not sent again.
     HubFull {
         /// The topic.
         topic: Vec<u8>,
         /// The hub.
         hub: NodeId,
+        /// The message that was refused, for a publish; `None` for a join.
+        message: Option<MessageId>,
     },
     /// A hub told this endpoint that messages of `topic` may be missing. It does so when the endpoint's subscription
     /// was held while the hub took the endpoint for down and is live again; when the endpoint fell so far behind

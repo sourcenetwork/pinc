@@ -302,7 +302,11 @@ pub(crate) struct Pending {
     /// The hub's stream had no room for it, so nothing was sent yet: it goes out when the stream has room again
     /// ([`Topics::peer_writable`]), or at its next retry.
     pub(crate) unsent: bool,
+    /// Bit `i` is set when `hubs[i]` refused it for a full topic table; the publish ends refused when all are set.
+    pub(crate) refused: u64,
 }
+
+const _: () = assert!(pinc_membership::consts::MAX_HUBS <= 64);
 
 /// A message set aside until a decision arrives: `topic_len | topic | body`.
 #[derive(Debug)]

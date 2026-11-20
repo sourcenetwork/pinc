@@ -183,6 +183,7 @@ impl Topics {
             idx: 0,
             served,
             unsent: handed == Handed::NoRoom,
+            refused: 0,
         });
         Ok(mid)
     }
@@ -333,6 +334,13 @@ impl Topics {
                 let n = self.hubs.len();
                 let Some(p) = self.pending.get_mut(i) else { break };
                 p.idx += 1;
+                // A hub that refused it for a full topic table is skipped; not every bit is set, else it ended.
+                for _ in 0..n {
+                    if p.refused & (1 << (p.idx % n)) == 0 {
+                        break;
+                    }
+                    p.idx += 1;
+                }
                 p.next_try = now.saturating_add(PUB_RETRY);
                 let hub = self.hubs.get(p.idx % n).copied();
                 let topic = p.data.get(..p.tlen).unwrap_or_default();

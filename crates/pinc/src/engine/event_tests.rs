@@ -263,6 +263,32 @@ fn a_hub_full_notice_is_told_for_a_joined_topic_only() {
         },
     );
     let hub = c.node.full_id(&[1; 32]);
-    assert_eq!(c.events.pop_front(), Some(Event::HubFull { topic, hub }));
+    assert_eq!(
+        c.events.pop_front(),
+        Some(Event::HubFull {
+            topic,
+            hub,
+            message: None
+        })
+    );
+    let mid = [7; 8];
+    c.on_node_event(
+        1,
+        NodeEvent::PublishFull {
+            hub: [1; 32],
+            topic: b"other".to_vec(),
+            mid,
+        },
+    );
+    let hub = c.node.full_id(&[1; 32]);
+    assert_eq!(
+        c.events.pop_front(),
+        Some(Event::HubFull {
+            topic: b"other".to_vec(),
+            hub,
+            message: Some(mid)
+        }),
+        "a refused publish is told with no joined-topic guard"
+    );
     assert!(c.events.is_empty());
 }

@@ -297,7 +297,12 @@ fn is_notice(bytes: &[u8]) -> bool {
 }
 
 fn notices_to(net: &Net, to: &NodeId) -> usize {
-    net.nodes[0].h.out.iter().filter(|o| o.to == *to && is_notice(&o.bytes)).count()
+    net.nodes[0]
+        .h
+        .out
+        .iter()
+        .filter(|o| o.to == *to && is_notice(&o.bytes))
+        .count()
 }
 
 /// A hub whose topic has `TABLE_MAX` subscribers answers a new member's SUB with the notice and counts it; a
@@ -321,7 +326,11 @@ fn a_hub_at_the_subscriber_cap_answers_a_new_member_with_the_notice() {
     assert_eq!(net.nodes[0].t.reject_stats().sub_refused(SubRefusal::Topics), 0);
     net.nodes[0].h.out.clear();
     sub_from(&mut net, &fake(0), T);
-    assert_eq!(notices_to(&net, &fake(0)), 0, "a subscriber the hub holds is not refused");
+    assert_eq!(
+        notices_to(&net, &fake(0)),
+        0,
+        "a subscriber the hub holds is not refused"
+    );
     assert_eq!(net.nodes[0].t.reject_stats().sub_refused(SubRefusal::Subscribers), 1);
     let now = net.now;
     let n = &mut net.nodes[0];
@@ -360,7 +369,11 @@ fn a_refused_join_asks_again_on_a_bounded_backoff_and_ends_in_joined() {
     net.run_until(t0 + 10 * SEC);
     net.unsubscribe(1, U);
     net.run_until(t0 + 200 * SEC);
-    assert_eq!(net.events(1).iter().filter(|e| matches!(e, Ev::HubFull { .. })).count(), 2, "one per topic");
+    assert_eq!(
+        net.events(1).iter().filter(|e| matches!(e, Ev::HubFull { .. })).count(),
+        2,
+        "one per topic"
+    );
     assert!(net.subscribed(1).is_empty());
     let (log, seen_now) = (&net.log[base..], seen.borrow().clone());
     assert_eq!(log.len(), seen_now.len());
@@ -378,8 +391,14 @@ fn a_refused_join_asks_again_on_a_bounded_backoff_and_ends_in_joined() {
     let want: Vec<u64> = [0, 2, 6, 14, 30, 62, 126, 190].iter().map(|s| t0 + s * SEC).collect();
     let secs = |v: &[u64]| v.iter().map(|t| (t - t0) / 1_000_000).collect::<Vec<_>>();
     assert_eq!(secs(&times), secs(&want));
-    assert!(times.windows(3).all(|w| w[1] - w[0] <= w[2] - w[1]), "gaps never shrink");
-    assert!(times.windows(2).all(|w| w[1] - w[0] <= SUB_WAIT_MAX), "gaps stay within the cap");
+    assert!(
+        times.windows(3).all(|w| w[1] - w[0] <= w[2] - w[1]),
+        "gaps never shrink"
+    );
+    assert!(
+        times.windows(2).all(|w| w[1] - w[0] <= SUB_WAIT_MAX),
+        "gaps stay within the cap"
+    );
     assert_eq!(notices_t, times.len(), "a notice for each ask");
     assert_eq!(asks_u, 3, "U asked at 0, 2 and 6 s and not after the unsubscribe");
     assert_eq!(notices_u, 3);
@@ -392,4 +411,100 @@ fn a_refused_join_asks_again_on_a_bounded_backoff_and_ends_in_joined() {
     let asked = net.count_between(1, 0, ty::SUB);
     net.run_until(net.now + 200 * SEC);
     assert_eq!(net.count_between(1, 0, ty::SUB), asked, "no ask once the hub holds it");
+}
+
+/// A network of `hubs` hubs, each holding one topic at most, then `members` members attached to every hub.
+fn small_tables(hubs: usize, members: usize) -> Net {
+    let limits = pinc_broadcast::Limits {
+        max_topics: 1,
+        ..pinc_broadcast::Limits::default()
+    };
+    let mut net = Net::with_limits(&vec![IdentityAlg::Ed25519; hubs + members], hubs, SEC, limits);
+    for i in hubs..hubs + members {
+        net.attach(i);
+    }
+    net
+}
+
+fn publish_fulls(net: &Net, i: usize) -> Vec<Ev> {
+    net.events(i)
+        .iter()
+        .filter(|e| matches!(e, Ev::PublishFull { .. }))
+        .cloned()
+        .collect()
+}
+
+/// A hub whose topic table is full tells the publisher; with one hub the publish ends refused at once, is sent no
+/// more and is never given up.
+#[test]
+fn a_publish_no_hub_can_hold_is_refused_and_not_resent() {
+    let mut net = small_tables(1, 2);
+    net.subscribe(1, b"A");
+    net.run_until(2 * SEC);
+    let mid = net.publish(2, b"B", b"x");
+    net.run_until(100 * SEC);
+    let hub = net.id(0);
+    assert_eq!(
+        publish_fulls(&net, 2),
+        [Ev::PublishFull {
+            hub,
+            topic: b"B".to_vec(),
+            mid
+        }]
+    );
+    let sent = net
+        .lanes
+        .iter()
+        .filter(|(f, _, t, _)| *f == 2 && (*t == ty::PUB || *t == ty::FANP))
+        .count();
+    assert_eq!(sent, 1, "the refused publish is sent once");
+    assert!(!net.events(2).iter().any(|e| matches!(e, Ev::GaveUp(_))));
+    assert_eq!(net.nodes[2].t.pending_len(), 0);
+    assert_eq!(net.nodes[0].t.reject_stats().pub_refused_sent(), 1);
+    assert_eq!(net.nodes[2].t.reject_stats().pub_refused_seen(), 1);
+}
+
+/// With two hubs the publish ends refused only once both refused it: the first refusal makes the next retry go to the
+/// other hub, whose refusal ends it.
+#[test]
+fn a_publish_ends_refused_only_once_every_hub_refused() {
+    let mut net = small_tables(2, 2);
+    net.subscribe(2, b"A");
+    net.run_until(2 * SEC);
+    let t0 = net.now;
+    net.publish(3, b"B", b"x");
+    net.run_until(t0 + 2 * SEC);
+    assert!(
+        publish_fulls(&net, 3).is_empty(),
+        "one hub refused, the other was not asked yet"
+    );
+    assert_eq!(net.nodes[3].t.pending_len(), 1);
+    net.run_until(t0 + 4 * SEC);
+    assert_eq!(publish_fulls(&net, 3).len(), 1, "the retry reached the second hub");
+    assert_eq!(net.nodes[3].t.pending_len(), 0);
+    net.run_until(t0 + 100 * SEC);
+    assert_eq!(publish_fulls(&net, 3).len(), 1);
+}
+
+/// A PFULL from a member, or for an id nothing waits for, changes nothing: the publish is still retried.
+#[test]
+fn a_forged_pfull_changes_nothing() {
+    let mut net = small_tables(1, 2);
+    net.filter = Some(Box::new(|from, _, bytes| {
+        !(from == 2 && matches!(bytes.get(4), Some(&(ty::PUB | ty::FANP | ty::FAN))))
+    }));
+    let mid = net.publish(2, b"B", b"x");
+    let (now, member, hub) = (net.now, net.id(1), net.id(0));
+    let n = &mut net.nodes[2];
+    n.t.frame(&mut n.h, now, &member, ty::PFULL, b"B", &mid);
+    n.t.frame(&mut n.h, now, &hub, ty::PFULL, b"B", &[9; 8]);
+    n.t.frame(&mut n.h, now, &hub, ty::PFULL, b"other", &mid);
+    n.t.frame(&mut n.h, now, &hub, ty::PFULL, b"B", &mid[..4]);
+    net.run_until(now + 7 * SEC);
+    assert!(publish_fulls(&net, 2).is_empty());
+    assert_eq!(net.nodes[2].t.pending_len(), 1);
+    assert!(
+        net.lanes.iter().any(|(f, _, t, _)| *f == 2 && *t == ty::PUB),
+        "the publish was retried"
+    );
 }

@@ -167,6 +167,7 @@ impl Core {
                 NEv::PublishAcked { .. }
                 | NEv::PublishGaveUp { .. }
                 | NEv::PublishRoom
+                | NEv::PublishFull { .. }
                 | NEv::GapRepaired { .. }
                 | NEv::Fallback { .. }
                 | NEv::Restored { .. }

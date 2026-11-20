@@ -60,6 +60,15 @@ pub enum NodeEvent {
         /// The message id.
         mid: [u8; 8],
     },
+    /// Every hub refused a publish for a full topic table; it is not sent again.
+    PublishFull {
+        /// The hub whose refusal came last.
+        hub: NodeId,
+        /// The topic.
+        topic: Vec<u8>,
+        /// The message id.
+        mid: [u8; 8],
+    },
     /// On a hub: a publish of its own that was refused for want of room in the topic's log may be taken now.
     PublishRoom,
     /// A message that a gap repair asked for arrived.

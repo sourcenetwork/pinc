@@ -73,6 +73,11 @@ pub enum Ev {
         hub: NodeId,
         topic: Vec<u8>,
     },
+    PublishFull {
+        hub: NodeId,
+        topic: Vec<u8>,
+        mid: [u8; 8],
+    },
     Acp {
         id: u32,
         origin: NodeId,
@@ -200,6 +205,11 @@ impl Host for NodeHost {
             Event::HubFull { hub, topic } => Ev::HubFull {
                 hub: *hub,
                 topic: topic.to_vec(),
+            },
+            Event::PublishFull { hub, topic, mid } => Ev::PublishFull {
+                hub: *hub,
+                topic: topic.to_vec(),
+                mid,
             },
             Event::AcpCheck { id, origin, topic } => Ev::Acp {
                 id,

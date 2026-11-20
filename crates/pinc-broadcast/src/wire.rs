@@ -48,6 +48,9 @@ pub mod ty {
     /// A member's adjacency record: the peers it holds sessions with, signed, sent to the hubs and mirrored between
     /// them. The topic is empty.
     pub const ADJ: u8 = 20;
+    /// A hub tells the node that handed it a PUB or FANP that it could not store the message for a full topic table:
+    /// the message id (8 bytes). A hub never sends it for a mirrored copy.
+    pub const PFULL: u8 = 21;
 }
 
 /// The length of a message id.

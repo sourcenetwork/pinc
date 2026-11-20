@@ -101,6 +101,8 @@ pub struct RejectStats {
     long_walks: u64,
     sub_refused: [u64; 2],
     hub_full_seen: u64,
+    pub_refused_sent: u64,
+    pub_refused_seen: u64,
 }
 
 impl RejectStats {
@@ -128,6 +130,26 @@ impl RejectStats {
     /// How many hub-full notices a member heard.
     pub const fn hub_full_seen(&self) -> u64 {
         self.hub_full_seen
+    }
+
+    /// How many publishes a hub refused for a full topic table and told the publisher.
+    pub const fn pub_refused_sent(&self) -> u64 {
+        self.pub_refused_sent
+    }
+
+    /// How many publishes ended because every hub refused them.
+    pub const fn pub_refused_seen(&self) -> u64 {
+        self.pub_refused_seen
+    }
+
+    #[cfg(feature = "alloc")]
+    pub(crate) const fn note_pub_refused_sent(&mut self) {
+        self.pub_refused_sent = self.pub_refused_sent.saturating_add(1);
+    }
+
+    #[cfg(feature = "alloc")]
+    pub(crate) const fn note_pub_refused_seen(&mut self) {
+        self.pub_refused_seen = self.pub_refused_seen.saturating_add(1);
     }
 
     #[cfg(feature = "alloc")]
@@ -223,6 +245,13 @@ pub enum Trace {
     },
     /// A publish was given up.
     PubGaveUp {
+        /// The id.
+        mid: [u8; 8],
+    },
+    /// Every hub refused a publish for a full topic table; the last to say so is `hub`.
+    PubRefused {
+        /// The hub.
+        hub: NodeId,
         /// The id.
         mid: [u8; 8],
     },

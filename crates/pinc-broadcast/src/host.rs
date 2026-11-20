@@ -79,6 +79,15 @@ pub enum Event<'a> {
         /// The message id.
         mid: [u8; 8],
     },
+    /// Every hub refused a publish for a full topic table; it is not sent again. The message is in no hub's log.
+    PublishFull {
+        /// The hub whose refusal came last.
+        hub: &'a NodeId,
+        /// The topic.
+        topic: &'a [u8],
+        /// The message id.
+        mid: [u8; 8],
+    },
     /// On a hub: a publish of its own that was refused with [`Refused::Backlog`](crate::Refused::Backlog), because
     /// its topic's log was full of messages subscribers were still owed, may be taken now: a subscriber that was
     /// behind moved on, or one that stalled can be let go. The application publishes again.

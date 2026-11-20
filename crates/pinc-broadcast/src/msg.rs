@@ -48,6 +48,13 @@ impl Topics {
         }
     }
 
+    fn send_pfull<H: Host>(&mut self, h: &mut H, to: &NodeId, topic: &[u8], mid: [u8; 8]) {
+        if wire::build(&mut self.scratch, ty::PFULL, topic, &[&mid]).is_ok() {
+            h.send(to, Lane::Reply, &self.scratch);
+            self.rejects.note_pub_refused_sent();
+        }
+    }
+
     /// A PUB, FAN, FANP, MSG or `MEMBER_PUSH` frame from `from`.
     pub(crate) fn on_msg<H: Host>(&mut self, h: &mut H, now: Nanos, from: &NodeId, t: u8, topic: &[u8], rest: &[u8]) {
         let allowed = match t {
@@ -116,8 +123,12 @@ impl Topics {
             let fanned = matches!(t, ty::FAN | ty::FANP);
             // The acknowledgement follows the store: a publisher that hears PACK stops retrying, so a message the
             // hub could not keep (no room for the topic) must not be acknowledged.
-            if self.hub_store(h, now, Some(from), fanned, topic, &head, rest, body) && ack {
+            let stored = self.hub_store(h, now, Some(from), fanned, topic, &head, rest, body);
+            if ack && stored {
                 self.send_pack(h, from, mid);
+            } else if ack && !self.topics.contains_key(topic) {
+                // No entry after a refused store is the full topic table: tell the publisher, who stops retrying here.
+                self.send_pfull(h, from, topic, mid);
             }
         } else {
             self.offer(h, now, topic, mid, head.origin, from, body, head.ts);

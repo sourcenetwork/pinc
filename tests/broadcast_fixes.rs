@@ -145,7 +145,7 @@ fn a_copy_that_arrives_after_the_dedupe_window_waits_once() {
 }
 
 /// A hub acknowledges a publish only after it stored it: with no room for the topic the publisher hears no PACK and
-/// gives up instead of believing the message is safe.
+/// is told the hub refused it (`PublishFull`) instead of believing the message is safe; it is not given up on later.
 #[test]
 fn a_hub_without_room_for_the_topic_does_not_acknowledge() {
     let limits = Limits {
@@ -162,8 +162,13 @@ fn a_hub_without_room_for_the_topic_does_not_acknowledge() {
     net.advance(100 * SEC);
     let acked = net.events(1).contains(&Ev::Acked(m));
     let gave_up = net.events(1).contains(&Ev::GaveUp(m));
+    let refused = net
+        .events(1)
+        .iter()
+        .any(|e| matches!(e, Ev::PublishFull { mid, .. } if *mid == m));
     assert!(!acked, "the hub did not store it");
-    assert!(gave_up);
+    assert!(refused, "the publisher is told the hub has no room");
+    assert!(!gave_up);
 }
 
 /// A message the subscriber received over a member session (the fallback) must not move the point a re-subscription
