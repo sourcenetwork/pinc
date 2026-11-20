@@ -595,3 +595,39 @@ async fn a_second_run_of_the_relay_endpoint_holds_a_packet_once() {
     })
     .await;
 }
+
+/// A node with two sessions at the hub, one over UDP and one over its carrier's relay path, is no longer reachable
+/// directly once the UDP one closes: what is sent to it goes to its carrier at once, not first to the closed address.
+#[nuclei::test]
+async fn a_member_whose_direct_session_closed_is_sent_to_on_its_carrier_at_once() {
+    const M1_ADDR: &str = "10.0.0.5:7003";
+    let rig = rig(true);
+    // node 1 (member `a`) reaches the relay only through its carrier; the same node on another socket reaches it by UDP
+    rig.net.cut(addr(A_ADDR), addr(RELAY_ADDR));
+    within(120, async {
+        both_carriers_open(&rig).await;
+        let known = Relay::new(rig.relay.id())
+            .with_udp(addr(RELAY_ADDR))
+            .with_tcp(addr(RELAY_ADDR));
+        let (no_carrier, _held) = unbounded();
+        let m1 = member_with(
+            Rc::clone(&rig.net),
+            addr(M1_ADDR),
+            1,
+            known,
+            no_carrier,
+            Rc::new(Cell::new(false)),
+        );
+        drive(&m1);
+        assert!(rig.a.join(b"relay/topic", &[]).await.unwrap());
+        assert!(m1.join(b"relay/topic", &[]).await.unwrap());
+        settle(&rig.relay, 30, "the hub holds both sessions of node 1", |s| s.hub_sessions >= 2).await;
+        m1.suspend().await;
+        settle(&rig.relay, 30, "the direct session is released", |s| s.hub_sessions == 1).await;
+        let before = rig.relay.relay_stats().unwrap().datagrams_dropped;
+        let _conn = echo(&rig).await;
+        let s = rig.relay.relay_stats().unwrap();
+        assert_eq!(s.datagrams_dropped, before, "a datagram went to the closed direct address: {s:?}");
+    })
+    .await;
+}
