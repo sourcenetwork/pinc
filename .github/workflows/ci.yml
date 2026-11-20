@@ -1,0 +1,87 @@
+# CI runs the gate (`just gate`) through the same justfile recipes as a local run, split into jobs that run side by
+# side: the static checks, the tests, the stack and harness tests, and the quick proofs. `just proofs-deep` (every
+# model over its full bounds, hours of processor time) is not part of the gate and does not run here.
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  checks:
+    name: checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+      - uses: Swatinem/rust-cache@v2
+      - run: just setup
+      - run: echo "$HOME/.elan/bin" >> "$GITHUB_PATH" && echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - run: just checks
+
+  test:
+    name: tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+      - uses: Swatinem/rust-cache@v2
+      - run: just setup
+      - run: echo "$HOME/.elan/bin" >> "$GITHUB_PATH" && echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - run: just test
+      - run: just doctest
+
+  stack:
+    name: unoptimised stack and harness tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            distributed -> ../target-harness
+      - run: just setup
+      - run: echo "$HOME/.elan/bin" >> "$GITHUB_PATH" && echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - run: just unoptimised
+      - run: just test-distributed
+
+  proofs:
+    name: quick proofs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v5
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/cache@v4
+        with:
+          path: proofs/lean/.lake
+          key: lean-${{ hashFiles('proofs/lean/lean-toolchain', 'proofs/lean/lake-manifest.json', 'proofs/lean/**/*.lean') }}
+          restore-keys: lean-
+      - run: just setup
+      - run: echo "$HOME/.elan/bin" >> "$GITHUB_PATH" && echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - run: just proofs
