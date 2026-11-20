@@ -502,7 +502,8 @@ mod tests {
         let w = p.next_store_write().expect("one write is owed");
         assert!(done(w.run()).is_err());
         p.store_written(false);
-        // the part's own check is now a second away, later than the retry at 1.3 s
+        // the machine's own timers move on past the retry (1.3 s), and so does the part's check
+        p.handle_timeout(T0 + SEC / 2);
         p.handle_timeout(T0 + SEC);
         assert_eq!(
             p.next_deadline(T0 + SEC),
