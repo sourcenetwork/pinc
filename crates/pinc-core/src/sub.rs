@@ -312,11 +312,12 @@ ep_impl! {
                 .get(probed)
                 .and_then(|s| s.conn.as_ref())
                 .is_some_and(|c| c.recovery().packets_in_flight() == 0);
-        let mut env = env!(self, now);
         if quiet
             && let Some(conn) = self.slots.get_mut(probed).and_then(|s| s.conn.as_mut())
         {
-            conn.close(&mut env, code::NO_ERROR);
+            let mut env = env!(self, now);
+            conn.close(&mut env, &mut lent!(self), code::NO_ERROR);
+            self.settle(probed, now);
         }
         if same {
             self.recompute_probed(probed, now);
