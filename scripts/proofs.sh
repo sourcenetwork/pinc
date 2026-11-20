@@ -35,9 +35,7 @@ else
 fi
 jtmp_root=$(mktemp -d)
 trap 'rm -rf "$jtmp_root"' EXIT
-# A recursive operator of a model recurses on the JVM's stack, and how deep the default megabyte goes depends on the
-# Java version (Padding overflows it on Java 17 and not on 21): every run gets 16 MiB.
-jopts() { printf -- '-Xss16m -XX:MaxRAMPercentage=%s%s -Djava.io.tmpdir=%s' "$HEAP" "$JIT" "$(mktemp -d "$jtmp_root/XXXXXX")"; }
+jopts() { printf -- '-XX:MaxRAMPercentage=%s%s -Djava.io.tmpdir=%s' "$HEAP" "$JIT" "$(mktemp -d "$jtmp_root/XXXXXX")"; }
 cfg() { # cfg <config> : the file TLC reads for <config> in this profile
     if [ "$PROFILE" = quick ] && [ -f "proofs/tla/quick/$1.cfg" ]; then echo "proofs/tla/quick/$1.cfg"; else echo "proofs/tla/$1.cfg"; fi
 }
@@ -53,7 +51,11 @@ need() { # need <file> <download command>
 }
 need "$COMMUNITY" "curl -fsSL -o $COMMUNITY https://github.com/tlaplus/CommunityModules/releases/download/202611060952/CommunityModules-deps.jar"
 need "$TRACE_TLC" "curl -fsSL -o $TRACE_TLC https://github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla2tools.jar"
-command -v tlc >/dev/null || { echo "proofs: tlc not found; install TLC (a wrapper around tla2tools.jar) on PATH" >&2; exit 1; }
+need "$TLA_HOME/tla2tools.jar" "just tla-tools"
+# A recursive operator of a model recurses on the stack of TLC's main thread, and the megabyte it has by default is
+# not enough for every model (Padding overflows it). The size has to be on the command line: the launcher makes the
+# main thread before the JVM reads JAVA_TOOL_OPTIONS. So the checks run through this function, not the tlc wrapper.
+tlc() { java -Xss64m -XX:+UseParallelGC -cp "$TLA_HOME/tla2tools.jar" tlc2.TLC "$@"; }
 command -v lake >/dev/null || { echo "proofs: lake not found; install Lean 4 with elan (https://github.com/leanprover/elan)" >&2; exit 1; }
 
 echo "-- lean"
