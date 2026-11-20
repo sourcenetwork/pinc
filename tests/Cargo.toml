@@ -950,6 +950,10 @@ name = "connect_tunnel_source"
 path = "connect_tunnel_source.rs"
 
 [[test]]
+name = "connect_found_slot"
+path = "connect_found_slot.rs"
+
+[[test]]
 name = "connect_flight_fwd"
 path = "connect_flight_fwd.rs"
 
