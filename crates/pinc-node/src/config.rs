@@ -58,8 +58,15 @@ pub(crate) const GONE_TTL: Nanos = 600 * S;
 /// The close code of a refusal (a denied or revoked node).
 pub(crate) const DENIED: u64 = pinc_membership::session::DENIED_CODE;
 
-/// The default protocol id of the hub stream. Its second name: the subscriber list moved to a new layout, so a node
-/// and a hub that speak the first name do not connect to this build.
+/// The default protocol id of the hub stream.
+///
+/// **The name moves only with a release.** The hub protocol has one name at a time, and every wire change of the
+/// protocol bumps it. Because a deployed relay node is its network's hub by default, a name change and the relay
+/// binary release that speaks the new name ship together, and a network upgrades its hubs before its members: a hub
+/// on the old name with members on the new one, or the reverse, is a broken network, not a supported one. A hub and
+/// a member speaking the previous name for one release so a network can be upgraded node by node is backwards
+/// compatibility, which is banned for now. This rule is the record of the decision (see the `pinc-node` module docs
+/// and issue #660); today's name is `pinc/hub/2` (an example, not a promise).
 pub const HUB_ALPN: &[u8] = b"pinc/hub/2";
 /// The protocol id of the values layer.
 pub const VALUES_ALPN: &[u8] = b"pinc/values";
