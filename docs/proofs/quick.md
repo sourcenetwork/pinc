@@ -261,6 +261,7 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `DtnSeal_reuse` | Kps {1, 2} -> {1} |
 | `DtnSeal_xbroken` | MaxB 2 -> 1 |
 | `DtnStore` | N 3 -> 2, Budget 4 -> 2, ByteVals {0,1,2,3,5} -> {1,2}, NowVals {0,1,2} -> {0,1} |
+| `DtnStore_cross` | MaxSeq 3 -> 2 |
 | `Early` | packets KMAX 5 -> 3; RecvStep -> RecvStepQuick: datagram lengths 1..2 -> {1} |
 | `Early_cap3` | packets KMAX 5 -> 4; RecvStep -> RecvStepQuick: datagram lengths 1..2 -> {1} |
 | `Encoder` | WalkK 8 -> 3, Seeds -> SeedsQuick (the powers of two 0..64 -> 13 around the edges, the big logs {0, 10, 20} -> {0, 20}, the overflow multiples 0..30 -> {0, 1, 2, 30}, the encoded multiples 0..4 -> 0..2) |
