@@ -824,13 +824,15 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
             Ok(Some(f)) => {
                 self.lookups.answered(peer);
                 // One entry per peer: the last answer wins, unless it carries an older record than the held one. A
-                // peer not held takes the ring's next slot.
+                // peer not held takes the first empty slot, and the ring's next slot only when none is empty.
                 let held = self.found.iter().position(|s| s.is_some_and(|(p, _, _)| p == *peer));
-                let slot = held.unwrap_or_else(|| {
-                    let next = self.found_next % FOUND;
-                    self.found_next = (next + 1) % FOUND;
-                    next
-                });
+                let slot = held
+                    .or_else(|| self.found.iter().position(Option::is_none))
+                    .unwrap_or_else(|| {
+                        let next = self.found_next % FOUND;
+                        self.found_next = (next + 1) % FOUND;
+                        next
+                    });
                 if let Some(s) = self.found.get_mut(slot)
                     && !s.is_some_and(|(p, old, _)| p == *peer && f.seq < old.seq)
                 {

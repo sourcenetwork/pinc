@@ -1,5 +1,6 @@
 //! One found record per peer: a later lookup answer replaces the peer's earlier one in its slot, an older record never
-//! displaces a newer one, and a peer never takes a second slot of the ring.
+//! displaces a newer one, a peer never takes a second slot of the ring, and a new peer takes an empty slot before it
+//! evicts another peer.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
 
 mod connect_common;
@@ -108,5 +109,33 @@ fn an_older_answer_does_not_replace_a_newer_one() {
         // The held entry keeps its time: stale 30 s after the first answer, not the second.
         assert!(c.found_fresh(1001 * SEC + 1, &peer).is_some());
         assert!(c.found_fresh(1040 * SEC, &peer).is_none());
+    });
+}
+
+#[test]
+fn a_new_peer_takes_a_forgotten_slot() {
+    big_stack(|| {
+        let mut c = conn();
+        let home = id(&ed(0x81));
+        let a = ed(0x79);
+        let others: Vec<Keypair> = (0..u8::try_from(FOUND - 1).unwrap()).map(|i| ed(0x90 + i)).collect();
+        let mut t = 1001 * SEC;
+        answer(&mut c, t, &a, home, 1);
+        for o in &others {
+            t += SEC;
+            answer(&mut c, t, o, home, 1);
+        }
+        let forgotten = others.get(2).unwrap();
+        c.forget_found(&id(forgotten));
+        let new = ed(0xa0);
+        answer(&mut c, t + SEC, &new, home, 1);
+        assert!(c.found(&id(&new)).is_some(), "the new peer was not kept");
+        assert!(c.found(&id(forgotten)).is_none(), "the forgotten peer came back");
+        for (i, kp) in std::iter::once(&a).chain(&others).enumerate() {
+            assert!(
+                std::ptr::eq(kp, forgotten) || c.found(&id(kp)).is_some(),
+                "a forgotten slot was free and another peer's entry was evicted (peer {i})"
+            );
+        }
     });
 }
