@@ -23,6 +23,8 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `BroadcastLog_big` | Ring 6 -> 4, Cap 3 -> 2, MaxN 7 -> 5 (still one more than the ring), Mids {1, 2, 3} -> {1, 2} (as many ids as the cap, as before) |
 | `BroadcastLog_cap` | Ring 6 -> 4, Cap 3 -> 2, MaxN 4 -> 2, Mids {1, 2, 3, 4} -> {1, 2, 3} (still one id more than the cap) |
 | `BroadcastMidMap` | Slots 8 -> 4, Cap 4 -> 2, Keys {0, 8, 16, 1, 9, 2, 7} -> {0, 4, 1, 3, 7} |
+| `BroadcastMidMap_anyHash` | Vals {0, 1} -> {0} |
+| `BroadcastMidMap_refuse` | Vals {0, 1} -> {0} |
 | `BroadcastNode` | MaxNow 5 -> 3, Mids {1, 2} -> {1} |
 | `BroadcastNode_evictCap` | Mids {1, 2, 3, 4} -> {1, 2, 3}, SeenCap 3 -> 2 (still one id more than the dedupe set holds) |
 | `BroadcastNode_evictCap2x` | SeenCap 4 -> 2 and Mids {1, 2, 3, 4} -> {1, 2} (still one seen slot per mid, so the seen table never overflows, as in the deep run), Origins {1, 2} -> {2} (every message is asked for, so the answer is taken; the node's own messages are left out) |
