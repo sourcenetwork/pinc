@@ -254,3 +254,23 @@ fn a_delay_tolerant_dial_skipped_inside_its_backoff_arms_the_redial_at_its_own_e
         );
     });
 }
+
+#[test]
+fn a_dial_with_a_full_table_of_dials_is_not_sent_and_the_layer_is_told() {
+    big(|| {
+        let mut node = node();
+        let peer = hub().bytes;
+        for i in 0..TABLE_MAX as u64 {
+            let mut other = [0u8; 32];
+            other[..8].copy_from_slice(&i.to_le_bytes());
+            node.io.lconn.insert((Layer::Values, other));
+        }
+        node.dial_layer(S, Layer::Dtn, &peer);
+        assert!(
+            node.io.ep.dials.is_empty(),
+            "a dial that cannot be recorded is not sent"
+        );
+        assert!(node.io.lfailed.contains_key(&(Layer::Dtn, peer)), "the layer is told");
+        assert_eq!(node.io.lconn.len(), TABLE_MAX);
+    });
+}

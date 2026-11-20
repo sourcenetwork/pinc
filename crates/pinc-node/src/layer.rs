@@ -168,15 +168,18 @@ where
         {
             return;
         }
+        if io.lconn.len() >= TABLE_MAX {
+            // No room to record the dial: sending it would let the next call send it again.
+            self.layer_lost(now, layer, peer, false);
+            return;
+        }
         let id = io.full_id(peer);
         if self
             .conn
             .dial(now, &mut self.io.ep, id, layer.alpn(), Role::Other, &[])
             .is_ok()
         {
-            if self.io.lconn.len() < TABLE_MAX {
-                self.io.lconn.insert(key);
-            }
+            self.io.lconn.insert(key);
             self.io.trace(NodeTrace::LayerDial {
                 layer: layer.code(),
                 peer: tag(peer),
