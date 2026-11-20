@@ -203,7 +203,8 @@ impl<S: StreamSource, const C: usize> Send<S, C> {
     }
 
     /// Accept up to `data.len()` bytes into the buffer, bounded by credit, the ring, the pool and `room` (what is left
-    /// of the connection's send buffer cap).
+    /// of the connection's send buffer cap). `written` never passes the peer's limit, a varint below 2^62, so it cannot
+    /// overflow.
     pub(super) fn write(&mut self, pool: &mut BufferPool<'_>, data: &[u8], room: u64) -> Result<usize, StreamError> {
         if !self.open {
             return Err(StreamError::StreamState);
