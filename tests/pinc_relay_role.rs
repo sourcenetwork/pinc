@@ -591,7 +591,8 @@ async fn a_second_run_of_the_relay_endpoint_holds_a_packet_once() {
         .await;
         let s = rig.relay.relay_stats().unwrap();
         assert_eq!(s.mailbox.stored, held, "the second run held the packets again: {s:?}");
-        // the member's mailbox is empty, and nothing expired or was pushed out of it: each held packet was handed over, once
+        // the member's mailbox is empty, and nothing expired or was pushed out of it: each held packet was handed
+        // over, once
         assert_eq!(
             (s.mailbox.delivered, s.mailbox.expired, s.mailbox.dropped_oldest),
             (held, 0, 0),

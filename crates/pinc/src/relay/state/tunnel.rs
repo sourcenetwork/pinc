@@ -639,7 +639,8 @@ mod tests {
     }
 
     /// A node with two sessions at the hub, one of them on a validated direct route: when that one closes the node
-    /// keeps a session with no direct route, and the relay stops tunnelling to it (the next datagram takes its carrier).
+    /// keeps a session with no direct route, and the relay stops tunnelling to it (the next datagram takes its
+    /// carrier).
     #[test]
     fn a_node_whose_direct_session_closes_is_no_longer_tunnelled_to() {
         use pinc_connect::relay::Sink;

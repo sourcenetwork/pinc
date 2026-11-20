@@ -11,9 +11,9 @@
 //! given up counts once more, and so does a mark the table has no room for.
 //!
 //! Invariants: the nodes marked are at most twice the record table for records kept, twice for records removed, and
-//! four times the mailbox member table; a packet
-//! is written with its arrival time and restored oldest first; nothing past its lifetime is restored. A wall clock that
-//! goes back across a restart lengthens what the store kept by up to the step back: the node cannot know it.
+//! four times the mailbox member table; a packet is written with its arrival time and restored oldest first; nothing
+//! past its lifetime is restored. A wall clock that goes back across a restart lengthens what the store kept by up to
+//! the step back: the node cannot know it.
 
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::vec::Vec;

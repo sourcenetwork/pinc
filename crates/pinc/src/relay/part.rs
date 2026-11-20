@@ -504,8 +504,8 @@ mod tests {
     }
 
     /// An idle part is woken for the retry of a failed write, though the machine's own timer and the part's check both
-    /// come later than the retry: the machine sweeps at 0.3 s and again at 1.3 s, and the part checks at 1.0 s and 2.0 s,
-    /// so without the retry's own wake the part sleeps from 1.3 s to 2.0 s, past the retry at 1.5 s.
+    /// come later than the retry: the machine sweeps at 0.3 s and again at 1.3 s, and the part checks at 1.0 s and
+    /// 2.0 s, so without the retry's own wake the part sleeps from 1.3 s to 2.0 s, past the retry at 1.5 s.
     #[test]
     fn a_failed_write_wakes_an_idle_part_for_its_retry() {
         let store = Flaky::default();

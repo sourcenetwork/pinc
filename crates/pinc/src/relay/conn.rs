@@ -1,7 +1,8 @@
 //! One accepted byte stream: its protected carrier, its WebSocket framing, and the bytes queued for it.
 //!
 //! Invariants: the queue of a stream and the write in flight together hold whole sealed units and never more than the
-//! backlog limit (plus one unit and one pong); a read or write buffer is owned by at most one operation; the buffers of a stream are allocated once and reused.
+//! backlog limit (plus one unit and one pong); a read or write buffer is owned by at most one operation; the buffers of
+//! a stream are allocated once and reused.
 
 use alloc::boxed::Box;
 use alloc::rc::Rc;
