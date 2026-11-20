@@ -486,13 +486,13 @@ impl<K: KeyStore, D: Discovery, A: Admission, C: Carriers<Pf>, Q: RoleSpec<K>, P
             port_mapping,
         };
         let core = build(cfg, T0, ns_to_ms(wall))?;
-        // The relay's clock is the wall clock; the endpoint's is the same time from another origin, a fixed offset away.
-        let offset = if <Q::Built as Role>::ON {
-            wall.saturating_sub(T0)
+        // The relay's clock is the wall clock; the endpoint's counts the same time from its own first instant.
+        let origin = if <Q::Built as Role>::ON {
+            crate::drive::role_origin(wall)
         } else {
             0
         };
-        let role = role.build(core.identity(), local, T0.saturating_add(offset))?;
+        let role = role.build(core.identity(), local, crate::drive::role_clock(origin, T0))?;
         Ok((
             Parts {
                 node,
@@ -501,7 +501,7 @@ impl<K: KeyStore, D: Discovery, A: Admission, C: Carriers<Pf>, Q: RoleSpec<K>, P
                 home: relays.first().map_or(node, |r| r.id),
                 relays,
                 max_message: limits.topic_message,
-                offset,
+                origin,
             },
             carriers,
             role,
@@ -524,13 +524,13 @@ struct Parts<D> {
     max_message: usize,
     home: NodeId,
     /// The relay clock minus the endpoint's, in nanoseconds.
-    offset: u64,
+    origin: u64,
 }
 
 impl<D> Parts<D> {
     fn finish<H: Hosted>(self, host: H, core: Core<H::Keys, H::Access>, local: SocketAddr, gso: usize) -> Inner<H, D> {
         Inner {
-            shared: Rc::new(Shared::new(host, core, local, gso, self.relays.clone(), self.offset)),
+            shared: Rc::new(Shared::new(host, core, local, gso, self.relays.clone(), self.origin)),
             node: self.node,
             public: self.public,
             discovery: self.discovery,

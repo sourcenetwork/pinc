@@ -12,7 +12,7 @@
 //! and none of it is compiled in.
 //!
 //! Invariants: the role is borrowed inside one call and never across an await or a call of a host closure; the relay
-//! gets the relay clock and the endpoint the endpoint's, one fixed offset apart; nothing here runs until the role's
+//! gets the relay clock and the endpoint the endpoint's, a fixed origin apart; nothing here runs until the role's
 //! records are restored.
 
 use alloc::vec::Vec;
@@ -39,7 +39,7 @@ impl<H: Hosted> Shared<H> {
 
     /// The relay clock at endpoint time `now`.
     fn relay_now(&self, now: u64) -> u64 {
-        now.saturating_add(self.role_off)
+        super::role_clock(self.role_wall0, now)
     }
 
     /// Run the relay's timers when they are due, apply what it queued for the endpoint and tell it what the endpoint
@@ -75,7 +75,7 @@ impl<H: Hosted> Shared<H> {
             self.service(core, now);
         }
         if let Some(at) = role.due(rnow) {
-            core.add_deadline(at.saturating_sub(self.role_off));
+            core.add_deadline(super::endpoint_clock(self.role_wall0, at));
         }
         moved
     }

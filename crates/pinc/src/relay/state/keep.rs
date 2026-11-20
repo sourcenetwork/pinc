@@ -10,7 +10,8 @@
 //! store is counted and reported, and a mark the table has no room for counts as one.
 //!
 //! Invariants: the nodes marked are at most twice the record table and four times the mailbox member table; a packet
-//! is written with its arrival time and restored oldest first; nothing past its lifetime is restored.
+//! is written with its arrival time and restored oldest first; nothing past its lifetime is restored. A wall clock that
+//! goes back across a restart lengthens what the store kept by up to the step back: the node cannot know it.
 
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;

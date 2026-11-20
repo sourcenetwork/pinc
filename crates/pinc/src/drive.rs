@@ -46,6 +46,21 @@ use crate::standby::Ticket;
 
 /// The first time the endpoint sees, so no time is zero.
 pub(crate) const T0: u64 = 10_000_000_000;
+/// What the relay role's clock is made from: the wall clock at the endpoint's first instant.
+pub(crate) const fn role_origin(wall: u64) -> u64 {
+    wall
+}
+
+/// The relay role's clock at endpoint time `now`: the wall clock at the first instant plus the time elapsed since.
+pub(crate) const fn role_clock(origin: u64, now: u64) -> u64 {
+    origin.saturating_add(now.saturating_sub(T0))
+}
+
+/// The endpoint time at which the role's clock reads `at`.
+pub(crate) const fn endpoint_clock(origin: u64, at: u64) -> u64 {
+    T0.saturating_add(at.saturating_sub(origin))
+}
+
 /// The largest UDP payload: the most a coalesced receive or a batched transmit holds.
 const UDP_MAX: usize = 65_536;
 /// The most datagrams read in one burst before the endpoint runs.
@@ -108,8 +123,8 @@ pub(crate) struct Shared<H: Hosted> {
     tx_bufs: Pool,
     /// The size of a transmit buffer: the endpoint's batch of datagrams of the largest size.
     tx_len: usize,
-    /// The relay role's clock minus the endpoint's, in nanoseconds; see [`role_io`].
-    role_off: u64,
+    /// The wall clock at the endpoint's first instant, which the relay role's clock counts from; see [`role_io`].
+    role_wall0: u64,
     /// The role's records are restored: its datagrams are read and its work done only from then on.
     role_ready: Cell<bool>,
     /// The role's carriers moved during the last poll: the endpoint has more to do.
@@ -219,7 +234,7 @@ impl<H: Hosted> Shared<H> {
         local: SocketAddr,
         gso: usize,
         relays: Vec<Relay>,
-        role_off: u64,
+        role_wall0: u64,
     ) -> Self {
         let port_mapping = core.node.has_port_mapping();
         let start = host.platform().now();
@@ -240,7 +255,7 @@ impl<H: Hosted> Shared<H> {
             rx_bufs,
             tx_bufs,
             tx_len,
-            role_off,
+            role_wall0,
             role_ready: Cell::new(false),
             rdirty: Cell::new(false),
         }
@@ -594,6 +609,16 @@ mod tests {
             assert_eq!(sh.instant(T0 + 4), start.saturating_add(4));
             assert_eq!(sh.instant(u64::MAX), start.saturating_add(u64::MAX - T0));
         }
+    }
+
+    /// A wall clock below the endpoint's first instant is still the role's clock: wall time plus the time elapsed.
+    #[test]
+    fn the_roles_clock_is_the_wall_clock_even_below_the_endpoints_first_instant() {
+        let (wall, sec) = (3_000_000_000, 1_000_000_000);
+        let origin = role_origin(wall);
+        assert_eq!(role_clock(origin, T0), wall, "the role starts at the wall clock");
+        assert_eq!(role_clock(origin, T0 + 2 * sec), wall + 2 * sec);
+        assert_eq!(endpoint_clock(origin, wall + 2 * sec), T0 + 2 * sec);
     }
 
     /// The endpoints of a thread share the pools with `std`, and each holds its own without.
