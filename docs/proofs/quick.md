@@ -360,6 +360,10 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `Heap_full` | N 5 -> 4 |
 | `Heap_hi` | N 4 -> 3 |
 | `Held` | ring CAP 3 -> 2, pushes PMAX 9 -> 6 |
+| `Held_evict` | PMAX 9 -> 8 |
+| `Held_head` | PMAX 9 -> 8 |
+| `Held_merge` | PMAX 9 -> 8 |
+| `Held_refuse` | PMAX 9 -> 8 |
 | `HubCodec_snap` | Snaps -> SnapsQuick: snapshot entries up to 3 -> 2 |
 | `HubCodec_snapn` | MutPos -> MutPosQuick, CutPos -> CutPosQuick (entry boundaries mutated and cut: all 64 or 65 entries -> the first 3 and the last 3) |
 | `Incarnation` | MaxSteps 4 -> 3 |
