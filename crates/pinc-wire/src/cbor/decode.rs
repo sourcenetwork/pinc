@@ -66,7 +66,7 @@ impl<'a> Decoder<'a> {
     /// Iterative: pending items are tracked on a fixed stack of [`MAX_DEPTH`] frames, never by recursion.
     ///
     /// # Errors
-    /// Any [`Decoder::next_item`] error, [`WireError::DepthExceeded`] past [`MAX_DEPTH`] open containers, and
+    /// Any [`Decoder::next_item`] error, [`WireError::DepthExceeded`] past [`MAX_DEPTH`] open arrays, maps and tags, and
     /// [`WireError::NonCanonical`] for map keys that are not text, or are duplicated or out of order.
     pub fn skip_value(&mut self) -> Result<(), WireError> {
         // Scalars (majors 0-3 and 7) need no frame stack.
