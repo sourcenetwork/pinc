@@ -15,7 +15,8 @@
 (* each attempt that ended (Done) or registered a wait (its key), each     *)
 (* kick (also the one a waiting future that does not drive makes, fix F3,  *)
 (* for a deadline it added) and each baton offered when a future's turn    *)
-(* ends. The test adds the futures it starts, polls, drops, the results    *)
+(* ends, and each send half dropped (its failure entry goes). The test     *)
+(* adds the futures it starts, polls, drops, the results                   *)
 (* they return and the wakes                                               *)
 (* of the host (a delivered packet, a timer). Each record carries the      *)
 (* futures woken after it and before the next record.                      *)
@@ -247,6 +248,16 @@ DropStep ==
     /\ pend' = pend \ {Ev.f} /\ armed' = armed \ {Ev.f} /\ wkey' = [wkey EXCEPT ![Ev.f] = NoKey]
     /\ UNCHANGED <<live, ended, acc, accu, fail, ans, call, sid, cur, out>>
 
+\* a send half dropped (Core::drop_send, engine/ops.rs; recorded while the session is in the table): the stream's
+\* failure entry goes. Its wake_queued wakes at most the driving future, whichever armed future holds the role
+\* (drive.rs sets core.driver to the ticket of the future that drives); the other wakes are the peer's polls after it,
+\* which make no record: only Stray ones
+SDropStep ==
+    /\ Ev.op = "sdrop"
+    /\ Woke \subseteq armed /\ Cardinality({f \in Woke : ~IsGlobal(f)}) <= 1 /\ armed' = armed \ Woke
+    /\ fail' = SelectSeq(fail, LAMBDA x : x # Ev.s)
+    /\ UNCHANGED <<live, ended, acc, accu, ans, pend, call, sid, wkey, cur, out>>
+
 SpawnStep ==
     /\ Ev.op = "spawn" /\ Ev.f \in Futs /\ Ev.f \notin pend /\ Woke = {}
     /\ pend' = pend \cup {Ev.f}
@@ -262,7 +273,7 @@ Init == i = 1 /\ live = FALSE /\ ended = 0 /\ acc = <<>> /\ accu = <<>> /\ fail 
         /\ pend = {} /\ call = [f \in Futs |-> 0] /\ sid = [f \in Futs |-> 0]
         /\ wkey = [f \in Futs |-> NoKey] /\ armed = {} /\ cur = -1 /\ out = [f \in Futs |-> NoOut]
 Step == /\ i <= Len(Trace) /\ Ev.t = "fw"
-        /\ \/ InitStep \/ SpawnStep \/ PollStep \/ TryStep \/ RetStep \/ DropStep
+        /\ \/ InitStep \/ SpawnStep \/ PollStep \/ TryStep \/ RetStep \/ DropStep \/ SDropStep
            \/ EvStep \/ AllStep \/ EndStep \/ WakeStep \/ RestStep
         /\ i' = i + 1
 Finished == i > Len(Trace) /\ UNCHANGED vars
