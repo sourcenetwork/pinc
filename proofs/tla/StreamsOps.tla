@@ -167,12 +167,16 @@ PoolDemand(r, l) ==
             IN Max(span - Cardinality(r.held), 0) * CH
 Unreceived(r) == PoolDemand(r, Charged(r, r.limit))
 
-(* due: the limit the window is due to move to, once an eighth of the window was freed *)
-Due(r) ==
+\* the limit the window is due to move to, once an eighth of the window was freed, whether or not the stream was asked
+\* to stop: the rule before aabe075c (the witness Streams_stop_raise_w.cfg)
+DueOld(r) ==
     IF ~r.open THEN -1
     ELSE LET cap == IF r.fin = -1 THEN MAXOFF ELSE r.fin
              cand == Min(r.read + r.size, cap)
          IN IF cand > r.limit /\ cand >= r.limit + r.size \div 8 THEN cand ELSE -1
+(* due: the limit the window is due to move to; none for a stream asked to stop (aabe075c): its sender was told to
+   reset and needs no credit for that, and what it still sends is dropped *)
+Due(r) == IF r.stop # 0 THEN -1 ELSE DueOld(r)
 
 (* ---- the pool ---- *)
 HeldTotal(T) == LET f[i \in 0..N] == IF i = 0 THEN 0 ELSE f[i - 1] + Cardinality(T.slots[i].held) IN f[N]
@@ -304,7 +308,8 @@ Discard(r) == IF r.fin # -1 /\ r.rst = -1
               THEN [r EXCEPT !.read = r.fin, !.contig = r.fin, !.held = {}, !.rs = <<>>, !.obs = TRUE]
               ELSE r
 
-OnData(T, r, off, len, fin, diff) ==
+(* the receive of a stream frame; End is the rule for the end arriving on a stream asked to stop *)
+OnDataWith(T, r, off, len, fin, diff, End(_)) ==
     LET e == off + len
         lo == Max(off, r.read)
         first == lo \div CH
@@ -319,8 +324,7 @@ OnData(T, r, off, len, fin, diff) ==
                  ELSE IF ~ins.ok THEN [r |-> r, err |-> "Fragmented"]
                  ELSE [r |-> stored, err |-> "ok"]
         done0 == [store.r EXCEPT !.hi = Max(@, e), !.fin = IF fin THEN e ELSE @]
-        \* the end arriving on a stream asked to stop discards it (c0706819): nothing else would end it
-        done == IF fin /\ r.stop # 0 THEN Discard(done0) ELSE done0
+        done == IF fin /\ r.stop # 0 THEN End(done0) ELSE done0
     IN IF e > MAXOFF THEN [r |-> r, err |-> "FlowControl"]
        ELSE IF r.fin # -1 /\ (e > r.fin \/ (fin /\ e # r.fin)) THEN [r |-> r, err |-> "FinalSize"]
        ELSE IF r.fin = -1 /\ fin /\ e < r.hi THEN [r |-> r, err |-> "FinalSize"]
@@ -329,29 +333,15 @@ OnData(T, r, off, len, fin, diff) ==
        ELSE IF r.rst = -1 THEN [r |-> done, err |-> "ok"]
        ELSE [r |-> [r EXCEPT !.hi = Max(@, e), !.fin = IF fin THEN e ELSE @], err |-> "ok"]
 
+\* the end arriving on a stream asked to stop discards it (c0706819): nothing else would end it; every byte arrived, so
+\* the request is over (9a410adf): one not yet sent is never sent and a lost one is not sent again
+EndStop(d) == [Discard(d) EXCEPT !.stop = 3, !.qcode = -1]
+OnData(T, r, off, len, fin, diff) == OnDataWith(T, r, off, len, fin, diff, EndStop)
+\* the rule before 9a410adf (the witness Streams_stop_end_w.cfg): the stream is discarded and its request stays
+OnDataStopOld(T, r, off, len, fin, diff) == OnDataWith(T, r, off, len, fin, diff, Discard)
 \* the rule before c0706819 (the witness Streams_stop_w.cfg): the end arriving on a stream asked to stop is kept
-OnDataOld(T, r, off, len, fin, diff) ==
-    LET e == off + len
-        lo == Max(off, r.read)
-        first == lo \div CH
-        last == (e - 1) \div CH
-        missing == {k \in first..last : k \notin r.held}
-        ins == InsertR(r.rs, lo, e)
-        stored == [r EXCEPT !.held = r.held \cup (first..last), !.rs = ins.rs, !.contig = First0(ins.rs)]
-        store == IF lo >= e THEN [r |-> r, err |-> "ok"]
-                 ELSE IF last - r.read \div CH >= RING THEN [r |-> r, err |-> "FlowControl"]
-                 ELSE IF lo < r.hi /\ diff /\ Overlaps(r.rs, lo, e) THEN [r |-> r, err |-> "Conflict"]
-                 ELSE IF Cardinality(missing) > AvailC(T) THEN [r |-> r, err |-> "Exhausted"]
-                 ELSE IF ~ins.ok THEN [r |-> r, err |-> "Fragmented"]
-                 ELSE [r |-> stored, err |-> "ok"]
-        done == [store.r EXCEPT !.hi = Max(@, e), !.fin = IF fin THEN e ELSE @]
-    IN IF e > MAXOFF THEN [r |-> r, err |-> "FlowControl"]
-       ELSE IF r.fin # -1 /\ (e > r.fin \/ (fin /\ e # r.fin)) THEN [r |-> r, err |-> "FinalSize"]
-       ELSE IF r.fin = -1 /\ fin /\ e < r.hi THEN [r |-> r, err |-> "FinalSize"]
-       ELSE IF e > r.limit THEN [r |-> r, err |-> "FlowControl"]
-       ELSE IF r.rst = -1 /\ store.err # "ok" THEN [r |-> r, err |-> store.err]
-       ELSE IF r.rst = -1 THEN [r |-> done, err |-> "ok"]
-       ELSE [r |-> [r EXCEPT !.hi = Max(@, e), !.fin = IF fin THEN e ELSE @], err |-> "ok"]
+EndKept(d) == d
+OnDataOld(T, r, off, len, fin, diff) == OnDataWith(T, r, off, len, fin, diff, EndKept)
 
 (* Frame: Streams::on_stream_frame, the new table and the error *)
 Frame(T, id, off, len, fin, diff) ==
