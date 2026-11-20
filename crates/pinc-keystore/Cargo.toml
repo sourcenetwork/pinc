@@ -17,7 +17,7 @@ std = ["dep:getrandom"]
 hwenc = ["std", "dep:tpm2-protocol", "dep:p256"]
 
 [dependencies]
-pinc-crypto = { workspace = true }
+pinc-crypto = { workspace = true, features = ["alloc"] }
 pinc-security = { workspace = true }
 zeroize = { workspace = true, features = ["alloc"] }
 getrandom = { workspace = true, optional = true }

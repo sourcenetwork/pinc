@@ -10,9 +10,9 @@ repository.workspace = true
 publish.workspace = true
 
 [features]
-default = ["alloc"]
-# Boxes the expanded ML-DSA-65 signing key once, at setup. Off on a target without an allocator, where the key stays
-# inline in the key pair.
+default = []
+# Boxes the expanded ML-DSA-65 signing key once, at setup. Off by default, as every `alloc` feature of the workspace
+# is: the crates that always allocate turn it on, and without it the key stays inline in the key pair.
 alloc = []
 # Test-only record of what every transcript absorbs, for trace validation. Allocates once armed; costs nothing when off.
 trace = []

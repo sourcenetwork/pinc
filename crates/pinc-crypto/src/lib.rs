@@ -5,11 +5,12 @@
 //! algorithms and node ids, [`kdf`] the BLAKE3 key derivation, [`Transcript`] the injective handshake hash and
 //! [`Drbg`] the seeded generator.
 //!
-//! The crate is `no_std`; with the default `alloc` feature it allocates in one place, once per ML-DSA-65 or hybrid
-//! key pair: [`identity::Keypair::from_seed`] boxes the expanded key (see [`identity`]). Ed25519 and P-256 key pairs
-//! never allocate, and no wire, sign or verify path does; when a key pair is built (at setup) is the caller's
-//! choice. Without the feature the crate never allocates. It never reads randomness (every key generation takes seed bytes from the caller) and never
-//! panics on any input. Secrets are zeroized on drop and compared in constant time.
+//! The crate is `no_std`; with the `alloc` feature it allocates in one place, once per ML-DSA-65 or hybrid key pair:
+//! [`identity::Keypair::from_seed`] boxes the expanded key (see [`identity`]). Ed25519 and P-256 key pairs never
+//! allocate, and no wire, sign or verify path does; when a key pair is built (at setup) is the caller's choice. The
+//! feature is off by default and the crate never allocates without it; the facade, the node crate, the key store and
+//! the transport's own `alloc` feature turn it on. It never reads randomness (every key generation takes seed bytes
+//! from the caller) and never panics on any input. Secrets are zeroized on drop and compared in constant time.
 //!
 //! The test-only `trace` feature records what every [`Transcript`] absorbs once a thread arms it (it needs `std` and
 //! allocates then); it is off by default and costs nothing off.

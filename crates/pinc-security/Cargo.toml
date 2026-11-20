@@ -16,7 +16,7 @@ trace = ["pinc-crypto/trace"]
 
 [dependencies]
 pinc-wire = { workspace = true }
-pinc-crypto = { workspace = true, default-features = false }
+pinc-crypto = { workspace = true }
 zeroize = { workspace = true }
 
 [lints]

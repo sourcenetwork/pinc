@@ -11,7 +11,7 @@ publish.workspace = true
 
 [features]
 default = []
-alloc = []
+alloc = ["pinc-crypto/alloc"]
 # Test-only observation of the key layer for trace validation. Costs nothing when off.
 trace = ["alloc", "pinc-security/trace"]
 # Test hook: hand the connection the frames of an authenticated packet without sealing them.
@@ -19,7 +19,7 @@ inject = []
 
 [dependencies]
 pinc-wire = { workspace = true }
-pinc-crypto = { workspace = true, default-features = false }
+pinc-crypto = { workspace = true }
 pinc-security = { workspace = true }
 
 [lints]

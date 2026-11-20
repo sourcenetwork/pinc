@@ -10,7 +10,7 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
-pinc-crypto = { workspace = true }
+pinc-crypto = { workspace = true, features = ["alloc"] }
 pinc-security = { workspace = true }
 pinc-keystore = { workspace = true }
 pinc-transport = { workspace = true, features = ["alloc"] }

@@ -7,8 +7,8 @@
 //! randomness from the caller.
 //!
 //! ML-DSA-65 keys hold their expanded matrix inline on a target without an allocator (about 64 KiB, for the hybrid
-//! too): there is nowhere else for it to stay. With the `alloc` feature (default) the expanded key is boxed once, in
-//! [`Keypair::from_seed`], and a key pair of any algorithm is 240 bytes. Storage is not construction:
+//! too): there is nowhere else for it to stay. With the `alloc` feature (off by default) the expanded key is boxed
+//! once, in [`Keypair::from_seed`], and a key pair of any algorithm is 240 bytes. Storage is not construction:
 //! [`Keypair::from_seed`] for ML-DSA-65 and the hybrid builds the 64 KiB expanded key in the caller's frame before
 //! the box copies it out, in every build, so those two algorithms need several hundred KiB of stack to construct a
 //! key pair (measured on aarch64: 512 KiB with this crate optimised, 256 KiB overflowing; 1 MiB at opt-level 0);
