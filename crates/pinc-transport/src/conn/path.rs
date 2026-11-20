@@ -21,9 +21,9 @@
 //! that cadence, and an end whose session moved no application data for 20 s only answers, as the reference model looks
 //! for no direct path on an idle session). The active path is chosen by cost: the smoothed round trip of the path, plus
 //! one second for a relay, minus 3 ms for IPv6; a validated UDP path that was silent for 15 s is left out; from a
-//! relay, or from a path whose address is gone, the connection moves at once, otherwise only for a gain above 5 ms.
-//! After three probe timeouts in a row on a direct path the path is dropped as validated, challenged on the re-join
-//! cadence, and the connection falls back to a relay path if it has one.
+//! relay, or from a path whose address is gone, the connection moves at once, otherwise only when the cheaper path's
+//! round trip is more than 5 ms shorter. After three probe timeouts in a row on a direct path the path is dropped as
+//! validated, challenged on the re-join cadence, and the connection falls back to a relay path if it has one.
 //!
 //! A challenge sent to a new or abandoned path follows a cadence that depends on why: a new path is probed 9 times
 //! from `max(33.3 ms, srtt / 8)`, doubling up to 2 s; a path abandoned after probe timeouts is probed at a flat gap
@@ -825,7 +825,8 @@ conn_impl! {
             .map(|(i, _)| i)
     }
 
-    /// Move to the cheapest usable path: at once from a relay or a gone path, otherwise for a gain above 5 ms.
+    /// Move to the cheapest usable path: at once from a relay or a gone path, otherwise when its round trip is more
+    /// than 5 ms shorter than the active path's.
     pub(super) fn choose_path(&mut self) {
         let Some(best) = self.best_path() else { return };
         let (Some(b), cur) = (self.paths.get(best).copied(), self.paths.active().copied()) else { return };
