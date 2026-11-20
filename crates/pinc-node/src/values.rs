@@ -486,8 +486,11 @@ where
         self.fetches_in(now, &In::ConnectFailed(prov));
     }
 
-    /// A session of the values protocol ended; `ours` says this node dialed it.
-    pub(crate) fn values_down(&mut self, now: Nanos, session: SessionId, peer: &NodeId, ours: bool) {
+    /// A session of the values protocol ended; `dialed` says this node dialed it. Its streams go, and the fetches hear
+    /// of theirs: all at once (`Closed`) when no session this node dialed to the peer is left, else stream by stream as
+    /// a reset, since a newer session already serves the peer (a fetch's stall redial hangs up the session every fetch
+    /// shares, and the endpoint ends it later).
+    pub(crate) fn values_down(&mut self, now: Nanos, session: SessionId, peer: &NodeId, dialed: bool) {
         let Some(v) = self.vals.as_deref_mut() else {
             return;
         };
@@ -497,17 +500,26 @@ where
             .lsess
             .values()
             .any(|s| s.layer == Layer::Values && s.peer == *peer);
+        let down = dialed && !self.io.lout.contains_key(&(Layer::Values, *peer));
         for lid in lids {
-            let serve = self
-                .vals
-                .as_deref()
-                .and_then(|v| v.net.stream(lid))
-                .is_some_and(|s| s.owner() == Owner::Serve);
-            if serve {
+            let owner = self.vals.as_deref().and_then(|v| v.net.stream(lid)).map(VStream::owner);
+            if owner == Some(Owner::Serve) {
                 self.server_in(now, &ServerIn::Reset(lid));
             }
             if let Some(v) = self.vals.as_deref_mut() {
                 v.net.drop_stream(lid);
+            }
+            if let Some(Owner::Fetch(fid)) = owner
+                && !down
+            {
+                self.fetch_in(
+                    now,
+                    fid,
+                    &In::Reset {
+                        stream: lid,
+                        code: pinc_values::knobs::code::CANCELLED,
+                    },
+                );
             }
         }
         // A provider nothing uses any more has no fetch and no served request to tell.
@@ -517,7 +529,7 @@ where
         if !more {
             self.server_in(now, &ServerIn::Closed(prov));
         }
-        if ours {
+        if down {
             self.fetches_in(now, &In::Closed(prov));
         }
     }

@@ -28,6 +28,8 @@ use crate::io::tests::{DIALED, Stub};
 use crate::layer::{LSess, Layer};
 use crate::node::Node;
 use crate::reconcile::ATTEMPTS;
+use crate::trace::Body;
+use crate::values_types::ValuesRequest;
 
 const S: u64 = 1_000_000_000;
 const SET: &[u8] = b"items";
@@ -55,6 +57,7 @@ impl SetsApp for Sets {
 
 /// Reconcile and delay-tolerant delivery on, with nothing stored.
 pub(crate) struct TApps {
+    values_on: bool,
     values: NoValues,
     sets: Sets,
     dtn: NoDtn,
@@ -66,7 +69,7 @@ impl Apps<Software> for TApps {
     type Dtn = NoDtn;
     fn enabled(&self) -> Enabled {
         Enabled {
-            values: false,
+            values: self.values_on,
             sets: true,
             dtn: true,
         }
@@ -90,10 +93,15 @@ fn hub() -> pinc_crypto::NodeId {
 }
 
 fn node() -> Box<TNode> {
-    node_with(false)
+    node_cfg(false, false, false)
 }
 
 pub(crate) fn node_with(is_hub: bool) -> Box<TNode> {
+    node_cfg(is_hub, false, false)
+}
+
+/// A node that is a hub or not, with the values layer on or off, and its trace on or off.
+fn node_cfg(is_hub: bool, values_on: bool, trace: bool) -> Box<TNode> {
     let kp = Keypair::from_seed(IdentityAlg::Ed25519, &[0x11; 32]).unwrap();
     let identity = LocalIdentity::from_keypair(&kp, KeyHandle(1)).unwrap();
     let prov = Software;
@@ -132,9 +140,10 @@ pub(crate) fn node_with(is_hub: bool) -> Box<TNode> {
         map_keys: IdKey::new(0x5eed, &SECRETS).unwrap(),
         wall_ms: 1_700_000_000_000,
         local,
-        trace: false,
+        trace,
     };
     let apps = TApps {
+        values_on,
         values: NoValues,
         sets: Sets,
         dtn: NoDtn,
@@ -419,5 +428,40 @@ fn a_dial_with_a_full_table_of_dials_is_not_sent_and_the_layer_is_told() {
         );
         assert!(node.io.lfailed.contains_key(&(Layer::Dtn, peer)), "the layer is told");
         assert_eq!(node.io.lconn.len(), TABLE_MAX);
+    });
+}
+
+/// A stall redial hangs up the session every fetch of the provider shares, which takes it out of the sessions the node
+/// opens streams on at once. When the endpoint reports that session closed, every fetch on it is told, not only the
+/// one that redialed: each gives up its streams there and tries again.
+#[test]
+fn a_hung_up_values_session_that_closes_is_reported_to_every_fetch_on_it() {
+    big(|| {
+        let mut node = node_cfg(false, true, true);
+        let peer = hub().bytes;
+        for _ in 0..2 {
+            let req = ValuesRequest {
+                root: [7; 32],
+                length: 1 << 20,
+                ranges: &[],
+                providers: &[peer],
+                deadline: None,
+            };
+            node.values_fetch(S, &req).unwrap();
+        }
+        node.settle(S);
+        node.layer_up(S, Layer::Values, SessionId(DIALED), peer, false);
+        node.settle(S);
+        node.io.lout.remove(&(Layer::Values, peer));
+        while node.poll_trace().is_some() {}
+        node.layer_closed(S, SessionId(DIALED));
+        let mut told = 0;
+        while let Some(item) = node.poll_trace() {
+            told += usize::from(matches!(
+                item.body,
+                Body::Values(_, pinc_values::trace::Trace::Retry(_))
+            ));
+        }
+        assert_eq!(told, 2, "a fetch of the closed session was not told it is gone");
     });
 }

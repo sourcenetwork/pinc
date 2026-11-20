@@ -305,7 +305,7 @@ where
             peer: tag(&s.peer),
         });
         match s.layer {
-            Layer::Values => self.values_down(now, session, &s.peer, ours),
+            Layer::Values => self.values_down(now, session, &s.peer, !s.incoming),
             Layer::Sets => self.sets_down(now, session, &s.peer),
             Layer::Dtn => self.dtn_down(now, session, &s.peer),
         }
