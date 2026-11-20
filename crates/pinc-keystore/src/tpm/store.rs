@@ -104,6 +104,8 @@ pub struct TpmStore<T: Transport> {
 }
 
 /// The most refused-flush handles remembered; a TPM holds only a few transient objects, so more is a wedged TPM.
+// vertexia: a TPM holding more than MAX_STALE transient objects whose flushes are refused forgets the handles past the
+// list (they stay loaded until a reset); stop unloading when the list is full, with a test transport of a larger table.
 const MAX_STALE: usize = 8;
 
 impl<T: Transport> core::fmt::Debug for TpmStore<T> {
