@@ -43,10 +43,22 @@
 (* model with nothing due (Quiet): no timer, answer, Limit or sub-session  *)
 (* answer left to happen. A line the model cannot take deadlocks.          *)
 (*                                                                         *)
-(* Not traced: a thin node (the model caps its delay at CapThin, 16 ticks, *)
-(* CAP_THIN 8 s, as the code does; the test never makes a thin node), the  *)
-(* host's hold of resends (Hold), the first                                *)
-(* fix and the planted bugs (all off), a second dial at once (over).       *)
+(* A thin node: every dial line says whether A's node was thin when it     *)
+(* dialed ("thin", the node-wide value the dial's handshake is given), and *)
+(* the dial takes it. The last dial of the test comes after a dial whose   *)
+(* answer took 300 ms, which makes the node thin: handed over to a peer    *)
+(* that stopped, it has no early end and closes past 120 ticks (the 60 s   *)
+(* of a thin node, LimitOf). Its first resend delay is more than one tick  *)
+(* (twice the round trip the slow dial measured, over 250 ms), not First,  *)
+(* and its cap is CapThin (8 s): both                                      *)
+(* only move hidden resends of a dial to a peer that never answers, which  *)
+(* no line shows. The 300 ms round trip of the slow dial falls within one  *)
+(* tick, so its answer comes with no tick line between: Rtt 0 still holds. *)
+(* The model takes the node's kind once, at the dial; the trace never      *)
+(* shows a node whose kind changes while a dial is up.                     *)
+(*                                                                         *)
+(* Not traced: the host's hold of resends (Hold), the first fix and the    *)
+(* planted bugs (all off), a second dial at once (over).                   *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds dial_report.ndjson.   *)
@@ -81,7 +93,7 @@ Step ==
       [] Ev.op = "restart" -> Quiet /\ ~held /\ M!Restart
       [] Ev.op \in {"cut", "heal"} -> Quiet /\ UNCHANGED mvars
       [] Ev.op = "cache" -> Quiet /\ M!Cache /\ cached' = Ev.allow
-      [] Ev.op = "dial" -> Quiet /\ M!Start /\ ~d'.thin /\ ~d'.wait /\ (d'.sub \/ d'.lost = L)
+      [] Ev.op = "dial" -> Quiet /\ M!Start /\ (d'.sub \/ d'.thin = Ev.thin) /\ ~d'.wait /\ (d'.sub \/ d'.lost = L)
       [] Ev.op = "answered" -> /\ \/ M!Answer /\ d'.answered
                                   \/ M!SubHeard
                                /\ d'.told_ans
