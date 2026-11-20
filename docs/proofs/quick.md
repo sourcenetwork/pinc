@@ -228,7 +228,10 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `DtnForwardNet_loss` | T (transfer slots per node) 2 -> 1 |
 | `DtnForwardNet_over` | Budget 4 -> 3, MaxMsgs 4 -> 2 |
 | `DtnForwardNet_replay` | MaxMsgs 3 -> 2, T (transfer slots per node) 2 -> 1 |
+| `DtnForward_full` | MaxSends 2 -> 1 |
 | `DtnForward_l1` | T (transfer slots) 2 -> 1, MaxTime 2 -> 1 |
+| `DtnForward_live` | Retry 2 -> 1, MaxTime 2 -> 1, L 2 -> 1 |
+| `DtnForward_rehold` | MaxTime 2 -> 1 |
 | `DtnGf` | Init -> InitQuick: rows 0..255 -> the 10 of Spread; AllSeqs -> AllSeqsQuick: kernel slices up to length 3 -> 2 |
 | `DtnLayout` | Seeds -> SeedsQuick: 10 (k, m) pairs -> 3 (k = 0, k + m = 255 and 256), logs {0, 3, 4, 5} -> {4, 5} |
 | `DtnRs_a` | Vals {0, 1, 255} -> {0, 255} |
