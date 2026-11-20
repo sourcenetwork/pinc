@@ -132,6 +132,7 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `ConnectCodec` | the mutation values Vals {0, 2, 13, 32, 255} -> ValsQuick {0, 13, 255}, the frames of the canonical-form check Small (up to 80 bytes) -> SmallQuick (up to 40 bytes) |
 | `ConnectDuty` | T 130 -> 65 (two steady beacons, at 5 and 65, after a burst cut short by a step of 4 s), RS {0, 2, 5, 64} -> {2} (a restart in the burst, and after the steady beacons once the clock stepped back to 2) |
 | `ConnectDuty_sat` | TOP = T 68 -> 9 (a burst restarted at 5 whose last deadline is the clock's last instant, and probe deadlines that land on it), RS {0, 2, 5, 64} -> {5} |
+| `ConnectFlight` | Ins -> InsQuick (hints 10 -> 3 with every beacon and record: none, a repeat of one shared with a beacon and the record, 4 distinct; 17 distinct hints only with no record; beacons 4 -> 3: none, a shared one, the full 4; record addresses 4 -> 3: none, overlapping, the full 8; a record homed on relay 0 or 1, not on none): 12000 -> 1428 cases |
 | `ConnectLink` | Steps StepsC {7 s, 30 s} -> StepsCQuick {30 s}, Horizon 90 s -> 120 s (the lease is learned at 120 s) |
 | `ConnectLink_lease` | Horizon 75 s -> 40 s |
 | `ConnectLink_restart` | Horizon 6 s -> 2.4 s |

@@ -48,6 +48,20 @@ SomeRec == [hasRec : {TRUE}, rec : RECS, fresh : BOOLEAN, recHome : {NOREL, 0, 1
 Ins == {[hints |-> h, beacon |-> b, hasRec |-> r.hasRec, rec |-> r.rec, fresh |-> r.fresh, recHome |-> r.recHome,
          peer |-> p, home |-> hm, fwd |-> f] :
         h \in HINTS, b \in BEACONS, r \in NoRec \cup SomeRec, p \in {NOREL, 2}, hm \in {NOREL, 1, 300}, f \in BOOLEAN}
+\* the quick profile's domain (quick/ConnectFlight.cfg substitutes it for Ins): hints none, a repeat of one shared with
+\* a beacon and the record, 4 distinct, each with beacons none, one shared, the full 4 and records none, overlapping, the
+\* full 8, homed on relay 0 or 1 (no relay is left to the cases with no record); 17 distinct hints (the cap reached by
+\* hints alone) only with no record
+HINTSQuick == {<<>>, <<"a1", "a1">>, Hn("h", 1, 4)}
+BEACONSQuick == {<<>>, <<"b1", "a1">>, Hn("b", 1, 4)}
+SomeRecQuick == [hasRec : {TRUE}, rec : {<<>>, <<"r1", "b1", "a1">>, Hn("r", 1, 8)}, fresh : BOOLEAN, recHome : {0, 1}]
+InsQuick == {[hints |-> h, beacon |-> b, hasRec |-> r.hasRec, rec |-> r.rec, fresh |-> r.fresh, recHome |-> r.recHome,
+              peer |-> p, home |-> hm, fwd |-> f] :
+             h \in HINTSQuick, b \in BEACONSQuick, r \in NoRec \cup SomeRecQuick, p \in {NOREL, 2}, hm \in {NOREL, 1, 300},
+             f \in BOOLEAN}
+            \cup {[hints |-> Hn("h", 1, 17), beacon |-> b, hasRec |-> FALSE, rec |-> <<>>, fresh |-> TRUE, recHome |-> NOREL,
+                  peer |-> p, home |-> hm, fwd |-> f] :
+                 b \in {<<>>, <<"b1", "a1">>}, p \in {NOREL, 2}, hm \in {NOREL, 1, 300}, f \in BOOLEAN}
 
 Init == x = [t |-> "root"]
 Next == x.t = "root" /\ \E i \in Ins : x' = [t |-> "case", v |-> i]
