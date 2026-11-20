@@ -128,8 +128,8 @@ and close run on 1 MiB of stack and fail on 512 KiB. `Limits::wasm()` is the pre
 | `pinc-keystore` | long-term keys behind a `KeyStore` trait; a software store and a pure-Rust TPM 2.0 store (`hwenc`) | yes, with an allocator (the TPM store needs `std`) | built; proven except the TPM store under pressure and the items [being closed](docs/proofs/closing.md) |
 | `pinc-security` | hybrid post-quantum handshake, resumption with 0-RTT, key schedule, packet protection, key roll | yes | built, proven |
 | `pinc-transport` | PINCER: streams, datagrams, flow and congestion control, loss recovery, pacing, path MTU, migration | yes | built; proven except the items [being closed](docs/proofs/closing.md) |
-| `pinc-core` | the SANS-IO endpoint: host interface, protocol dispatch, commands, events, queries | yes | built; proven except the endpoint under a stalled event queue ([#748](https://github.com/sourcenetwork/pinc/issues/748)) |
-| `pinc-node` | the endpoint, the connectivity client and every layer composed over real sessions | yes | built; proven except the reconcile layer's sets ([#748](https://github.com/sourcenetwork/pinc/issues/748)) and the items [being closed](docs/proofs/closing.md) |
+| `pinc-core` | the SANS-IO endpoint: host interface, protocol dispatch, commands, events, queries | yes | built; proven except the items [being closed](docs/proofs/closing.md) |
+| `pinc-node` | the endpoint, the connectivity client and every layer composed over real sessions | yes | built; proven except the items [being closed](docs/proofs/closing.md) |
 | `pinc-connect` | carriers, relays, signed records and lookup, hole punching, the hub tunnel, the mailbox | yes | built; proven except the thin kind of a running dial ([#748](https://github.com/sourcenetwork/pinc/issues/748)) and the items [being closed](docs/proofs/closing.md) |
 | `pinc-portmap` | a UDP port mapping from the home gateway (PCP, NAT-PMP, UPnP-IGD), off unless turned on | yes, heap-free | built, proven |
 | `pinc-table` | fixed tables over one block of bytes made once: sorted slab, array, ring, slot pool; no allocation after setup | yes, heap-free | built, proven |

@@ -8,9 +8,9 @@ These items are still open; they are listed so nothing is hidden:
   that took effect); the typed error after the last resend is covered by unit tests, not by the TPM model.
 - The TLC models are bounded as listed (the Lean theorems are not); the trace checks cover the recorded runs only;
   the model-based tests cover the bounded state graphs of their configs only, in the eleven tests of `scripts/proofs/mbt.sh`.
-- `pinc-core`: the model-based test of the endpoint (`MbtEndpoint`) covers the endpoint's use of its tables; it fails
-  on the config with a stalled event queue ([#748](https://github.com/sourcenetwork/pinc/issues/748)). The text below
-  was written before that model and is being brought in line with it (the same issue).
+- `pinc-core`: the model-based test of the endpoint (`MbtEndpoint`) covers the endpoint's use of its tables in its
+  three configs, the one with a stalled event queue among them. The text below was written before that model and is
+  being brought in line with it ([#748](https://github.com/sourcenetwork/pinc/issues/748)).
   The half-open cap and the life of an unauthenticated session are proved (see "half-open cap" above: at most 256
   counted sessions, a refused first flight changes no slot, no arrival frees a session, no first flight makes a
   fifth holder of an id, a session leaves the count only when it is established or freed, and is gone at the first timer call at or
@@ -209,5 +209,5 @@ These items are still open; they are listed so nothing is hidden:
   covered under another row): of the relay role `relay/hub.rs`, `relay/run.rs`, `relay/peers.rs`,
   `relay/carrier_fns.rs`, `relay/fx.rs`, `relay/limits.rs` and `relay/stats.rs`, the carrier and HTTP I/O
   (`drive/carrier_io.rs`, `drive/http_io.rs`), `mem.rs`, `host.rs`, `maps.rs`, `body.rs` and `endpoint_topics.rs`; and
-  the items of [#748](https://github.com/sourcenetwork/pinc/issues/748) (the model-based test of opens, `notifyall`); its async plumbing is assumed of the host
+  `notifyall` ([#748](https://github.com/sourcenetwork/pinc/issues/748)); its async plumbing is assumed of the host
   ([#246](https://github.com/sourcenetwork/pinc/issues/246) (c)).
