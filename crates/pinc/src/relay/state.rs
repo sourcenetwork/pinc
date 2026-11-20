@@ -87,7 +87,8 @@ pub(crate) struct Core<S, K: KeyStore, A> {
     udp_out: VecDeque<(SocketAddr, Vec<u8>)>,
     udp_pool: Vec<Vec<u8>>,
     keep: keep::Keep,
-    /// Slots with a read or a write to start, and slots to close: the loop works through these and never scans the streams.
+    /// Slots with a read or a write to start, and slots to close: the loop works through these and never scans the
+    /// streams (only the timer checks every carrier's deadlines, once a second).
     pub(crate) submit: Vec<usize>,
     reap: Vec<(usize, u64)>,
     next_conn: u64,
@@ -738,10 +739,22 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
     }
 
     fn close_session(&mut self, node: &NodeId, session: SessionId, reason: CloseReason) {
-        let slot = self.conns.iter().position(|c| {
+        let named = |c: &Option<Conn<S>>| {
             c.as_ref()
                 .is_some_and(|c| c.node.as_ref() == Some(node) && c.session == Some(session))
-        });
+        };
+        let slot = self
+            .by_node
+            .get(&node_key(node))
+            .copied()
+            .filter(|&s| self.conns.get(s).is_some_and(named))
+            // a replaced carrier is no longer the node's entry (its replacement is): found by a scan, once per
+            // reconnect of a node, at most `CARRIERS` streams
+            .or_else(|| {
+                (reason == CloseReason::Replaced)
+                    .then(|| self.conns.iter().position(named))
+                    .flatten()
+            });
         if let Some(slot) = slot {
             self.dying(
                 slot,
