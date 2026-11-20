@@ -498,17 +498,18 @@ mod tests {
         store.fail_first.set(true);
         let (mut p, _) = part(store);
         p.restore(T0, &owed_write());
-        p.handle_timeout(T0 + SEC / 2);
+        p.handle_timeout(T0 + SEC * 3 / 10);
         let w = p.next_store_write().expect("one write is owed");
         assert!(done(w.run()).is_err());
         p.store_written(false);
+        // the part's own check is now a second away, later than the retry at 1.3 s
         p.handle_timeout(T0 + SEC);
         assert_eq!(
             p.next_deadline(T0 + SEC),
-            Some(T0 + SEC + SEC / 2),
+            Some(T0 + SEC * 13 / 10),
             "the part sleeps past the retry"
         );
-        p.handle_timeout(T0 + SEC + SEC / 2);
+        p.handle_timeout(T0 + SEC * 13 / 10);
         assert!(p.next_store_write().is_some(), "the retry did not come");
     }
 

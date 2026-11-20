@@ -673,7 +673,10 @@ mod tests {
         let sh = &ep.0.shared;
         let rnow = sh.relay_now(T0);
         assert_eq!(rnow, wall, "the role's clock does not start at the wall clock");
-        let due = sh.role().unwrap().due(rnow).unwrap();
+        // the role runs its timers, so its next deadline counts from the clock it was built on
+        let mut role = sh.role().unwrap();
+        role.tick(rnow);
+        let due = role.due(rnow).unwrap();
         assert!(
             due <= rnow + SEC,
             "the role's first deadline is {due} at {rnow}, more than a second away"
