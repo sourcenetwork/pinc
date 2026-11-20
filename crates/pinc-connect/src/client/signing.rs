@@ -39,6 +39,8 @@ struct Job {
     buf: [u8; MAX_RECORD_LEN],
     signed: usize,
     msg: [u8; sleep::MSG_LEN],
+    /// A sleep notice the node no longer wants: its signature is still asked for and answered, and then dropped.
+    cancelled: bool,
 }
 
 /// The signing work of a node.
@@ -82,20 +84,29 @@ impl Signing {
         self.beacon = true;
     }
 
-    /// A suspension begins: owe a notice to every relay in `relays`.
-    pub(super) const fn begin_suspend(&mut self, relays: u32, wall_ms: u64) {
+    /// A suspension begins: owe a notice to every relay in `relays`. A notice of an earlier suspension still asked
+    /// for is no longer wanted: its answer is dropped.
+    pub(super) fn begin_suspend(&mut self, relays: u32, wall_ms: u64) {
+        self.cancel_job();
         self.sleep = relays;
         self.sleep_ms = wall_ms;
         self.suspending = true;
     }
 
-    /// The node resumed before its notices were signed: they are no longer wanted.
+    /// The node resumed before its notices were signed: they are no longer wanted. A notice already asked for is
+    /// still answered, and the answer is dropped.
     pub(super) fn cancel_suspend(&mut self) {
         self.sleep = 0;
         self.suspending = false;
         self.close_at = None;
-        if self.job.as_ref().is_some_and(|j| j.kind == Kind::Sleep) {
-            self.job = None;
+        self.cancel_job();
+    }
+
+    /// The signature asked for, if it is a sleep notice, is answered and dropped (the host holds the request, so the
+    /// job stays until its answer: a late answer must never land on the job that follows).
+    fn cancel_job(&mut self) {
+        if let Some(j) = self.job.as_mut().filter(|j| j.kind == Kind::Sleep) {
+            j.cancelled = true;
         }
     }
 }
@@ -170,6 +181,9 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
                 true
             }
             Kind::Sleep => {
+                if job.cancelled {
+                    return true;
+                }
                 let Ok(len) = sleep::finish(&mut job.buf, job.signed, sig) else {
                     return false;
                 };
@@ -225,6 +239,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
             buf: [0; MAX_RECORD_LEN],
             signed: 0,
             msg: [0; sleep::MSG_LEN],
+            cancelled: false,
         }
     }
 

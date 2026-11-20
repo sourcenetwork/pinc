@@ -954,6 +954,10 @@ name = "connect_flight_fwd"
 path = "connect_flight_fwd.rs"
 
 [[test]]
+name = "connect_sleep"
+path = "connect_sleep.rs"
+
+[[test]]
 name = "connect_punch"
 path = "connect_punch.rs"
 
