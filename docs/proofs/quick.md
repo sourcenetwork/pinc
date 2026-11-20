@@ -476,6 +476,7 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `Queue_over` | PMAX 8 -> 7 |
 | `Queue_purge` | PMAX 8 -> 7 |
 | `Queue_wrap` | PMAX 8 -> 5, CL {1, 2, 3, 5} -> {1} (four pushes of one class and four pops wrap the head of the ring of CAP 4) |
+| `RangeVerifier` | MaxGroups 7 -> 6 |
 | `Reach` | N 3 -> 2, S 4 -> 3, PMAX 9 -> 6 |
 | `Reconcile` | UniMax 5 -> 3; Xor8 <- Xor8Quick and XorTab <- XorTabQuick (the byte XOR from a 16 x 16 table of half bytes) |
 | `ReconcileWire` | BLen 3 -> 2, RAlpha {0, 1, 2, 3} -> {0, 1, 2}, RLen 5 -> 3; Seeds <- SeedsQuick and Expand <- ExpandQuick (smaller literal case domains, see ReconcileWire.tla) |
