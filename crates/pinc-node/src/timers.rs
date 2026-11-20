@@ -172,7 +172,7 @@ where
     }
 }
 
-/// A probe of the bound on the node's timer, for the trace check (cargo feature `trace`): a real [`Bound`] driven
+/// A probe of the bound on the node's timer, for the trace check (cargo feature `trace`): a real `Bound` driven
 /// through the check of a timer call and the answer between two calls.
 #[cfg(feature = "trace")]
 #[doc(hidden)]

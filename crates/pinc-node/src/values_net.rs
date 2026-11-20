@@ -658,7 +658,7 @@ impl Net {
 }
 
 /// The tables of the values layer as the trace test of the proofs drives them (cargo feature `trace`): a real
-/// [`Net`] whose provider and stream tables are filled, all but `window` slots and streams, by fillers that are never
+/// `Net` whose provider and stream tables are filled, all but `window` slots and streams, by fillers that are never
 /// given back, so what is left behaves as tables of `window`. Numbers and stream numbers are reported relative to the
 /// first one past the fillers. The probe makes no decision of its own: each call is the call the node makes.
 #[cfg(feature = "trace")]
@@ -674,7 +674,7 @@ pub mod probe {
     /// The bound of both tables.
     pub const TABLE_MAX_PROBE: usize = TABLE_MAX;
 
-    /// A [`Net`] with all but a window of its tables filled.
+    /// A `Net` with all but a window of its tables filled.
     #[derive(Debug)]
     pub struct NetProbe {
         net: Net,

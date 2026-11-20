@@ -31,7 +31,7 @@ pub(crate) const fn cid_len(n: usize) -> usize {
 /// The sizes, exported for trace validation (cargo feature `trace`, off by default).
 #[cfg(feature = "trace")]
 pub mod trace {
-    /// [`super::head_len`].
+    /// `super::head_len`.
     #[must_use]
     pub const fn head_len(arg: u64) -> usize {
         super::head_len(arg)
