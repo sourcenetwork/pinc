@@ -339,8 +339,10 @@ impl<T: Transport> TpmStore<T> {
     /// # Errors
     /// [`KeyStoreError::InvalidHandle`] if `at` is outside the persistent range or `key` is already persistent;
     /// a TPM failure such as `TPM_RC_NV_DEFINED` if `at` is taken; [`KeyStoreError::TpmFull`] when the TPM has no room
-    /// and no key can be unloaded. If only the flush of the transient copy fails, the key is persistent all the same, the
-    /// error is returned and the flush is retried before the next load.
+    /// and no key can be unloaded. If only the flush of the transient copy fails, the key is persistent all the same
+    /// and the flush is retried before the next load: `Ok(())` is returned when the leftover handle is remembered
+    /// for that, the flush error only when it could not be remembered (the list is full). After such an error
+    /// `tpm_handle(key) == Some(at)` tells that the key is persistent.
     pub fn persist(&mut self, key: &KeyHandle, at: u32) -> Result<()> {
         if !PERSISTENT.contains(&at) {
             return Err(KeyStoreError::InvalidHandle);
@@ -355,7 +357,10 @@ impl<T: Transport> TpmStore<T> {
         if let Some(slot) = self.keys.get_mut(&id) {
             slot.place = Place::Persistent(at);
         }
-        self.discard(transient)
+        match self.discard(transient) {
+            Err(e) if !self.stale.contains(&transient) => Err(e),
+            _ => Ok(()),
+        }
     }
 
     /// Read the public key of the object at `handle` and record it, with `blob` for a key this store created (`None`

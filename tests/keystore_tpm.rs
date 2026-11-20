@@ -400,10 +400,9 @@ fn a_lost_flush_answer_after_persist_does_not_make_two_keys_one_object() {
     let k1 = store.generate(IdentityAlg::EcdsaP256).unwrap();
     let k2 = store.generate(IdentityAlg::EcdsaP256).unwrap();
     armed.store(true, Ordering::Relaxed);
-    assert!(matches!(
-        store.persist(&k1, PERSISTENT_KEY),
-        Err(KeyStoreError::Transport(_))
-    ));
+    // The key is persistent and the leftover handle is remembered, so the call reports success.
+    store.persist(&k1, PERSISTENT_KEY).unwrap();
+    assert_eq!(store.tpm_handle(&k1), Some(PERSISTENT_KEY));
     let k3 = store.generate(IdentityAlg::EcdsaP256).unwrap();
     for (name, k) in [("k1", &k1), ("k2", &k2), ("k3", &k3)] {
         let (alg, pk) = store.public(k).unwrap();
