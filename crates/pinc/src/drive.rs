@@ -749,6 +749,22 @@ mod tests {
         );
     }
 
+    /// The role is built at the platform's wall clock: its first check falls a second after it, not after the
+    /// endpoint's first instant (the machine's own sweep, run at half a second, is due later than that check).
+    #[test]
+    fn the_role_is_built_at_the_platforms_wall_clock() {
+        let wall = 3 * SEC;
+        let ep = rolled(wall);
+        let sh = &ep.0.shared;
+        let mut role = sh.role().unwrap();
+        role.tick(wall + SEC / 2);
+        assert_eq!(
+            role.due(wall + SEC / 2),
+            Some(wall + SEC),
+            "the role was built at a clock other than the wall clock"
+        );
+    }
+
     /// The endpoints of a thread share the pools with `std`, and each holds its own without.
     #[test]
     fn two_endpoints_of_a_thread_share_their_pools_only_with_std() {
