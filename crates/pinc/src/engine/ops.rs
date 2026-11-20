@@ -338,9 +338,11 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
         self.drop_recv(now, info, stream);
     }
 
-    /// The receive half of a stream is dropped before its end: throw away what arrives until the stream ends.
+    /// The receive half of a stream is dropped before its end: throw away what arrives until the stream ends. Only a
+    /// stream still open is listed: it holds a slot, and so does every listed one.
     pub(crate) fn drop_recv(&mut self, now: u64, info: &SessInfo, stream: StreamId) {
-        if let Some(s) = self.sessions.get_mut(&info.id)
+        if self.drain_stream(now, info.id, stream) == RecvStatus::Open
+            && let Some(s) = self.sessions.get_mut(&info.id)
             && !s.discard.contains(&stream)
         {
             debug_assert!(s.discard.len() < DISCARDED, "a dropped stream without a stream slot");
@@ -348,7 +350,6 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
                 s.discard.push(stream);
             }
         }
-        self.discard_if_dropped(now, info.id, stream);
     }
 
     pub(crate) fn send_datagram(&mut self, now: u64, info: &SessInfo, data: &[u8]) -> Result<()> {

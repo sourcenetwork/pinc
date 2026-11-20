@@ -1,14 +1,17 @@
 //! Regressions of the core's bounded tables: a refused revoke leaves no bar, a stale lookup failure answers no later
 //! lookup, and a restore counts the addresses the book kept.
 
+use alloc::rc::Rc;
 use alloc::vec;
 use core::net::SocketAddr;
 
 use pinc_connect::client::Notice;
+use pinc_core::SessionId;
+use pinc_security::Alpn;
 
 use super::adjacent_tests::{core, peer};
 use super::state::BOOK_MAX;
-use super::{REVOKED_MAX, Try};
+use super::{DISCARDED, REVOKED_MAX, Try, Up};
 use crate::error::ErrorKind;
 
 #[test]
@@ -60,4 +63,23 @@ fn a_restore_counts_the_nodes_the_book_kept() {
     state.extend_from_slice(&seq);
     let r = c.restore_state(1, &state).unwrap();
     assert_eq!(r.addresses, 1);
+}
+
+/// A session of the core's table that the endpoint does not know, so any stream of it is gone.
+fn listed_full() -> (super::adjacent_tests::C, Rc<super::SessInfo>) {
+    let mut c = core();
+    let id = SessionId(1);
+    c.session_up(1, id, peer(1), Alpn::new(b"app").unwrap(), Up::Accepted { held: 0 });
+    let s = c.sessions.get_mut(&id).unwrap();
+    s.discard.extend((0..DISCARDED as u64).map(|i| i * 4));
+    let info = Rc::clone(&s.info);
+    (c, info)
+}
+
+#[test]
+fn a_dropped_stream_that_holds_no_slot_is_not_listed() {
+    let (mut c, info) = listed_full();
+    // The end of this stream was consumed by a read that was dropped before it told the handle: the slot is free.
+    c.drop_recv(1, &info, 4 * DISCARDED as u64 + 400);
+    assert_eq!(c.sessions.get(&info.id).unwrap().discard.len(), DISCARDED);
 }

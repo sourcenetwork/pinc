@@ -61,6 +61,16 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
         if !self.sessions.get(&session).is_some_and(|s| s.discard.contains(&id)) {
             return;
         }
+        if self.drain_stream(now, session, id) != RecvStatus::Open
+            && let Some(s) = self.sessions.get_mut(&session)
+        {
+            s.discard.retain(|i| *i != id);
+        }
+    }
+
+    /// Consume what the endpoint holds on `id` until it holds nothing; how the stream stands then (`Finished` if the
+    /// endpoint no longer knows it).
+    pub(super) fn drain_stream(&mut self, now: u64, session: SessionId, id: StreamId) -> RecvStatus {
         loop {
             let n = match self.node.endpoint().query(Query::Read { session, stream: id }) {
                 Answer::Chunk(c) => c.len(),
@@ -71,14 +81,8 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
                 Ok(_) => RecvStatus::Open,
                 Err(_) => RecvStatus::Finished,
             };
-            if status != RecvStatus::Open {
-                if let Some(s) = self.sessions.get_mut(&session) {
-                    s.discard.retain(|i| *i != id);
-                }
-                return;
-            }
-            if n == 0 {
-                return;
+            if status != RecvStatus::Open || n == 0 {
+                return status;
             }
         }
     }
