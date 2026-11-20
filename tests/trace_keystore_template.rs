@@ -131,13 +131,14 @@ fn keystore_template_traces() {
         )
         .unwrap();
         run.cut(&cmds, "open");
-        for _ in 0..2 {
-            store.generate(IdentityAlg::EcdsaP256).unwrap();
-            run.cut(&cmds, "generate");
-        }
+        // Sealing first: TPM2_Create needs a free object slot, and the primary with two loaded keys fills all three.
         for pt in [&b"sealed by the tpm"[..], b"sealed by the tpm", &[0u8; 32][..]] {
             store.seal(pt).unwrap();
             run.cut(&cmds, "seal");
+        }
+        for _ in 0..2 {
+            store.generate(IdentityAlg::EcdsaP256).unwrap();
+            run.cut(&cmds, "generate");
         }
     }
 
