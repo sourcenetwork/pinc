@@ -658,19 +658,26 @@ fn seeded(seed: u64, out: &mut Vec<String>) -> bool {
         }
         match r.stream {
             Stream::Live => {
-                choices.extend([3, 4]);
                 if r.conn.carrier_state(0) == State::Open {
-                    choices.push(5);
+                    choices.extend([3, 4, 5]);
+                } else {
+                    // a handshake needs two or three rounds before the end of the stream may cut it
+                    choices.extend([3, 3, 3, 4]);
                 }
             }
-            Stream::Asked => choices.extend([6, 4]),
+            Stream::Asked => choices.extend([6, 6, 6, 4]),
             Stream::None => {}
         }
         match choices[(rng.next_u64() % choices.len() as u64) as usize] {
             0 => {
                 r.route_next();
             }
-            1 => r.tick(if rng.next_u64() % 20 == 0 { 31_000 } else { 10 }),
+            // mostly 10 ms; 2 s (the longest retry wait) one time in five, and 31 s (past a dial's cap) one in twenty
+            1 => r.tick(match rng.next_u64() % 20 {
+                0 => 31_000,
+                1..=4 => 2_000,
+                _ => 10,
+            }),
             2 => r.drive(10),
             3 => {
                 r.shuttle_once();
@@ -704,6 +711,7 @@ fn connect_carriers_trace() {
         midmessage(&mut out);
         slow(&mut out);
         let opened = (0..40).filter(|&seed| seeded(seed, &mut out)).count();
+        eprintln!("connect_carriers: a carrier opened in {opened} of 40 seeds");
         assert!(opened >= 30, "a carrier opened in only {opened} of 40 seeds");
         assert!(out.len() > 2000, "the trace holds {} events", out.len());
         if let Ok(dir) = std::env::var("PINC_TRACE_DIR") {
