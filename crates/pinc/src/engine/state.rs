@@ -228,4 +228,304 @@ mod tests {
         v1.extend_from_slice(&41u64.to_be_bytes());
         assert!(parse(&v1).is_none());
     }
+
+    use alloc::collections::BTreeSet;
+    use alloc::format;
+    use alloc::string::String;
+    use core::fmt::Write as _;
+
+    use crate::engine::adjacent_tests::{C, core as new_core};
+    use crate::trace_util::{below, jb, mix, write_trace};
+
+    const NOW: u64 = 1_000_000;
+
+    fn node_of(i: u8) -> NodeId {
+        NodeId {
+            alg: IdentityAlg::Ed25519,
+            bytes: [i; 32],
+        }
+    }
+
+    fn v4(i: u8) -> SocketAddr {
+        SocketAddr::new(IpAddr::from([10, 0, 0, i]), 4433)
+    }
+
+    fn v6(i: u16) -> SocketAddr {
+        SocketAddr::new(IpAddr::from([0x2001, 0xdb8, 0, 0, 0, 0, 0, i]), 9)
+    }
+
+    /// A state as its parts, so a source can break a bound the encoder keeps.
+    #[derive(Clone)]
+    struct Src {
+        len: u32,
+        core: Vec<u8>,
+        count: u16,
+        entries: Vec<u8>,
+        seq: u64,
+    }
+
+    impl Src {
+        fn of(core: &[u8], book: &Book, seq: u64) -> Self {
+            let mut entries = Vec::new();
+            for (node, addrs) in book {
+                let a: Vec<u8> = addrs.iter().flat_map(addr_bytes).collect();
+                entries.extend(entry(
+                    node.alg.tag(),
+                    node.bytes,
+                    u8::try_from(addrs.len()).unwrap(),
+                    &a,
+                ));
+            }
+            Self {
+                len: u32::try_from(core.len()).unwrap(),
+                core: core.to_vec(),
+                count: u16::try_from(book.len()).unwrap(),
+                entries,
+                seq,
+            }
+        }
+
+        fn bytes(&self, version: u8) -> Vec<u8> {
+            let mut o = vec![version];
+            o.extend_from_slice(&self.len.to_be_bytes());
+            o.extend_from_slice(&self.core);
+            o.extend_from_slice(&self.count.to_be_bytes());
+            o.extend_from_slice(&self.entries);
+            if version == VERSION {
+                o.extend_from_slice(&self.seq.to_be_bytes());
+            }
+            o
+        }
+    }
+
+    fn addr_bytes(a: &SocketAddr) -> Vec<u8> {
+        let mut b = Vec::new();
+        put_addr(&mut b, a);
+        b
+    }
+
+    fn entry(tag: u8, node: [u8; 32], n: u8, addrs: &[u8]) -> Vec<u8> {
+        let mut e = vec![tag];
+        e.extend_from_slice(&node);
+        e.push(n);
+        e.extend_from_slice(addrs);
+        e
+    }
+
+    /// The core's own state in the layout of `CoreStateOps.Enc`: no tickets, one round trip of 5 to `[7; 32]`.
+    fn core_with_round_trip() -> Vec<u8> {
+        let mut c = vec![1, 0, 0, 0, 2, 1, 0, 0, 1, 1];
+        c.extend_from_slice(&[7; 32]);
+        c.extend_from_slice(&5u64.to_be_bytes());
+        c.extend_from_slice(&[0, 0]);
+        c
+    }
+
+    fn live(kind: usize) -> C {
+        let mut c = new_core();
+        match kind {
+            1 => {
+                let src = Src::of(&core_with_round_trip(), &vec![(node_of(3), vec![v4(1), v6(1)])], 5);
+                c.restore_state(NOW, &src.bytes(VERSION)).unwrap();
+            }
+            2 => {
+                for i in 0..8 {
+                    assert!(c.add_address(node_of(4), v4(i)));
+                }
+                assert!(c.add_address(node_of(5), v4(1)));
+                c.node.restore_record_seq(u64::MAX - 1);
+            }
+            _ => {}
+        }
+        c
+    }
+
+    fn jbook(book: &Book) -> String {
+        let rows: Vec<String> = book
+            .iter()
+            .map(|(n, addrs)| {
+                let a: Vec<String> = addrs.iter().map(|x| jb(&addr_bytes(x))).collect();
+                format!(
+                    r#"{{"alg":{},"bytes":{},"addrs":[{}]}}"#,
+                    n.alg.tag(),
+                    jb(&n.bytes),
+                    a.join(",")
+                )
+            })
+            .collect();
+        format!("[{}]", rows.join(","))
+    }
+
+    /// A live state: the export, the book sorted by node and the record number.
+    fn snap(c: &mut C) -> String {
+        let export = c.export_state(NOW).unwrap();
+        let (_, book, seq) = parse(&export).unwrap();
+        assert_eq!(seq, Some(c.node.connectivity().record_seq()));
+        let mut live: Book = c.book.iter().map(|(n, a)| (*n, a.clone())).collect();
+        live.sort_by_key(|(n, _)| (n.alg.tag(), n.bytes));
+        assert_eq!(book.len(), live.len());
+        let seq = c.node.connectivity().record_seq().to_be_bytes();
+        format!(
+            r#"{{"export":{},"book":{},"seq":{}}}"#,
+            jb(&export),
+            jbook(&live),
+            jb(&seq)
+        )
+    }
+
+    fn sources() -> Vec<Src> {
+        let mut out = Vec::new();
+        let mut core0 = Vec::new();
+        for kind in 0..3 {
+            let export = live(kind).export_state(NOW).unwrap();
+            let (core, book, seq) = parse(&export).unwrap();
+            if kind == 0 {
+                core0 = core.to_vec();
+            }
+            out.push(Src::of(core, &book, seq.unwrap()));
+        }
+        let one = vec![(node_of(1), vec![v4(1)])];
+        let base = Src::of(&core0, &one, 0);
+        let with = |f: &dyn Fn(&mut Src)| {
+            let mut s = base.clone();
+            f(&mut s);
+            s
+        };
+        out.push(Src::of(&core0[..core0.len() - 1], &one, 0));
+        out.push(Src::of(
+            &core0,
+            &vec![(node_of(1), vec![v4(1)]), (node_of(1), vec![v6(1)])],
+            0,
+        ));
+        out.push(Src::of(&core0, &vec![(node_of(1), vec![v4(1), v4(1)])], 0));
+        out.push(Src::of(&core0, &vec![(node_of(1), vec![])], 0));
+        out.push(Src::of(&core0, &one, 3));
+        out.push(Src::of(&core0, &one, u64::MAX));
+        let nine: Book = (0..9u8)
+            .map(|i| {
+                (
+                    node_of(i + 1),
+                    if i == 0 { (0..8).map(v4).collect() } else { vec![v4(i)] },
+                )
+            })
+            .collect();
+        out.push(Src::of(&core0, &nine, 0));
+        out.push(with(&|s| s.count = u16::try_from(BOOK_MAX + 1).unwrap()));
+        out.push(with(&|s| s.count = u16::MAX));
+        out.push(Src::of(&core0, &vec![(node_of(1), (0..9).map(v4).collect())], 0));
+        for tag in [0, 5] {
+            out.push(with(&|s| s.entries = entry(tag, [1; 32], 0, &[])));
+        }
+        for fam in [0, 5, 255] {
+            out.push(with(&|s| s.entries = entry(1, [1; 32], 1, &[fam, 0, 0, 0, 0, 0, 9])));
+        }
+        for len in [u32::MAX, 0x8000_0000] {
+            out.push(with(&|s| s.len = len));
+        }
+        out
+    }
+
+    /// Every input the spec derives from the sources, without repeats, and the random ones.
+    fn inputs() -> Vec<Vec<u8>> {
+        let mut set = BTreeSet::new();
+        for src in sources() {
+            for version in [VERSION, VERSION_1] {
+                let bs = src.bytes(version);
+                set.insert(bs.clone());
+                for k in 0..bs.len() {
+                    set.insert(bs[..k].to_vec());
+                }
+                set.insert([bs.clone(), vec![0]].concat());
+                for i in 0..bs.len() {
+                    for v in [0, 255, bs[i].wrapping_add(1)] {
+                        let mut m = bs.clone();
+                        m[i] = v;
+                        set.insert(m);
+                    }
+                }
+            }
+        }
+        let mut seed = 7u64;
+        for _ in 0..300 {
+            let mut bs: Vec<u8> = (0..below(&mut seed, 80))
+                .map(|_| mix(&mut seed).to_le_bytes()[0])
+                .collect();
+            if let Some(first) = bs.first_mut() {
+                *first = u8::try_from(1 + below(&mut seed, 2)).unwrap();
+            }
+            set.insert(bs);
+        }
+        set.into_iter().collect()
+    }
+
+    fn parse_json(bs: &[u8]) -> String {
+        match parse(bs) {
+            None => r#"{"ok":false}"#.into(),
+            Some((core, book, seq)) => format!(
+                r#"{{"ok":true,"ver":{},"core":{},"book":{},"seq":{}}}"#,
+                bs[0],
+                jb(core),
+                jbook(&book),
+                seq.map_or_else(|| "[]".into(), |s| jb(&s.to_be_bytes()))
+            ),
+        }
+    }
+
+    /// Restores of every input into three live cores, and a full book, recorded with the live state around each.
+    #[test]
+    fn trace_state() {
+        let mut out = String::new();
+        let inputs = inputs();
+        for kind in 0..3 {
+            let mut c = live(kind);
+            let mut before = snap(&mut c);
+            for bs in &inputs {
+                let r = c.restore_state(NOW, bs);
+                let ok = r.is_ok();
+                if parse(bs).is_none() {
+                    assert!(!ok);
+                }
+                let after = snap(&mut c);
+                if !ok {
+                    assert_eq!(after, before, "a refused restore changed the state");
+                }
+                let res = r.map_or([0; 4], |r| [r.tickets, r.peers, r.prekeys, r.addresses]);
+                writeln!(
+                    out,
+                    r#"{{"t":"state","op":"restore","bs":{},"parse":{},"ok":{},"res":{res:?},"before":{before},"after":{after}}}"#,
+                    jb(bs),
+                    parse_json(bs),
+                    ok
+                )
+                .unwrap();
+                if after != before {
+                    c = live(kind);
+                    before = snap(&mut c);
+                }
+            }
+        }
+
+        let mut c = new_core();
+        for i in 0..BOOK_MAX {
+            let mut bytes = [0u8; 32];
+            bytes[..8].copy_from_slice(&u64::try_from(i).unwrap().to_be_bytes());
+            let node = NodeId {
+                alg: IdentityAlg::Ed25519,
+                bytes,
+            };
+            assert!(c.add_address(node, v4(1)));
+        }
+        let core0 = parse(&live(0).export_state(NOW).unwrap()).unwrap().0.to_vec();
+        let new: Book = (0..3u8).map(|i| (node_of(200 + i), vec![v4(i)])).collect();
+        let ok = c.restore_state(NOW, &Src::of(&core0, &new, 0).bytes(VERSION)).is_ok();
+        let added = new.iter().filter(|(n, _)| c.book.contains_key(n)).count();
+        assert_eq!((c.book.len(), added), (BOOK_MAX, 0));
+        writeln!(
+            out,
+            r#"{{"t":"state","op":"full","before":{BOOK_MAX},"after":{},"ok":{ok},"added":{added}}}"#,
+            c.book.len()
+        )
+        .unwrap();
+        write_trace("facade_state.ndjson", &out);
+    }
 }
