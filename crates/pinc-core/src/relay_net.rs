@@ -5,9 +5,12 @@
 //! endpoint treats any address in this range as a relay path (it costs a second more when the active path is chosen,
 //! and its congestion state survives a move from one relay to another). IPv4 addresses are `240.relay.peer`
 //! (the reserved class E block, never routed) and IPv6 addresses are `fd56:494e:43::relay:peer`; the port is
-//! unused. `relay` is a table position below 256 and `peer` a table position the connectivity layer assigns.
+//! zero as [`relay_addr`] makes it, and the hub of a relay role sets it to the generation of the slot (the address
+//! `relay_parts` reads does not depend on it). `relay` is a table position below 256 and `peer` a table position the
+//! connectivity layer assigns.
 //!
-//! Invariants: [`relay_addr`] and [`relay_parts`] are inverses; an address outside the block is never a relay path.
+//! Invariants: [`relay_addr`] and [`relay_parts`] are inverses for the IP
+//! part of the address; an address outside the block is never a relay path.
 
 use core::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
