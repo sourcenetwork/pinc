@@ -41,6 +41,9 @@ pub const RC_TESTING: u32 = 0x90A;
 /// `TPM_RC_RETRY`: the TPM was busy; send the command again.
 pub const RC_RETRY: u32 = 0x922;
 
+/// `TPM_RC_OBJECT_MEMORY`: the TPM has no free slot for another object.
+pub(crate) const RC_OBJECT_MEMORY: u32 = 0x902;
+
 /// Whether `code` is a warning the TPM 2.0 specification defines as "send the same command again".
 const fn is_resend(code: u32) -> bool {
     matches!(code, RC_YIELDED | RC_TESTING | RC_RETRY)

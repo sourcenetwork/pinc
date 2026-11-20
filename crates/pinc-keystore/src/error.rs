@@ -47,6 +47,10 @@ pub enum KeyStoreError {
         /// The TPM warning code (`TPM_RC_RETRY`, `TPM_RC_YIELDED` or `TPM_RC_TESTING`).
         code: u32,
     },
+    /// The TPM has no free object slot and the store has no loaded key it can unload to make one: the slots are held
+    /// by the object the command uses or by other users of the TPM.
+    #[cfg(feature = "hwenc")]
+    TpmFull,
 }
 
 impl fmt::Display for KeyStoreError {
@@ -73,6 +77,8 @@ impl fmt::Display for KeyStoreError {
                 f,
                 "the TPM stayed busy and did not take the command (response code {code:#06x})"
             ),
+            #[cfg(feature = "hwenc")]
+            Self::TpmFull => f.write_str("the TPM has no room for another object and the store has none to unload"),
         }
     }
 }

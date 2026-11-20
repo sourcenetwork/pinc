@@ -11,7 +11,7 @@ use tpm2_protocol::TpmUnmarshal;
 use tpm2_protocol::data::{Tpm2bPrivate, Tpm2bPublic};
 use zeroize::Zeroizing;
 
-use super::client::{Blob, EccPoint, MAX_AUTH_LEN, RC_INITIALIZE, TpmClient};
+use super::client::{Blob, EccPoint, MAX_AUTH_LEN, RC_INITIALIZE, RC_OBJECT_MEMORY, TpmClient};
 use super::template;
 use super::transport::{DeviceTransport, SimTransport, Transport};
 use crate::{KeyHandle, KeyStore, KeyStoreError, Result, Signature, sealed};
@@ -63,10 +63,20 @@ impl TpmConfig {
     }
 }
 
+/// Where a key lives.
+enum Place {
+    /// A key this store created: loaded at `handle`, or unloaded (`None`) to make room, then loaded again from
+    /// `blob`, which the TPM wrapped under the primary (not a secret in clear).
+    Transient { handle: Option<u32>, blob: Blob },
+    /// A persistent key at this handle; it takes a slot only while a command uses it.
+    Persistent(u32),
+}
+
 struct Slot {
-    handle: u32,
-    persistent: bool,
+    place: Place,
     public: [u8; 33],
+    /// The store's use counter at the key's last use; the least recently used loaded key is unloaded first.
+    used: u64,
 }
 
 /// A [`KeyStore`] over a TPM 2.0.
@@ -74,6 +84,11 @@ struct Slot {
 /// It holds ECDSA P-256 identity keys (created in the TPM, never exported) and seals data under a TPM-protected
 /// key. [`KeyStore::decapsulate`] and every other algorithm are [`KeyStoreError::Unsupported`]: keep those keys in a
 /// [`SoftwareStore`](crate::SoftwareStore).
+///
+/// A TPM holds only a few objects at once (three on some). When it has no room for an object a call needs, the store
+/// unloads its least recently used key that the call does not use and loads it again from its wrapped form on its
+/// next use; a TPM with room sees no extra command. When no key can be unloaded, the call fails with
+/// [`KeyStoreError::TpmFull`].
 ///
 /// Dropping the store flushes its transient handles; a failure to flush then cannot be reported, and the TPM
 /// reclaims the handle when its resource manager closes the session.
@@ -84,6 +99,8 @@ pub struct TpmStore<T: Transport> {
     keys: HashMap<u64, Slot>,
     /// Transient handles whose flush the TPM refused, retried before the next command that loads an object.
     stale: Vec<u32>,
+    /// Counts key uses, for [`Slot::used`].
+    tick: u64,
 }
 
 /// The most refused-flush handles remembered; a TPM holds only a few transient objects, so more is a wedged TPM.
@@ -178,6 +195,7 @@ impl<T: Transport> TpmStore<T> {
             primary,
             keys: HashMap::new(),
             stale: Vec::new(),
+            tick: 0,
         })
     }
 
@@ -186,9 +204,13 @@ impl<T: Transport> TpmStore<T> {
         &mut self.client
     }
 
-    /// The TPM handle behind `key`.
+    /// The TPM handle of `key` while it is loaded; `None` for a key not in this store or unloaded to make room (it is
+    /// loaded again by its next use). The handle names the key until the next call on this store.
     pub fn tpm_handle(&self, key: &KeyHandle) -> Option<u32> {
-        self.keys.get(&key.id()).map(|s| s.handle)
+        self.keys.get(&key.id()).and_then(|s| match s.place {
+            Place::Persistent(h) | Place::Transient { handle: Some(h), .. } => Some(h),
+            Place::Transient { handle: None, .. } => None,
+        })
     }
 
     /// Flush the transient `handle`; if the TPM refuses, remember it so [`Self::reclaim`] tries again.
@@ -208,68 +230,143 @@ impl<T: Transport> TpmStore<T> {
         }
     }
 
+    /// The next value of the use counter.
+    fn touch(&mut self) -> u64 {
+        self.tick = self.tick.wrapping_add(1);
+        self.tick
+    }
+
+    /// The TPM just gave out `handle`, so an earlier refused flush of that number no longer names a leftover object:
+    /// forget it, or a later retry would flush the new object.
+    fn adopt(&mut self, handle: u32) {
+        self.stale.retain(|&h| h != handle);
+    }
+
+    /// The least recently used loaded key other than `keep`.
+    fn least_used(&self, keep: Option<u64>) -> Option<u64> {
+        self.keys
+            .iter()
+            .filter(|(id, s)| Some(**id) != keep && matches!(s.place, Place::Transient { handle: Some(_), .. }))
+            .min_by_key(|(_, s)| s.used)
+            .map(|(id, _)| *id)
+    }
+
+    /// Flush the loaded key `id` and mark it unloaded; it is loaded again from its blob on its next use. A refused
+    /// flush is remembered as [`Self::discard`] does and returned.
+    fn unload(&mut self, id: u64) -> Result<()> {
+        let handle = match self.keys.get_mut(&id).map(|s| &mut s.place) {
+            Some(Place::Transient { handle, .. }) => handle.take(),
+            _ => None,
+        };
+        handle.map_or(Ok(()), |h| self.discard(h))
+    }
+
+    /// Send `cmd`, which may need a free object slot; while the TPM answers that it has none, retry the flushes it
+    /// refused earlier (once), then unload the least recently used loaded key other than `keep` and send `cmd`
+    /// again. Each pass frees a slot or ends the loop, so `cmd` is sent at most the number of loaded keys plus two
+    /// times. While the TPM has room, `cmd` is sent once and nothing else.
+    fn room<R>(
+        &mut self,
+        keep: Option<u64>,
+        mut cmd: impl FnMut(&mut TpmClient<T>, &TpmConfig, u32) -> Result<R>,
+    ) -> Result<R> {
+        let mut reclaimed = self.stale.is_empty();
+        loop {
+            match cmd(&mut self.client, &self.config, self.primary) {
+                Err(KeyStoreError::Tpm { code: RC_OBJECT_MEMORY }) => {}
+                done => return done,
+            }
+            if !reclaimed {
+                reclaimed = true;
+                self.reclaim();
+                continue;
+            }
+            let id = self.least_used(keep).ok_or(KeyStoreError::TpmFull)?;
+            self.unload(id)?;
+        }
+    }
+
+    /// The TPM handle of `key`, loading the key again first if it was unloaded to make room; marks it used.
+    fn handle_of(&mut self, key: &KeyHandle) -> Result<u32> {
+        let id = key.id();
+        let used = self.touch();
+        let slot = self.keys.get_mut(&id).ok_or(KeyStoreError::UnknownKey)?;
+        slot.used = used;
+        let blob = match &slot.place {
+            Place::Persistent(h) | Place::Transient { handle: Some(h), .. } => return Ok(*h),
+            Place::Transient { handle: None, blob } => blob.clone(),
+        };
+        let handle = self.room(Some(id), |c, _, primary| c.load(primary, &[], &blob))?;
+        self.adopt(handle);
+        if let Some(Place::Transient { handle: h, .. }) = self.keys.get_mut(&id).map(|s| &mut s.place) {
+            *h = Some(handle);
+        }
+        Ok(handle)
+    }
+
     /// Create an identity key of `alg` inside the TPM and load it.
     ///
     /// # Errors
-    /// [`KeyStoreError::Unsupported`] unless `alg` is [`IdentityAlg::EcdsaP256`]; a TPM or transport failure.
+    /// [`KeyStoreError::Unsupported`] unless `alg` is [`IdentityAlg::EcdsaP256`]; [`KeyStoreError::TpmFull`] when the
+    /// TPM has no room and no key can be unloaded; a TPM or transport failure.
     pub fn generate(&mut self, alg: IdentityAlg) -> Result<KeyHandle> {
         if alg != IdentityAlg::EcdsaP256 {
             return Err(KeyStoreError::Unsupported);
         }
         self.reclaim();
-        let blob = self.client.create(
-            self.primary,
-            &[],
-            template::p256_signing_key(),
-            &self.config.key_auth,
-            &[],
-        )?;
-        let handle = self.client.load(self.primary, &[], &blob)?;
-        self.register(handle, false)
+        let blob = self.room(None, |c, cfg, primary| {
+            c.create(primary, &[], template::p256_signing_key(), &cfg.key_auth, &[])
+        })?;
+        let handle = self.room(None, |c, _, primary| c.load(primary, &[], &blob))?;
+        self.adopt(handle);
+        self.register(handle, Some(blob))
     }
 
     /// Load the persistent key at `handle`.
     ///
     /// # Errors
     /// [`KeyStoreError::InvalidHandle`] outside the persistent range; a TPM failure such as `TPM_RC_HANDLE` if
-    /// nothing lives there.
+    /// nothing lives there; [`KeyStoreError::TpmFull`] when the TPM has no room and no key can be unloaded.
     pub fn load_persistent(&mut self, handle: u32) -> Result<KeyHandle> {
         if !PERSISTENT.contains(&handle) {
             return Err(KeyStoreError::InvalidHandle);
         }
-        self.register(handle, true)
+        self.register(handle, None)
     }
 
     /// Make `key` persistent at `at`, so a later run can find it with [`TpmStore::load_persistent`].
     ///
     /// # Errors
     /// [`KeyStoreError::InvalidHandle`] if `at` is outside the persistent range or `key` is already persistent;
-    /// a TPM failure such as `TPM_RC_NV_DEFINED` if `at` is taken.
+    /// a TPM failure such as `TPM_RC_NV_DEFINED` if `at` is taken; [`KeyStoreError::TpmFull`] when the TPM has no room
+    /// and no key can be unloaded.
     pub fn persist(&mut self, key: &KeyHandle, at: u32) -> Result<()> {
         if !PERSISTENT.contains(&at) {
             return Err(KeyStoreError::InvalidHandle);
         }
-        let slot = self.keys.get(&key.id()).ok_or(KeyStoreError::UnknownKey)?;
-        if slot.persistent {
+        if matches!(self.slot(key)?.place, Place::Persistent(_)) {
             return Err(KeyStoreError::InvalidHandle);
         }
-        let transient = slot.handle;
-        self.client.evict_control(&self.config.owner_auth, transient, at)?;
+        let id = key.id();
+        let transient = self.handle_of(key)?;
+        self.room(Some(id), |c, cfg, _| c.evict_control(&cfg.owner_auth, transient, at))?;
         self.client.flush_context(transient)?;
-        if let Some(slot) = self.keys.get_mut(&key.id()) {
-            slot.handle = at;
-            slot.persistent = true;
+        if let Some(slot) = self.keys.get_mut(&id) {
+            slot.place = Place::Persistent(at);
         }
         Ok(())
     }
 
-    /// Read the public key of the object at `handle` and record it; on failure a transient `handle` is flushed.
-    fn register(&mut self, handle: u32, persistent: bool) -> Result<KeyHandle> {
-        let public = self.client.read_public(handle).and_then(|p| compress(&p));
+    /// Read the public key of the object at `handle` and record it, with `blob` for a key this store created (`None`
+    /// for a persistent one); on failure a transient `handle` is flushed.
+    fn register(&mut self, handle: u32, blob: Option<Blob>) -> Result<KeyHandle> {
+        let public = self
+            .room(None, |c, _, _| c.read_public(handle))
+            .and_then(|p| compress(&p));
         let public = match public {
             Ok(p) => p,
             Err(e) => {
-                if !persistent {
+                if blob.is_some() {
                     // The read failure is the error to report; a refused flush is remembered, not reported.
                     let _ = self.discard(handle);
                 }
@@ -277,14 +374,15 @@ impl<T: Transport> TpmStore<T> {
             }
         };
         let key = KeyHandle::next();
-        self.keys.insert(
-            key.id(),
-            Slot {
-                handle,
-                persistent,
-                public,
+        let used = self.touch();
+        let place = match blob {
+            Some(blob) => Place::Transient {
+                handle: Some(handle),
+                blob,
             },
-        );
+            None => Place::Persistent(handle),
+        };
+        self.keys.insert(key.id(), Slot { place, public, used });
         Ok(key)
     }
 
@@ -296,8 +394,10 @@ impl<T: Transport> TpmStore<T> {
 impl<T: Transport> Drop for TpmStore<T> {
     fn drop(&mut self) {
         // Best effort: a destructor cannot report, and the resource manager reclaims leftovers on close.
-        for slot in self.keys.values().filter(|s| !s.persistent) {
-            let _ = self.client.flush_context(slot.handle);
+        for slot in self.keys.values() {
+            if let Place::Transient { handle: Some(h), .. } = slot.place {
+                let _ = self.client.flush_context(h);
+            }
         }
         let _ = self.client.flush_context(self.primary);
         for handle in &self.stale {
@@ -308,9 +408,10 @@ impl<T: Transport> Drop for TpmStore<T> {
 
 impl<T: Transport> KeyStore for TpmStore<T> {
     fn sign(&mut self, key: &KeyHandle, msg: &[u8]) -> Result<Signature> {
-        let handle = self.slot(key)?.handle;
+        let id = key.id();
+        let handle = self.handle_of(key)?;
         let digest = Software.sha256(msg);
-        let (r, s) = self.client.sign_p256(handle, &self.config.key_auth, &digest)?;
+        let (r, s) = self.room(Some(id), |c, cfg, _| c.sign_p256(handle, &cfg.key_auth, &digest))?;
         let mut rs = [0u8; 64];
         let (lo, hi) = rs.split_at_mut(32);
         lo.copy_from_slice(&r);
@@ -339,13 +440,9 @@ impl<T: Transport> KeyStore for TpmStore<T> {
         self.client.fill_random(dek.as_mut_slice())?;
         let mut nonce = [0u8; NONCE_LEN];
         self.client.fill_random(&mut nonce)?;
-        let blob = self.client.create(
-            self.primary,
-            &[],
-            template::sealed_data(),
-            &self.config.key_auth,
-            dek.as_slice(),
-        )?;
+        let blob = self.room(None, |c, cfg, primary| {
+            c.create(primary, &[], template::sealed_data(), &cfg.key_auth, dek.as_slice())
+        })?;
         let mut header = vec![VERSION];
         header.extend_from_slice(&blob.private);
         header.extend_from_slice(&blob.public);
@@ -355,7 +452,8 @@ impl<T: Transport> KeyStore for TpmStore<T> {
     fn unseal(&mut self, sealed: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
         let (blob, header_len) = parse_sealed(sealed)?;
         self.reclaim();
-        let handle = self.client.load(self.primary, &[], &blob)?;
+        let handle = self.room(None, |c, _, primary| c.load(primary, &[], &blob))?;
+        self.adopt(handle);
         let dek = self.client.unseal(handle, &self.config.key_auth);
         let flushed = self.discard(handle);
         let dek = dek?;

@@ -3,9 +3,11 @@
 
 use pinc_crypto::identity::{verify, verify_node};
 use pinc_crypto::{CryptoError, IdentityAlg, NodeId, Provider, Software};
-use pinc_keystore::tpm::SimTransport;
+use pinc_keystore::tpm::{SimTransport, TpmClient, Transport};
 use pinc_keystore::{KeyHandle, KeyStore, KeyStoreError, TpmConfig, TpmStore};
 use pinc_tests::{SplitMix64, Swtpm};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 const PERSISTENT_KEY: u32 = 0x8101_0001;
 /// The order of the P-256 group, big-endian.
@@ -252,4 +254,123 @@ fn missing_persistent_handle_leaves_the_store_usable() {
     }
     let key = new_key(&mut store);
     store.sign(&key, b"still works").unwrap();
+}
+
+fn sign_verifies(store: &mut TpmStore<SimTransport>, key: &KeyHandle, msg: &[u8]) {
+    let (alg, pk) = store.public(key).unwrap();
+    let sig = store.sign(key, msg).unwrap();
+    verify(alg, &pk, msg, sig.as_bytes()).unwrap();
+}
+
+#[test]
+fn three_keys_sign_in_any_order_on_a_tpm_with_three_slots() {
+    let tpm = Swtpm::start();
+    let mut store = tpm.open(TpmConfig::new());
+    let ks: Vec<KeyHandle> = (0..3)
+        .map(|i| {
+            store
+                .generate(IdentityAlg::EcdsaP256)
+                .unwrap_or_else(|e| panic!("key {i} could not be made while the others were loaded: {e:?}"))
+        })
+        .collect();
+    let pks: Vec<_> = ks.iter().map(|k| store.public(k).unwrap().1).collect();
+    assert!(pks[0] != pks[1] && pks[1] != pks[2] && pks[0] != pks[2]);
+    for order in [&[0usize, 1, 2][..], &[2, 1, 0], &[0, 0, 2, 1]] {
+        for &i in order {
+            sign_verifies(&mut store, &ks[i], b"turn");
+        }
+    }
+    drop(store);
+    let mut raw = TpmClient::new(SimTransport::connect(("127.0.0.1", tpm.port)).unwrap());
+    let primaries: Vec<u32> = (0..3)
+        .map(|_| {
+            raw.create_primary(b"")
+                .unwrap_or_else(|e| panic!("dropping the store left a transient object: {e:?}"))
+        })
+        .collect();
+    for h in primaries {
+        raw.flush_context(h).unwrap();
+    }
+}
+
+#[test]
+fn a_store_with_two_loaded_keys_seals_and_unseals() {
+    let tpm = Swtpm::start();
+    let mut store = tpm.open(TpmConfig::new());
+    let (a, b) = (new_key(&mut store), new_key(&mut store));
+    let sealed = store
+        .seal(b"two keys")
+        .unwrap_or_else(|e| panic!("sealing with two keys loaded failed: {e:?}"));
+    assert_eq!(store.unseal(&sealed).unwrap().as_slice(), b"two keys");
+    sign_verifies(&mut store, &a, b"after seal");
+    sign_verifies(&mut store, &b, b"after seal");
+}
+
+#[test]
+fn an_unloaded_key_gives_its_handle_and_can_be_made_persistent() {
+    let tpm = Swtpm::start();
+    let mut store = tpm.open(TpmConfig::new());
+    let (k1, k2, k3) = (new_key(&mut store), new_key(&mut store), new_key(&mut store));
+    assert_eq!(store.tpm_handle(&k1), None, "k1 was unloaded by the third key");
+    store.sign(&k1, b"x").unwrap();
+    let h = store.tpm_handle(&k1).unwrap();
+    let point = store.client_mut().read_public(h).unwrap();
+    assert_eq!(store.public(&k1).unwrap().1[1..], point.x);
+    store.persist(&k2, PERSISTENT_KEY).unwrap();
+    assert_eq!(store.tpm_handle(&k2), Some(PERSISTENT_KEY));
+    for k in [&k1, &k2, &k3] {
+        sign_verifies(&mut store, k, b"all three");
+    }
+}
+
+struct CountLoads<T: Transport>(T, Arc<AtomicUsize>);
+
+impl<T: Transport> Transport for CountLoads<T> {
+    fn transmit(&mut self, command: &[u8]) -> std::io::Result<Vec<u8>> {
+        if command.get(6..10) == Some(&0x157u32.to_be_bytes()[..]) {
+            self.1.fetch_add(1, Ordering::Relaxed);
+        }
+        self.0.transmit(command)
+    }
+}
+
+#[test]
+fn the_least_recently_used_key_is_unloaded() {
+    let tpm = Swtpm::start();
+    let loads = Arc::new(AtomicUsize::new(0));
+    let mut store = TpmStore::open(
+        CountLoads(SimTransport::connect(("127.0.0.1", tpm.port)).unwrap(), loads.clone()),
+        TpmConfig::new(),
+    )
+    .unwrap();
+    let count = || loads.load(Ordering::Relaxed);
+    let k1 = store.generate(IdentityAlg::EcdsaP256).unwrap();
+    let k2 = store.generate(IdentityAlg::EcdsaP256).unwrap();
+    assert_eq!(count(), 2, "an extra load while the TPM had room");
+    store.sign(&k1, b"a").unwrap();
+    let _k3 = store.generate(IdentityAlg::EcdsaP256).unwrap();
+    assert_eq!(count(), 3);
+    store.sign(&k1, b"b").unwrap();
+    assert_eq!(count(), 3, "the key used last was unloaded");
+    let sig = store.sign(&k2, b"c").unwrap();
+    assert_eq!(count(), 5, "one load refused for want of room, one accepted");
+    let (alg, pk) = store.public(&k2).unwrap();
+    verify(alg, &pk, b"c", sig.as_bytes()).unwrap();
+}
+
+#[test]
+fn a_full_tpm_with_nothing_to_unload_is_a_typed_error() {
+    let tpm = Swtpm::start();
+    let mut store = tpm.open(TpmConfig::new());
+    let a = store.client_mut().create_primary(b"").unwrap();
+    let b = store.client_mut().create_primary(b"").unwrap();
+    assert_eq!(store.generate(IdentityAlg::EcdsaP256), Err(KeyStoreError::TpmFull));
+    store.client_mut().flush_context(a).unwrap();
+    let k = new_key(&mut store);
+    let sealed = store.seal(b"x").unwrap();
+    assert_eq!(store.unseal(&sealed).unwrap().as_slice(), b"x");
+    sign_verifies(&mut store, &k, b"loaded again");
+    store.client_mut().flush_context(b).unwrap();
+    let msg = KeyStoreError::TpmFull.to_string();
+    assert!(msg.len() < 100 && !msg.contains("TPM2_"), "{msg}");
 }

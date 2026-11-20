@@ -5,7 +5,8 @@
 //! so a blob created by one connection loads on any other connection to the same TPM.
 //!
 //! Invariants: transient TPM handles are flushed when the store is dropped, when an operation fails after loading
-//! one, and when a key is made persistent (a flush the TPM refuses is retried before the next load); a command the TPM
+//! one, when a key is made persistent, and when a key is unloaded to make room for another object (it is loaded again on
+//! its next use; a flush the TPM refuses is retried before the next load); a command the TPM
 //! answers with a "send it again" warning is resent at once within a bounded attempt count; the public key and node id of a key are read from the TPM, never
 //! assumed; every signature is normalized to the low-`s` form `pinc_crypto` requires.
 
