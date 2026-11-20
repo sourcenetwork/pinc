@@ -593,13 +593,18 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `ValuesPlan_tight` | MaxLen 11 -> 8 |
 | `ValuesPlan_word` | MaxLen 20 -> 14 |
 | `ValuesSchedList` | MAXU 7 -> 3; N 4 as deep (SplitOk splits an aligned one-span list) |
+| `ValuesSched_alllie` | QN 5 -> 4 |
+| `ValuesSched_dup` | WN 2 -> 1 |
 | `ValuesSched_liar` | NG 4 -> 2 |
 | `ValuesSched_n2` | NG 4 -> 2 |
 | `ValuesSched_n3` | NG 4 -> 2 |
+| `ValuesSched_nocorr` | NG 4 -> 3 |
 | `ValuesSched_silent` | NG 4 -> 2 |
+| `ValuesSched_small` | NG 4 -> 3 |
 | `ValuesSched_tight` | NG 5 -> 4 (every span of WantsMix and every group of InitvTwo still lies in the value) |
 | `ValuesSched_track` | NG 4 -> 2 |
 | `ValuesSched_wants` | NG 5 -> 4 (every span of WantsA and every group of InitvA still lies in the value) |
+| `ValuesSched_wide` | QN 2 -> 1, AN 2 -> 1 |
 | `ValuesSys_code` | G 6 -> 5, Want {0..5} -> {0..4} (still more groups than MinT 4, so the value is striped) |
 | `ValuesSys_code_steal` | G 6 -> 5, Want {0..5} -> {0..4} (provider 1 still takes MinT 4 groups, at least SMIN 2 to steal) |
 | `ValuesSys_loss` | G 3 -> 2, Want {0,1,2} -> {0,1} |
