@@ -669,8 +669,8 @@ struct Reached {
     ctl_released: bool,
 }
 
-/// One seeded run; `early` makes it an optimistic dial, and `reset_early` resets its last early stream at once.
-fn run(seed: u64, out: &mut String, run: u32, early: bool, reset_early: bool) -> Reached {
+/// A run's table and pool on the test's own constants, with nothing logged yet.
+fn new_run(seed: u64, out: &mut String, run: u32) -> Run<'_> {
     let mut config = Config::new(false);
     config.initial_stream_window = WINDOW;
     config.max_stream_window = 6 * CH;
@@ -681,7 +681,7 @@ fn run(seed: u64, out: &mut String, run: u32, early: bool, reset_early: bool) ->
     };
     let pool = BufferPool::new_boxed(POOL);
     let t = Box::new(Table::new(&config, &pool));
-    let mut r = Run {
+    Run {
         t,
         pool,
         rng: SplitMix64::traced(seed),
@@ -699,7 +699,12 @@ fn run(seed: u64, out: &mut String, run: u32, early: bool, reset_early: bool) ->
         released: false,
         ctl_released: false,
         cover: 0,
-    };
+    }
+}
+
+/// One seeded run; `early` makes it an optimistic dial, and `reset_early` resets its last early stream at once.
+fn run(seed: u64, out: &mut String, run: u32, early: bool, reset_early: bool) -> Reached {
+    let mut r = new_run(seed, out, run);
     r.log(r#""op":"init""#);
     // An optimistic dial: the application opens streams and queues data before the peer's limits are known
     // (`Connection::allow_early_streams`), and the establishment applies them some time later.
@@ -733,6 +738,76 @@ fn run(seed: u64, out: &mut String, run: u32, early: bool, reset_early: bool) ->
     }
 }
 
+impl Run<'_> {
+    /// Consume `n` bytes of stream `id` at tick 0 with no rate (the window stays its initial size).
+    fn eat(&mut self, id: u64, n: usize) {
+        let res = self.t.consume(&mut self.pool, id, n, 0, 0);
+        let err = res.as_ref().err().map_or("ok", |e| err_name(*e));
+        self.log(&format!(
+            r#""op":"consume","id":{id},"n":{n},"now":0,"srtt":0,"err":"{err}""#
+        ));
+    }
+
+    /// Other users of the pool take `k` chunks, one `ext` event each.
+    fn take(&mut self, k: usize) {
+        for _ in 0..k {
+            self.hog.push(self.pool.alloc_chunk().unwrap());
+            let ext = self.view().ext;
+            self.log(&format!(r#""op":"ext","ext":{ext}"#));
+        }
+    }
+
+    /// The first steps of both scripted runs: peer stream 0 sends 10340 bytes in chunk 0 and the reader takes them all
+    /// (an eighth of the window, so the grant moves and the stream is charged 5 chunks, of which the first charge
+    /// counts 4); then peer stream 4 opens with an empty frame, with the end when `fin`.
+    fn script_open(&mut self, fin: bool) {
+        self.log(r#""op":"init""#);
+        self.frame(0, 0, 10340, false, false);
+        self.eat(0, 10340);
+        self.frame(4, 0, 0, fin, false);
+        assert!(self.slot(4).is_some(), "the empty frame did not open stream 4");
+    }
+}
+
+/// Run 41: a credit raise the stream admission rule makes and the rule before it (the whole ledger) does not. Stream
+/// 4 ends and 11 chunks go to other users: 8 chunks are left, 4 of them beside the first charges counted, so one stream
+/// fits (the whole ledger counts 5, and none does).
+fn script_raise(out: &mut String) {
+    let mut r = new_run(41, out, 41);
+    r.script_open(true);
+    r.take(11);
+    r.eat(4, 0);
+    let _ = r.t.finish(4);
+    r.drain();
+    let k = r.inflight.iter().position(|e| e.0 == 4).unwrap();
+    let (fid, off, len, fin) = r.inflight.swap_remove(k);
+    r.t.on_acked(&mut r.pool, fid, off, len, fin);
+    r.log(&format!(r#""op":"finish","id":{fid},"done":true"#));
+    for _ in 0..4 {
+        r.pending();
+    }
+    assert!(
+        r.control
+            .iter()
+            .any(|f| matches!(f, ControlFrame::MaxStreams { limit: 3 })),
+        "no MAX_STREAMS of 3 was queued"
+    );
+    r.log(r#""op":"end""#);
+}
+
+/// Run 42: a local stream the stream admission rule opens and the rule before it refuses. Stream 4 holds its first
+/// charge, other users take 7 chunks, 12 are left: four chunks for each of streams 0, 4 and the new one fit (the
+/// whole ledger counts 5 for stream 0 and 13 do not).
+fn script_open_local(out: &mut String) {
+    let mut r = new_run(42, out, 42);
+    r.script_open(false);
+    r.take(7);
+    r.open_local();
+    assert_eq!(r.view().local_opened[0], 1, "the local stream was refused");
+    assert!(r.slot(1).is_some(), "the local stream has no slot");
+    r.log(r#""op":"end""#);
+}
+
 #[test]
 fn stream_table_runs_match_the_models() {
     big_stack(|| {
@@ -753,6 +828,8 @@ fn stream_table_runs_match_the_models() {
             released |= r.released;
             ctl_released |= r.ctl_released;
         }
+        script_raise(&mut out);
+        script_open_local(&mut out);
         assert!(jumped, "no frame opened a skipped stream inside the credit");
         assert!(
             pinc_tests::soaking() || past,
@@ -809,6 +886,9 @@ fn stream_table_runs_match_the_models() {
             r#""kind":"msd""#,
             r#""kind":"msts""#,
             r#""kind":"reset""#,
+            // run 41: the credit raised to 3 once stream 4 ended; run 42: stream 1 opened beside two others
+            r#""run":41,"op":"pending","kind":"msts","fid":-1,"max":3"#,
+            r#""run":42,"op":"open","#,
         ] {
             assert!(
                 pinc_tests::soaking() || out.contains(needle),
