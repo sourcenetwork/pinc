@@ -526,6 +526,9 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `Recovery_flushdown` | PNMAX 2 -> 1, SIZES {1, 2} -> {1}, PMAX 1 -> 0, HOR 90 -> 45, LATEN 2 -> 1 (KMAX 4 kept: a probe firing needs send, ack, send, timeout) |
 | `RekeyCodec` | Shares -> SharesQuick: 3 shares -> 1 |
 | `ReplyPath` | NP 4 -> 2 places, Ids {1..5} -> {1, 2, 3} (one more than the places, so a full table meets a new path), HDMAX 2 -> 1 |
+| `ReplyPath_coalesced` | Ids {1, 2, 3, 4, 5} -> {1, 2, 3, 4} |
+| `ReplyPath_held` | Ids {1, 2, 3, 4, 5} -> {1, 2, 3, 4} |
+| `ReplyPath_one` | Ids {1, 2} -> {1} |
 | `Rtt` | CAP 2 -> 1, PEERS {1, 2, 3} -> {1, 2} (one peer past a full table still), DEPTH 4 -> 3 |
 | `Rx` | KMAX 4 -> 3, SENTN 2 -> 1, CONFN 2 -> 1, HOR 400 -> 30 (three calls still overflow CAP 2 and fill both tables) |
 | `Rx_wide` | SENTN 3 -> 1, CONFN 2 -> 1, HOR 300 -> 0 (KMAX 4 kept: four packets overflow CAP 3) |
