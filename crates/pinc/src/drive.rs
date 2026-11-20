@@ -628,4 +628,230 @@ mod tests {
         assert_eq!((held(&sh.rx_bufs), held(&sh.tx_bufs)), (rx, tx));
         assert_eq!((room(&sh.rx_bufs), room(&sh.tx_bufs)), (rx_room, tx_room));
     }
+
+    use alloc::format;
+    use alloc::string::String;
+    use core::fmt::Write as _;
+
+    use crate::trace_util::{below, mix, write_trace};
+
+    /// One run of the buffer pools.
+    struct BufRun {
+        run: usize,
+        seed: u64,
+        holders: (usize, usize),
+        lens: (usize, usize),
+        calls: usize,
+    }
+
+    /// What the runs together showed.
+    #[derive(Default)]
+    struct Seen {
+        alloc_after_first: bool,
+        full_give: bool,
+        mixed_len: bool,
+    }
+
+    /// The two endpoints' pools, their holders and the lines written so far.
+    struct Bufs<'a> {
+        p1: &'a Pool,
+        p2: &'a Pool,
+        held: Vec<Option<Buf<'a>>>,
+        h1: usize,
+        lens: (usize, usize),
+        room: (usize, usize),
+        next_tag: u32,
+        first: bool,
+        head: String,
+        out: String,
+        seen: Seen,
+    }
+
+    fn tag(v: &[u8]) -> u32 {
+        u32::from_le_bytes(v[..4].try_into().unwrap())
+    }
+
+    fn entries(p: &Pool) -> String {
+        let rows: Vec<String> = p.borrow().iter().map(|v| format!("[{},{}]", tag(v), v.len())).collect();
+        rows.join(",")
+    }
+
+    impl<'a> Bufs<'a> {
+        fn endpoint(&self, h: usize) -> (usize, &'a Pool, usize) {
+            if h < self.h1 {
+                (1, self.p1, self.lens.0)
+            } else {
+                (2, self.p2, self.lens.1)
+            }
+        }
+
+        /// The state after a call, with the invariants checked.
+        fn state(&self) -> String {
+            let std = cfg!(feature = "std");
+            let mut tags = Vec::new();
+            let mut held = Vec::new();
+            for b in &self.held {
+                match b {
+                    Some(b) => {
+                        tags.push(tag(&b.v));
+                        held.push(format!("[{},{}]", tag(&b.v), b.v.len()));
+                    }
+                    None => held.push("[0,0]".into()),
+                }
+            }
+            for (h, b) in self.held.iter().enumerate() {
+                if let Some(b) = b {
+                    assert_eq!(b.v.len(), self.endpoint(h).2, "a held buffer has its holder's length");
+                }
+            }
+            let pools: Vec<&Pool> = if std { vec![self.p1] } else { vec![self.p1, self.p2] };
+            for p in pools {
+                assert!(p.borrow().len() <= POOLED);
+                tags.extend(p.borrow().iter().map(|v| tag(v)));
+            }
+            let n = tags.len();
+            tags.sort_unstable();
+            tags.dedup();
+            assert_eq!(tags.len(), n, "a tag is in two places");
+            assert!(tags.iter().all(|t| *t != 0));
+            let c1 = self.p1.borrow().capacity();
+            let (c2, second) = if std {
+                (0, String::new())
+            } else {
+                let c2 = self.p2.borrow().capacity();
+                assert_eq!((c1, c2), self.room, "the capacity reserved at the build is kept");
+                assert!(c1 >= POOLED && c2 >= POOLED);
+                assert!(self.p1.borrow().iter().all(|v| v.len() == self.lens.0));
+                assert!(self.p2.borrow().iter().all(|v| v.len() == self.lens.1));
+                (c2, entries(self.p2))
+            };
+            format!(
+                r#"{{"pools":[[{}],[{second}]],"cap":[{c1},{c2}],"held":[{}]}}"#,
+                entries(self.p1),
+                held.join(",")
+            )
+        }
+
+        fn take(&mut self, h: usize) {
+            let (e, pool, len) = self.endpoint(h);
+            if cfg!(feature = "std") && pool.borrow().last().is_some_and(|v| v.len() != len) {
+                self.seen.mixed_len = true;
+            }
+            let mut b = pooled(pool, len);
+            let got = tag(&b.v);
+            if got == 0 {
+                self.seen.alloc_after_first |= !self.first;
+                b.v[..4].copy_from_slice(&self.next_tag.to_le_bytes());
+                self.next_tag += 1;
+            }
+            self.first = false;
+            self.held[h] = Some(b);
+            let (head, v) = (&self.head, self.state());
+            let _ = writeln!(
+                self.out,
+                r#"{head},"op":"take","h":{},"e":{e},"len":{len},"got":{got},"v":{v}}}"#,
+                h + 1
+            );
+        }
+
+        fn give(&mut self, h: usize) {
+            let (e, pool, _) = self.endpoint(h);
+            self.seen.full_give |= pool.borrow().len() == POOLED;
+            self.held[h] = None;
+            let (head, v) = (&self.head, self.state());
+            let _ = writeln!(self.out, r#"{head},"op":"give","h":{},"e":{e},"v":{v}}}"#, h + 1);
+        }
+    }
+
+    fn bufs_run(r: &BufRun) -> (String, Seen) {
+        let std = cfg!(feature = "std");
+        let ((h1, h2), (l1, l2)) = (r.holders, r.lens);
+        let (p1, p2) = (pools(l1, l1).0, pools(l2, l2).0);
+        assert_eq!(Rc::ptr_eq(&p1, &p2), std);
+        let mut next_tag = 1;
+        if !std {
+            p1.borrow_mut()[0][..4].copy_from_slice(&1u32.to_le_bytes());
+            p2.borrow_mut()[0][..4].copy_from_slice(&2u32.to_le_bytes());
+            next_tag = 3;
+        }
+        let hs = h1 + h2;
+        let mut b = Bufs {
+            p1: &p1,
+            p2: &p2,
+            held: (0..hs).map(|_| None).collect(),
+            h1,
+            lens: r.lens,
+            room: (p1.borrow().capacity(), p2.borrow().capacity()),
+            next_tag,
+            first: true,
+            head: format!(r#"{{"t":"bufs","std":{std},"run":{}"#, r.run),
+            out: String::new(),
+            seen: Seen::default(),
+        };
+        let init = format!(
+            r#"{},"op":"init","hs":{hs},"h1":{h1},"lens":[{l1},{l2}],"v":{}}}"#,
+            b.head,
+            b.state()
+        );
+        b.out.push_str(&init);
+        b.out.push('\n');
+        let mut s = r.seed;
+        for _ in 0..r.calls {
+            let free: Vec<usize> = (0..hs).filter(|&h| b.held[h].is_none()).collect();
+            let busy: Vec<usize> = (0..hs).filter(|&h| b.held[h].is_some()).collect();
+            let pick = mix(&mut s) % 100;
+            if pick < 90 {
+                let take = (pick < 45 && !free.is_empty()) || busy.is_empty();
+                let from = if take { &free } else { &busy };
+                let h = from[below(&mut s, from.len())];
+                if take { b.take(h) } else { b.give(h) }
+            } else if pick < 95 {
+                for h in free {
+                    b.take(h);
+                }
+            } else {
+                for h in busy {
+                    b.give(h);
+                }
+            }
+        }
+        (b.out, b.seen)
+    }
+
+    /// Takes and gives of buffers on the pools of two endpoints, each run on a thread of its own.
+    #[test]
+    fn trace_facade_bufs() {
+        let mut out = String::new();
+        let mut seen = Seen::default();
+        let mut run = 0;
+        for holders in [(1, 1), (3, 1), (9, 2), (12, 12)] {
+            for lens in [(8, 8), (8, 24), (24, 8)] {
+                for base in [0x6275_6673u64, 0x6275_6674] {
+                    let mut rng = base.wrapping_add(u64::try_from(run).unwrap());
+                    let calls = 200 + usize::try_from(mix(&mut rng) % 801).unwrap();
+                    let cfg = BufRun {
+                        run,
+                        seed: rng,
+                        holders,
+                        lens,
+                        calls,
+                    };
+                    let (lines, got) = std::thread::spawn(move || bufs_run(&cfg)).join().unwrap();
+                    out.push_str(&lines);
+                    seen.alloc_after_first |= got.alloc_after_first;
+                    seen.full_give |= got.full_give;
+                    seen.mixed_len |= got.mixed_len;
+                    run += 1;
+                }
+            }
+        }
+        assert!(seen.alloc_after_first && seen.full_give);
+        assert_eq!(seen.mixed_len, cfg!(feature = "std"));
+        let name = if cfg!(feature = "std") {
+            "facade_bufs_std.ndjson"
+        } else {
+            "facade_bufs_nostd.ndjson"
+        };
+        write_trace(name, &out);
+    }
 }
