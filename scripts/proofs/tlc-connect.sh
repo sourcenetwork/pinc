@@ -1,0 +1,34 @@
+# The model checks of the connectivity crate added with the trace tests of the PR line, sourced by scripts/proofs.sh after
+# tlc.sh (which holds the models before them): one line per TLC config under proofs/tla.
+par run_tlc connect_carriers ConnectCarriers ConnectCarriers
+par run_tlc connect_carriers_slow ConnectCarriers ConnectCarriers_slow
+par witness_tlc connect_carriers_w_open ConnectCarriers ConnectCarriers_w_open NoFallbackOpen
+par run_tlc connect_carriers_w_slow ConnectCarriers ConnectCarriers_w_slow
+par run_tlc connect_drive ConnectDrive ConnectDrive
+par run_tlc connect_drive_punch ConnectDrive ConnectDrive_punch
+par witness_tlc connect_drive_w_check ConnectDrive ConnectDrive_w_check NoCheck
+par run_tlc connect_drive_prune ConnectDrivePrune ConnectDrivePrune
+par run_tlc connect_drive_prune_w_drop ConnectDrivePrune ConnectDrivePrune_w_drop
+par run_tlc connect_drive_prune_w_ask ConnectDrivePrune ConnectDrivePrune_w_ask
+par run_tlc connect_duty ConnectDuty ConnectDuty
+par witness_tlc connect_duty_burst ConnectDuty ConnectDuty_w_burst BurstNotFull
+par run_tlc connect_duty_sat ConnectDuty ConnectDuty_sat
+par run_tlc connect_radio ConnectRadio ConnectRadio
+par run_tlc connect_radio_sat ConnectRadio ConnectRadio_sat
+par run_tlc connect_flight ConnectFlight ConnectFlight
+par witness_tlc connect_flight_cut ConnectFlight ConnectFlight_w_cut RelayKept
+par run_tlc connect_heldqueue ConnectHeldQueue ConnectHeldQueue
+par witness_tlc connect_heldqueue_droptwo ConnectHeldQueue ConnectHeldQueue_w_droptwo NotDropTwo
+par witness_tlc connect_heldqueue_countdrop ConnectHeldQueue ConnectHeldQueue_w_countdrop NotCountDrop
+par witness_tlc connect_heldqueue_compact ConnectHeldQueue ConnectHeldQueue_w_compact NotCompactLive
+par run_tlc connect_mapped ConnectMapped ConnectMapped
+par witness_tlc connect_mapped_fallback ConnectMapped ConnectMapped_w_fallback NoFallback
+par run_tlc connect_nodeid ConnectNodeId ConnectNodeId
+par run_tlc connect_sleep ConnectSleep ConnectSleep
+par run_tlc connect_sleep_beacon ConnectSleep ConnectSleep_beacon
+par witness_tlc connect_sleep_w_close ConnectSleep ConnectSleep_w_close NoCloseAfterNotice
+par run_tlc connect_sleep_twice ConnectSleep ConnectSleep_twice
+par run_tlc connect_sleep_w_behind ConnectSleep ConnectSleep_w_behind
+par run_tlc connect_sleep_w_wall ConnectSleep ConnectSleep_w_wall
+par run_tlc connect_sleep_resume ConnectSleep ConnectSleep_resume
+par witness_tlc connect_sleep_w_cancel ConnectSleep ConnectSleep_w_cancel NoCancelled

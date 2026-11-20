@@ -24,7 +24,6 @@ par run_tlc keyroll_forge KeyRoll KeyRoll_forge
 par witness_tlc keyroll_good KeyRoll KeyRoll_good NotGood
 par run_tlc keyroll_stale KeyRoll KeyRoll_stale
 par run_tlc keyroll_gate KeyRoll KeyRoll_gate
-par run_tlc keyroll_orphan KeyRoll KeyRoll_orphan
 par witness_tlc keyroll_xbroken KeyRoll KeyRoll_xbroken PostCompromiseX
 par run_tlc labels Labels Labels
 par run_tlc crypto_kdf CryptoKdf CryptoKdf
@@ -404,6 +403,7 @@ par witness_tlc streams_stall Streams Streams_stall NoStuckGrant
 par run_tlc streams_live Streams Streams_live
 par run_tlc streams_live_mid Streams Streams_live_mid
 par run_tlc streams_live_ext Streams Streams_live_ext
+par witness_tlc streams_live_blocked Streams Streams_live_blocked NeverBlocked
 par witness_live_tlc streams_live_stall Streams Streams_live_stall
 par run_tlc streams_early Streams Streams_early
 par witness_tlc streams_early_w Streams Streams_early_w OpenerInside

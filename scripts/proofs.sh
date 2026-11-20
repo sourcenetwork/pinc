@@ -98,6 +98,17 @@ par() {
     "$@" &
 }
 . scripts/proofs/tlc.sh
+. scripts/proofs/tlc-broadcast.sh
+. scripts/proofs/tlc-connect.sh
+. scripts/proofs/tlc-core.sh
+. scripts/proofs/tlc-dag.sh
+. scripts/proofs/tlc-node.sh
+. scripts/proofs/tlc-portmap.sh
+. scripts/proofs/tlc-security.sh
+. scripts/proofs/tlc-table.sh
+. scripts/proofs/tlc-transport.sh
+. scripts/proofs/tlc-wire.sh
+. scripts/proofs/tlc-facade.sh
 while [ -n "$(jobs -rp)" ]; do wait -n || exit 1; done
 
 echo "-- trace"

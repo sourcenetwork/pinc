@@ -1,0 +1,48 @@
+# The model checks of the node crate added with the trace tests of the PR line, sourced by scripts/proofs.sh after
+# tlc.sh (which holds the models before them): one line per TLC config under proofs/tla.
+par run_tlc node_portmap NodePortMap NodePortMap
+par witness_tlc node_portmap_overflow NodePortMap NodePortMap_overflow NeverOverflow
+par witness_tlc node_portmap_sat NodePortMap NodePortMap_sat NeverSaturated
+par run_tlc node_portmap_woldest NodePortMap NodePortMap_woldest
+par run_tlc node_sets NodeSets NodeSets
+par run_tlc node_sets_two NodeSets NodeSets_two
+par witness_tlc node_sets_busy NodeSets NodeSets_busy RoundsNotFull
+par witness_tlc node_sets_exhausted NodeSets NodeSets_exhausted NeverExhausted
+par witness_tlc node_sets_respfull NodeSets NodeSets_respfull RespNotFull
+par witness_tlc node_sets_sat NodeSets NodeSets_sat NeverSat
+par run_tlc node_sets_way NodeSets NodeSets_way
+par run_tlc node_sets_cancel NodeSets NodeSets_cancel
+par run_tlc node_values NodeValues NodeValues
+par witness_tlc node_values_busy NodeValues NodeValues_busy NeverBusy
+par witness_tlc node_values_super NodeValues NodeValues_super NeverSuper
+par run_tlc node_values_net NodeValuesNet NodeValuesNet
+par witness_tlc node_values_net_refused NodeValuesNet NodeValuesNet_refused NeverRefused
+par witness_tlc node_values_net_sfull NodeValuesNet NodeValuesNet_sfull NeverStreamFull
+par witness_tlc node_values_net_hole NodeValuesNet NodeValuesNet_hole NoHole
+par run_tlc node_provided NodeProvided NodeProvided
+par witness_tlc node_provided_full NodeProvided NodeProvided_full NeverRefused
+par run_tlc node_silence NodeSilence NodeSilence
+par witness_tlc node_silence_need NodeSilence NodeSilence_w_need NeedNeverBinds
+par witness_tlc node_silence_sat NodeSilence NodeSilence_w_sat NeverMax
+par run_tlc node_timer_bound NodeTimerBound NodeTimerBound
+par witness_tlc node_timer_bound_top NodeTimerBound NodeTimerBound_w_top NoTopHold
+par witness_tlc node_timer_bound_sat NodeTimerBound NodeTimerBound_w_sat NoSat
+par run_tlc node_event_queue NodeEventQueue NodeEventQueue
+par witness_tlc node_event_queue_kept NodeEventQueue NodeEventQueue_w_kept NoKeptDrop
+par witness_tlc node_event_queue_sat NodeEventQueue NodeEventQueue_w_sat NoLostSat
+par witness_tlc node_event_queue_stop NodeEventQueue NodeEventQueue_w_stop NoStop
+par run_tlc node_dtn_backoff NodeDtnBackoff NodeDtnBackoff
+par witness_tlc node_dtn_backoff_full NodeDtnBackoff NodeDtnBackoff_w_full NoRefused
+par witness_tlc node_dtn_backoff_cap NodeDtnBackoff NodeDtnBackoff_w_cap NoCap
+par witness_tlc node_dtn_backoff_sat NodeDtnBackoff NodeDtnBackoff_w_sat NoSat
+par run_tlc node_dtn_backoff_redial NodeDtnBackoff NodeDtnBackoff_redial
+par run_tlc node_dtn_codec_record NodeDtnCodec NodeDtnCodec_record
+par run_tlc node_dtn_codec_runs NodeDtnCodec NodeDtnCodec_runs
+par run_tlc node_dtn_codec_frame NodeDtnCodec NodeDtnCodec_frame
+par run_tlc node_dtn_codec_agree NodeDtnCodec NodeDtnCodec_agree
+par run_tlc node_due NodeDue NodeDue
+par run_tlc node_due_dtn NodeDue NodeDue_dtn
+par witness_tlc node_due_exact NodeDue NodeDue_exact Exact
+par witness_tlc node_due_noroute NodeDue NodeDue_noroute Coherent
+par witness_tlc node_due_dtnkeep NodeDue NodeDue_dtnkeep Coherent
+par witness_tlc node_due_fall NodeDue NodeDue_fall NeverLate

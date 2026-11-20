@@ -1,0 +1,13 @@
+# The model checks of the broadcast crate added with the trace tests of the PR line, sourced by scripts/proofs.sh after
+# tlc.sh (which holds the models before them): one line per TLC config under proofs/tla.
+par run_tlc broadcast_adj_record BroadcastAdjRecord BroadcastAdjRecord
+par witness_tlc broadcast_adj_record_peers BroadcastAdjRecord BroadcastAdjRecord_peers NoTwoPeers
+par run_tlc broadcast_auth2 BroadcastAuth2 BroadcastAuth2
+par witness_tlc broadcast_auth2_delivers BroadcastAuth2 BroadcastAuth2_delivers NoDelivery
+par witness_tlc broadcast_auth2_notopic BroadcastAuth2 BroadcastAuth2_notopic DeliverExact
+par witness_tlc broadcast_auth2_nokey BroadcastAuth2 BroadcastAuth2_nokey DeliverExact
+par run_tlc broadcast_statement BroadcastStatement BroadcastStatement
+par run_tlc broadcast_statement_wide BroadcastStatement BroadcastStatement_wide
+par witness_tlc broadcast_statement_refused BroadcastStatement BroadcastStatement_refused NoRefusal
+par run_tlc broadcast_wire2 BroadcastWire2 BroadcastWire2
+par witness_tlc broadcast_wire2_keyed BroadcastWire2 BroadcastWire2_keyed NoKeyedParentHead
