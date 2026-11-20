@@ -46,6 +46,19 @@ pub fn soaking() -> bool {
     trace_salt() != 0
 }
 
+/// How many generated cases (seeded runs, rounds, iterations) a trace test runs: `deep` normally, `quick` only when a
+/// trace is being written (`PINC_TRACE_DIR` is set) and the deep switch (`PINC_TRACE_DEEP=1`, set by the deep proofs profile)
+/// is off. An ordinary `cargo test` has no trace directory and so always runs the full `deep` count; scripted and fixed
+/// scenarios do not call this, they run in every profile.
+pub fn trace_cases(quick: usize, deep: usize) -> usize {
+    let env = |k| std::env::var_os(k);
+    if env("PINC_TRACE_DIR").is_some() && env("PINC_TRACE_DEEP").is_none_or(|v| v != "1") {
+        quick
+    } else {
+        deep
+    }
+}
+
 /// A small deterministic pseudo-random generator (`SplitMix64`) for reproducible test inputs.
 ///
 /// Tests use it instead of a global random source, so a failing case reproduces from its seed.

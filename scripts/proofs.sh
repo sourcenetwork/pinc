@@ -30,6 +30,8 @@ if [ "$PROFILE" = quick ]; then
     JIT=' -XX:TieredStopAtLevel=1'
 else
     JOBS=3; WORKERS=auto; HEAP=15; JIT=''
+    # the trace tests record their full count of generated cases (the quick profile records fewer)
+    export PINC_TRACE_DEEP=1
 fi
 jtmp_root=$(mktemp -d)
 trap 'rm -rf "$jtmp_root"' EXIT
