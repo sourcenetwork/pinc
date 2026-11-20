@@ -15,7 +15,7 @@ use crate::engine::Try;
 use crate::error::{Error, ErrorKind, Result};
 use crate::host::Hosted;
 use crate::platform::{Platform, ns_to_ms};
-use crate::records::{MAX_HINTS, PeerRecord, Records, Rendezvous};
+use crate::records::{MAX_HINTS, PeerRecord, Records, Rendezvous, newest};
 
 impl<H: Hosted, R: Rendezvous> Endpoint<H, Records<R>> {
     /// Set the hints the next [`publish_record`](Self::publish_record) puts in this node's record: at most
@@ -98,20 +98,30 @@ impl<H: Hosted, R: Rendezvous> Endpoint<H, Records<R>> {
     }
 
     /// The newest verified record of `node`, hints included: what the rendezvous holds now if it is newer than what
-    /// this endpoint saw before. `None` if the store has no record of `node` that verifies.
+    /// this endpoint saw before. The relays are asked whenever the rendezvous holds no record of `node`; when none
+    /// answers, the newest record already known is the answer. `None` if no record of `node` verifies.
     ///
     /// # Errors
-    /// [`crate::ErrorKind::TimedOut`] if the store does not answer within [`LOOKUP_WAIT`].
+    /// [`crate::ErrorKind::TimedOut`] if the store does not answer within [`LOOKUP_WAIT`], or, with no record known,
+    /// no relay does.
     pub async fn lookup(&self, node: &NodeId) -> Result<Option<PeerRecord>> {
-        let stored = self
-            .within(LOOKUP_WAIT, self.0.discovery.find(node))
+        let (best, held) = self
+            .within(LOOKUP_WAIT, self.0.discovery.find_held(node))
             .await
             .ok_or(Error::new(ErrorKind::TimedOut, "the rendezvous did not answer in time"))?;
-        if stored.is_some() || !self.has_relays() {
-            return Ok(stored);
+        if held || !self.has_relays() {
+            return Ok(best);
         }
-        let relayed = self.relay_record(node).await?;
-        Ok(self.0.discovery.note(node, relayed))
+        match self.relay_record(node).await {
+            // A table that is absent or borrowed hands back the answer alone: keep the newer of it and `best`.
+            Ok(relayed) => Ok(self
+                .0
+                .discovery
+                .note(node, relayed.clone())
+                .or_else(|| newest(best.as_ref(), relayed))),
+            Err(_) if best.is_some() => Ok(best),
+            Err(e) => Err(e),
+        }
     }
 }
 

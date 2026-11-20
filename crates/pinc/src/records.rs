@@ -129,12 +129,19 @@ impl<R> Records<R> {
 impl<R: Rendezvous> Records<R> {
     /// The newest verified record of `node`: what the store holds now if it is newer than what was seen before.
     pub(crate) async fn find(&self, node: &NodeId) -> Option<PeerRecord> {
+        self.find_held(node).await.0
+    }
+
+    /// As [`find`](Self::find), and whether the store itself held a verified record of `node` (a record only
+    /// remembered does not count).
+    pub(crate) async fn find_held(&self, node: &NodeId) -> (Option<PeerRecord>, bool) {
         let fetched = self
             .store
             .fetch(node)
             .await
             .and_then(|b| PeerRecord::verified(node, &b));
-        self.note(node, fetched)
+        let held = fetched.is_some();
+        (self.note(node, fetched), held)
     }
 
     /// Keep `fetched` if it is newer than what is known of `node`; the newest known record.
@@ -172,6 +179,8 @@ impl<R: Rendezvous> Discovery for Records<R> {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
+    use alloc::vec;
+
     use pinc_crypto::IdentityAlg;
 
     use super::*;
@@ -240,6 +249,75 @@ mod tests {
         assert_eq!(records.note(&node(1), Some(record(1, 5))).map(|r| r.seq), Some(5));
         assert_eq!(records.note(&node(1), Some(record(1, 3))).map(|r| r.seq), Some(5));
         assert_eq!(records.note(&node(1), None).map(|r| r.seq), Some(5));
+    }
+
+    #[test]
+    fn find_says_whether_the_store_itself_held_a_record() {
+        use core::pin::pin;
+        use core::task::{Context, Poll, Waker};
+
+        use pinc_connect::record::{self, MAX_RECORD_LEN, Reach, RecordFields};
+        use pinc_crypto::Keypair;
+
+        struct Held(Option<Vec<u8>>);
+
+        impl Rendezvous for Held {
+            fn publish(&self, _record: &[u8]) -> impl Future<Output = Result<()>> {
+                core::future::ready(Ok(()))
+            }
+
+            fn fetch(&self, _node: &NodeId) -> impl Future<Output = Option<Vec<u8>>> {
+                core::future::ready(self.0.clone())
+            }
+        }
+
+        // The stores answer at once: one poll settles the future.
+        fn ready<T>(f: impl Future<Output = T>) -> T {
+            let mut f = pin!(f);
+            match f.as_mut().poll(&mut Context::from_waker(Waker::noop())) {
+                Poll::Ready(v) => Some(v),
+                Poll::Pending => None,
+            }
+            .unwrap()
+        }
+
+        let key = Keypair::from_seed(IdentityAlg::Ed25519, &[7; 32]).unwrap();
+        let me = key.node_id();
+        let mut bytes = vec![0u8; MAX_RECORD_LEN];
+        let fields = RecordFields {
+            home: me,
+            seq: 3,
+            reach: Reach::Public,
+            addrs: &[],
+            hints: &[],
+        };
+        let len = record::sign(&key, &fields, &mut bytes).unwrap();
+        bytes.truncate(len);
+        let secrets: &'static [u64; 7] = &[1, 2, 3, 4, 5, 6, 7];
+        let remembered = PeerRecord {
+            node: me,
+            seq: 5,
+            addrs: Vec::new(),
+            hints: Vec::new(),
+        };
+
+        let records = Records::new(Held(None));
+        records.seed_maps(5, secrets);
+        records.note(&me, Some(remembered.clone()));
+        let (best, held) = ready(records.find_held(&me));
+        assert_eq!(best.map(|r| r.seq), Some(5), "the remembered record is the answer");
+        assert!(!held, "the store holds none");
+
+        let records = Records::new(Held(Some(bytes)));
+        records.seed_maps(5, secrets);
+        records.note(&me, Some(remembered));
+        let (best, held) = ready(records.find_held(&me));
+        assert!(held, "the store holds one");
+        assert_eq!(
+            best.map(|r| r.seq),
+            Some(5),
+            "the newest of the stored and the remembered"
+        );
     }
 
     #[test]

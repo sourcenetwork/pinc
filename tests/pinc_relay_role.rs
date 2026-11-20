@@ -692,3 +692,45 @@ async fn a_record_a_relay_answered_is_not_replaced_by_an_older_one_from_the_stor
     })
     .await;
 }
+
+#[nuclei::test]
+async fn a_lookup_sees_the_record_a_peer_republished_after_the_looker_knew_one() {
+    let net = Net::new();
+    let (to_relay, accepted) = unbounded();
+    let relay = relay_endpoint(Rc::clone(&net), addr(RELAY_ADDR), accepted, MemStore::new());
+    let known = Relay::new(relay.id())
+        .with_udp(addr(RELAY_ADDR))
+        .with_tcp(addr(RELAY_ADDR));
+    let a = member_with(
+        Rc::clone(&net),
+        addr(A_ADDR),
+        1,
+        known,
+        to_relay.clone(),
+        Rc::new(Cell::new(true)),
+        Records::new(Held::default()),
+    );
+    let b = member(net, addr(B_ADDR), 2, known, to_relay);
+    let _relay_run = run_task(&relay);
+    drive(&a);
+    drive(&b);
+    within(120, async {
+        let first = Rc::new(RefCell::new(None));
+        eventually(60, "the lookup answers B's record", || {
+            let (a, id, first) = (a.clone(), b.id(), Rc::clone(&first));
+            async move {
+                let Ok(Some(r)) = a.lookup(&id).await else {
+                    return false;
+                };
+                *first.borrow_mut() = Some(r);
+                true
+            }
+        })
+        .await;
+        assert!(first.take().unwrap().hints.is_empty(), "B had set no hints yet");
+        // The rendezvous holds nothing, so every lookup asks the relays again and sees the new hints.
+        b.set_hints(&[3; 38]).unwrap();
+        lookup_hints(&a, b.id(), 3).await;
+    })
+    .await;
+}
