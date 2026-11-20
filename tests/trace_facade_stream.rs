@@ -231,7 +231,6 @@ struct Peer<H: Hosted> {
     chunks: Cell<u64>,
     dgrams: Cell<u64>,
     read: Cell<u64>,
-    saw_end: Cell<bool>,
 }
 
 async fn peer_open<H: Hosted + 'static>(c: Connection<H>) -> Out<H> {
@@ -309,9 +308,6 @@ async fn peer_dg<H: Hosted + 'static>(c: Connection<H>, j: u64) -> Out<H> {
 
 /// Read until a read would wait, the end or an error; as the peer's `pread` record.
 async fn peer_read<H: Hosted + 'static>(p: Rc<Peer<H>>) -> Out<H> {
-    if p.saw_end.get() {
-        return Out::Res(Res::end(p.read.get()));
-    }
     let mut g = p.recv.borrow_mut();
     let r = g.as_mut().expect("the peer's recv half");
     loop {
@@ -333,7 +329,6 @@ async fn peer_read<H: Hosted + 'static>(p: Rc<Peer<H>>) -> Out<H> {
                 p.read.set(j);
             }
             Some(Ok(None)) => {
-                p.saw_end.set(true);
                 return Out::Res(Res::end(p.read.get()));
             }
             Some(Err(e)) => return Out::Res(Res::err(e)),
@@ -395,7 +390,6 @@ fn fresh_with(seed: u64, limits: Limits) -> T<impl Hosted + 'static> {
             chunks: Cell::new(0),
             dgrams: Cell::new(0),
             read: Cell::new(0),
-            saw_end: Cell::new(false),
         }),
         next_p: 0,
         writes_ok: 0,
