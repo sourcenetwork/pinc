@@ -129,3 +129,25 @@ fn a_lost_path_is_never_validated_or_followed_again() {
         );
     });
 }
+
+/// A held direct path the endpoint then names a relay's is valid at once, as every relay path is.
+#[test]
+fn a_held_path_named_a_relay_by_add_path_is_valid_at_once() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let mut link = two_routes(36);
+        link.route(PathId(3)).up = false;
+        let mut net = connected(&mut w, &mut sa, &mut sb, link);
+        let now = net.now;
+        net.a
+            .with_env(now, |c, env| c.add_path(env, PathId(3), PathInfo::default()))
+            .unwrap();
+        assert!(!net.a.conn.path_validated(PathId(3)));
+        net.a.with_env(now, |c, env| c.add_path(env, PathId(3), RELAY)).unwrap();
+        assert!(
+            net.a.conn.path_validated(PathId(3)),
+            "a held path named a relay's stays unvalidated"
+        );
+    });
+}

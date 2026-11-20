@@ -309,10 +309,7 @@ conn_impl! {
     pub fn add_path(&mut self, env: &mut Env<'_, P>, id: PathId, info: PathInfo) -> Result<(), PathError> {
         let i = match self.paths.find(id) {
             Some(i) if !self.paths.get(i).is_some_and(|p| p.gone) => {
-                if let Some(p) = self.paths.get_mut(i) {
-                    p.info = info;
-                }
-                self.sync_kind(i);
+                self.take_info(i, info);
                 if self.paths.active().is_none_or(|p| p.gone) {
                     self.choose_path();
                 }
@@ -565,22 +562,26 @@ conn_impl! {
             if self.active_open_to_move() {
                 self.choose_path();
             }
-            // A path taken for direct that the endpoint names a relay's is valid as every relay path is. It becomes
-            // a candidate for the next choice of the active path, not this one.
-            if let Some(p) = self.paths.get_mut(i)
-                && p.info.kind == PathKind::Relay
-                && !p.validated
-                && !p.gone
-            {
-                p.validated = true;
-                p.amp.validate();
-            }
+            // The path becomes a candidate for the next choice of the active path, not this one.
+            self.take_info(i, info);
         }
     }
 
     /// The active path is one the connection leaves for any better path at once: none, a relay, or gone.
     pub(super) fn active_open_to_move(&self) -> bool {
         self.paths.active().is_none_or(|p| p.gone || p.info.kind == PathKind::Relay)
+    }
+
+    /// Take what the endpoint knows of held path `i`: its kind decides the path cost, and a path named a relay's is
+    /// valid as every relay path is.
+    fn take_info(&mut self, i: usize, info: PathInfo) {
+        let Some(p) = self.paths.get_mut(i) else { return };
+        p.info = info;
+        if info.kind == PathKind::Relay && !p.validated && !p.gone {
+            p.validated = true;
+            p.amp.validate();
+        }
+        self.sync_kind(i);
     }
 
     /// Whether a path is validated.
