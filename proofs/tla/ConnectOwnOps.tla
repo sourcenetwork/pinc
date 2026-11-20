@@ -54,14 +54,19 @@ Restart(S) == [S EXCEPT !.probe = [k \in 1..Len(S.probe) |-> 0], !.refl = [k \in
 InSeq(s, a) == \E i \in 1..Len(s) : s[i] = a
 
 (* Netcheck::reflexive_into: the distinct reflexive addresses in relay order (an address that several relays report is
-   listed once, at its first relay), as many as fit in cap *)
-ReflList(cf, S) == LET F[k \in 0..Len(S.refl)] == IF k = 0 THEN <<>> ELSE IF S.refl[k] # 0 /\ ~InSeq(F[k - 1], S.refl[k]) THEN Append(F[k - 1], S.refl[k]) ELSE F[k - 1]
-                   IN SubSeq(F[Len(S.refl)], 1, Min(Len(F[Len(S.refl)]), cf.cap))
+   listed once, at its first relay), as many as fit in cap. Each level names the one before once (p): TLC does not
+   keep the value of a recursive function's argument, so naming F[k - 1] in the test and again in the result evaluated
+   the levels below twice each, 2^k times in all. *)
+ReflList(cf, S) == LET F[k \in 0..Len(S.refl)] == IF k = 0 THEN <<>>
+                           ELSE LET p == F[k - 1] IN IF S.refl[k] # 0 /\ ~InSeq(p, S.refl[k]) THEN Append(p, S.refl[k]) ELSE p
+                       all == F[Len(S.refl)]
+                   IN SubSeq(all, 1, Min(Len(all), cf.cap))
 
-(* Connectivity::candidates: reflexive first, then the local ones not yet there, up to cap *)
+(* Connectivity::candidates: reflexive first, then the local ones not yet there, up to cap (one level named once, as
+   in ReflList) *)
 Cands(cf, S) == LET r0 == ReflList(cf, S)
                     F[i \in 0..Len(S.local)] == IF i = 0 THEN r0
-                        ELSE IF Len(F[i - 1]) < cf.cap /\ ~InSeq(F[i - 1], S.local[i]) THEN Append(F[i - 1], S.local[i]) ELSE F[i - 1]
+                        ELSE LET p == F[i - 1] IN IF Len(p) < cf.cap /\ ~InSeq(p, S.local[i]) THEN Append(p, S.local[i]) ELSE p
                 IN F[Len(S.local)]
 
 (* tick records the wall clock when it is given one *)
