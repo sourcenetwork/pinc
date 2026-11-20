@@ -609,9 +609,20 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `ValuesSys_code_steal` | G 6 -> 5, Want {0..5} -> {0..4} (provider 1 still takes MinT 4 groups, at least SMIN 2 to steal) |
 | `ValuesSys_loss` | G 3 -> 2, Want {0,1,2} -> {0,1} |
 | `ValuesSys_mid` | G 3 -> 2, Want {0,1,2} -> {0,1} |
+| `ValuesSys_midold` | G 3 -> 2, Want {0,1,2} -> {0,1} |
 | `ValuesSys_n1` | G 3 -> 2, Want {0,1,2} -> {0,1} |
+| `ValuesSys_n3` | G 3 -> 2, Want {0,1,2} -> {0,1} |
 | `ValuesSys_n4` | Liars {2,3,4} kept; bounded by constraint: behaviours of at most 28 steps (ValuesSys_n4QuickBound) |
 | `ValuesSys_slow` | G 3 -> 2, Want {0,1,2} -> {0,1} |
+| `ValuesSys_steal` | G 3 -> 2, Want {0,1,2} -> {0,1} |
+| `ValuesSys_w_ahead` | G 3 -> 2, Want {0,1,2} -> {0,1} |
+| `ValuesSys_w_code_steal` | G 6 -> 5, Want {0,1,2,3,4,5} -> {0,1,2,3,4} |
+| `ValuesSys_w_deadline` | G 2 -> 1, Want {0,1} -> {0} |
+| `ValuesSys_w_dup` | G 3 -> 2, Want {0,1,2} -> {0,1} |
+| `ValuesSys_w_lied` | G 2 -> 1, Want {0,1} -> {0} |
+| `ValuesSys_w_redial` | G 2 -> 1, Want {0,1} -> {0} |
+| `ValuesSys_w_steal` | G 3 -> 2, Want {0,1,2} -> {0,1} |
+| `ValuesSys_w_store` | G 2 -> 1, Want {0,1} -> {0} |
 | `ValuesTime_dl` | MaxN 8 -> 3 |
 | `ValuesTime_hold` | MaxN 10 -> 7, TimeSet {0,1,2,3} s -> {0,3} s |
 | `ValuesTime_holdsmall` | NG 5 -> 4, WantG {0..4} -> {0..3}, MaxN 13 -> 4 |
