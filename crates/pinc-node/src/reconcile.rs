@@ -500,17 +500,7 @@ where
     /// Abandon the round's stream, if it has one.
     fn round_abort(&mut self, round: &Round, code: u64) {
         if let Some((session, stream)) = round.active {
-            let _ = self.io.cmd(Command::Reset {
-                session,
-                stream,
-                error: code,
-            });
-            let _ = self.io.cmd(Command::StopSending {
-                session,
-                stream,
-                error: code,
-            });
-            self.io.drop_strm(session, stream);
+            self.io.abandon_with(session, stream, code);
         }
     }
 
@@ -712,17 +702,7 @@ where
             }
         }
         if let Some(code) = code {
-            let _ = self.io.cmd(Command::Reset {
-                session,
-                stream,
-                error: code,
-            });
-            let _ = self.io.cmd(Command::StopSending {
-                session,
-                stream,
-                error: code,
-            });
-            self.io.drop_strm(session, stream);
+            self.io.abandon_with(session, stream, code);
             return;
         }
         if done {

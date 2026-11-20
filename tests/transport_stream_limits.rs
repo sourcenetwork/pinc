@@ -366,3 +366,77 @@ fn the_credit_given_to_the_peer_keeps_its_windows_in_the_pool() {
     t.on_stream_frame(&mut pool, 4, 0, &[1; 10], false).unwrap();
     assert_eq!(t.open_streams(), 5);
 }
+
+/// A peer stream whose end arrived after a hole is dropped at once when the application gives it up: no stop request
+/// goes, its chunks come back, it leaves the table and the peer's stream credit is raised; the retransmission of the
+/// missing bytes is taken and dropped.
+#[test]
+fn a_stop_request_on_a_stream_whose_end_arrived_after_a_hole_frees_it_at_once() {
+    let (mut pool, mut rx) = setup_credit(20, |c| c.initial_stream_window = 64 * 1024);
+    assert_eq!(rx.advertised_streams(), 2);
+    let body = pattern(3000, 5);
+    rx.on_stream_frame(&mut pool, 2, 1000, &body[1000..], true).unwrap();
+    assert!(rx.read_chunk(&pool, 2).is_none(), "bytes past the hole were readable");
+    assert_eq!(rx.open_streams(), 1);
+    rx.stop_sending(&mut pool, 2, 9).unwrap();
+    // The credit raise is a control frame too, so every frame is read once (`drain_control` leaves raises out).
+    let frames: Vec<ControlFrame> = std::iter::from_fn(|| rx.pending_control()).collect();
+    assert_eq!(
+        frames,
+        [ControlFrame::MaxStreams { limit: 3 }],
+        "no stop request, and one raise: one admitted plus room for two more"
+    );
+    assert_eq!(rx.recv_status(2), None, "the stopped stream is still in the table");
+    assert_eq!(rx.open_streams(), 0);
+    assert_eq!(pool.used_chunks(), 0, "the bytes past the hole are still held");
+    rx.on_stream_frame(&mut pool, 2, 0, &body[..1000], false).unwrap();
+    assert_eq!(pool.used_chunks(), 0, "the retransmission was stored");
+    assert!(rx.read_chunk(&pool, 2).is_none());
+}
+
+/// A peer stream we answered with a reset and gave up after its end arrived after a hole leaves the table once the
+/// reset is acknowledged.
+#[test]
+fn a_stopped_stream_with_its_end_and_a_reset_answer_leaves_when_the_reset_is_acknowledged() {
+    let (mut pool, mut rx) = setup_credit(20, |c| c.initial_stream_window = 64 * 1024);
+    let body = pattern(3000, 6);
+    rx.on_stream_frame(&mut pool, 4, 1000, &body[1000..], true).unwrap();
+    rx.reset(&mut pool, 4, 5).unwrap();
+    rx.stop_sending(&mut pool, 4, 5).unwrap();
+    let reset = ControlFrame::ResetStream {
+        id: 4,
+        error_code: 5,
+        final_size: 0,
+    };
+    assert_eq!(drain_control(&mut rx), [reset], "only our reset goes");
+    assert_eq!(pool.used_chunks(), 0, "the bytes past the hole are still held");
+    rx.on_control_acked(&mut pool, &reset);
+    assert_eq!(rx.recv_status(4), None, "the stream is still in the table");
+    assert_eq!(
+        rx.open_streams(),
+        1,
+        "only stream 0, opened with it and never used, is left"
+    );
+    rx.on_stream_frame(&mut pool, 4, 0, &body[..1000], false).unwrap();
+    assert_eq!(pool.used_chunks(), 0, "the retransmission was stored");
+}
+
+/// A stream asked to stop whose end then arrives, with no reset to follow, is dropped when the end arrives.
+#[test]
+fn the_end_arriving_on_a_stream_asked_to_stop_frees_it() {
+    let (mut pool, mut rx) = setup_credit(20, |c| c.initial_stream_window = 64 * 1024);
+    rx.on_stream_frame(&mut pool, 2, 0, b"abc", false).unwrap();
+    rx.stop_sending(&mut pool, 2, 9).unwrap();
+    assert_eq!(
+        drain_control(&mut rx),
+        [ControlFrame::StopSending { id: 2, error_code: 9 }]
+    );
+    rx.on_stream_frame(&mut pool, 2, 3, b"def", true).unwrap();
+    assert_eq!(
+        rx.recv_status(2),
+        None,
+        "the stream waits for a reset that will not come"
+    );
+    assert_eq!(rx.open_streams(), 0);
+    assert_eq!(pool.used_chunks(), 0);
+}

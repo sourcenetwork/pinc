@@ -107,10 +107,31 @@ impl<const C: usize> Recv<C> {
         !self.open || (self.observed && self.status() != RecvStatus::Open)
     }
 
-    /// Ask the sender to stop with `code`. Nothing is queued if the sender already ended the stream or a request was made.
-    pub(super) fn request_stop(&mut self, code: u64) {
-        if self.open && self.reset.is_none() && self.final_size.is_none() && self.stop == Stop::None {
+    /// Ask the sender to stop with `code`. A stream whose end arrived is not asked: its bytes are discarded and it
+    /// counts as read to its end (true is returned, the table settles it). Nothing is queued if the sender reset the
+    /// stream or a request was made.
+    pub(super) fn request_stop(&mut self, pool: &mut BufferPool<'_>, code: u64) -> bool {
+        if !self.open || self.reset.is_some() {
+            return false;
+        }
+        if self.final_size.is_some() {
+            self.discard(pool);
+            return true;
+        }
+        if self.stop == Stop::None {
             self.stop = Stop::Pending(code);
+        }
+        false
+    }
+
+    /// Drop every byte held and count the stream read to its known end, as a reset does but without one: the
+    /// application gave the stream up and the sender has nothing more to send on it.
+    fn discard(&mut self, pool: &mut BufferPool<'_>) {
+        if let (Some(f), None) = (self.final_size, self.reset) {
+            self.read_off = f;
+            self.contig = f;
+            self.release_all(pool);
+            self.observed = true;
         }
     }
 
@@ -220,6 +241,10 @@ impl<const C: usize> Recv<C> {
         self.highest = self.highest.max(end);
         if fin {
             self.final_size = Some(end);
+            // Asked to stop before the end arrived: the sender has nothing left to reset, so nothing else would end it.
+            if self.stop != Stop::None {
+                self.discard(pool);
+            }
         }
         Ok(())
     }

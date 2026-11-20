@@ -671,18 +671,28 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
     }
 
     /// Ask the peer to stop sending on a stream we receive on; it resets the stream with `error_code`. The request is
-    /// queued as a control frame and sent again if lost. Nothing is queued if the peer already ended the stream.
+    /// queued as a control frame and sent again if lost.
+    /// A stream whose end already arrived is not asked: its bytes are dropped and it counts as read to its end, so it
+    /// leaves the table once its send half is done and the peer gets its place in the stream limit back.
     ///
     /// # Errors
     /// [`StreamError::UnknownStream`], or [`StreamError::StreamState`] for a stream we cannot receive on.
-    pub fn stop_sending(&mut self, _pool: &mut BufferPool<'_>, id: StreamId, error_code: u64) -> Result<(), StreamError> {
+    pub fn stop_sending(
+        &mut self,
+        pool: &mut BufferPool<'_>,
+        id: StreamId,
+        error_code: u64,
+    ) -> Result<(), StreamError> {
         let i = self.require(id)?;
         let slot = self.slots.get_mut(i).ok_or(StreamError::UnknownStream)?;
         if !slot.recv.open {
             return Err(StreamError::StreamState);
         }
-        slot.recv.request_stop(error_code);
-        self.refresh(i);
+        if slot.recv.request_stop(pool, error_code) {
+            self.settle(pool, i);
+        } else {
+            self.refresh(i);
+        }
         Ok(())
     }
 

@@ -234,7 +234,8 @@ conn_impl! {
     }
 
     /// Ask the peer to stop sending on a stream; it resets the stream with `error`, which arrives as a reset. The
-    /// request is repeated until acknowledged. Nothing happens if the peer already ended the stream.
+    /// request is repeated until acknowledged. A stream whose end already arrived is not asked: what it holds is dropped and
+    /// it counts as read to its end.
     ///
     /// # Errors
     /// The errors of [`Streams::stop_sending`](crate::stream::Streams::stop_sending).

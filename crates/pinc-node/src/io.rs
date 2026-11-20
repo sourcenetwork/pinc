@@ -618,15 +618,12 @@ impl<E: Ep, St: Store> Io<E, St> {
         ] {
             let _ = self.cmd(c);
         }
-        // vertexia: a stream whose end arrived with a hole keeps its place until the session ends (no stop request
-        // goes once the end is known); a discard rule in the endpoint's stop_sending would close it.
         // Bounded by what the stream holds: each pass releases at least one byte of it.
         while let Some(n) = self.ep.read_chunk(session, stream).map(<[u8]>::len).filter(|n| *n > 0) {
             if self.consume(session, stream, n).is_none() {
                 break;
             }
         }
-        let _ = self.consume(session, stream, 0);
         self.drop_strm(session, stream);
     }
 
