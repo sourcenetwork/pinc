@@ -70,7 +70,7 @@ Verify(m, sig) ==
 
 Base(o, a, v, fl) == [alg |-> a, origin |-> o, inc |-> v, seq |-> v, topic |-> v, wall |-> v, ctr |-> v,
                       flags |-> fl, parents |-> v, body |-> v]
-Near(g) == {g} \union {[g EXCEPT ![x] = y] : x \in FieldNames, y \in Dom(x)}
+Near(g) == {g} \union UNION {{[g EXCEPT ![x] = y] : y \in Dom(x)} : x \in FieldNames}
 
 VARIABLES made, dlv
 vars == <<made, dlv>>

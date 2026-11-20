@@ -115,7 +115,7 @@ Bound == \A h \in Heads : Write(h, BE(0, BlenW)).ok => Len(Write(h, BE(0, BlenW)
 ASSUME RoundTrip
 ASSUME Bound
 
-AllBytes == UNION {[1..n -> Sym] : n \in 0..2} \union {<<Version>> \o s : s \in UNION {[1..n -> Sym] : n \in 0..(MaxLen - 1)}}
+AllBytes == (UNION {[1..n -> Sym] : n \in 0..2}) \union {<<Version>> \o s : s \in UNION {[1..n -> Sym] : n \in 0..(MaxLen - 1)}}
 
 VARIABLE x
 Init == x \in AllBytes

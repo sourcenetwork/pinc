@@ -68,9 +68,10 @@ Parse(b) ==
 Encode(v) == v.origin \o <<v.alg>> \o v.pk \o v.inc \o v.seq \o BE(Len(v.peers), CntW) \o Cat(v.peers) \o v.sig
 
 Ids == [1..OrgW -> Sym]
-ViewsOf(t) == {[origin |-> o, alg |-> t, pk |-> k, inc |-> n, seq |-> n, peers |-> p, sig |-> g] :
-                 o \in Ids, k \in [1..KeyW(t) -> Sym], n \in [1..IntW -> Sym], g \in [1..SigW(t) -> Sym],
-                 p \in {q \in UNION {[1..m -> Ids] : m \in 0..AdjMax} : Ascending(q) /\ \A j \in 1..Len(q) : q[j] # o}}
+ViewsOf(t) == UNION {{[origin |-> o, alg |-> t, pk |-> k, inc |-> n, seq |-> n, peers |-> p, sig |-> g] :
+                        k \in [1..KeyW(t) -> Sym], n \in [1..IntW -> Sym], g \in [1..SigW(t) -> Sym],
+                        p \in {q \in UNION {[1..m -> Ids] : m \in 0..AdjMax} : Ascending(q) /\ \A j \in 1..Len(q) : q[j] # o}} :
+                       o \in Ids}
 Views == UNION {ViewsOf(t) : t \in Tags}
 RoundTrip == \A v \in Views :
     LET r == Parse(Encode(v))
