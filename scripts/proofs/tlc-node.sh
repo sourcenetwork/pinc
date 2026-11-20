@@ -17,6 +17,9 @@ par witness_tlc node_sets_w_samecall NodeSets NodeSets_w_samecall FullOnce
 par run_tlc node_values NodeValues NodeValues
 par witness_tlc node_values_busy NodeValues NodeValues_busy NeverBusy
 par witness_tlc node_values_super NodeValues NodeValues_super NeverSuper
+par run_tlc node_values_two NodeValues NodeValues_two
+par witness_tlc node_values_lost NodeValues NodeValues_lost NoLost
+par witness_tlc node_values_twice NodeValues NodeValues_twice TellOnce
 par run_tlc node_values_net NodeValuesNet NodeValuesNet
 par witness_tlc node_values_net_refused NodeValuesNet NodeValuesNet_refused NeverRefused
 par witness_tlc node_values_net_sfull NodeValuesNet NodeValuesNet_sfull NeverStreamFull

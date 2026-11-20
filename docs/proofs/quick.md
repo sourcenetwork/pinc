@@ -250,6 +250,7 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `Mtu` | KMAX 5 -> 4 (the drop to the floor takes four calls) |
 | `NodeBackoff` | TIMES {0, 70 s, u64::MAX} -> {0, u64::MAX} (TimesDefQuick); bounded by constraint: behaviours of at most 4 levels (NodeBackoffQuickBound) |
 | `NodeBackoff_denymax` | PEERS {1, 2} -> {1} (the hub), TIMES {0, 70 s, u64::MAX} -> {0, u64::MAX} (TimesDefQuick) |
+| `NodeValues` | NMAX 3 -> 2 (at most 2 streams added in a behaviour), SIDS {1, 2, 3} -> {1, 2} (a hung-up session and its redial) |
 | `NodeSets` | SIDS {1, 2, 3} -> {1, 2} (a dial, a filler's session, and the endpoint refusing a third), NSTARTS 2 -> 1 (one round in all: a start refused Busy is not reached, NodeSets_busy is its witness) |
 | `NodeSets_cancel` | SIDS {1, 2, 3} -> {1, 2} (a dial, a filler's session, and the endpoint refusing a third), NSTARTS 2 -> 1 (one round in all: a start refused Busy is not reached, NodeSets_busy is its witness) |
 | `NodeSets_two` | SIDS {1, 2} -> {1} (one session at a time: two rounds share it, or the other peer's dial is refused), ATTEMPTS 2 -> 1 (a round ends Exhausted at its first failure; the retries are the quick NodeSets profile's), TMAX 1 -> 0 (no saturated clock; the quick NodeSets profile keeps it) |
