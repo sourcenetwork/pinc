@@ -63,8 +63,11 @@ pub const BUSY: u64 = 0x42;
 const SHUTDOWN_GRACE: u64 = 1_000_000_000;
 /// The most events one [`Core::service`] call handles before it returns, so transmit and receive are not starved.
 const BUDGET: usize = 4096;
-/// The most stopped streams of a session remembered for their writers, and discarded streams tracked.
+/// The most stopped streams of a session remembered for their writers.
 const TRACKED: usize = 128;
+/// The most dropped or refused streams of a session listed for discarding: a dropped stream holds one of the
+/// session's stream slots until it ends, so the list never needs more.
+const DISCARDED: usize = crate::mem::STREAMS;
 /// The most events of hub sessions kept for the relay role between two of its turns; the rest are dropped.
 const RELAY_EVENTS: usize = 1024;
 
@@ -220,7 +223,8 @@ struct Sess {
     waits: Vec<(SKey, Ticket)>,
     /// Streams the peer stopped or this side reset: the error their writer sees.
     send_fail: Vec<(StreamId, Error)>,
-    /// Streams the application dropped or refused: what arrives on them is thrown away until they end.
+    /// Streams the application dropped or refused, at most one per stream slot: what arrives on them is thrown away
+    /// until they end.
     discard: Vec<StreamId>,
 }
 
@@ -923,7 +927,8 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             return;
         }
         // Refuse: tell the peer to stop, and drop what it sends.
-        if s.discard.len() < TRACKED {
+        debug_assert!(s.discard.len() < DISCARDED, "a dropped stream without a stream slot");
+        if s.discard.len() < DISCARDED {
             s.discard.push(id);
         }
         if !uni {

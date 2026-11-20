@@ -16,7 +16,7 @@ use pinc_security::Alpn;
 use pinc_transport::stream::{RecvStatus, StreamError, StreamId};
 
 use super::gate::direction;
-use super::{Admit, Core, Dial, GKey, Gate, Route, SHUTDOWN_GRACE, SKey, SessInfo, TRACKED, Try, Wait};
+use super::{Admit, Core, DISCARDED, Dial, GKey, Gate, Route, SHUTDOWN_GRACE, SKey, SessInfo, Try, Wait};
 use crate::error::{Error, ErrorKind, Result};
 
 impl<S: KeyStore, A: Admit> Core<S, A> {
@@ -341,10 +341,12 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
     /// The receive half of a stream is dropped before its end: throw away what arrives until the stream ends.
     pub(crate) fn drop_recv(&mut self, now: u64, info: &SessInfo, stream: StreamId) {
         if let Some(s) = self.sessions.get_mut(&info.id)
-            && s.discard.len() < TRACKED
             && !s.discard.contains(&stream)
         {
-            s.discard.push(stream);
+            debug_assert!(s.discard.len() < DISCARDED, "a dropped stream without a stream slot");
+            if s.discard.len() < DISCARDED {
+                s.discard.push(stream);
+            }
         }
         self.discard_if_dropped(now, info.id, stream);
     }
