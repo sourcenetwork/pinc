@@ -6,7 +6,8 @@
 //! buffer, the amplification room, the probe size, the size of a whole flight, the padding the handshake owed) and
 //! what it wrote (the handshake fragment, the application packet, the padding and the length returned). Runs: a
 //! resumed dial with early data behind a whole flight, a fresh dial for every interface MTU and family with the
-//! flight split on and off and path MTU probes on, and seeded random runs.
+//! flight split on and off and path MTU probes on, fresh dials into buffers smaller than the padding a first
+//! flight owes, and seeded random runs.
 //!
 //! The test asserts, without the model: every exchange completes; a datagram is its parts; none exceeds the buffer or
 //! the amplification room; without a probe a datagram with application data fits the path's size; and the runs show
@@ -28,9 +29,21 @@ use pinc_crypto::IdentityAlg;
 use pinc_tests::*;
 use pinc_transport::conn::{DgramRecord, PathId, PathInfo};
 
+/// The buffer of the harness: the largest a datagram buffer is.
+const BUF: usize = 65_536;
+
 /// One exchange: the client dials (resumed when `resumed`) and writes `len` bytes before the dial, the responder
 /// answers with `len` bytes once the request is whole. Returns every call of `build_datagram` on both sides.
-fn exchange(w: &mut World, resumed: bool, len: usize, delay: u64, info: (u16, bool), seed: u64) -> Vec<DgramRecord> {
+/// `buf` is the size of the buffer the connection writes each datagram into.
+fn exchange(
+    w: &mut World,
+    resumed: bool,
+    len: usize,
+    delay: u64,
+    info: (u16, bool),
+    seed: u64,
+    buf: usize,
+) -> Vec<DgramRecord> {
     let ticket = resumed.then(|| {
         let mut tickets = first_session(w);
         tickets.take(&w.rp.id.node_id(), ALPN, T0).unwrap()
@@ -39,6 +52,7 @@ fn exchange(w: &mut World, resumed: bool, len: usize, delay: u64, info: (u16, bo
     let a = w.client(&mut sa, ticket, pinc_security::ClientTickets::new());
     let b = w.server(&mut sb);
     let mut net = Net::new(a, b, Link::new(seed, Params::new(delay)), &mut w.stores);
+    net.buf.truncate(buf);
     net.a.conn.set_path_info(
         PathId(1),
         PathInfo {
@@ -153,7 +167,7 @@ fn dgram_size_traces() {
             w.cfg.flight_split = true;
             w.cfg.probe_mtu = false;
             run(
-                exchange(&mut w, true, len, 10 * MS, (1500, false), 7 + i as u64),
+                exchange(&mut w, true, len, 10 * MS, (1500, false), 7 + i as u64, BUF),
                 &mut out,
             );
         }
@@ -170,7 +184,27 @@ fn dgram_size_traces() {
             w.cfg.flight_split = split;
             w.cfg.probe_mtu = true;
             run(
-                exchange(&mut w, false, 4000, 10 * MS, (mtu, v6), 100 + i as u64),
+                exchange(&mut w, false, 4000, 10 * MS, (mtu, v6), 100 + i as u64, BUF),
+                &mut out,
+            );
+        }
+        // A caller whose buffer is smaller than the padding a first flight owes (1045 to 1077 bytes) cuts the padding
+        // to its room, and the next call writes the rest alone: the padding-only datagram. A responder with a large
+        // key does not need it: its reply is six datagrams, and a third of that is below the floor of 1200 bytes.
+        for (i, (alg, buf, split)) in [IdentityAlg::Ed25519, IdentityAlg::MlDsa65]
+            .into_iter()
+            .flat_map(|a| {
+                [1000usize, 700]
+                    .into_iter()
+                    .flat_map(move |b| [true, false].map(move |s| (a, b, s)))
+            })
+            .enumerate()
+        {
+            let mut w = World::new(alg);
+            w.cfg.flight_split = split;
+            w.cfg.probe_mtu = false;
+            run(
+                exchange(&mut w, false, 4000, 10 * MS, (1200, false), 300 + i as u64, buf),
                 &mut out,
             );
         }
@@ -184,7 +218,7 @@ fn dgram_size_traces() {
             let len = [0usize, 1, 30, 1088, 1303, 9000][(rng.next_u64() % 6) as usize];
             let delay = (1 + rng.next_u64() % 50) * MS;
             let resumed = rng.next_u64() % 2 == 1;
-            run(exchange(&mut w, resumed, len, delay, (mtu, v6), 200 + s), &mut out);
+            run(exchange(&mut w, resumed, len, delay, (mtu, v6), 200 + s, BUF), &mut out);
         }
         assert!(seen.behind, "no data behind a whole flight");
         assert!(seen.probe_big, "no probe above the path's size");
