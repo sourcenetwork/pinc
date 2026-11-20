@@ -485,6 +485,7 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `Reach_refresh` | PMAX 9 -> 8 |
 | `Reach_refuse` | PMAX 9 -> 8 |
 | `Reach_renew` | PMAX 9 -> 8 |
+| `Reasm` | KMAX 5 -> 4 |
 | `Reconcile` | UniMax 5 -> 3; Xor8 <- Xor8Quick and XorTab <- XorTabQuick (the byte XOR from a 16 x 16 table of half bytes) |
 | `ReconcileWire` | BLen 3 -> 2, RAlpha {0, 1, 2, 3} -> {0, 1, 2}, RLen 5 -> 3; Seeds <- SeedsQuick and Expand <- ExpandQuick (smaller literal case domains, see ReconcileWire.tla) |
 | `ReconcileWire_cap1` | BLen 3 -> 2, RAlpha {0, 1, 2, 3} -> {0, 1, 2}, RLen 5 -> 3; Seeds <- SeedsQuick and Expand <- ExpandQuick (smaller literal case domains, see ReconcileWire.tla) |
