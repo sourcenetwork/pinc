@@ -56,6 +56,14 @@ impl crate::standby::Standby {
         self.mark(Mark::All);
     }
 
+    /// Log the drop of the send half of `stream`, which forgets its failure.
+    pub(super) fn trace_send_drop(&self, stream: u64) {
+        #[cfg(feature = "trace")]
+        self.mark(Mark::SendDrop { s: stream });
+        #[cfg(not(feature = "trace"))]
+        let _ = stream;
+    }
+
     /// Log the end of a session with reason `err`.
     pub(super) fn trace_end(&self, err: &crate::error::Error) {
         #[cfg(feature = "trace")]

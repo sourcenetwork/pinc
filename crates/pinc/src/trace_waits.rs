@@ -36,6 +36,11 @@ pub enum Mark {
         /// The reason's code (see [`kind_code`]).
         e: u32,
     },
+    /// The send half of a stream was dropped and its failure forgotten.
+    SendDrop {
+        /// The stream.
+        s: u64,
+    },
     /// An attempt ended (key 0) or registered a wait on `key` and stream `s`.
     Try {
         /// The wait's key code, 0 when the attempt ended.

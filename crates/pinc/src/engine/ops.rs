@@ -263,6 +263,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
         }
         if let Some(s) = self.sessions.get_mut(&session) {
             s.send_fail.retain(|(i, _)| *i != stream);
+            self.standby.trace_send_drop(stream);
         }
         self.wake_queued();
     }

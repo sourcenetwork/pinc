@@ -362,6 +362,7 @@ impl Log {
                 }
                 Mark::All => self.add(r#"{"t":"fw","op":"all""#.to_owned()),
                 Mark::End { e } => self.add(format!(r#"{{"t":"fw","op":"end","e":{e}"#)),
+                Mark::SendDrop { s } => self.add(format!(r#"{{"t":"fw","op":"sdrop","s":{s}"#)),
                 Mark::Try { key, s } => {
                     let f = self.cur.expect("a wait was logged outside a poll");
                     self.add(format!(r#"{{"t":"fw","op":"try","f":{f},"key":{key},"s":{s}"#));
