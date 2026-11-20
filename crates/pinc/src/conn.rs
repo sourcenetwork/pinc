@@ -268,7 +268,7 @@ impl<H: Hosted> Connection<H> {
     ///
     /// # Errors
     /// [`crate::ErrorKind::TooLarge`] if the datagram does not fit `buf` (it stays queued); the reason the connection
-    /// ended, once the datagrams that arrived before are read.
+    /// ended; datagrams still queued when it ended are dropped with it.
     pub async fn recv_datagram(&self, buf: &mut [u8]) -> Result<usize> {
         self.0.sh.run(|core, _| core.read_datagram(&self.0.info, buf)).await
     }
@@ -277,7 +277,7 @@ impl<H: Hosted> Connection<H> {
     /// [`recv_datagram`](Self::recv_datagram) to reuse a buffer. Cancel safe.
     ///
     /// # Errors
-    /// The reason the connection ended, once the datagrams that arrived before are read.
+    /// The reason the connection ended; datagrams still queued when it ended are dropped with it.
     pub async fn read_datagram(&self) -> Result<Vec<u8>> {
         let mut buf = vec![0u8; 2048];
         let n = match self.recv_datagram(&mut buf).await {
