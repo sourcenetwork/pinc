@@ -183,8 +183,11 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `ConnectTable` | N 3 -> 2, KeySet {1, 2, 3, 4} -> {1, 2, 3} |
 | `ConnectTable_cache` | N 3 -> 2, KeySet {1, 2, 3, 4, 5} -> {1, 2, 3} |
 | `ConnectTable_n4` | KeySet {1, 2, 3, 4} -> {1, 2} |
+| `ConnectWs` | ReadSizes {1, 4, 1000} -> {1, 1000} |
 | `ConnectWs_forms` | NF 2 -> 1 (plans of one descriptor) |
 | `ConnectWs_ops` | FLs {14000000, 14000002} -> {14000002} (a payload of 2 bytes) |
+| `ConnectWs_reach` | ReadSizes {1, 1000} -> {1} |
+| `ConnectWs_reach_max` | ReadSizes {20, 1000} -> {20} |
 | `CoreState` | Lives -> LivesQuick (endpoints 3 -> 2: the full one left out), Positions -> PositionsQuick (middle bytes every 7th -> every 21st) |
 | `CoreTable` | N 3 -> 2, KeySet {1, 2, 3} -> {1, 2} |
 | `CoreTable_chain` | N 3 -> 2, KeySet {1, 2, 3} -> {1, 2} |
