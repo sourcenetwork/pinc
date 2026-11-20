@@ -17,9 +17,10 @@ The script reads every node and edge, computes paths from the initial state that
 visits every state on the way), and writes them as test cases:
   line 1:   {"constants": {...}, "init": {...}, "states": n, "leaves": l, "edges": m, "cases": c, "steps": s}
   then one line per case: {"case": i, "steps": [{"call": "CallHold", "args": [...], "state": {...}}, ...]}
-`constants` are the CONSTANTS of <config.cfg>, `init` the initial state and `state` the state after the call, every
-TLA+ value as JSON: an integer, a boolean, a string, a sequence or a set as an array, a record as an object. A leaf is
-a state past the config's CONSTRAINT: the graph has the edges into it, none out of it.
+`constants` are the CONSTANTS of <config.cfg> given a value (not one substituted with `<-`), `init` the initial state
+and `state` the state after the call, every TLA+ value as JSON: an integer, a boolean, a string, a sequence or a set as
+an array, a record as an object. A leaf is a state past the config's CONSTRAINT: the graph has the edges into it, none
+out of it.
 
 The cover: states are taken in breadth-first order from the initial state; while one has an edge not taken yet, a
 case goes to it along the breadth-first tree and then follows edges not taken yet (a call that leaves the state as it
@@ -174,14 +175,23 @@ KEYWORDS = (r"(?:SPECIFICATION|INIT|NEXT|INVARIANTS?|PROPERTY|PROPERTIES|CONSTRA
 
 
 def constants(path):
-    """The `name = value` assignments of the CONSTANTS section of a TLC config, values as TLA+."""
+    """The `name = value` assignments of the CONSTANTS section of a TLC config, values as TLA+. A substitution
+    `name <- Op` is left out: its value is an operator of the module (a config file cannot spell a tuple)."""
     with open(path, encoding="utf-8") as f:
         text = re.sub(r"\\\*[^\n]*", "", f.read())
     out = {}
+    ident = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
     for body in re.findall(r"\bCONSTANTS?\b(.*?)(?=\b" + KEYWORDS + r"\b|\Z)", text, re.S):
         p = Tla(body)
         while not p.done():
-            m = re.compile(r"[A-Za-z_][A-Za-z0-9_]*").match(p.s, p.i)
+            m = ident.match(p.s, p.i)
+            if m and p.eat_after(m.end(), "<-"):
+                p.ws()
+                op = ident.match(p.s, p.i)
+                if not op:
+                    raise SystemExit(f"mbt: {path}: cannot read the operator substituted for {m.group(0)}")
+                p.i = op.end()
+                continue
             if not m or not p.eat_after(m.end(), "="):
                 raise SystemExit(f"mbt: {path}: cannot read the constant at {p.s[p.i:p.i + 20]!r}")
             out[m.group(0)] = p.value()

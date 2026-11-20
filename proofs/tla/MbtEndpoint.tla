@@ -84,7 +84,7 @@ vars == <<now, live, o, q>>
 
 INSTANCE OrphanOps
 
-\* the KEYS of the witness configs (the TLC of run_tlc reads no tuple in a config file)
+\* the KEYS of the configs: a config file cannot spell a tuple, so each config names one of these (KEYS <- KeysW)
 KeysW == {<<1, 1>>, <<1, 2>>, <<2, 1>>}
 KeysLifeW == {<<1, 1>>, <<2, 1>>, <<3, 1>>}
 KeysStallW == {<<1, 1>>}
@@ -97,8 +97,9 @@ Sat(x) == IF x >= TMAX THEN TMAX ELSE x
 End(c) == Sat(c + LIFE + 1)
 Stalled == q = S
 Holders(id) == {s \in live : s[2] = id}
-\* a part of message key held and not past its life at t (Orphans::holds)
-Fresh(t, key) == \E k \in DOMAIN o.slots : o.slots[k] # None /\ o.slots[k][3] = key /\ ~Stale(o.slots[k], OLIFE, t)
+\* a part of message key held and not past its life at t (Orphans::holds); a set, not \E: in an action TLC takes each
+\* slot that holds such a part as a step of its own
+Fresh(t, key) == {k \in DOMAIN o.slots : o.slots[k] # None /\ o.slots[k][3] = key /\ ~Stale(o.slots[k], OLIFE, t)} # {}
 
 \* replay_held: take the oldest part of the message until none is left (every take expires the old ones first)
 RECURSIVE TakeAll(_, _, _)
@@ -111,7 +112,9 @@ Init == now = 0 /\ live = {} /\ o = Orphan0(4) /\ q = 0
 CallFlood(t, id, src, dec) ==
     /\ t >= now
     /\ <<id, src>> \in KEYS
-    /\ (Holders(id) = {} \/ (Cardinality(Holders(id)) < 4 /\ Fresh(t, <<id, src>>)))
+    \* an IF, not a disjunction: TLC takes each true disjunct as a step of its own, so a flood that both allowed was
+    \* generated twice, and scripts/mbt.py counts one edge per step TLC generated (Fresh is a set for the same reason)
+    /\ IF Holders(id) = {} THEN TRUE ELSE Cardinality(Holders(id)) < 4 /\ Fresh(t, <<id, src>>)
     /\ dec = FloodDec
     /\ now' = t
     /\ live' = IF dec = 1 THEN live \cup {<<t, id, src>>} ELSE live
