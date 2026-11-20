@@ -523,7 +523,7 @@ struct Parts<D> {
     relays: Vec<Relay>,
     max_message: usize,
     home: NodeId,
-    /// The relay clock minus the endpoint's, in nanoseconds.
+    /// The wall clock at the endpoint's first instant, which the relay role's clock counts from; 0 without a role.
     origin: u64,
 }
 
