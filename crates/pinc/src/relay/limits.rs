@@ -39,8 +39,8 @@ pub struct Limits {
     /// A carrier that sends nothing for this long is closed, in nanoseconds. The relay pings every 10 minutes, so a
     /// live peer answers well within the default.
     pub idle_ns: u64,
-    /// The most bytes queued for one carrier that is not draining. A carrier past it is closed, so one slow reader
-    /// never holds memory or time of the others.
+    /// The most bytes queued for one carrier that is not draining, counting a write in flight. A carrier past it is
+    /// closed, so one slow reader never holds memory or time of the others.
     pub write_backlog: usize,
     /// The most members with a UDP session to the relay's hub, when a hub is configured. Memory for all of them is
     /// reserved when the relay is built: about 360 KiB each plus their buffers.

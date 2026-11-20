@@ -1,6 +1,7 @@
 //! One accepted byte stream: its protected carrier, its WebSocket framing, and the bytes queued for it.
 //!
-//! Invariants: the queue of a stream holds whole sealed units and never more than the backlog limit; a read or write
+//! Invariants: the queue of a stream and the write in flight together hold whole sealed units and never more than the
+//! backlog limit (plus one unit and the control replies, at most `CTL_MAX` bytes); a read or write
 //! buffer is owned by at most one operation; the buffers of a stream are allocated once and reused.
 
 use alloc::boxed::Box;
@@ -50,6 +51,8 @@ pub(crate) struct Conn<S> {
     ctl: Vec<u8>,
     wbuf: Option<Vec<u8>>,
     woff: usize,
+    /// The bytes of the write buffer not yet written: they stay part of the backlog while the write is in flight.
+    unsent: usize,
 }
 
 impl<S> Conn<S> {
@@ -77,6 +80,7 @@ impl<S> Conn<S> {
             ctl: Vec::new(),
             wbuf: Some(Vec::new()),
             woff: 0,
+            unsent: 0,
         }
     }
 
@@ -92,18 +96,18 @@ impl<S> Conn<S> {
         self.rbuf = Some(buf);
     }
 
-    /// Queue sealed bytes (whole units); false if the queue would pass `limit` bytes.
+    /// Queue sealed bytes (whole units); false if the queue and the write in flight would pass `limit` bytes.
     pub(crate) fn push(&mut self, wire: &[u8], limit: usize) -> bool {
-        if self.q.len() - self.qpos + wire.len() > limit {
+        if self.backlog() + wire.len() > limit {
             return false;
         }
         self.q.extend_from_slice(wire);
         true
     }
 
-    /// Bytes queued and not yet handed to a write.
+    /// Bytes queued and not yet written, in the queue or in the write in flight.
     pub(crate) fn backlog(&self) -> usize {
-        self.q.len() - self.qpos
+        self.q.len() - self.qpos + self.unsent
     }
 
     /// Queue a WebSocket control reply.
@@ -120,11 +124,13 @@ impl<S> Conn<S> {
         }
         let mut buf = self.wbuf.take()?;
         if self.woff < buf.len() {
+            self.unsent = buf.len() - self.woff;
             return Some((buf, self.woff));
         }
         buf.clear();
         self.woff = 0;
         if self.fill(&mut buf, mask) {
+            self.unsent = buf.len();
             Some((buf, 0))
         } else {
             self.wbuf = Some(buf);
@@ -135,6 +141,7 @@ impl<S> Conn<S> {
     /// A write finished: `n` bytes of `buf` went out.
     pub(crate) fn wrote(&mut self, buf: Vec<u8>, n: usize) {
         self.woff += n;
+        self.unsent = buf.len().saturating_sub(self.woff);
         self.wbuf = Some(buf);
     }
 
