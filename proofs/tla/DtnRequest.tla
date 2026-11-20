@@ -184,8 +184,10 @@ TypeOK == /\ have \subseteq Syms /\ shared \subseteq Syms /\ refused \subseteq H
 \* only data is fetched.
 NoParityWithoutLoss == \A x \in Holders : \A s \in ask[x] : IsParity(s) => \E d \in DataOf(Blk(s)) : d \in LostOf(x)
 
-\* A request asks no block for more symbols than it was short of K when it was made.
-AskWithinNeed == \A x \in Holders : \A b \in 0..(NB - 1) : Cardinality(ask[x] \cap BSyms(b)) <= Need(base[x], b)
+\* A request asks no block for more symbols than it was short of K when it was made (none of a block that held K or
+\* more: Need is negative when it held more, its parity too).
+AskWithinNeed == \A x \in Holders : \A b \in 0..(NB - 1) :
+                    Cardinality(ask[x] \cap BSyms(b)) <= IF Need(base[x], b) < 0 THEN 0 ELSE Need(base[x], b)
 
 \* A request asks for no symbol held when it was made, and none this transfer lost.
 AskFresh == \A x \in Holders : ask[x] \cap (base[x] \cup LostOf(x)) = {}
