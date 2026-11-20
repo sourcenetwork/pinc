@@ -16,10 +16,12 @@ on:
 permissions:
   contents: read
 
+# A newer push replaces a pull request's run: its group is its branch (`github.ref` would name master once the pull
+# request is merged, and its last run would then cancel master's). Every other run (a push to master, the nightly
+# one, one started by hand) is a group of its own, so it is never cancelled or left waiting by the next.
 concurrency:
-  group: ci-${{ github.ref }}
-  # A newer push replaces a pull request's run; a run on master is left to finish, so its proofs are not cut short.
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ci-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
