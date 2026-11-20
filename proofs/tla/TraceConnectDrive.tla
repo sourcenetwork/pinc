@@ -34,7 +34,8 @@ Ev == Trace[i]
 
 LOOKUPS == 16
 WAITERS == 4
-BUF == 8
+\* the drive's buffers of dropped and of asking peers hold as many peers as the lookup table (drive.rs)
+BUF == LOOKUPS
 
 \* last is the endpoint's last_app: a drive's idle is now - last_app (saturating), as each_session computes it
 St0 == [est |-> FALSE, dialer |-> TRUE, retx |-> 0, pto |-> FALSE, rr |-> FALSE, valid |-> FALSE, idle |-> 0, rtt |-> 0,

@@ -95,7 +95,7 @@ AskAll(T, q, now) ==
     ELSE AskAll(IF LHas(T, Head(q)) THEN T ELSE LAsk(T, now, Head(q), TRUE, FALSE, 0).T, Tail(q), now)
 
 (* the pending dials and lookups of one drive: pruned, the first b dropped peers lose their lookup, the first b
-   pending peers without one ask again (b is 8 in the code) *)
+   pending peers without one ask again (b is LOOKUPS, 16, in the code) *)
 PruneDrive(P, T, ended, now, b) ==
     LET pr == PruneEnded(P.items, 1, ended, <<>>)
         P1 == [P EXCEPT !.items = pr.items]
