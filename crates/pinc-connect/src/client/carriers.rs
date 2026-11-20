@@ -257,7 +257,8 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
         if let Some(a) = act {
             self.act(now, i, a);
         }
-        if self.rly.get(i).is_some_and(|r| r.link.is_open()) {
+        // On a slow node a carrier that just opened still owes its held packets: a new one waits behind them.
+        if self.rly.get(i).is_some_and(|r| r.link.is_open() && !r.drain_due) {
             let sent = if relay_id.as_ref() == Some(dst) {
                 self.frame_to(now, i, &Frame::SelfSend { packet })
             } else {

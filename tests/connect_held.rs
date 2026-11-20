@@ -202,3 +202,56 @@ fn a_very_slow_node_drops_held_first_flights_of_established_sessions_and_collaps
         assert_eq!(rig.relay.stats().rejected, 1 + 8);
     });
 }
+
+#[test]
+fn a_new_packet_does_not_overtake_the_held_ones_on_a_very_slow_nodes_carrier() {
+    use pinc_connect::relay::Trace;
+    big_stack(|| {
+        let mut host = Box::new(Host::new(0x31, "192.168.1.2:4433".parse().unwrap(), 1000 * SEC));
+        let (identity, prekey) = (host.identity, host.prekey_info.clone());
+        let mut keys = Soft(Box::new(Host::new(
+            0x31,
+            "192.168.1.2:4433".parse().unwrap(),
+            1000 * SEC,
+        )));
+        let mut rig = Rig::new(&identity, prekey);
+        // A node whose round trip and peak are both slow: the held packets wait for the drive after the carrier opens.
+        rig.conn.set_node_rtt(4 * SEC, 4 * SEC);
+        let (peer, now) = (nid(0xb7), 1000 * SEC);
+        rig.relay.carrier_opened(now, peer, &mut rig.sink).unwrap();
+        let to = rig.conn.path_addr(0, &peer);
+        let short = |len: usize| vec![0x40u8; len];
+        for len in [101, 102, 103] {
+            rig.conn.route(now, &*host.ep, to, &short(len));
+        }
+        let mut answered = 0;
+        let now = rig.bring_up(&mut keys, now, &mut answered);
+        rig.conn.route(now, &*host.ep, to, &short(104));
+        let Rig { conn, drbg, .. } = &mut rig;
+        let mut env = Env {
+            provider: &Software,
+            now,
+            drbg,
+        };
+        conn.drive(now, &mut *host.ep, &mut env, Some(now / 1_000_000));
+        for _ in 0..8 {
+            rig.shuttle(&mut keys, now, &mut answered);
+        }
+        let order: Vec<usize> = rig
+            .traces()
+            .into_iter()
+            .filter_map(|t| {
+                if let Trace::Routed { dst, bytes, .. } = t {
+                    (dst == peer).then_some(bytes)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(
+            order,
+            [101, 102, 103, 104],
+            "the packets reached the relay out of order"
+        );
+    });
+}
