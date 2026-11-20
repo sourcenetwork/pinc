@@ -2,7 +2,8 @@
 //!
 //! Invariants: it holds at most one outgoing message (the last flight, kept so it can be sent again), at most one
 //! outstanding key request, and at most one of each event. `poll` hands them out in a fixed order (key request,
-//! message, early keys, resume rejected, established, failure) and each exactly once; a failure discards everything else queued.
+//! message, early keys, resume rejected, established, failure) and each exactly once; a failure discards everything
+//! else queued.
 
 use pinc_crypto::IdentityAlg;
 use pinc_crypto::Provider;
