@@ -36,12 +36,12 @@ pub mod trace {
     pub const fn head_len(arg: u64) -> usize {
         super::head_len(arg)
     }
-    /// [`super::text_len`].
+    /// `super::text_len`.
     #[must_use]
     pub const fn text_len(n: usize) -> usize {
         super::text_len(n)
     }
-    /// [`super::cid_len`].
+    /// `super::cid_len`.
     #[must_use]
     pub const fn cid_len(n: usize) -> usize {
         super::cid_len(n)
