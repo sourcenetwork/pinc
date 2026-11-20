@@ -25,7 +25,7 @@ use pinc_crypto::{NodeId, Secret};
 use pinc_keystore::KeyStore;
 use pinc_node::HUB_ALPN;
 use pinc_security::{Alpn, KeyRequest, KeyResponse};
-use pinc_transport::stream::{RecvStatus, StreamId, is_uni};
+use pinc_transport::stream::StreamId;
 
 use crate::carriers::Relay;
 use crate::error::{Error, ErrorKind, Result};
@@ -48,6 +48,7 @@ mod ops;
 #[allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "tests assert")]
 mod prekey_tests;
 mod state;
+mod streams;
 #[cfg(test)]
 #[allow(clippy::unwrap_used, reason = "tests assert")]
 mod taken_tests;
@@ -912,80 +913,6 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
     pub(crate) fn fail(&mut self, err: Error) {
         if self.stopped.is_none() {
             self.stop(err);
-        }
-    }
-
-    fn stream_opened(&mut self, now: u64, session: SessionId, id: StreamId) {
-        let uni = is_uni(id);
-        let cap = self.limits.accept_streams;
-        let Some(s) = self.sessions.get_mut(&session) else {
-            return;
-        };
-        let q = if uni { &mut s.accept_uni } else { &mut s.accept_bi };
-        if q.len() < cap {
-            q.push_back(id);
-            self.wake_s(session, if uni { SKey::AcceptUni } else { SKey::AcceptBi });
-            return;
-        }
-        // Refuse: tell the peer to stop, and drop what it sends.
-        debug_assert!(s.discard.len() < DISCARDED, "a dropped stream without a stream slot");
-        if s.discard.len() < DISCARDED {
-            s.discard.push(id);
-        }
-        if !uni {
-            let _ = self.cmd(now, || Command::Reset {
-                session,
-                stream: id,
-                error: BUSY,
-            });
-        }
-        let _ = self.cmd(now, || Command::StopSending {
-            session,
-            stream: id,
-            error: BUSY,
-        });
-        self.discard_if_dropped(now, session, id);
-    }
-
-    fn send_failed(&mut self, session: SessionId, id: StreamId, err: Error) {
-        if let Some(s) = self.sessions.get_mut(&session) {
-            s.send_fail.retain(|(i, _)| *i != id);
-            if s.send_fail.len() >= TRACKED {
-                s.send_fail.remove(0);
-            }
-            s.send_fail.push((id, err));
-        }
-    }
-
-    fn send_failure(&self, session: SessionId, id: StreamId) -> Option<Error> {
-        let s = self.sessions.get(&session)?;
-        s.send_fail.iter().find(|(i, _)| *i == id).map(|(_, e)| *e)
-    }
-
-    /// Throw away what the endpoint holds on a stream the application dropped, until the stream ends.
-    fn discard_if_dropped(&mut self, now: u64, session: SessionId, id: StreamId) {
-        if !self.sessions.get(&session).is_some_and(|s| s.discard.contains(&id)) {
-            return;
-        }
-        loop {
-            let n = match self.node.endpoint().query(Query::Read { session, stream: id }) {
-                Answer::Chunk(c) => c.len(),
-                _ => 0,
-            };
-            let status = match self.cmd(now, || Command::Consume { session, stream: id, n }) {
-                Ok(Value::Recv(st)) => st,
-                Ok(_) => RecvStatus::Open,
-                Err(_) => RecvStatus::Finished,
-            };
-            if status != RecvStatus::Open {
-                if let Some(s) = self.sessions.get_mut(&session) {
-                    s.discard.retain(|i| *i != id);
-                }
-                return;
-            }
-            if n == 0 {
-                return;
-            }
         }
     }
 }
