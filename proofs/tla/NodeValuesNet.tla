@@ -72,8 +72,10 @@ Next == \/ \E f \in FIDS, ps \in Lists : StartA(f, ps)
         \/ \E x \in n.streams : DropA(x.lid)
 Spec == Init /\ [][Next]_vars
 
-\* the state space is finite only with a bound on the streams ever added
-Bound == n.next <= NMAX
+\* the state space is finite only with a bound on the streams ever added and on the refusals counted: a refusal changes
+\* nothing but the count and op (RefusedWhole), and no step reads either, so a state reached after more refusals is
+\* reached after its last one alone; without the bound the same refusal repeats forever and the run never ends
+Bound == n.next <= NMAX /\ n.refused <= 1
 
 Bounded == Len(n.provs) <= CAP /\ Cardinality(n.streams) <= SCAP
 Trimmed == n.provs = Trim(n.provs)

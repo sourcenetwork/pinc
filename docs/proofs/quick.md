@@ -446,6 +446,7 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `NodeBackoff_shedfree` | PEERS {1, 2} -> {1} |
 | `NodeBackoff_window` | PEERS {1, 2} -> {1} |
 | `NodeValues` | NMAX 3 -> 2 (at most 2 streams added in a behaviour), SIDS {1, 2, 3} -> {1, 2} (a hung-up session and its redial) |
+| `NodeValuesNet` | CAP 2 -> 1, SCAP 2 -> 1, PEERS {1, 2, 3} -> {1, 2} (the second peer finds the provider table full, so a fetch of 2 peers is still refused part way and gives back what it took; one stream fills the stream table) |
 | `NodeSets` | SIDS {1, 2, 3} -> {1, 2} (a dial, a filler's session, and the endpoint refusing a third), NSTARTS 2 -> 1 (one round in all: a start refused Busy is not reached, NodeSets_busy is its witness) |
 | `NodeSets_cancel` | SIDS {1, 2, 3} -> {1, 2} (a dial, a filler's session, and the endpoint refusing a third), NSTARTS 2 -> 1 (one round in all: a start refused Busy is not reached, NodeSets_busy is its witness) |
 | `NodeSets_two` | SIDS {1, 2} -> {1} (one session at a time: two rounds share it, or the other peer's dial is refused), ATTEMPTS 2 -> 1 (a round ends Exhausted at its first failure; the retries are the quick NodeSets profile's), TMAX 1 -> 0 (no saturated clock; the quick NodeSets profile keeps it) |
