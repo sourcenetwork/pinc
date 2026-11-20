@@ -521,6 +521,7 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `Recovery` | PNMAX 2 -> 1, SIZES {1, 2} -> {1}, PMAX 1 -> 0, HOR 90 -> 45 (KMAX 4 kept: a probe firing needs send, ack, send, timeout) |
 | `Recovery_asleep` | PNMAX 2 -> 1, SIZES {1, 2} -> {1}, PMAX 1 -> 0, HOR 90 -> 45 (KMAX 4 kept: a probe firing needs send, ack, send, timeout) |
 | `Recovery_asleep_w` | SIZES {1, 2} -> {1}, PMAX 1 -> 0 (the time-threshold loss on a timeout while asleep is still found) |
+| `Recovery_count` | HOR 7 -> 5 |
 | `Recovery_flags` | PNMAX 2 -> 1, HOR 90 -> 45, LATEN 2 -> 1 |
 | `Recovery_flushdown` | PNMAX 2 -> 1, SIZES {1, 2} -> {1}, PMAX 1 -> 0, HOR 90 -> 45, LATEN 2 -> 1 (KMAX 4 kept: a probe firing needs send, ack, send, timeout) |
 | `RekeyCodec` | Shares -> SharesQuick: 3 shares -> 1 |
