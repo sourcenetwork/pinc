@@ -5,8 +5,9 @@
 //! Three seeds, one world each (two hubs, six members, a line rate of 8 Mbit/s). Members 1 to 4 provide a value each
 //! (the four roots differ), member 3 lies and is evicted by the fetch. At 30 s member 0 fetches each of the four
 //! roots from the four providers and member 5 fetches the root of member 1 from members 1 and 2, each with a deadline of
-//! 50 s; at 31 s member 0 cancels its lowest running fetch; member 2 crashes at 32 s and restarts at 33 s, so that its
-//! new sessions supersede the incoming ones its peers still hold from it. The world runs to 60 s in steps of 50 ms, and after
+//! 50 s; at 31 s member 0 cancels its lowest running fetch; member 2 fetches the root of member 4 from member 4 at
+//! 31.9 s, crashes at 32 s, restarts at 33 s and fetches it again at 33.5 s, so that its new session supersedes the
+//! incoming one member 4 still holds from it. The world runs to 60 s in steps of 50 ms, and after
 //! each step every member writes one line with the view of the probe `Node::values_view`: its values sessions, the
 //! sessions it dialed, the provider table, the streams with their provider, owner and session, and the running
 //! fetches' provider lists. Peers, sessions and stream numbers are written as small numbers, numbered per member and
@@ -207,6 +208,21 @@ fn run(seed: u64, out: &mut String) {
             deadline: Some(DEADLINE),
         },
     );
+    // SUPERSEDE needs a peer that dials: member 2 is a provider of the others, so it fetches too, just before its
+    // crash (the transfer is cut) and after its restart (the bytes it did not verify are asked for again).
+    for at in [secs(32) - 100 * MS, secs(33) + 500 * MS] {
+        w.sim.command(
+            at,
+            m[2],
+            NCmd::ValuesFetch {
+                root: roots[3],
+                length: len as u64,
+                ranges: vec![],
+                providers: ids(&w, &m[4..5]),
+                deadline: Some(DEADLINE),
+            },
+        );
+    }
     w.sim.crash(secs(32), m[2]);
     w.sim.restart(secs(33), m[2]);
     let m2 = w.id(m[2]);
