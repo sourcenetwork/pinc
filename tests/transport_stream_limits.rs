@@ -440,3 +440,32 @@ fn the_end_arriving_on_a_stream_asked_to_stop_frees_it() {
     assert_eq!(rx.open_streams(), 0);
     assert_eq!(pool.used_chunks(), 0);
 }
+
+/// A stop request not yet sent when the end arrives is never sent: every byte arrived, there is nothing to stop.
+#[test]
+fn a_stop_not_yet_sent_is_dropped_when_the_end_arrives() {
+    let (mut pool, mut t) = setup(1024, |c| c.initial_stream_window = 64 * 1024);
+    t.on_stream_frame(&mut pool, 8, 0, b"y", false).unwrap();
+    t.stop_sending(&mut pool, 8, 2).unwrap();
+    t.on_stream_frame(&mut pool, 8, 1, b"z", true).unwrap();
+    assert!(
+        drain_control(&mut t).is_empty(),
+        "a stream whose end arrived was asked to stop"
+    );
+}
+
+/// A stop request reported lost after the end arrived is not sent again.
+#[test]
+fn a_lost_stop_is_not_sent_again_once_the_end_arrived() {
+    let (mut pool, mut t) = setup(1024, |c| c.initial_stream_window = 64 * 1024);
+    t.on_stream_frame(&mut pool, 8, 0, b"y", false).unwrap();
+    t.stop_sending(&mut pool, 8, 2).unwrap();
+    let frame = ControlFrame::StopSending { id: 8, error_code: 2 };
+    assert_eq!(drain_control(&mut t), [frame]);
+    t.on_stream_frame(&mut pool, 8, 1, b"z", true).unwrap();
+    t.on_control_lost(&frame);
+    assert!(
+        drain_control(&mut t).is_empty(),
+        "a stop for a finished stream came back"
+    );
+}

@@ -242,8 +242,10 @@ impl<const C: usize> Recv<C> {
         if fin {
             self.final_size = Some(end);
             // Asked to stop before the end arrived: the sender has nothing left to reset, so nothing else would end it.
+            // Every byte arrived, so a request not yet sent is never sent and a lost one is not sent again.
             if self.stop != Stop::None {
                 self.discard(pool);
+                self.stop = Stop::Acked;
             }
         }
         Ok(())
