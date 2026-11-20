@@ -954,6 +954,9 @@ fn fixed_runs(tr: &mut PmTrace) {
         r.lost(net, 2);
         r.set(net, 1);
         r.punch(net);
+        // The probe of a punch leaves at the timer of the path, not with the next datagram built.
+        let t = r.now;
+        r.timer_at(net, t);
         flight(net, 1000);
         r.send_all(net);
         r.answer(net, 1);
