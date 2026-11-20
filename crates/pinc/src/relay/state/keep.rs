@@ -159,6 +159,11 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
         if self.keep.restoring || self.keep.mail.contains(&node) {
             return;
         }
+        self.push_mail(node);
+    }
+
+    /// Mark `node` for a mailbox write; a mark past the table is counted as a failed write.
+    fn push_mail(&mut self, node: NodeId) {
         if self.keep.mail.len() < 4 * MAILBOX_MEMBERS {
             self.keep.mail.push(node);
         } else {
@@ -315,7 +320,7 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
                 dropped |= self.sm.restore_held(now, at, node, &src, flag, body).is_err();
             }
             if dropped || decode(blob).next().is_none() {
-                self.keep.mail.push(*node);
+                self.push_mail(*node);
             }
         }
         self.keep.restoring = false;
@@ -424,6 +429,23 @@ mod tests {
             });
         }
         assert_eq!(core.counters.store_errors, 1, "the lost mark was not counted");
+    }
+
+    /// A store that holds more mailboxes than the table has room for does not make the marks pass it, and the marks lost
+    /// are counted.
+    #[test]
+    fn the_restore_marks_mailboxes_up_to_the_table_and_counts_the_rest() {
+        let mut core = core();
+        let over = 4 * MAILBOX_MEMBERS + 3;
+        let kept = Kept {
+            records: vec![],
+            mailboxes: (0..over)
+                .map(|i| (nid(u16::try_from(i).unwrap()), Vec::new()))
+                .collect(),
+        };
+        core.restore(T0, &kept);
+        assert_eq!(core.keep.mail.len(), 4 * MAILBOX_MEMBERS, "the marks passed the table");
+        assert_eq!(core.counters.store_errors, 3, "the marks lost were not counted");
     }
 
     /// The records to remove from the store never pass twice the record table, and the ones lost are counted.
