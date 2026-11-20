@@ -27,7 +27,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR.                                                *)
 (***************************************************************************)
-EXTENDS FacadeStreamOps, TLC, Json, IOUtils
+EXTENDS FacadeStreamOps, TLC, Json, IOUtils, TraceEnd
 
 CONSTANT FILE
 
@@ -80,4 +80,7 @@ Inv ==
     /\ \A j \in 1..(Len(s.dgot) - 1) : s.dgot[j] < s.dgot[j + 1]
     /\ \A x \in s.ddrop, y \in Range(s.dq) : x < y
     /\ Len(s.dq) <= DQ
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

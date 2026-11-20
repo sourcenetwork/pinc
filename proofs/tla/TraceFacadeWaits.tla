@@ -46,7 +46,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR.                                                *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils, TraceEnd
 
 CONSTANTS
     FILE,   \* the ndjson under PINC_TRACE_DIR
@@ -275,4 +275,7 @@ Inv ==
     /\ \A f \in Futs : SessWait(f) => live /\ f \in pend
     /\ Len(acc) <= ACAP /\ Len(accu) <= ACAP
     /\ Len(fail) <= TRK
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================
