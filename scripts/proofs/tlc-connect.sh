@@ -13,6 +13,7 @@ par run_tlc connect_drive_prune_w_ask ConnectDrivePrune ConnectDrivePrune_w_ask
 par run_tlc connect_duty ConnectDuty ConnectDuty
 par witness_tlc connect_duty_burst ConnectDuty ConnectDuty_w_burst BurstNotFull
 par run_tlc connect_duty_sat ConnectDuty ConnectDuty_sat
+par witness_tlc connect_duty_probetop ConnectDuty ConnectDuty_w_probetop ProbeNotAtTop
 par run_tlc connect_radio ConnectRadio ConnectRadio
 par run_tlc connect_radio_sat ConnectRadio ConnectRadio_sat
 par run_tlc connect_flight ConnectFlight ConnectFlight
