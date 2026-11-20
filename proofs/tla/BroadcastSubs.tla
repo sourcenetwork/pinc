@@ -14,8 +14,13 @@
 (* RestoreOnlyHeld (a live entry is not told again, a released member is   *)
 (* told nothing); HoldKeeps (a hold changes live entries to held and       *)
 (* nothing else); ReleaseForgets (afterwards the member has no entry);     *)
-(* TableBound (entries per topic stay within TableMax; past it a SUB is    *)
-(* ignored, as in the code).                                               *)
+(* TableBound (entries per topic stay within TableMax). A SUB is taken or  *)
+(* answered with the hub-full notice, never dropped: the hub cannot hold   *)
+(* it when its topic table has no room for a topic it has no entry of, or  *)
+(* when the topic has TableMax subscribers. SubTakes (a SUB that is taken  *)
+(* makes the entry live); NoticeOnlyWhenFull (the notice goes only to a    *)
+(* member without an entry, at a full topic or a topic the hub could not   *)
+(* add). BroadcastSubs_busy.cfg finds the notice sent (NoNotice violated). *)
 (*                                                                         *)
 (* Lean counterpart: proofs/lean/Pinc/BroadcastSubs.lean.                  *)
 (***************************************************************************)
@@ -32,11 +37,15 @@ Entries(t) == {m \in Members : subs[t][m] # "none"}
 
 Init == subs = [t \in Topics |-> [m \in Members |-> "none"]] /\ step = NoStep
 
-\* on_sub: record the subscriber live (an unknown member only if the table has room)
-Sub == \E m \in Members, t \in Topics :
-    /\ IF subs[t][m] # "none" \/ Cardinality(Entries(t)) < TableMax
-       THEN subs' = [subs EXCEPT ![t][m] = "live"] ELSE UNCHANGED subs
-    /\ step' = NoStep
+\* on_sub: record the subscriber live (an unknown member only if the topic has room, and a topic the hub has no
+\* entry of only if its topic table has room: room), else answer with the hub-full notice and change nothing
+Sub == \E m \in Members, t \in Topics, room \in BOOLEAN :
+    LET takes == subs[t][m] # "none" \/ ((room \/ Entries(t) # {}) /\ Cardinality(Entries(t)) < TableMax)
+    IN IF takes
+       THEN /\ subs' = [subs EXCEPT ![t][m] = "live"]
+            /\ step' = [NoStep EXCEPT !.k = "sub", !.member = m, !.topic = t]
+       ELSE /\ UNCHANGED subs
+            /\ step' = [NoStep EXCEPT !.k = "notice", !.member = m, !.topic = t]
 
 Unsub == \E m \in Members, t \in Topics : subs' = [subs EXCEPT ![t][m] = "none"] /\ step' = NoStep
 
@@ -75,4 +84,12 @@ HoldKeeps == step.k = "hold" => /\ \A t \in step.before : subs[t][step.member] =
                                 /\ \A t \in Topics : subs[t][step.member] # "live"
 ReleaseForgets == step.k = "release" => \A t \in Topics : subs[t][step.member] = "none"
 TableBound == \A t \in Topics : Cardinality(Entries(t)) <= TableMax
+\* a SUB that is taken leaves the member's entry live
+SubTakes == step.k = "sub" => subs[step.topic][step.member] = "live"
+\* the notice goes only to a member without an entry, at a topic with TableMax entries or one the hub has none of
+NoticeOnlyWhenFull == step.k = "notice" =>
+    /\ subs[step.topic][step.member] = "none"
+    /\ (Cardinality(Entries(step.topic)) >= TableMax \/ Entries(step.topic) = {})
+\* witness only (BroadcastSubs_busy.cfg): TLC finds a SUB answered with the notice
+NoNotice == step.k # "notice"
 =============================================================================

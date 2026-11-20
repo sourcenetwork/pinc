@@ -6,16 +6,19 @@
 (*                                                                         *)
 (* The Rust test tests/trace_broadcast_subs.rs drives one hub (built with  *)
 (* the cargo feature `trace`, whose probe `Topics::sub_state` reads an     *)
-(* entry) with members 1 to 3 on topics 1 and 2, and a publisher, node 4,  *)
-(* that subscribes to nothing. It records one event per call: SUB and      *)
-(* UNSUB frames from a member, hold, restore and release of a member, and  *)
-(* a publish; with the RESTORED frames a restore sent (their topics), the  *)
-(* members a publish was pushed to, and the whole table after the call.    *)
-(* Every event must be a step of BroadcastSubs.tla (Sub, Unsub, Hold,      *)
-(* Restore, Release, Push) for that member or topic, whose table is the   *)
-(* recorded one, and the model's invariants hold on every state. The code's *)
-(* table cap (TABLE_MAX, 4096) is above the 3 members: the trace never     *)
-(* reaches it (BroadcastSubs.cfg checks the cap).                          *)
+(* entry, and a topic table of two topics) with members 1 to 3 on topics 1 *)
+(* and 2, a publisher that subscribes to nothing, and member 4, which asks *)
+(* for topic 3 once topics 1 and 2 fill the hub's topic table. It records  *)
+(* one event per call: SUB and UNSUB frames from a member, the hub-full    *)
+(* notice that answers member 4's SUB (notice), hold, restore and release  *)
+(* of a member, and a publish; with the RESTORED frames a restore sent     *)
+(* (their topics), the members a publish was pushed to, and the whole      *)
+(* table after the call. Every event must be a step of BroadcastSubs.tla   *)
+(* (Sub taking the SUB or answering it with the notice, Unsub, Hold,       *)
+(* Restore, Release, Push) for that member or topic, whose table is the    *)
+(* recorded one, and the model's invariants hold on every state. The       *)
+(* code's subscriber cap (TABLE_MAX, 4096) is above the 4 members: the     *)
+(* trace never reaches it (BroadcastSubs.cfg checks the cap).              *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and PINC_TRACE_DIR, the *)
 (* directory that holds bcast/subs.ndjson.                                 *)
@@ -36,6 +39,7 @@ Recorded == [t \in Topics |-> [m \in Members |-> Ev.subs[t][m]]]
 
 SubEv == Ev.op = "sub" /\ M!Sub /\ subs'[Ev.topic][Ev.m] = "live"
 UnsubEv == Ev.op = "unsub" /\ M!Unsub /\ subs'[Ev.topic][Ev.m] = "none"
+NoticeEv == Ev.op = "notice" /\ M!Sub /\ step'.k = "notice" /\ step'.member = Ev.m /\ step'.topic = Ev.topic
 HoldEv == Ev.op = "hold" /\ M!Hold /\ step'.member = Ev.m
 RestoreEv == Ev.op = "restore" /\ M!Restore /\ step'.member = Ev.m /\ step'.told = Range(Ev.told)
 ReleaseEv == Ev.op = "release" /\ M!Release /\ step'.member = Ev.m
@@ -43,7 +47,7 @@ PushEv == Ev.op = "push" /\ M!Push /\ step'.topic = Ev.topic /\ step'.pushed = R
 
 Init == i = 1 /\ M!Init
 Step == /\ i <= Len(Trace) /\ Ev.t = "subs"
-        /\ (SubEv \/ UnsubEv \/ HoldEv \/ RestoreEv \/ ReleaseEv \/ PushEv)
+        /\ (SubEv \/ UnsubEv \/ NoticeEv \/ HoldEv \/ RestoreEv \/ ReleaseEv \/ PushEv)
         /\ subs' = Recorded
         /\ i' = i + 1
 Finished == i > Len(Trace) /\ UNCHANGED vars
@@ -51,7 +55,7 @@ TNext == Step \/ Finished
 TraceSpec == Init /\ [][TNext]_vars
 
 Inv == /\ M!TypeOK /\ M!HeldGetsNoPush /\ M!RestoreTellsExactly /\ M!RestoreOnlyHeld /\ M!HoldKeeps
-       /\ M!ReleaseForgets /\ M!TableBound
+       /\ M!ReleaseForgets /\ M!TableBound /\ M!SubTakes /\ M!NoticeOnlyWhenFull
 \* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
 ReplayAtEnd == ReplaySeen(i > Len(Trace))
 ReplayEnded == ReplayRead(Len(Trace))
