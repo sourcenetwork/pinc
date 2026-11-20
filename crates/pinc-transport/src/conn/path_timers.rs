@@ -138,23 +138,26 @@ conn_impl! {
         let thin = self.thin_session();
         let node = self.rec.peak_rtt();
         let Some(p) = self.paths.get_mut(i) else { return };
-        if p.info.kind != PathKind::Direct || !p.validated {
+        if p.info.kind != PathKind::Direct {
             return;
         }
-        p.validated = false;
-        // A re-join already running is not set up again.
-        if !(p.rejoin && p.probes_left > 0) {
-            let mut gap = REJOIN_GAP.max(if slow { srtt } else { srtt / 2 });
-            let mut probes = 4.max(REJOIN_PROBES * REJOIN_GAP / gap);
-            if thin {
-                gap = gap.max(RJ_THIN_GAP).max(srtt).max(node);
-                probes = 4.max(12 * SECOND / gap);
+        // Only a validated path has a validation to drop and a re-join to set up; every direct path falls back.
+        if p.validated {
+            p.validated = false;
+            // A re-join already running is not set up again.
+            if !(p.rejoin && p.probes_left > 0) {
+                let mut gap = REJOIN_GAP.max(if slow { srtt } else { srtt / 2 });
+                let mut probes = 4.max(REJOIN_PROBES * REJOIN_GAP / gap);
+                if thin {
+                    gap = gap.max(RJ_THIN_GAP).max(srtt).max(node);
+                    probes = 4.max(12 * SECOND / gap);
+                }
+                p.probes_left = u32::try_from(probes).unwrap_or(u32::MAX);
+                p.probe_gap = gap;
+                p.next_probe = now.saturating_add(gap);
+                p.rejoin = true;
+                self.set_challenge(env, i);
             }
-            p.probes_left = u32::try_from(probes).unwrap_or(u32::MAX);
-            p.probe_gap = gap;
-            p.next_probe = now.saturating_add(gap);
-            p.rejoin = true;
-            self.set_challenge(env, i);
         }
         self.relay_fallback();
     }

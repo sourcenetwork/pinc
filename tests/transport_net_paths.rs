@@ -55,3 +55,28 @@ fn a_session_on_a_lost_path_moves_to_a_relay_path_added_after_the_loss() {
         bulk(&mut net, &data, 30 * SEC);
     });
 }
+
+/// The direct path stops answering and the session has no relay path at its first probe timeouts: one added after
+/// them still takes the session at the next, though the direct path was already dropped as validated.
+#[test]
+fn a_session_whose_direct_path_went_silent_falls_back_to_a_relay_path_added_later() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let mut net = connected(&mut w, &mut sa, &mut sb, two_routes(32));
+        net.link.route(PathId(1)).up = false;
+        let id = net.a.conn.open_uni().unwrap();
+        net.a.conn.write(id, &pattern(10_000, 33)).unwrap();
+        assert!(net.run(net.now + 30 * SEC, |n| n.a.conn.stats().ptos >= 3));
+        assert!(
+            !net.a.conn.path_validated(PathId(1)),
+            "the silent path is no longer validated"
+        );
+        let now = net.now;
+        net.a.with_env(now, |c, env| c.add_path(env, PathId(3), RELAY)).unwrap();
+        assert!(
+            net.run(net.now + 5 * SEC, |n| n.a.conn.active_is_relay()),
+            "the session stays on the unanswered direct path"
+        );
+    });
+}
