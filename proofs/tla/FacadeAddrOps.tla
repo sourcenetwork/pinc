@@ -2,10 +2,11 @@
 (***************************************************************************)
 (* Node ids as text and a node's address as a ticket, as the code computes *)
 (* them: crates/pinc/src/addr.rs `node_to_string`, `is_lower_hex`,         *)
-(* `node_from_str`, `NodeAddr::with_relay`, `ticket`, `parse`. Text is a   *)
-(* sequence of byte codes. A node id is [alg |-> tag 1..4, bytes |-> NB    *)
-(* bytes]; pinc-crypto identity.rs `from_tag` knows tags 1..4 and 1 is     *)
-(* Ed25519, which prints without a tag. A socket address is                *)
+(* `node_from_str`, `NodeAddr::with_direct`, `with_relay`, `ticket`,       *)
+(* `parse`. Text is a sequence of byte codes. A node id is [alg |-> tag    *)
+(* 1..4, bytes |-> NB bytes]; pinc-crypto identity.rs `from_tag` knows     *)
+(* tags 1..4 and 1 is Ed25519, which prints without a tag and is refused   *)
+(* with one (one text per id). A socket address is                         *)
 (* [txt |-> its Display text, flow |-> its IPv6 flowinfo] (0 for IPv4).    *)
 (* The core library's `SocketAddr` parse is an argument: a function cp     *)
 (* from the texts it accepts to the address it gives; any other text is    *)
@@ -59,8 +60,12 @@ NodeFromStr(s) ==
        THEN LET tag == Before(s, k)
             IN IF ~IsLowerHex(tag, 2) THEN Err
                ELSE LET t == 16 * HexVal(tag[1]) + HexVal(tag[2])
-                    IN IF t \in 1..4 THEN Id(t, After(s, k)) ELSE Err
+                    \* a known tag other than Ed25519's: "01." is refused (an Ed25519 id is written without a tag)
+                    IN IF t \in 2..4 THEN Id(t, After(s, k)) ELSE Err
        ELSE Id(1, s)
+
+\* NodeAddr::with_direct(addr): an IPv6 flow label is dropped (the text form has none)
+WithDirect(a) == [a EXCEPT !.flow = 0]
 
 \* NodeAddr::with_relay(url) accepts the url exactly when it is non-empty, has "://" and no ','
 RelayOK(u) == u # <<>> /\ Contains(u, Sep) /\ ~Has(u, Comma)

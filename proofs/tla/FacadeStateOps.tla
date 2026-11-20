@@ -3,7 +3,7 @@
 (* The framing of the endpoint's saved state as the facade writes and      *)
 (* reads it: crates/pinc/src/engine/state.rs `export_state` (131-158),     *)
 (* `parse` (98-127), `restore_state` (161-180), and the address book's     *)
-(* `add_address` (engine/ops.rs 450-463). Bytes are sequences of byte      *)
+(* `add_address` (engine/ops.rs 464-478). Bytes are sequences of byte      *)
 (* codes.                                                                  *)
 (*                                                                         *)
 (* Format: version(1) core_len(CLEN) core count(CNT) { alg(1) node(NB)     *)
@@ -84,6 +84,9 @@ Export(live, CE(_)) ==
     IN Enc(2, CE(live.core), [k \in 1..Len(b) |-> <<b[k][1], Cap(b[k][2], ADDRSMAX)>>], live.seq)
 
 (* ---- the address book ---- *)
+\* the <<node, address>> pairs a book holds
+Pairs(b) == UNION {{<<b[k][1], b[k][2][j]>> : j \in 1..Len(b[k][2])} : k \in 1..Len(b)}
+Range(s) == {s[k] : k \in 1..Len(s)}
 Pos(book, node) == {k \in 1..Len(book) : book[k][1] = node}
 \* add_address: a new node only below BOOKMAX, an address kept once, at most ADDRSMAX of one node
 AddAddr(book, node, a) ==
@@ -94,10 +97,20 @@ AddAddr(book, node, a) ==
          IN IF \E j \in 1..Len(v) : v[j] = a THEN book
             ELSE IF Len(v) >= ADDRSMAX THEN book
             ELSE [book EXCEPT ![k] = <<node, Append(v, a)>>]
-RECURSIVE AddAll(_, _, _)
-AddAll(book, node, as) == IF as = <<>> THEN book ELSE AddAll(AddAddr(book, node, Head(as)), node, Tail(as))
-RECURSIVE Merge(_, _)
-Merge(book, es) == IF es = <<>> THEN book ELSE Merge(AddAll(book, Head(es)[1], Head(es)[2]), Tail(es))
+\* every address of one entry offered in turn (the code's `|` does not short-circuit); kept: add_address answered
+\* true for one of them, that is the address is in the book after the call
+RECURSIVE AddAll(_, _, _, _)
+AddAll(book, node, as, kept) ==
+    IF as = <<>> THEN [book |-> book, kept |-> kept]
+    ELSE LET b == AddAddr(book, node, Head(as))
+         IN AddAll(b, node, Tail(as), kept \/ <<node, Head(as)>> \in Pairs(b))
+\* the entries merged in order; n counts the entries with an address kept (state.rs 168-172, fix F14)
+RECURSIVE MergeN(_, _, _)
+MergeN(book, es, n) ==
+    IF es = <<>> THEN [book |-> book, n |-> n]
+    ELSE LET r == AddAll(book, Head(es)[1], Head(es)[2], FALSE)
+         IN MergeN(r.book, Tail(es), n + (IF r.kept THEN 1 ELSE 0))
+Merge(book, es) == MergeN(book, es, 0).book
 
 (* ---- restore_state ---- *)
 \* every check that can refuse (parse, then the core) comes before the first write
@@ -107,13 +120,10 @@ Restore(live, bs, CR(_, _)) ==
     IF ~p.ok THEN RFail(live)
     ELSE LET c == CR(live.core, p.core) IN
          IF ~c.ok THEN RFail(live)
-         ELSE [ok |-> TRUE,
-               live |-> [core |-> c.live, book |-> Merge(live.book, p.book),
-                         seq |-> IF p.ver = 2 THEN MaxBE(live.seq, p.seq) ELSE live.seq],
-               \* Restored { tickets, peers, prekeys } of the core, then addresses = the input's node count
-               res |-> c.res \o <<Len(p.book)>>]
-
-\* the <<node, address>> pairs a book holds
-Pairs(b) == UNION {{<<b[k][1], b[k][2][j]>> : j \in 1..Len(b[k][2])} : k \in 1..Len(b)}
-Range(s) == {s[k] : k \in 1..Len(s)}
+         ELSE LET m == MergeN(live.book, p.book, 0)
+              IN [ok |-> TRUE,
+                  live |-> [core |-> c.live, book |-> m.book,
+                            seq |-> IF p.ver = 2 THEN MaxBE(live.seq, p.seq) ELSE live.seq],
+                  \* Restored { tickets, peers, prekeys } of the core, then addresses: the entries the book kept
+                  res |-> c.res \o <<m.n>>]
 =============================================================================

@@ -17,12 +17,13 @@
 (*  - a refusal leaves the export bytes, the book and the record number;   *)
 (*  - after an accepted restore the book is the model's merge of the book  *)
 (*    before and the input's, the record number is the larger one (version *)
-(*    2) or unchanged (version 1), and `addresses` is the input's node      *)
-(*    count;                                                               *)
+(*    2) or unchanged (version 1), and `addresses` counts the input's      *)
+(*    entries the book kept an address of (fix F14);                       *)
 (*  - every export parses back as the book and record number it was taken  *)
 (*    from, and its core bytes are read by the core's parse.               *)
 (* One event summarises a full book of 4096 nodes (`full`): its size before *)
-(* and after an input with new nodes, and that none of them was added; its *)
+(* and after an input with new nodes, that none of them was added and that *)
+(* `addresses` is 0 (the test records it as "addresses"); its              *)
 (* 4096 entries are not parsed here (the recursion would be 4096 deep).    *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
@@ -58,8 +59,9 @@ EvOK(ev) ==
               /\ ~ev.ok => ev.after = ev.before
               /\ ev.ok => /\ F!Range(Book(ev.after.book)) = F!Range(F!Merge(bb, p.book))
                           /\ ev.after.seq = (IF p.ver = 2 THEN F!MaxBE(ev.before.seq, p.seq) ELSE ev.before.seq)
-                          /\ ev.res[4] = Len(p.book)
-      [] ev.op = "full" -> /\ ev.before = 4096 /\ ev.after = 4096 /\ ev.ok /\ ev.added = 0
+                          /\ ev.res[4] = F!MergeN(bb, p.book, 0).n
+      \* a full book refuses every new node, and the restore counts none of them (fix F14)
+      [] ev.op = "full" -> /\ ev.before = 4096 /\ ev.after = 4096 /\ ev.ok /\ ev.added = 0 /\ ev.addresses = 0
       [] OTHER -> FALSE
 
 Init == x = 0

@@ -1,39 +1,43 @@
 ----------------------------- MODULE FacadeWaits -----------------------------
 (***************************************************************************)
 (* The waiters of one session of the facade and the events that wake them: *)
-(* crates/pinc/src/engine.rs (Core::add_wait, forget, wake_s, on_event,     *)
-(* stream_opened, send_failed, session_down, stop, end_session, and the     *)
-(* notify_all of Core::service when the endpoint dropped an event), the     *)
-(* attempts of crates/pinc/src/engine/ops.rs (accept_stream, read, write,   *)
-(* read_datagram, closed, answered) and the order of a poll in              *)
-(* crates/pinc/src/drive.rs (Shared::run_as: an attempt runs only after a   *)
-(* service that handled nothing; a Wait registers, a Done forgets).         *)
+(* crates/pinc/src/engine.rs (Core::add_wait, forget, wake_s, on_event,    *)
+(* stream_opened, send_failed, session_down, stop, end_session, and the    *)
+(* notify_all of Core::service when the endpoint dropped an event), the    *)
+(* attempts of crates/pinc/src/engine/ops.rs (accept_stream, read, write,  *)
+(* read_datagram, closed, answered) and the order of a poll in             *)
+(* crates/pinc/src/drive.rs (Shared::run_as: an attempt runs only after a  *)
+(* service that handled nothing; a Wait registers, a Done forgets).        *)
 (*                                                                         *)
 (* Each future runs one operation of Op on the session (read and write on  *)
-(* one stream, 0). The transport's side (Env) changes what a future waits   *)
+(* one stream, 0). The transport's side (Env) changes what a future waits  *)
 (* for and queues an event in the endpoint's bounded event queue (EQ       *)
-(* places) in the order of pinc-core's EventRing: a full queue drops a new  *)
-(* read or write notification, evicts the oldest such one for any other     *)
+(* places) in the order of pinc-core's EventRing: a full queue drops a new *)
+(* read or write notification, evicts the oldest such one for any other    *)
 (* event, and refuses the change (the stall) when it holds nothing it may  *)
 (* drop. A drop is the counter `lost` that the next service turns into a   *)
-(* notify_all. Read and room notifications are edge triggered (raised only  *)
-(* when the stream had nothing or no room), the weaker of the two choices.  *)
+(* notify_all. Read and room notifications are edge triggered (raised only *)
+(* when the stream had nothing or no room), the weaker of the two choices. *)
 (*                                                                         *)
 (* The core's drain of BUDGET events per service is one event per step:    *)
-(* an attempt runs only once the queue is empty (drive.rs returns Io and    *)
+(* an attempt runs only once the queue is empty (drive.rs returns Io and   *)
 (* polls again while a service handled anything), so how the drain is cut  *)
 (* is invisible to a waiter. Opens (SKey::Open) are FacadeOpen.tla's; the  *)
-(* driving role and its baton are FacadeTurn.tla's; the standby slab is     *)
-(* FacadeStandby.tla's. A waiting future here is one whose ticket is armed. *)
+(* driving role and its baton are FacadeTurn.tla's; the standby slab is    *)
+(* FacadeStandby.tla's. A waiting future here is one whose ticket is       *)
+(* armed.                                                                  *)
 (*                                                                         *)
-(* Properties, from the docs of engine.rs and conn.rs: a wake is never lost *)
-(* (NoLostWake, WakeLive), a future waits only while registered on a live   *)
-(* session (Registered, WaitsOwned), only the events of its key wake it     *)
-(* (WakeExact), a closed session ends every waiter with its one reason      *)
-(* (ClosedReason, EndedOnce, EndedWhenGone), streams the peer opened are    *)
-(* accepted in order, once, and refused past the accept limit (AcceptFifo,  *)
-(* AcceptBound, AcceptKept), the stopped streams remembered stay within     *)
-(* TRACKED (FailBound) and a refused call changes nothing (ErrKeeps).       *)
+(* Properties, from the docs of engine.rs and conn.rs: a wake is never     *)
+(* lost (NoLostWake, WakeLive), a future waits only while registered on    *)
+(* a live session (Registered, WaitsOwned), only the events of its key     *)
+(* wake it (WakeExact), a closed session ends every waiter with its one    *)
+(* reason                                                                  *)
+(* (ClosedReason, EndedOnce, EndedWhenGone), streams the peer opened are   *)
+(* accepted in order, once, and refused past the accept limit (AcceptFifo, *)
+(* AcceptBound, AcceptKept), the stopped streams remembered stay within    *)
+(* TRACKED (FailBound) and are only streams the peer stopped, not ones     *)
+(* refused (FailOnlyStopped, fix F6), and a refused call changes nothing   *)
+(* (ErrKeeps).                                                             *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC
 
@@ -198,9 +202,10 @@ OnEvent(e, all) ==
             IF Len(acc) < ACAP
             THEN /\ acc' = Append(acc, e.s) /\ Wake(Keyed("acceptBi"), all) /\ waits' = Unkey("acceptBi")
                  /\ UNCHANGED <<res, live, ended, got, refused, dropped, fail, ans>>
-            \* refused: reset BUSY (a bidi stream's writer sees Stopped(BUSY)), stop-sending BUSY, discard
-            ELSE /\ refused' = refused \cup {e.s} /\ fail' = SendFailed(fail, e.s) /\ Wake({}, all)
-                 /\ UNCHANGED <<res, waits, live, ended, acc, got, dropped, ans>>
+            \* refused: reset BUSY, stop-sending BUSY, discard; no failure entry, since no writer of it is ever
+            \* made (fix F6: the entry could evict a live writer's past TRACKED)
+            ELSE /\ refused' = refused \cup {e.s} /\ Wake({}, all)
+                 /\ UNCHANGED <<res, waits, live, ended, acc, got, dropped, fail, ans>>
       [] e.k = "readable" ->
             /\ Wake(Keyed("read"), all) /\ waits' = Unkey("read")
             /\ UNCHANGED <<res, live, ended, acc, got, refused, dropped, fail, ans>>
@@ -356,6 +361,8 @@ AcceptKept ==
           + (IF InQueue(id) THEN 1 ELSE 0) = 1
 
 FailBound == Len(fail) <= TRK /\ Cardinality(Range(fail)) = Len(fail)
+\* a failure entry is kept only for a stream the peer stopped, whose writer can read it (fix F6)
+FailOnlyStopped == Range(fail) \subseteq tstop
 
 \* a refused call (an error result) changes nothing of the session or the transport
 ErrKeeps ==

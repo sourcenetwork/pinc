@@ -24,7 +24,7 @@
 (* The loop is the decided fix of platform.rs `add` (pinc#731): try d,     *)
 (* and when it does not fit, bisect between lo (fits, from zero) and hi    *)
 (* (does not fit, from d) with mid = lo + (hi - lo) / 2 until              *)
-(* (hi - lo) / 2 is zero, and return self + lo.                            *)
+(* (hi - lo) / 2 is zero, and return self + lo (one more checked_add).     *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, U64
 CONSTANTS BITS, T0, NPS
@@ -82,11 +82,12 @@ SubD(a, b) == IF a.n >= b.n THEN [s |-> Sub(a.s, b.s), n |-> a.n - b.n]
               ELSE [s |-> Sub(Sub(a.s, b.s), One), n |-> a.n + NPS - b.n]
 
 \* `HostInstant for std::time::Instant`: add, with lat the latest Duration self can take (checked_add(x) is Some
-\* exactly when x <= lat). n is the number of checked_add calls, got the Duration added (zero: self returned).
+\* exactly when x <= lat). n is the number of checked_add calls, got the Duration added (zero: self returned). After
+\* the bisection the code calls checked_add(lo) once more for the instant it returns (platform.rs, fix F5).
 RECURSIVE Bisect(_, _, _, _)
 Bisect(lat, lo, hi, k) ==
     LET h == Half(SubD(hi, lo))
-    IN IF IsZeroD(h) THEN [n |-> k, got |-> lo]
+    IN IF IsZeroD(h) THEN [n |-> k + 1, got |-> lo]
        ELSE LET mid == AddD(lo, h)
             IN IF LeD(mid, lat) THEN Bisect(lat, mid, hi, k + 1) ELSE Bisect(lat, lo, mid, k + 1)
 InstantAdd(lat, d) == IF LeD(d, lat) THEN [n |-> 1, got |-> d] ELSE Bisect(lat, ZeroD, d, 1)

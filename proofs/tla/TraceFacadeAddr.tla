@@ -8,7 +8,9 @@
 (* `pinc`, file facade_addr.ndjson) records every text as an array of byte *)
 (* codes: ids of every algorithm and their text read back; the texts of    *)
 (* the model's "str" cases at 32 bytes and random mutations; every url of  *)
-(* at most 4 characters over h : / , @ and what `with_relay` says; NodeAddr *)
+(* at most 4 characters over h : / , @ and what `with_relay` says; each    *)
+(* address given to `with_direct` and the one the value holds (op          *)
+(* "direct"); NodeAddr                                                     *)
 (* values (built through the API, with flowinfo 0 and 1, and through the   *)
 (* public fields) with their ticket; and parses of tickets and of mutated  *)
 (* tickets. The core library's SocketAddr parse is an oracle the test      *)
@@ -47,6 +49,9 @@ EvOK(ev) ==
       [] ev.op = "str" -> LET r == A!NodeFromStr(ev.s)
                           IN r.ok = ev.ok /\ (ev.ok => r.v = Id(ev))
       [] ev.op = "relay" -> A!RelayOK(ev.u) = ev.ok
+      \* with_direct of one address: what the value holds (the flow label dropped, fix F12)
+      [] ev.op = "direct" -> A!WithDirect([txt |-> ev.a.txt, flow |-> ev.a.flow])
+                             = [txt |-> ev.held.txt, flow |-> ev.held.flow]
       [] ev.op = "ticket" -> A!Ticket(Val(ev.v)) = ev.text
       [] ev.op = "parse" -> LET r == A!Parse(ev.s, CPOf(ev))
                             IN Covered(ev) /\ r.ok = ev.ok /\ (ev.ok => r.v = Val(ev.v))
@@ -56,4 +61,6 @@ Init == x = 0
 Next == UNCHANGED x
 TraceSpec == Init /\ [][Next]_x
 
-AllOK == \A k \in DOMAIN Trace : Trace[k].t = "addr" /\ EvOK(Trace[k])
+AllOK == /\ \A k \in DOMAIN Trace : Trace[k].t = "addr" /\ EvOK(Trace[k])
+         \* an address with a flow label was given to with_direct
+         /\ \E k \in DOMAIN Trace : Trace[k].op = "direct" /\ Trace[k].a.flow # 0

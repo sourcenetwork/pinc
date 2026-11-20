@@ -1,47 +1,50 @@
 ---------------------------- MODULE FacadeRecords ---------------------------
 (***************************************************************************)
-(* Discovery by signed records in the facade: what a lookup may believe.    *)
+(* Discovery by signed records in the facade: what a lookup may believe.   *)
 (*                                                                         *)
-(* Who acts. Nodes publish records with rising sequence numbers to a store  *)
+(* Who acts. Nodes publish records with rising sequence numbers to a store *)
 (* nobody trusts. The store may hold the newest record, an older one of the *)
-(* same node (a replay), a record of another node filed under this one, or  *)
+(* same node (a replay), a record of another node filed under this one, or *)
 (* bytes that do not verify (a forgery). A looking-up endpoint fetches what *)
-(* the store holds, keeps it only if it verifies and names the node asked   *)
+(* the store holds, keeps it only if it verifies and names the node asked  *)
 (* about, and keeps the newer of that and what it already knew.            *)
 (*                                                                         *)
-(* What must never happen. The endpoint believes a record its node did not  *)
+(* What must never happen. The endpoint believes a record its node did not *)
 (* sign (KnownGenuine); what it believes about a node goes back to an older *)
-(* record (NoRollback); a lookup answers with something other than the      *)
+(* record (NoRollback); a lookup answers with something other than the     *)
 (* newest genuine record it has seen of that node (LookupNewest).          *)
 (*                                                                         *)
-(* Rust: crates/pinc/src/records.rs `PeerRecord::verified` (signature, key  *)
+(* Rust: crates/pinc/src/records.rs `PeerRecord::verified` (signature, key *)
 (* to node id binding and the node asked about), `newest`, `Records::find`; *)
-(* crates/pinc/src/endpoint.rs `Endpoint::{signed_record, lookup}` (the     *)
-(* rising sequence number). Lean counterpart: Pinc/FacadeRecords.lean       *)
-(* (`inv_reach`, `noSeqCheck_bad`).                                         *)
+(* crates/pinc/src/endpoint.rs `Endpoint::{signed_record, lookup}` (the    *)
+(* rising sequence number). Lean counterpart: Pinc/FacadeRecords.lean      *)
+(* (`inv_reach`, `noSeqCheck_bad`).                                        *)
 (*                                                                         *)
 (* Witness (scripts/proofs.sh witness_tlc): SeqCheck = FALSE keeps whatever *)
 (* verified record was fetched last; a replayed older record then rolls the *)
-(* endpoint back and NoRollback fails.                                      *)
+(* endpoint back and NoRollback fails.                                     *)
 (*                                                                         *)
 (* The known table is bounded as the code has it: at most KMAX nodes       *)
-(* (records.rs `KNOWN_MAX`, 4096); `remember` forgets one other node's      *)
+(* (records.rs `KNOWN_MAX`, 4096); `remember` forgets one other node's     *)
 (* record (whichever the map yields first: any) to take a new node when it *)
-(* is full. A forgotten node's next lookup takes whatever verifies, so a    *)
+(* is full. A forgotten node's next lookup takes whatever verifies, so a   *)
 (* replay older than what was once believed is believed again: NoRollback  *)
-(* holds only while no node is forgotten (HeldNoRollback: a held record   *)
+(* holds only while no node is forgotten (HeldNoRollback: a held record    *)
 (* never goes back, checked with forgetting in FacadeRecords_bounded.cfg), *)
-(* and FacadeRecords_evict.cfg                                             *)
-(* (KMAX 1) shows NoReplayBelieved failing (finding a).                    *)
+(* the limit the module doc states ("the newest of its node seen while it  *)
+(* was held"). Witness FacadeRecords_evict.cfg (KMAX 1): NoReplayBelieved  *)
+(* fails.                                                                  *)
 (*                                                                         *)
-(* RELAYS: the endpoint knows relays (a node that carries the relay role, *)
+(* RELAYS: the endpoint knows relays (a node that carries the relay role,  *)
 (* ordinary or deployed from the relay binary). When the store yields      *)
 (* nothing that verifies and nothing is known, `Endpoint::lookup`          *)
-(* (endpoint/records.rs 105-114) answers with the record the relays found  *)
-(* (`relay_record`), which the connectivity client verified, but neither   *)
-(* weighs it against nor keeps it in the known table (RelayLookup).        *)
-(* FacadeRecords_relay.cfg shows LookupNewest failing (finding b); the      *)
-(* answers stay genuine (AnswerGenuine, FacadeRecords_bounded.cfg).         *)
+(* (endpoint/records.rs 105-115) takes the record the relays found         *)
+(* (`relay_record`, verified by the connectivity client) and weighs it     *)
+(* against the known table and keeps it there (`Records::note`, fix F8):   *)
+(* RelayLookup. Before F8 it answered with that record and kept nothing,   *)
+(* so LookupNewest failed (the old FacadeRecords_relay.cfg, finding b);    *)
+(* FacadeRecords_relay.cfg now checks every property with relays and a     *)
+(* table that holds every node.                                            *)
 (***************************************************************************)
 EXTENDS Naturals, FiniteSets
 
@@ -113,14 +116,17 @@ Lookup(n) ==
        /\ answer' = [node |-> n, rec |-> best]
        /\ UNCHANGED <<published, store>>
 
-\* The store yields nothing for `n` and the endpoint has relays: the answer is a genuine record of `n` the relays
-\* found (any published one, possibly older than one answered before) or none; the known table is not touched.
+\* The store yields nothing for `n` and the endpoint has relays: the relays find a genuine record of `n` (any
+\* published one) or none; `note` weighs it against what is known and keeps it, as `find` does a fetched one.
 RelayLookup(n) ==
     /\ RELAYS
     /\ ~Verified(n, store[n]) /\ known[n] = NoRec
     /\ \E r \in {NoRec} \cup {[signer |-> n, seq |-> q, sound |-> TRUE] : q \in 1..published[n]} :
-          answer' = [node |-> n, rec |-> r]
-    /\ UNCHANGED <<published, store, known, peak>>
+          LET best == IF r = NoRec THEN known[n] ELSE Newest(known[n], r)
+          IN /\ IF best = NoRec THEN UNCHANGED known ELSE Remember(n, best)
+             /\ peak' = [peak EXCEPT ![n] = IF best.seq > @ THEN best.seq ELSE @]
+             /\ answer' = [node |-> n, rec |-> best]
+    /\ UNCHANGED <<published, store>>
 
 Next == \E n \in Nodes : Publish(n) \/ Tamper(n) \/ Lookup(n) \/ RelayLookup(n)
 
