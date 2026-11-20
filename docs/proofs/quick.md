@@ -26,11 +26,17 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `BroadcastMidMap_anyHash` | Vals {0, 1} -> {0} |
 | `BroadcastMidMap_refuse` | Vals {0, 1} -> {0} |
 | `BroadcastNode` | MaxNow 5 -> 3, Mids {1, 2} -> {1} |
+| `BroadcastNode_ackById` | MaxNow 5 -> 4 |
+| `BroadcastNode_ackEarly` | MaxNow 5 -> 4 |
+| `BroadcastNode_compareAll` | MaxNow 4 -> 3 |
+| `BroadcastNode_evict` | MaxNow 6 -> 5 |
 | `BroadcastNode_evictCap` | Mids {1, 2, 3, 4} -> {1, 2, 3}, SeenCap 3 -> 2 (still one id more than the dedupe set holds) |
 | `BroadcastNode_evictCap2x` | SeenCap 4 -> 2 and Mids {1, 2, 3, 4} -> {1, 2} (still one seen slot per mid, so the seen table never overflows, as in the deep run), Origins {1, 2} -> {2} (every message is asked for, so the answer is taken; the node's own messages are left out) |
 | `BroadcastNode_floors` | Stamps {1, 2} -> {1}, MaxNow 5 -> 4; bounded by constraint: behaviours of at most 6 levels (BroadcastNode_floorsQuickBound) |
 | `BroadcastNode_graft` | MaxNow 4 -> 1, Mids {1, 2} -> {1} A hub that also publishes its own messages: the id is recorded, and a message over the ring (size 5, ring 4) is refused by the log, which leaves the id known with no print held. A graft due an acknowledgement under such an id is answered IdTaken and not acknowledged (GraftTaken); a graft under a stored id is acknowledged as before (AckOnlyStored). Two ids, one origin, both sizes (the rival bodies are in BroadcastNode_taken and _retry). |
+| `BroadcastNode_graftOld` | MaxNow 2 -> 1 |
 | `BroadcastNode_heldDup` | MaxNow 5 -> 2, TTL 2 -> 1 (the id expires at 2 and the copy is held again), Mids {1, 2} -> {1} |
+| `BroadcastNode_heldFull` | MaxNow 5 -> 4 |
 | `BroadcastNode_hub` | MaxNow 4 -> 2, TTL 2 -> 1, AcpCap 2 -> 1, LogWin 3 -> 1, Mids {1, 2, 3} -> {1}, SeenCap 3 -> 2, LogRing 4 -> 2, LogCap 2 -> 1 |
 | `BroadcastNode_hubcap` | CONSTRAINT EpochsLe3 -> EpochsLe3Quick (at most 2 epochs of an id instead of 3) |
 | `BroadcastNode_retry` | Mids {1, 2, 3} -> {1, 2}, SeenCap 3 -> 2 (still room for every id), MaxNow 4 -> 1 A hub whose log holds one message: a second id evicts the first, which the dedupe set (room for all three ids) then remembers with its print. An exact retry of the evicted message is acknowledged (RetryAcked) and another message under the id (another body) is not (AckOnlyStored); one origin, three ids. The copy due no acknowledgement is in BroadcastNode_retryFan. |
