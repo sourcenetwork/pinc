@@ -123,7 +123,7 @@ def replayOne (j : J) (st : St1) : Except String St1 := do
     | "loststop" => upd (ctlLostStop T (← natF j "id")) "loststop"
     | "ackedstop" => upd (ctlAckedStop T (← natF j "id")) "ackedstop"
     | "stopreq" =>
-      let (T2, err) := stopReq T (← natF j "id") (← natF j "code")
+      let (T2, err) := stopReq p T (← natF j "id") (← natF j "code")
       check (err == (← strF j "err")) s!"stopreq: the model answers {err}, the code {← strF j "err"}"
       upd T2 "stopreq"
     | "onstop" =>

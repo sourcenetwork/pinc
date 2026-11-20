@@ -17,6 +17,11 @@ Unbounded theorems about the receive half and the table of `Pinc.TransportStream
   meets the table the first arrival met; an admitted stream moves the next index past its own id (STREAM_CAP).
 * `onReset_ok`, `onReset_final_fixed`, `onData_final_fixed`: a reset frees the buffered bytes, leaves nothing
   readable and fixes the final size, and a final size once fixed never changes.
+* `Slot.discard_spec`, `onData_stopped_end_discards`, `stopReq_given_up`, `stopReq_given_up_frees`,
+  `stopReq_given_up_keeps`, `stopReq_given_up_rl` (c0706819): a stream given up after its end arrived, or whose end
+  arrives after a stop was asked, holds no bytes and is read to its end; the stop request asks nothing and settles it,
+  so it leaves the table at once when its send half is done, and a counted peer stream gives back exactly its place in
+  the peer's limit (`regrant_rl`: a regrant moves no count).
 * `Content`, `exactly_once_in_order`, `stored_immutable`: with the checks of `Recv::store` (a byte received twice
   must be identical) and the rule that a consume stays inside the stored prefix, the bytes delivered are the bytes
   stored, in offset order, each once; `held_back_delivers_once`: a held-back first arrival changes nothing and its
@@ -158,6 +163,29 @@ theorem storeStep_fin (p : P) (T : Tab) (r : Slot) (off len : Nat) (diff : Bool)
   repeat' split
   all_goals simp
 
+theorem storeStep_rst (p : P) (T : Tab) (r : Slot) (off len : Nat) (diff : Bool) :
+    (storeStep p T r off len diff).1.rst = r.rst := by
+  unfold storeStep
+  dsimp only
+  repeat' split
+  all_goals simp
+
+@[simp] theorem Slot.discard_fin (r : Slot) : r.discard.fin = r.fin := by
+  unfold Slot.discard
+  split <;> rfl
+
+/-- A discard touches only the receive half's bytes: the stream, its count, its send half and its end stay. -/
+theorem Slot.discard_keeps (r : Slot) :
+    r.discard.id = r.id ∧ r.discard.cnt = r.cnt ∧ r.discard.open_ = r.open_ ∧ r.discard.sendDone = r.sendDone := by
+  unfold Slot.discard
+  split <;> simp [Slot.sendDone]
+
+/-- A discard of a stream whose end is known and that was not reset holds no bytes, is read to its end and its
+receive half is done. -/
+theorem Slot.discard_spec (r : Slot) (f : Nat) (hf : r.fin = some f) (hr : r.rst = none) :
+    r.discard.held = [] ∧ r.discard.rs = [] ∧ r.discard.read = f ∧ r.discard.recvDone = true := by
+  simp [Slot.discard, hf, hr, Slot.recvDone, Slot.status]
+
 /-- The final size, once fixed, never changes. -/
 theorem onData_final_fixed (p : P) (T : Tab) (r : Slot) (off len f : Nat) (fin diff : Bool) (hf : r.fin = some f) :
     (onData p T r off len fin diff).1.fin = some f := by
@@ -166,6 +194,99 @@ theorem onData_final_fixed (p : P) (T : Tab) (r : Slot) (off len f : Nat) (fin d
   dsimp only
   repeat' split
   all_goals simp_all
+
+/-! ### Giving a stream up after its end arrived (c0706819) -/
+/-- The end arriving on a stream asked to stop: the stream holds no bytes, is read to its end and its receive half is
+done. -/
+theorem onData_stopped_end_discards (p : P) (T : Tab) (r : Slot) (off len : Nat) (diff : Bool) (hr : r.rst = none)
+    (hs : r.stop ≠ 0) :
+    (onData p T r off len true diff).2 = "ok" →
+      (onData p T r off len true diff).1.held = [] ∧ (onData p T r off len true diff).1.rs = [] ∧
+      (onData p T r off len true diff).1.fin = some (onData p T r off len true diff).1.read ∧
+      (onData p T r off len true diff).1.recvDone = true := by
+  have hst := storeStep_rst p T r off len diff
+  unfold onData
+  dsimp only
+  repeat' split
+  all_goals simp_all [Slot.discard, Slot.recvDone, Slot.status]
+
+theorem grantOne_rl (p : P) (first : Nat) (T : Tab) (i : Nat) : (grantOne p first T i).rl = T.rl := by
+  unfold grantOne
+  dsimp only
+  split <;> rfl
+
+theorem grantRun_rl (p : P) (T : Tab) (first : Nat) : (grantRun p T first).rl = T.rl := by
+  unfold grantRun
+  generalize List.range p.n = l
+  induction l generalizing T with
+  | nil => rfl
+  | cons a t ih => simp only [List.foldl_cons]; rw [ih]; exact grantOne_rl p first T a
+
+/-- A regrant moves no stream count. -/
+theorem regrant_rl (p : P) (T : Tab) : (regrant p T).rl = T.rl := by
+  have ha : (refreshAdmit p T).rl = T.rl := by
+    unfold refreshAdmit
+    dsimp only
+    split <;> rfl
+  unfold regrant
+  dsimp only
+  split
+  · rw [grantRun_rl, ha]
+  · exact ha
+
+/-- A stop request on a stream whose end arrived and that was not reset asks nothing: it discards the stream and
+settles it. -/
+theorem stopReq_given_up (p : P) (T : Tab) (id code i f : Nat) (hi : findSlot T id = some i)
+    (ho : (T.slots.getD i Slot.new).open_ = true) (hr : (T.slots.getD i Slot.new).rst = none)
+    (hf : (T.slots.getD i Slot.new).fin = some f) :
+    stopReq p T id code = (settle p (setSlot T i (T.slots.getD i Slot.new).discard) i, "ok") := by
+  unfold stopReq
+  rw [hi]
+  simp only [ho, hr, hf, Bool.not_true, Bool.false_eq_true, ↓reduceIte, Option.isSome_none, Option.isSome_some]
+
+/-- Its send half done, the stream leaves the table at once. -/
+theorem stopReq_given_up_frees (p : P) (T : Tab) (id code i f : Nat) (hi : findSlot T id = some i)
+    (ho : (T.slots.getD i Slot.new).open_ = true) (hr : (T.slots.getD i Slot.new).rst = none)
+    (hf : (T.slots.getD i Slot.new).fin = some f) (hd : (T.slots.getD i Slot.new).sendDone = true) :
+    (stopReq p T id code).1 = regrant p (freeSlot (setSlot T i (T.slots.getD i Slot.new).discard) i) := by
+  rw [stopReq_given_up p T id code i f hi ho hr hf]
+  have hl := lt_of_open T.slots i ho
+  have hs := Slot.discard_spec _ f hf hr
+  have hk := Slot.discard_keeps (T.slots.getD i Slot.new)
+  unfold settle
+  dsimp only
+  simp only [getD_setSlot T i i _ hl, eq_self, ↓reduceIte, hs.2.2.2, hk.2.2.2, hd, Bool.and_self]
+
+/-- Its send half not done, the slot is kept with its receive half done (release_limit may then free its place). -/
+theorem stopReq_given_up_keeps (p : P) (T : Tab) (id code i f : Nat) (hi : findSlot T id = some i)
+    (ho : (T.slots.getD i Slot.new).open_ = true) (hr : (T.slots.getD i Slot.new).rst = none)
+    (hf : (T.slots.getD i Slot.new).fin = some f) (hd : (T.slots.getD i Slot.new).sendDone = false) :
+    (stopReq p T id code).1 = regrant p (releaseLimit (setSlot T i (T.slots.getD i Slot.new).discard) i) := by
+  rw [stopReq_given_up p T id code i f hi ho hr hf]
+  have hl := lt_of_open T.slots i ho
+  have hk := Slot.discard_keeps (T.slots.getD i Slot.new)
+  have hs := Slot.discard_spec _ f hf hr
+  unfold settle
+  dsimp only
+  simp only [getD_setSlot T i i _ hl, eq_self, ↓reduceIte, hs.2.2.2, hk.2.2.2, hd, Bool.and_false,
+    Bool.false_eq_true]
+
+/-- A counted peer stream given up with its send half done gives its place in the peer's limit back: the count drops
+by exactly the one slot freed. -/
+theorem stopReq_given_up_rl (p : P) (T : Tab) (id code i f id' : Nat) (hi : findSlot T id = some i)
+    (ho : (T.slots.getD i Slot.new).open_ = true) (hr : (T.slots.getD i Slot.new).rst = none)
+    (hf : (T.slots.getD i Slot.new).fin = some f) (hd : (T.slots.getD i Slot.new).sendDone = true)
+    (hid : (T.slots.getD i Slot.new).id = some id') (hloc : isLocal id' = false)
+    (hc : (T.slots.getD i Slot.new).cnt = true) :
+    (stopReq p T id code).1.rl = T.rl - 1 := by
+  rw [stopReq_given_up_frees p T id code i f hi ho hr hf hd, regrant_rl]
+  have hl := lt_of_open T.slots i ho
+  have hk := Slot.discard_keeps (T.slots.getD i Slot.new)
+  unfold freeSlot
+  dsimp only
+  simp only [getD_setSlot T i i _ hl, eq_self, ↓reduceIte, hk.1, hid, hk.2.1, hc, hloc, Bool.false_eq_true]
+  rfl
+
 
 /-! ### In-order delivery, each byte once -/
 /-- The bytes of one stream as the receive half keeps them: the byte stored at an offset (the first one ever stored

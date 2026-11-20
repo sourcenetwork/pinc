@@ -318,10 +318,19 @@ def storeStep (p : P) (T : Tab) (r : Slot) (off len : Nat) (diff : Bool) : Slot 
                         r.held.filter (· > last),
                 rs := rs', contig := first0 rs' }, "ok")
 
+/-- `Recv::discard`: a stream given up whose end is known drops every byte held and counts as read to its end, as a
+reset does but without one (c0706819). -/
+def Slot.discard (r : Slot) : Slot :=
+  match r.fin, r.rst with
+  | some f, none => { r with read := f, contig := f, held := [], rs := [], obs := true }
+  | _, _ => r
+
 def onData (p : P) (T : Tab) (r : Slot) (off len : Nat) (fin diff : Bool) : Slot × String :=
   let e := off + len
   let store := storeStep p T r off len diff
-  let done := { store.1 with hi := max store.1.hi e, fin := if fin then some e else store.1.fin }
+  let done0 := { store.1 with hi := max store.1.hi e, fin := if fin then some e else store.1.fin }
+  -- the end arriving on a stream asked to stop discards it: nothing else would end it
+  let done := if fin && r.stop != 0 then done0.discard else done0
   if e > p.maxoff then (r, "FlowControl")
   else if r.fin.any (fun f => e > f || (fin && e != f)) then (r, "FinalSize")
   else if r.fin.isNone && fin && e < r.hi then (r, "FinalSize")
@@ -480,14 +489,18 @@ def appReset (p : P) (T : Tab) (id code ext2 : Nat) : Tab :=
               then { setSlot T i { r with srst := 1, scode := some code } with ext := ext2 } else T
     settle p T1 i
 
-/-- `Streams::stop_sending`: queue a stop request once; nothing if the sender already ended the stream. -/
-def stopReq (T : Tab) (id code : Nat) : Tab × String :=
+/-- `Streams::stop_sending`, `Recv::request_stop`: queue a stop request once; nothing if the sender reset the stream. A
+stream whose end already arrived is not asked: it is discarded and settled, so it leaves the table once its send half is
+done and the peer gets its place in the stream limit back (c0706819). -/
+def stopReq (p : P) (T : Tab) (id code : Nat) : Tab × String :=
   match findSlot T id with
   | none => (T, "UnknownStream")
   | some i =>
     let r := T.slots.getD i Slot.new
     if !r.open_ then (T, "StreamState")
-    else if r.rst.isNone && r.fin.isNone && r.stop == 0 then (setSlot T i { r with stop := 1, qcode := some code }, "ok")
+    else if r.rst.isSome then (T, "ok")
+    else if r.fin.isSome then (settle p (setSlot T i r.discard) i, "ok")
+    else if r.stop == 0 then (setSlot T i { r with stop := 1, qcode := some code }, "ok")
     else (T, "ok")
 
 /-- `Streams::on_stop_sending`: the table, the error and whether this call reset the send half with `code`. -/
