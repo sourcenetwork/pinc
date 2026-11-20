@@ -24,7 +24,8 @@
 (*                      (the host asks after any call)                     *)
 (*  NoWallNoJob         without a wall clock nothing is signed             *)
 (*  RefusedNotSent      a refused or failed signature sends nothing and is *)
-(*                      reported as SignFailed                              *)
+(*                      reported as one SignFailed; any answer to a        *)
+(*                      cancelled notice sends nothing and reports none    *)
 (*  SleepNotRetried     a failed sleep notice is not asked again           *)
 (*  RecordRetry         a failed record waits for its retry time           *)
 (*  NoticeTwice         each relay owed a notice gets it twice over UDP,  *)
@@ -48,7 +49,8 @@ EXTENDS ConnectSleepOps, TLC
 
 CONSTANTS Relays, Udp, Home, Times, TMax, Retry, Repub, Beacons, Twice, LinkStates
 
-K == [retry |-> Retry, repub |-> Repub, tmax |-> TMax, never |-> 0, udp |-> Udp, home |-> Home]
+\* never: the publish time and the close that are not there (None), below every time of the run
+K == [retry |-> Retry, repub |-> Repub, tmax |-> TMax, never |-> -1, udp |-> Udp, home |-> Home]
 
 VARIABLES s, owed, sent, failed, sinceSusp, badClose, badPrio, badRefuse, badRetry, badWall, badSusp, reach
 vars == <<s, owed, sent, failed, sinceSusp, badClose, badPrio, badRefuse, badRetry, badWall, badSusp, reach>>
@@ -96,10 +98,11 @@ Answer == \E now \in Times, ok \in BOOLEAN, rj \in BOOLEAN, bj \in BOOLEAN :
        IN /\ Post(W, now, FALSE, FALSE, W.s.job.k # "none", FALSE, FALSE)
           \* a cancelled notice is not owed, so its failure raises no retry question
           /\ failed' = IF ~ok /\ j.k = "sleep" /\ ~j.c THEN failed \cup {j.r} ELSE failed
-          /\ badRefuse' = (badRefuse \/ (~ok /\ (W.o.udp # <<>> \/ W.o.pub > 0 \/ W.o.bcn > 0 \/ W.o.fails # 1)))
+          /\ LET out == W.o.udp # <<>> \/ W.o.pub > 0 \/ W.o.bcn > 0 IN
+             badRefuse' = (badRefuse \/ (~ok /\ ~j.c /\ (out \/ W.o.fails # 1)) \/ (j.c /\ (out \/ W.o.fails # 0)))
           \* a record wanted again meanwhile (set_hints) is new work and may start at once
           /\ badRetry' = (badRetry \/ (~ok /\ j.k = "record" /\ ~s.record /\ now < TMax
-                                        /\ (W.s.pub <= now \/ W.s.job.k = "record")))
+                                        /\ ((W.s.pub # K.never /\ W.s.pub <= now) \/ W.s.job.k = "record")))
 
 Suspend == \E now \in Times, rj \in BOOLEAN, bj \in BOOLEAN :
     /\ Twice \/ ~s.susp

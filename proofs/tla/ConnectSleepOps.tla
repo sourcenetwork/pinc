@@ -20,8 +20,8 @@
 (*   susp     Signing::suspending                                          *)
 (*   closeAt  Signing::close_at (K.never for none)                         *)
 (*   wall     the layer has a wall clock (Signing::wall_ms is some)        *)
-(*   pub      next_publish of the node (0 in the code is K.never here,    *)
-(*            u64::MAX is K.tmax)                                          *)
+(*   pub      next_publish of the node (None is K.never: none before the  *)
+(*            first change, and while a record is asked for)               *)
 (*   lk       per relay, its link state: "open", "dialing" or "down"; the *)
 (*            carriers' own life is ConnectCarriers.tla                    *)
 (* o is what the call let out: udp the sleep datagrams in order (a relay  *)
@@ -32,8 +32,9 @@
 (* K = [retry, repub, tmax, never, udp, home]: HOME_RETRY_NS,              *)
 (* RECORD_REPUBLISH_NS and u64::MAX in the unit of the caller, the value  *)
 (* standing for none, the relays configured with a UDP address, and the  *)
-(* home relay. Saturating sums stop at K.tmax as the code's stop at       *)
-(* u64::MAX.                                                                *)
+(* home relay. Saturating sums (the suspension's close) stop at K.tmax as  *)
+(* the code's stop at u64::MAX; a publish deadline past K.tmax is K.never  *)
+(* (pinc-transport deadline_after, a checked add).                         *)
 (*                                                                         *)
 (* Whether a record job can be built (a home and a class are known,       *)
 (* record_job) and whether a beacon job can (beacon_job) are parameters   *)
@@ -44,6 +45,8 @@
 EXTENDS Integers, FiniteSets, Sequences
 
 SatAdd(a, b, K) == IF a >= K.tmax - b THEN K.tmax ELSE a + b
+\* deadline_after: none past the clock's last instant
+ChkAdd(a, b, K) == IF a > K.tmax - b THEN K.never ELSE a + b
 MinOf(S) == CHOOSE x \in S : \A y \in S : x <= y
 
 NoJob == [k |-> "none", r |-> 0, c |-> FALSE]
@@ -62,7 +65,7 @@ StartJobs(W, now, rj, bj, K) ==
         LET r == MinOf(W.s.sleep) IN [W EXCEPT !.s.sleep = @ \ {r}, !.s.job = Job("sleep", r)]
     ELSE IF W.s.record THEN
         IF rj THEN [W EXCEPT !.s.record = FALSE, !.s.job = Job("record", K.home)]
-        ELSE [W EXCEPT !.s.record = FALSE, !.s.pub = SatAdd(now, K.retry, K)]
+        ELSE [W EXCEPT !.s.record = FALSE, !.s.pub = ChkAdd(now, K.retry, K)]
     ELSE IF W.s.beacon THEN
         [W EXCEPT !.s.beacon = FALSE, !.s.job = IF bj THEN Job("beacon", 0) ELSE NoJob]
     ELSE W
@@ -79,39 +82,55 @@ CloseForSuspend(W, now, K) ==
         [W EXCEPT !.s.closeAt = K.never, !.s.susp = FALSE, !.s.lk = [x \in DOMAIN @ |-> "down"], !.o.closes = @ \cup open]
     ELSE W
 
-(* complete: a signature of the right length was given for the job j; a cancelled sleep notice sends nothing (its
-   answer is consumed: nothing sent, nothing failed) *)
+(* complete: a signature of the right length was given for the job j, not a cancelled sleep notice; a record handed
+   to the home carrier arms the republish only when nothing armed the publish time while it was signed (fix K10: a
+   change made meanwhile wins) *)
 Complete(W, j, now, K) ==
     CASE j.k = "record" ->
-            IF W.s.lk[j.r] = "open" THEN [W EXCEPT !.o.pub = @ + 1, !.s.pub = SatAdd(now, K.repub, K)]
+            IF W.s.lk[j.r] = "open"
+            THEN [W EXCEPT !.o.pub = @ + 1, !.s.pub = IF @ = K.never THEN ChkAdd(now, K.repub, K) ELSE @]
             ELSE [W EXCEPT !.s.pub = now]
       [] j.k = "beacon" -> [W EXCEPT !.o.bcn = @ + 1]
       [] j.k = "sleep" ->
-            IF j.c THEN W ELSE IF j.r \in K.udp THEN [W EXCEPT !.o.udp = @ \o <<j.r, j.r>>] ELSE W
+            IF j.r \in K.udp THEN [W EXCEPT !.o.udp = @ \o <<j.r, j.r>>] ELSE W
       [] OTHER -> W
 
-(* the complete call answers false only for a sleep notice, not cancelled, to a relay with no UDP address (a suspension
-   never owes one) *)
-Completes(j, K) == j.k # "sleep" \/ j.c \/ j.r \in K.udp
+(* the complete call answers false only for a sleep notice to a relay with no UDP address (a suspension never owes
+   one) *)
+Completes(j, K) == j.k # "sleep" \/ j.r \in K.udp
 
-(* sign_response: ok is a signature of the identity's length; anything else is refused *)
+(* sign_response: ok is a signature of the identity's length; anything else is refused; the answer to a cancelled
+   sleep notice is dropped, whatever it is: nothing sent, nothing failed, and the next jobs start *)
 SignResponse(W, now, ok, rj, bj, K) ==
     IF W.s.job.k = "none" THEN W
     ELSE LET j == W.s.job
              W1 == [W EXCEPT !.s.job = NoJob]
-             W2 == IF ok /\ Completes(j, K) THEN Complete(W1, j, now, K)
+             W2 == IF j.c THEN W1
+                   ELSE IF ok /\ Completes(j, K) THEN Complete(W1, j, now, K)
                    ELSE [W1 EXCEPT !.o.fails = @ + 1,
-                                   !.s.pub = IF j.k = "record" THEN SatAdd(now, K.retry, K) ELSE @]
+                                   !.s.pub = IF j.k = "record" THEN ChkAdd(now, K.retry, K) ELSE @]
          IN MaybeClose(StartJobs(W2, now, rj, bj, K), now, K)
 
-(* tick: the wall clock is kept once given (a tick without one keeps the earlier one); the suspension's close; publish asks for the record when pw (its due
-   time came, no record is wanted, the class is known and the home carrier is open: PubDue and the caller) *)
+(* tick: the wall clock is kept once given (a tick without one keeps the earlier one); the suspension's close; publish
+   asks for the record when pw (its due time came, no record is wanted, the class is known and the home carrier is
+   open: PubDue and the caller) and disarms the publish time until the answer *)
 TickStep(W, now, w, pw, rj, bj, K) ==
     LET W1 == CloseForSuspend([W EXCEPT !.s.wall = @ \/ w], now, K)
-        W2 == IF pw THEN [W1 EXCEPT !.s.record = TRUE, !.s.pub = K.tmax] ELSE W1
+        W2 == IF pw THEN [W1 EXCEPT !.s.record = TRUE, !.s.pub = K.never] ELSE W1
     IN StartJobs(W2, now, rj, bj, K)
 
-PubDue(s, now, K) == s.pub # K.never /\ s.pub # K.tmax /\ now >= s.pub /\ ~RecordWanted(s)
+(* The links' own ticks at the start of tick (link.rs tick, up to four steps per relay, before the suspension's close):
+   a down link may redial; a dial that waited too long, or an open carrier found dead (reset), closes (Act::Close, a
+   stream close request) and may redial at once; an open link stays open otherwise; no link opens here (only
+   carrier_open opens one). new is the link's state after its tick, closed whether it closed. ConnectSleep.tla passes
+   no move: its Link step reaches the same states between calls, and a close request is no part of its properties. *)
+LinkTickOK(old, new, closed) ==
+    \/ old = "down" /\ new \in {"down", "dialing"} /\ ~closed
+    \/ old = "dialing" /\ new \in {"down", "dialing"} /\ (new = "down" => closed)
+    \/ old = "open" /\ IF closed THEN new \in {"down", "dialing"} ELSE new = "open"
+LinkTick(W, nl, cl) == [W EXCEPT !.s.lk = nl, !.o.closes = @ \cup cl]
+
+PubDue(s, now, K) == s.pub # K.never /\ now >= s.pub /\ ~RecordWanted(s)
 
 (* drive: the tick, then (bc) the beacon duty cycle asks for a beacon, then start_jobs again *)
 DriveStep(W, now, w, pw, rj, bj, rj2, bj2, bc, K) ==
