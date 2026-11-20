@@ -212,8 +212,8 @@ impl Machines {
         }
     }
 
-    /// Whether `other` is a handle of the same pool, for tests.
-    #[cfg(feature = "trace")]
+    /// Whether `other` is a handle of the same pool, for tests. Always built: it holds no state, and the facade's build
+    /// without std reads it in its tests.
     #[doc(hidden)]
     #[must_use]
     pub fn shares(&self, other: &Self) -> bool {

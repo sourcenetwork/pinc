@@ -34,8 +34,7 @@ PINC_TRACE_DIR="$dir" cargo test -q -p pinc --lib trace_addr
 PINC_TRACE_DIR="$dir" cargo test -q -p pinc --lib trace_state
 PINC_TRACE_DIR="$dir" cargo test -q -p pinc --lib trace_events
 PINC_TRACE_DIR="$dir" cargo test -q -p pinc --lib trace_facade_bufs
-# the machine pool probes are behind the trace feature (which implies std)
-PINC_TRACE_DIR="$dir" cargo test -q -p pinc --features trace --lib trace_facade_machines
+PINC_TRACE_DIR="$dir" cargo test -q -p pinc --lib trace_facade_machines
 par trace_tlc TraceVerifiedRanges ranges
 par trace_tlc TraceVarint varint
 par trace_tlc TraceLayout layout

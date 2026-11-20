@@ -356,8 +356,8 @@ where
     }
 
     /// A handle of the pool of handshake machine boxes the slots made from now on take; `None` when the host gave every
-    /// slot its own memory. For tests.
-    #[cfg(feature = "trace")]
+    /// slot its own memory. For tests. Always built: it holds no state, and the facade's build without std reads it in
+    /// its tests.
     #[doc(hidden)]
     #[must_use]
     pub fn machines(&self) -> Option<pinc_transport::conn::Machines> {

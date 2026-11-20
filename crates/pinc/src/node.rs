@@ -109,7 +109,7 @@ macro_rules! define {
                 }
             }
             /// The endpoint's pool of handshake machine boxes, for tests.
-            #[cfg(all(test, feature = "trace"))]
+            #[cfg(test)]
             fn machines(&self) -> Option<Machines> {
                 match self { $(Self::$v(ep) => ep.machines(),)+ }
             }
@@ -261,8 +261,9 @@ mod tests {
     }
 }
 
-// The pool rule is read through probes of the `trace` feature, so the test is built only with it.
-#[cfg(all(test, feature = "trace"))]
+// The pool rule is read through the hidden probes `Endpoint::machines` and `Machines::shares`, which are always built,
+// so the test runs with and without `std` and writes the file of its build.
+#[cfg(test)]
 #[allow(clippy::unwrap_used, reason = "tests assert")]
 mod machines_trace {
     use super::*;
@@ -303,8 +304,8 @@ mod machines_trace {
             let thr = m.shares(&thread_pool);
             assert_eq!(
                 pool == first,
-                std,
-                "with std every endpoint of a thread shares the first's pool"
+                std || i == 0,
+                "with std every endpoint of a thread shares the first's pool, without it each has its own"
             );
             assert_eq!(thr, std);
             writeln!(
