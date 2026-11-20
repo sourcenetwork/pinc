@@ -118,47 +118,49 @@ InitEv == /\ Ev.op = "init"
                    short |-> Ev.short, hello |-> Ev.hello, holders |-> Ev.holders]
           /\ e' = [slots |-> Table0(Ev.k), count |-> 0]
 
+\* TLC evaluates a LET value again at each of its uses in a step: the \E over a one-value set takes the steps'
+\* fold and the slots after the call once
 CallEv ==
-    LET st == Fold([e |-> e, ok |-> TRUE, adm |-> <<>>], Ev.steps, 1)
-        sl == After(e.slots, Ev.diff)
-        made == \E k \in DOMAIN Ev.steps : Ev.steps[k][1] = 1
+    LET made == \E k \in DOMAIN Ev.steps : Ev.steps[k][1] = 1
         decided == Len(Ev.steps) > 0 /\ Ev.steps[1][1] = 0
         timeout == IF Ev.timeout = <<>> THEN NoDl ELSE Ev.timeout[1]
     IN /\ Ev.op \in {"dgram", "timer", "other"}
-       /\ st.ok
-       \* the slots and the count the model computes are the endpoint's; the deadlines are the endpoint's own
-       /\ \A j \in DOMAIN sl : Bare(sl[j]) = Bare(st.e.slots[j])
-       \* a session lives the base life or the hold, and its life never falls while it holds the slot
-       /\ \A j \in DOMAIN sl : sl[j].use => /\ sl[j].life \in {p.life, p.hold}
-                                         /\ (e.slots[j].use /\ e.slots[j].created = sl[j].created
-                                               => sl[j].life >= e.slots[j].life)
-       /\ st.e.count = Ev.count
-       /\ e' = [slots |-> sl, count |-> Ev.count]
-       \* poll_timeout is the earliest deadline, none while the event queue is stalled
-       /\ timeout = Poll(sl, Ev.stalled = 1)
-       \* a timer call the queue did not stop leaves no unauthenticated session at or past its end; a stalled one runs
-       \* nothing
-       /\ Ev.op = "timer" /\ Ev.stalled = 0 => \A j \in DOMAIN sl : ~Expired(sl[j], Ev.now)
-       /\ Ev.op = "timer" /\ Ev.stalled0 = 1 => Ev.steps = <<>> /\ Ev.diff = <<>>
-       \* an arrival never frees a session: a datagram whose first flight went to the admission frees only a session
-       \* that was not in use before it or that it made itself (the id table full, or a session that ended at once)
-       /\ Ev.op = "dgram" /\ (\E k \in DOMAIN Ev.steps : Ev.steps[k][1] = 0) =>
-            \A k \in DOMAIN Ev.steps : Ev.steps[k][1] = 4 =>
-                 \/ Ev.steps[k][2] \notin DOMAIN e.slots
-                 \/ ~e.slots[Ev.steps[k][2]].use
-                 \/ \E m \in 1..(k - 1) : Ev.steps[m][1] = 1 /\ Ev.steps[m][2] = Ev.steps[k][2]
-       \* a datagram for an id no session holds: a stalled queue or a type that starts no session decides nothing, a first
-       \* message type is decided, and what makes no session changes no slot and counts one dropped or stalled datagram
-       /\ Ev.op = "dgram" /\ Ev.n = 0 =>
-            /\ Ev.stalled0 = 1 => Ev.steps = <<>> /\ Ev.stalledIn = 1 /\ Ev.dropped = 0
-            /\ Ev.stalled0 = 0 /\ ~First(Ev.kind) => Ev.steps = <<>> /\ (Ev.kind # 0 => Ev.dropped = 1)
-            /\ Ev.stalled0 = 0 /\ First(Ev.kind) => decided
-            /\ ~made => Ev.diff = <<>>
-            \* what decides and makes no session is counted once: dropped, or (otherwise) a reject the ledger refused, or
-            \* refused for want of room; a reject that is queued is counted when it is sent, not in this call
-            /\ decided /\ ~made =>
-                 IF Ev.steps[1][2] = 2 THEN Ev.dropped + Ev.otherwise <= 1 ELSE Ev.dropped + Ev.otherwise = 1
-       /\ UNCHANGED p
+       /\ \E st \in {Fold([e |-> e, ok |-> TRUE, adm |-> <<>>], Ev.steps, 1)} :
+          \E sl \in {After(e.slots, Ev.diff)} :
+          /\ st.ok
+          \* the slots and the count the model computes are the endpoint's; the deadlines are the endpoint's own
+          /\ \A j \in DOMAIN sl : Bare(sl[j]) = Bare(st.e.slots[j])
+          \* a session lives the base life or the hold, and its life never falls while it holds the slot
+          /\ \A j \in DOMAIN sl : sl[j].use => /\ sl[j].life \in {p.life, p.hold}
+                                            /\ (e.slots[j].use /\ e.slots[j].created = sl[j].created
+                                                  => sl[j].life >= e.slots[j].life)
+          /\ st.e.count = Ev.count
+          /\ e' = [slots |-> sl, count |-> Ev.count]
+          \* poll_timeout is the earliest deadline, none while the event queue is stalled
+          /\ timeout = Poll(sl, Ev.stalled = 1)
+          \* a timer call the queue did not stop leaves no unauthenticated session at or past its end; a stalled one runs
+          \* nothing
+          /\ Ev.op = "timer" /\ Ev.stalled = 0 => \A j \in DOMAIN sl : ~Expired(sl[j], Ev.now)
+          /\ Ev.op = "timer" /\ Ev.stalled0 = 1 => Ev.steps = <<>> /\ Ev.diff = <<>>
+          \* an arrival never frees a session: a datagram whose first flight went to the admission frees only a session
+          \* that was not in use before it or that it made itself (the id table full, or a session that ended at once)
+          /\ Ev.op = "dgram" /\ (\E k \in DOMAIN Ev.steps : Ev.steps[k][1] = 0) =>
+               \A k \in DOMAIN Ev.steps : Ev.steps[k][1] = 4 =>
+                    \/ Ev.steps[k][2] \notin DOMAIN e.slots
+                    \/ ~e.slots[Ev.steps[k][2]].use
+                    \/ \E m \in 1..(k - 1) : Ev.steps[m][1] = 1 /\ Ev.steps[m][2] = Ev.steps[k][2]
+          \* a datagram for an id no session holds: a stalled queue or a type that starts no session decides nothing, a first
+          \* message type is decided, and what makes no session changes no slot and counts one dropped or stalled datagram
+          /\ Ev.op = "dgram" /\ Ev.n = 0 =>
+               /\ Ev.stalled0 = 1 => Ev.steps = <<>> /\ Ev.stalledIn = 1 /\ Ev.dropped = 0
+               /\ Ev.stalled0 = 0 /\ ~First(Ev.kind) => Ev.steps = <<>> /\ (Ev.kind # 0 => Ev.dropped = 1)
+               /\ Ev.stalled0 = 0 /\ First(Ev.kind) => decided
+               /\ ~made => Ev.diff = <<>>
+               \* what decides and makes no session is counted once: dropped, or (otherwise) a reject the ledger refused, or
+               \* refused for want of room; a reject that is queued is counted when it is sent, not in this call
+               /\ decided /\ ~made =>
+                    IF Ev.steps[1][2] = 2 THEN Ev.dropped + Ev.otherwise <= 1 ELSE Ev.dropped + Ev.otherwise = 1
+          /\ UNCHANGED p
 
 Init == /\ i = 1 /\ e = [slots |-> Table0(1), count |-> 0]
         /\ p = [k |-> 1, max |-> 0, life |-> 0, hold |-> 0, full |-> 0, short |-> 0, hello |-> 0, holders |-> 0]
