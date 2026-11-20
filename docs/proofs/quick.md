@@ -294,11 +294,14 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `FacadeStandby_oldest` | AMAX 4 -> 3 |
 | `FacadeStandby_wrap` | wakers W {1, 2} -> {1} |
 | `FacadeTurn` | F {1, 2, 3} -> {1, 2} |
+| `FacadeTurn_drain` | GENS 3 -> 2 |
 | `FacadeTurn_live` | F {1, 2, 3} -> {1, 2} |
+| `FacadeTurn_nopass` | GENS 4 -> 3 |
 | `FacadeTurn_role` | F {1, 2, 3} -> {1, 2} |
 | `FacadeTurn_two` | STARTS 3 -> 2, DMAX 3 -> 1, DRAIN 2 -> 1 |
 | `FacadeTurn_wrap` | bounded by constraint: the owner starts at most once (FacadeTurn_wrapQuickBound), STARTS = 6 kept for the other future |
 | `FacadeTurn_wrapfew` | STARTS 4 -> 2 |
+| `FacadeTurn_wrapkeep` | GENS 3 -> 2 |
 | `Frame` | the frames: Frames (545) -> FramesQuick (177), the 130-byte payload in 7 frames instead of 81 |
 | `FramePack` | Normal -> NormalQuick (41472 -> 544 normal cases: every source together, every switch apart), Other -> OtherQuick (rooms {24, 40, 64} -> {24, 64}, ACKs 3 -> 2, streams 4 -> 3) |
 | `FramePack_modes` | Normal -> NormalQuick (41472 -> 544 normal cases: every source together, every switch apart), Other -> OtherQuick (rooms {24, 40, 64} -> {24, 64}, ACKs 3 -> 2, streams 4 -> 3) |
