@@ -160,7 +160,11 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
                     record: job.buf.get(..len).unwrap_or_default(),
                 };
                 if self.frame_to(now, job.relay, &frame) {
-                    self.next_publish = deadline_after(now, rule::RECORD_REPUBLISH_NS);
+                    // A time set meanwhile (a class, home or carrier change asked for a new record) wins over the
+                    // period: `publish` disarmed it before this job.
+                    if self.next_publish.is_none() {
+                        self.next_publish = deadline_after(now, rule::RECORD_REPUBLISH_NS);
+                    }
                 } else {
                     // The carrier went away meanwhile: publish again when it opens.
                     self.next_publish = Some(now);

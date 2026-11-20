@@ -128,3 +128,31 @@ fn a_home_carrier_opened_at_clock_zero_asks_for_the_record_at_once() {
         );
     });
 }
+
+#[test]
+fn a_class_change_made_while_the_record_is_signed_is_published_without_waiting_for_the_period() {
+    big_stack(|| {
+        let host = Box::new(Host::new(0x31, "192.168.1.2:4433".parse().unwrap(), 1000 * SEC));
+        let (identity, prekey) = (host.identity, host.prekey_info.clone());
+        let mut keys = Soft(host);
+        let mut rig = Rig::new(&identity, prekey);
+        let mut answered = 0;
+        let now = rig.bring_up(&mut keys, 1000 * SEC, &mut answered) + SEC;
+        let wall = now / 1_000_000;
+        tick(&mut rig, now, wall);
+        assert!(rig.conn.sign_request().is_some(), "the record was due");
+        // The node learns it is public while the host still holds the request: the record in flight was built before.
+        rig.conn.set_local(&["198.51.100.5:20000".parse().unwrap()]);
+        tick(&mut rig, now + SEC / 10, wall);
+        let sig = {
+            let req = rig.conn.sign_request().unwrap();
+            keys.answer(now, &req)
+        };
+        rig.conn.sign_response(now + SEC / 10, sig.response());
+        tick(&mut rig, now + SEC / 5, wall);
+        assert!(
+            rig.conn.sign_request().is_some(),
+            "the change waits for the next period"
+        );
+    });
+}
