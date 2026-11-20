@@ -248,8 +248,9 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
             self.accept_failed();
             return Err(stream);
         };
+        // the carrier names are constants: this fails only if the relay cannot build a session, not for the peer's fault
         let Ok(cfg) = session::responder_config(self.local, scid) else {
-            self.counters.protocol_failures += 1;
+            self.accept_failed();
             return Err(stream);
         };
         let mut conn = Conn::new(
