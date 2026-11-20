@@ -161,17 +161,14 @@ impl<H: Hosted, D: Discovery> Endpoint<H, D> {
 
     /// The record the relays hold for `node`: asked of the home relay, answered within [`LOOKUP_WAIT`].
     async fn relay_record(&self, node: &NodeId) -> Result<Option<PeerRecord>> {
-        let (mut deadline, mut started) = (None, false);
+        let (mut deadline, mut since) = (None, None);
         let wait = u64::try_from(LOOKUP_WAIT.as_nanos()).unwrap_or(u64::MAX);
         self.0
             .shared
             .run(|core, now| {
                 let at = *deadline.get_or_insert_with(|| now.saturating_add(wait));
-                if !started {
-                    started = true;
-                    core.lookup_start(now, node);
-                }
-                core.lookup_poll(node, at, now)
+                let since = *since.get_or_insert_with(|| core.lookup_start(now, node));
+                core.lookup_poll(node, since, at, now)
             })
             .await
     }

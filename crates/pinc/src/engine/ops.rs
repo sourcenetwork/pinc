@@ -647,12 +647,13 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
         }
     }
 
-    /// Ask the relays for the record of `peer`.
-    pub(crate) fn lookup_start(&mut self, now: u64, peer: &NodeId) {
-        // A failure left by an earlier lookup that nobody waited for must not answer this one.
-        self.lookup_failed.retain(|p| p != peer);
+    /// Ask the relays for the record of `peer`; the number the caller gives [`lookup_poll`](Self::lookup_poll), so a
+    /// failure noticed before this lookup started does not answer it.
+    pub(crate) fn lookup_start(&mut self, now: u64, peer: &NodeId) -> u64 {
+        self.lookups += 1;
         self.node.lookup(now, peer);
         self.dirty = true;
+        self.lookups
     }
 
     /// A notice of the connectivity layer: an answer to a lookup wakes the futures that wait for one. A dial to a peer
@@ -665,17 +666,19 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
                 if self.lookup_failed.len() >= 16 {
                     self.lookup_failed.pop_front();
                 }
-                self.lookup_failed.push_back(*p);
+                self.lookup_failed.push_back((*p, self.lookups));
             }
             _ => return,
         }
         self.wake_g(GKey::Lookup);
     }
 
-    /// The verified record a relay found for `peer`, or that it has none, or a timeout at `deadline`, else a wait.
+    /// The verified record a relay found for `peer`, or that it has none (a failure noticed since lookup number `since`
+    /// started), or a timeout at `deadline`, else a wait.
     pub(crate) fn lookup_poll(
         &mut self,
         peer: &NodeId,
+        since: u64,
         deadline: u64,
         now: u64,
     ) -> Try<Result<Option<crate::records::PeerRecord>>> {
@@ -687,8 +690,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
                 hints: f.hints().to_vec(),
             })));
         }
-        if let Some(at) = self.lookup_failed.iter().position(|p| p == peer) {
-            self.lookup_failed.remove(at);
+        if self.lookup_failed.iter().any(|(p, at)| p == peer && *at >= since) {
             return Try::Done(Ok(None));
         }
         if now >= deadline {

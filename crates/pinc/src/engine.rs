@@ -299,8 +299,11 @@ pub(crate) struct Core<S, A> {
     adjacent_next: u64,
     /// How long a dial may take, in nanoseconds.
     connect_timeout: u64,
-    /// The peers a relay had no record for or sent a bad one for, oldest first.
-    lookup_failed: VecDeque<NodeId>,
+    /// The peers a relay had no record for or sent a bad one for, oldest first, each with the number of lookups started
+    /// when it was noticed: a lookup takes only a failure noticed after it started, and leaves it for the others.
+    lookup_failed: VecDeque<(NodeId, u64)>,
+    /// How many lookups were started.
+    lookups: u64,
     neighbors_dirty: bool,
     look_at: u64,
     /// The instants futures wait for: a deadline passing wakes them to look again.
@@ -351,6 +354,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             adjacent_next: 0,
             connect_timeout: cfg.connect_timeout,
             lookup_failed: VecDeque::new(),
+            lookups: 0,
             neighbors_dirty: false,
             look_at: 0,
             deadlines: BTreeSet::new(),

@@ -32,10 +32,31 @@ fn a_stale_lookup_failure_does_not_answer_a_later_lookup() {
     let mut c = core();
     let p = peer(1);
     c.on_notice(&Notice::Missing(p));
-    c.lookup_start(1, &p);
+    let since = c.lookup_start(1, &p);
     assert!(
-        matches!(c.lookup_poll(&p, 100, 2), Try::Wait(_)),
+        matches!(c.lookup_poll(&p, since, 100, 2), Try::Wait(_)),
         "the old failure answered"
+    );
+}
+
+#[test]
+fn two_lookups_of_one_peer_each_take_the_failure_noticed_after_they_started() {
+    let mut c = core();
+    let p = peer(1);
+    let first = c.lookup_start(1, &p);
+    c.on_notice(&Notice::Missing(p));
+    // A second lookup starts before the first one polls; it does not erase the first one's answer.
+    let second = c.lookup_start(2, &p);
+    assert!(matches!(c.lookup_poll(&p, first, 100, 3), Try::Done(Ok(None))));
+    assert!(
+        matches!(c.lookup_poll(&p, second, 100, 3), Try::Wait(_)),
+        "the old failure answered"
+    );
+    c.on_notice(&Notice::Missing(p));
+    assert!(matches!(c.lookup_poll(&p, second, 100, 4), Try::Done(Ok(None))));
+    assert!(
+        matches!(c.lookup_poll(&p, first, 100, 4), Try::Done(Ok(None))),
+        "the first lookup still has its answer"
     );
 }
 
