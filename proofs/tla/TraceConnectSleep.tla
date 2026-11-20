@@ -31,7 +31,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds connect_sleep.ndjson. *)
 (***************************************************************************)
-EXTENDS ConnectSleepOps, Json, IOUtils
+EXTENDS ConnectSleepOps, Json, IOUtils, TLC
 
 K == [retry |-> 2000000, repub |-> 1800000000, tmax |-> 2147483647, never |-> -2000000000, udp |-> {1}, home |-> 1]
 
@@ -43,17 +43,17 @@ Ev == Trace[i]
 
 SetOfSeq(q) == {q[k] : k \in 1..Len(q)}
 
-(* the first event is "init", read after the carrier opened: no request outstanding, a wall clock given, nothing
-   owed; whether a record is wanted cannot be read *)
-Init == /\ i = 1
-        /\ \E rec \in BOOLEAN :
-              s = [NewS({1}, K) EXCEPT !.wall = TRUE, !.record = rec, !.lk = [x \in {1} |-> "open"]]
+(* every run of the test starts with "init", read after the carrier of a new client opened: no request outstanding,
+   a wall clock given, nothing owed; whether a record is wanted cannot be read *)
+Fresh == {[NewS({1}, K) EXCEPT !.wall = TRUE, !.record = rec, !.lk = [x \in {1} |-> "open"]] : rec \in BOOLEAN}
+Init == /\ i = 1 /\ s \in Fresh
 
 Obs(W) == /\ W.s.job.k = Ev.job /\ W.s.job.r = Ev.jr
           /\ W.o.udp = Ev.udp /\ W.o.fails = Ev.fails /\ W.o.bcn = Ev.bcn /\ W.o.closes = SetOfSeq(Ev.closes)
           /\ s' = [W.s EXCEPT !.lk[1] = Ev.link] /\ i' = i + 1
 
-InitE == /\ Ev.op = "init" /\ Ev.job = "none" /\ Ev.link = "open" /\ UNCHANGED s /\ i' = i + 1
+\* the next run of the test: a new client
+InitE == /\ Ev.op = "init" /\ Ev.job = "none" /\ Ev.link = "open" /\ s' \in Fresh /\ i' = i + 1
 
 CallE ==
     CASE Ev.op = "tick" ->
@@ -79,5 +79,8 @@ TraceSpec == Init /\ [][TNext]_vars /\ WF_vars(TNext)
 
 \* the whole recorded trace is a behaviour of ConnectSleepOps.tla
 TraceAccepted == <>(i = Len(Trace) + 1)
+\* the check's postcondition: some behaviour took every event (a choice the record cannot show yet, such as pw, may
+\* leave other branches without a next step: those are not errors, so the config does not check deadlock)
+Accepted == TLCGet("stats").diameter = Len(Trace) + 1
 Inv == TRUE
 =============================================================================
