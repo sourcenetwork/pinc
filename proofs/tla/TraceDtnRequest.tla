@@ -31,7 +31,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds dtn_request.ndjson.   *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils, TraceEnd
 
 VARIABLES have, lost, shared, st, ask, base, refused, done, drops, cs, i
 mvars == <<have, lost, shared, st, ask, base, refused, done, drops>>
@@ -112,4 +112,7 @@ TraceSpec == Init /\ [][TNext]_vars
 Inv == /\ DN!TypeOK /\ DN!NoParityWithoutLoss /\ DN!AskWithinNeed /\ DN!AskFresh /\ DN!ActiveReachable
        /\ DN!LostBounded /\ DN!FinishDecodable
        /\ \A x \in refused : BadNow # {}
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

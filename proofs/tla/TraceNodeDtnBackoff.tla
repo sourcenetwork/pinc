@@ -21,7 +21,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds dtn_backoff.ndjson.   *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils, Nanos
+EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils, Nanos, TraceEnd
 CONSTANT MAXT
 VARIABLES i, F, redial, n
 vars == <<i, F, redial, n>>
@@ -85,4 +85,7 @@ View == i
 Inv == (i > 1 /\ Trace[i - 1].op = "fail") =>
            LET e == Trace[i - 1] IN /\ e.len <= MAXT
                                     /\ F[e.peer] # None => InBounds(F[e.peer])
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

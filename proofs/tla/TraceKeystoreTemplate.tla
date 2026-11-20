@@ -18,7 +18,7 @@
 (* variable PINC_TRACE_DIR, the directory that holds                       *)
 (* keystore_template.ndjson.                                               *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, TLC, Json, IOUtils, TraceEnd
 
 VARIABLE c
 
@@ -62,4 +62,7 @@ TraceSpec == Init /\ [][Next]_c
 EventsOK == /\ c.t = "root" => /\ Len(Trace) > 0
                                /\ \A k \in KT!Kinds : \E j \in 1..Len(Trace) : Trace[j].kind = k
             /\ c.t = "event" => EvOK(Trace[c.i])
+\* the end check (TraceEnd.tla): the state of the last line was reached in a trace that has one
+ReplayAtEnd == ReplaySeen(c.t = "event" /\ c.i = Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

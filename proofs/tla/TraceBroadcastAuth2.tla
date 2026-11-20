@@ -27,7 +27,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and PINC_TRACE_DIR, the *)
 (* directory that holds bcast/auth2.ndjson.                                *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, TLC, Json, IOUtils, TraceEnd
 
 VARIABLES i, orc
 vars == <<i, orc>>
@@ -76,4 +76,7 @@ TraceSpec == Init /\ [][TNext]_vars
 \* that no two statements share (an injective encoding, a collision-free hash)
 OneSigner == \A o, p \in orc : /\ o.sig = p.sig => o = p
                                /\ o.st = p.st <=> o.cid = p.cid
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

@@ -19,7 +19,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds dtn_codec_node.ndjson.*)
 (***************************************************************************)
-EXTENDS Integers, Sequences, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, TLC, Json, IOUtils, TraceEnd
 
 VARIABLE c
 
@@ -101,4 +101,7 @@ EventsOK ==
                 [] ev.op = "u64" -> U64Ev(ev)
                 [] ev.op = "u16" -> U16Ev(ev)
                 [] OTHER -> FALSE
+\* the end check (TraceEnd.tla): the state of the last line was reached in a trace that has one
+ReplayAtEnd == ReplaySeen(c.t = "event" /\ c.i = Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

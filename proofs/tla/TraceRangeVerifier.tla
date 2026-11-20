@@ -33,7 +33,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds verifier.ndjson.      *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils, TraceEnd
 
 VARIABLES n, first, last, stack, failed, released, len, G, filled, oracle, errk, pos, i
 core == <<n, first, last, stack, failed, released>>
@@ -171,4 +171,9 @@ Inv ==
     /\ Len(stack) <= 55
     /\ filled < 1 \/ (stack # <<>> /\ filled < NodeNeed(Head(stack)))
 
+\* the end check (TraceEnd.tla): the trace has a line, its first line starts a run, and every run was taken to its
+\* end (the next "vrun" line or the end of the trace), each end reached marked by its position
+RunEnds == {k \in 2..Len(Trace) : Trace[k].t = "vrun"} \cup {Len(Trace) + 1}
+ReplayAtEnd == ReplayMark(i >= 1 /\ (i > Len(Trace) \/ Trace[i].t = "vrun"), i)
+ReplayEnded == ReplayReadAll(Len(Trace), RunEnds) /\ Trace[1].t = "vrun"
 =================================================================================

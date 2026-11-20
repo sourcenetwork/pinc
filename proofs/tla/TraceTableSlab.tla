@@ -19,7 +19,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds table_slab.ndjson.    *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils, TraceEnd
 VARIABLES i, s
 vars == <<i, s>>
 INSTANCE TableSlabOps
@@ -67,4 +67,7 @@ TraceSpec == Init /\ [][TNext]_vars
 Inv == /\ s.len <= s.cap
        /\ {s.idx[p] : p \in 0..(s.len - 1)} = 0..(s.len - 1)
        /\ \A p \in 0..(s.len - 2) : s.recs[s.idx[p]][1] < s.recs[s.idx[p + 1]][1]
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

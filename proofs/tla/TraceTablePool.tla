@@ -22,7 +22,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds table_pool.ndjson.    *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils, TraceEnd
 VARIABLES i, s
 vars == <<i, s>>
 INSTANCE TablePoolOps
@@ -60,4 +60,7 @@ TraceSpec == Init /\ [][TNext]_vars
 Inv == LET live == {s.st[k] : k \in 0..(s.free - 1)}
        IN /\ Cardinality(live) = s.free
           /\ \A k \in 0..(s.n - 1) : (k \in live) <=> (s.gen[k] % 2 = 0)
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

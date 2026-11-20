@@ -24,7 +24,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds recovery.ndjson.      *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils, TraceEnd
 
 CONSTANTS N, MS, SEC, MP, TOP, MAXG, LATEN
 VARIABLES i, rs, tl
@@ -110,4 +110,7 @@ TraceSpec == Init /\ [][TNext]_vars
 Inv == /\ rs.sent = rs.acked + rs.inf + rs.lost
        /\ rs.inf = SumSizes(rs.ring, 0)
        /\ Len(rs.ring) <= N
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

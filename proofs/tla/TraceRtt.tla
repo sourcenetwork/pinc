@@ -17,7 +17,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds rtt.ndjson.           *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, TLC, Json, IOUtils, TraceEnd
 VARIABLES i, r, cap
 vars == <<i, r, cap>>
 INSTANCE RttOps
@@ -56,4 +56,7 @@ TraceSpec == Init /\ [][TNext]_vars
 \* the table never grows past its bound, and the floor is one of its six values
 Inv == /\ Len(r.tab) <= cap \/ cap = 0
        /\ r.floor \in {Zero, Ms(500), N!Sec(1), N!Sec(2), N!Sec(4), N!Sec(8)}
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

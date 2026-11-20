@@ -27,7 +27,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds ctl.ndjson.           *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils, TraceEnd
 CONSTANT DOC
 VARIABLES i, c, pu, p
 vars == <<i, c, pu, p>>
@@ -83,4 +83,7 @@ TraceSpec == Init /\ [][TNext]_vars
 
 \* never more chunks charged than the pool has
 Inv == pu <= p
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

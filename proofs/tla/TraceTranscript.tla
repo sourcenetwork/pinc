@@ -28,7 +28,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds transcript.ndjson.    *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils, TraceEnd
 
 VARIABLES i, full
 vars == <<i, full>>
@@ -127,4 +127,7 @@ TraceAccepted == <>(i = Len(Trace) + 1)
 
 (* every kind was seen with all its fields *)
 Covered == i > Len(Trace) => full = Kinds
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

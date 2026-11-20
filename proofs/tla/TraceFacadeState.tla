@@ -29,7 +29,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds facade_state.ndjson.  *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils, TraceEnd
 VARIABLE x
 
 F == INSTANCE FacadeStateOps WITH NB <- 32, IP4 <- 4, IP6 <- 16, PORT <- 2, CLEN <- 4, CNT <- 2, SEQ <- 8,
@@ -73,4 +73,7 @@ AllOK == /\ \A k \in DOMAIN Trace : Trace[k].t = "state" /\ EvOK(Trace[k])
          /\ \E k \in DOMAIN Trace : Trace[k].op = "restore" /\ Trace[k].ok /\ Trace[k].parse.ver = 1
          /\ \E k \in DOMAIN Trace : Trace[k].op = "restore" /\ Trace[k].ok /\ Trace[k].parse.ver = 2
          /\ \E k \in DOMAIN Trace : Trace[k].op = "restore" /\ Trace[k].parse.ok /\ ~Trace[k].ok
+\* the end check (TraceEnd.tla): the one state checks every line of a trace that has one
+ReplayAtEnd == ReplaySeen(TRUE)
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

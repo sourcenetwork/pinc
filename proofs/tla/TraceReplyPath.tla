@@ -21,7 +21,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds reply_path.ndjson.    *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, TLC, Json, IOUtils, TraceEnd
 CONSTANTS NP
 VARIABLES i, c
 vars == <<i, c>>
@@ -65,4 +65,7 @@ TraceSpec == Init /\ [][TNext]_vars
 \* the active path is held and validated, and no path is held twice, throughout
 Inv == /\ c.t[c.act].id # 0 /\ c.t[c.act].v
        /\ \A a, b \in 1..NP : (c.t[a].id # 0 /\ c.t[a].id = c.t[b].id) => a = b
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

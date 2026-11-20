@@ -20,7 +20,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds prekeys.ndjson.       *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, TLC, Json, IOUtils, TraceEnd
 VARIABLES i, s
 vars == <<i, s>>
 
@@ -79,4 +79,7 @@ TraceSpec == Init /\ [][TNext]_vars
 \* the shape the model keeps, on the recorded states
 Inv == /\ Len(s.held) <= 2 /\ R!Increasing(s.held)
        /\ (s.held # <<>> => R!Newest(s.held) = s.next - 1)
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

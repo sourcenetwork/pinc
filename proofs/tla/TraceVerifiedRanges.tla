@@ -17,7 +17,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds ranges.ndjson.        *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, TLC, Json, IOUtils, RangeOps
+EXTENDS Integers, Sequences, TLC, Json, IOUtils, RangeOps, TraceEnd
 
 VARIABLES items, req, res, i
 vars == <<items, req, res, i>>
@@ -63,4 +63,7 @@ TraceSpec == Init /\ [][TNext]_vars /\ WF_vars(TNext)
 
 (* the whole recorded trace is a behaviour of VerifiedRanges.tla *)
 TraceAccepted == <>(i = Len(Trace) + 1)
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =================================================================================

@@ -21,7 +21,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds facade_addr.ndjson.   *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils, TraceEnd
 VARIABLE x
 
 A == INSTANCE FacadeAddrOps WITH NB <- 32
@@ -64,4 +64,7 @@ TraceSpec == Init /\ [][Next]_x
 AllOK == /\ \A k \in DOMAIN Trace : Trace[k].t = "addr" /\ EvOK(Trace[k])
          \* an address with a flow label was given to with_direct
          /\ \E k \in DOMAIN Trace : Trace[k].op = "direct" /\ Trace[k].a.flow # 0
+\* the end check (TraceEnd.tla): the one state checks every line of a trace that has one
+ReplayAtEnd == ReplaySeen(TRUE)
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

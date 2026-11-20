@@ -19,7 +19,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds reach.ndjson.         *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, TLC, Json, IOUtils, TraceEnd
 VARIABLES i, r, n, mx
 vars == <<i, r, n, mx>>
 INSTANCE ReachOps
@@ -55,4 +55,7 @@ TraceSpec == Init /\ [][TNext]_vars
 Inv == /\ DOMAIN r.cells = 0..n - 1
        /\ \A k \in Occ(r.cells, n) : r.cells[k][2][2] <= mx /\ r.cells[k][3] <= r.clock
        /\ \A k, l \in Occ(r.cells, n) : r.cells[k][1] = r.cells[l][1] => k = l
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

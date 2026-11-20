@@ -15,7 +15,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds heap.ndjson.          *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils, TraceEnd
 VARIABLES i, s
 vars == <<i, s>>
 CONSTANT TIEHI
@@ -44,4 +44,7 @@ TraceSpec == Init /\ [][TNext]_vars
 \* the heap never holds more than its ids, and each one once
 Inv == /\ Len(s.hp) <= Cardinality(DOMAIN s.pos)
        /\ \A id \in DOMAIN s.pos : s.pos[id] # NONE => (s.pos[id] < Len(s.hp) /\ H(s.hp, s.pos[id]) = id)
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

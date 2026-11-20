@@ -20,7 +20,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds machines.ndjson.      *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils, TraceEnd
 VARIABLES i, cells, conns
 vars == <<i, cells, conns>>
 
@@ -66,4 +66,7 @@ TraceSpec == Init /\ [][TNext]_vars
 Inv == /\ \A j, k \in DOMAIN cells : (j # k /\ cells[j] # 0) => cells[j] # cells[k]
        /\ \A j, k \in DOMAIN conns : (j # k /\ conns[j] > 0) => conns[j] # conns[k]
        /\ Ids(cells) \cap Ids(conns) = {}
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

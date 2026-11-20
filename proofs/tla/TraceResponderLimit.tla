@@ -26,7 +26,7 @@
 (* variable PINC_TRACE_DIR, the directory that holds                       *)
 (* responder_limit.ndjson.                                                 *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, TLC, Json, IOUtils, TraceEnd
 
 VARIABLES t, rtt, answerAt, rejectAt, finishAt, armed, r, i
 mvars == <<t, rtt, answerAt, rejectAt, finishAt, armed, r>>
@@ -80,4 +80,7 @@ TraceSpec == Init /\ [][TNext]_vars
 
 \* the invariants of ResponderLimit.cfg, on every state of every run
 Inv == R!HalfOpenBounded /\ R!SlowFinishHolds /\ R!UnansweredKeepsBase /\ R!RejectedKeepsBase
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

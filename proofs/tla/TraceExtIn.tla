@@ -19,7 +19,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds ext_in.ndjson.           *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, TLC, Json, IOUtils, TraceEnd
 VARIABLES i, r, cap, mx
 vars == <<i, r, cap, mx>>
 INSTANCE ExtInOps
@@ -54,4 +54,7 @@ TraceSpec == Init /\ [][TNext]_vars
 
 \* the ring never grows, and holds no body over the limit
 Inv == r.len \in 0..cap /\ \A k \in 1..r.len : r.q[k][4] <= mx
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

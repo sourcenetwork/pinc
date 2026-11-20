@@ -33,7 +33,7 @@
 (*                                                                         *)
 (* Lean counterpart: Pinc/TraceReconcile.lean (lake exe replay).           *)
 (***************************************************************************)
-EXTENDS ReconcileSess, Json, IOUtils
+EXTENDS ReconcileSess, Json, IOUtils, TraceEnd
 
 VARIABLES i, ini, rsp, cs
 vars == <<i, ini, rsp, cs>>
@@ -122,4 +122,7 @@ TraceSpec == Init /\ [][TNext]_vars
 Inv ==
     /\ i <= Len(Trace) + 1
     /\ Len(ini.core.frames) <= MAX_NEST /\ Len(rsp.core.frames) <= MAX_NEST
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

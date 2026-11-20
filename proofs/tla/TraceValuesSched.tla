@@ -39,7 +39,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment      *)
 (* variable PINC_TRACE_DIR, the directory that holds values_sched.ndjson.   *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils, ValuesSchedOps
+EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils, ValuesSchedOps, TraceEnd
 
 VARIABLES i, rs
 vars == <<i, rs>>
@@ -223,4 +223,7 @@ Inv ==
         /\ rs.q + rs.pv[0].a + rs.pv[1].a + rs.pv[2].a + rs.pv[3].a + rs.vb + (IF rs.pend = NONE THEN 0 ELSE rs.pend.bytes)
                = BytesOf(rs.W, rs.L)
         /\ \A s \in rs.ev : ~rs.pv[s].inA /\ rs.pv[s].a = 0
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =================================================================================

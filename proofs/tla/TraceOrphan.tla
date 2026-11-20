@@ -17,7 +17,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds orphan.ndjson.        *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, TLC, Json, IOUtils, TraceEnd
 VARIABLES i, o, max, life
 vars == <<i, o, max, life>>
 INSTANCE OrphanOps
@@ -47,4 +47,7 @@ TraceSpec == Init /\ [][TNext]_vars
 \* the table never grows, and the counters balance
 Inv == /\ o.held = o.replayed + o.expired + o.evicted + Waiting(o)
        /\ \A k \in DOMAIN o.slots : o.slots[k] = None \/ o.slots[k][5] <= max
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

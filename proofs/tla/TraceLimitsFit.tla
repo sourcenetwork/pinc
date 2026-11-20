@@ -19,7 +19,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds limits.ndjson.        *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, Json, IOUtils, LimitsFitOps
+EXTENDS Integers, Sequences, Json, IOUtils, LimitsFitOps, TraceEnd
 
 Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/limits.ndjson")
 
@@ -38,4 +38,7 @@ Covered == \A n \in Names : \E k \in 1..Len(Trace) : Trace[k].name = n
 VARIABLE x
 Init == x = 0
 Next == UNCHANGED x
+\* the end check (TraceEnd.tla): the one state checks every line of a trace that has one
+ReplayAtEnd == ReplaySeen(TRUE)
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

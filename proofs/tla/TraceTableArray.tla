@@ -14,7 +14,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds table_array.ndjson.   *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils, TraceEnd
 VARIABLES i, s
 vars == <<i, s>>
 INSTANCE TableArrayOps
@@ -48,4 +48,7 @@ TraceSpec == Init /\ [][TNext]_vars
 \* the order is a permutation of the places, and the count is the places present
 Inv == /\ {s.ord[q] : q \in 0..(s.p - 1)} = 0..(s.p - 1)
        /\ s.cnt = Cardinality({q \in 0..(s.p - 1) : s.fl[q]})
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

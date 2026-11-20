@@ -36,7 +36,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds connect_sleep.ndjson. *)
 (***************************************************************************)
-EXTENDS ConnectSleepOps, Json, IOUtils, TLC
+EXTENDS ConnectSleepOps, Json, IOUtils, TLC, TraceEnd
 
 K == [retry |-> 2000000, repub |-> 1800000000, tmax |-> 2147483647, never |-> -2000000000, udp |-> {1}, home |-> 1]
 
@@ -92,8 +92,10 @@ TraceSpec == Init /\ [][TNext]_vars /\ WF_vars(TNext)
 
 \* the whole recorded trace is a behaviour of ConnectSleepOps.tla
 TraceAccepted == <>(i = Len(Trace) + 1)
-\* the check's postcondition: some behaviour took every event (a choice the record cannot show yet, such as pw, may
-\* leave other branches without a next step: those are not errors, so the config does not check deadlock)
-Accepted == TLCGet("stats").diameter = Len(Trace) + 1
 Inv == TRUE
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one (a choice the record
+\* cannot show yet, such as pw, may leave other branches without a next step: those are not errors, so the config
+\* does not check deadlock)
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

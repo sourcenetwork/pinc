@@ -15,7 +15,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds connect_table.ndjson. *)
 (***************************************************************************)
-EXTENDS ConnectTableOps, Json, IOUtils
+EXTENDS ConnectTableOps, Json, IOUtils, TraceEnd
 
 VARIABLES i, n, bk, t, c
 vars == <<i, n, bk, t, c>>
@@ -63,4 +63,7 @@ TraceSpec == Init /\ [][TNext]_vars /\ WF_vars(TNext)
 \* the whole recorded trace is a behaviour of ConnectTableOps.tla
 TraceAccepted == <>(i = Len(Trace) + 1)
 Inv == TRUE
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

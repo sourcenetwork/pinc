@@ -36,7 +36,7 @@
 (* variable PINC_TRACE_DIR, the directory that holds                       *)
 (* values_plan_small.ndjson.                                               *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils, TraceEnd
 
 VARIABLES i, srv, tab
 vars == <<i, srv, tab>>
@@ -240,4 +240,7 @@ Finished == i > Len(Trace) /\ UNCHANGED vars
 TNext == Step \/ Finished
 
 TraceSpec == Init /\ [][TNext]_vars
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

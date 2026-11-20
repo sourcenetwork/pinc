@@ -18,7 +18,7 @@
 (* variable PINC_TRACE_DIR, the directory that holds minc.ndjson.           *)
 (* Lean counterpart: Pinc/TraceMembershipInc.lean.                          *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, TLC, Json, IOUtils, TraceEnd
 
 VARIABLES i, run, inc, tg
 vars == <<i, run, inc, tg>>
@@ -92,4 +92,7 @@ TraceSpec == Init /\ [][TNext]_vars
 
 (* the facts of the model hold on every recorded state *)
 Inv == inc # <<>> => /\ U!Le(inc[1].epoch, INC!EpochMax) /\ inc[1].seq \in 0..65535
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

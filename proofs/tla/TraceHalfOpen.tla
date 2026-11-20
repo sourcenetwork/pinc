@@ -46,7 +46,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds halfopen.ndjson.      *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils, TraceEnd
 VARIABLES i, e, p
 vars == <<i, e, p>>
 INSTANCE HalfOpenOps
@@ -175,4 +175,7 @@ Inv == /\ e.count <= p.max
             /\ e.slots[j].counted => e.slots[j].unauth /\ e.slots[j].use
             /\ ~e.slots[j].use => e.slots[j] = Free
             /\ e.slots[j].use /\ e.slots[j].unauth => e.slots[j].dl # NoDl /\ e.slots[j].dl <= End(e.slots[j])
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

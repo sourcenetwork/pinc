@@ -30,7 +30,7 @@
 (* environment variable PINC_TRACE_DIR, the directory that holds           *)
 (* connect_carrier.ndjson.                                                 *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, TLC, Json, IOUtils, TraceEnd
 VARIABLES i, c, tab, K
 vars == <<i, c, tab, K>>
 INSTANCE ConnectCarrierOps WITH MaxPn <- 1073741824, Sat <- 1073741824
@@ -95,4 +95,7 @@ TNext == Step \/ Finished
 TraceSpec == Init /\ [][TNext]_vars
 
 Inv == \A s \in Sides : c[s].out <= K.outn /\ c[s].wr - c[s].rd <= K.inl
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

@@ -23,7 +23,7 @@
 (* IOUtils) and PINC_TRACE_DIR, the directory that holds                   *)
 (* relay-keep.ndjson.                                                      *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils, TraceEnd
 CONSTANTS NR, NM, RCAP, MCAP, MBP, MAILQ, TTL, AGE, MAXT, FQ
 VARIABLES i, s, st, job
 vars == <<i, s, st, job>>
@@ -113,4 +113,7 @@ Inv == /\ Count(s.rec) <= RCAP
        /\ \A m \in Members : Len(s.mb[m]) <= MBP
        /\ Cardinality(s.slot) <= MCAP
        /\ Len(s.fq) <= FQ /\ s.tr < MAXT
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

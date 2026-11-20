@@ -46,7 +46,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds handshake.ndjson.     *)
 (***************************************************************************)
-EXTENDS HsOps, Json, IOUtils
+EXTENDS HsOps, Json, IOUtils, TraceEnd
 
 CONSTANTS INODE, R1, R2   \* the honest initiator node and the two honest responder nodes of a world
 MaxS == 40
@@ -400,4 +400,7 @@ TraceSpec == Init /\ [][TNext]_vars /\ WF_vars(TNext)
 
 (* the whole recorded trace is a behaviour of the machines of HsOps.tla *)
 TraceAccepted == <>(i = Len(Trace) + 1)
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

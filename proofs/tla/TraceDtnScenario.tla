@@ -26,7 +26,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds dtn_scenario.ndjson.  *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils, TraceEnd
 
 VARIABLES i, nf, cb, lg, msgs, t, seq, dropped, released, delivered, replayed, acc, met, nx, lo, fins, refin
 vars == <<i, nf, cb, lg, msgs, t, seq, dropped, released, delivered, replayed, acc, met, nx, lo, fins, refin>>
@@ -130,5 +130,8 @@ TNext == (i <= Len(Trace)
 
 TraceSpec == Init /\ [][TNext]_vars /\ WF_vars(TNext)
 TraceAccepted == <>(i = Len(Trace) + 1)
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================
 

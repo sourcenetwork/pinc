@@ -20,7 +20,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and PINC_TRACE_DIR, the *)
 (* directory that holds bcast/subs.ndjson.                                 *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils, TraceEnd
 
 CONSTANTS Members, Topics, TableMax
 
@@ -52,4 +52,7 @@ TraceSpec == Init /\ [][TNext]_vars
 
 Inv == /\ M!TypeOK /\ M!HeldGetsNoPush /\ M!RestoreTellsExactly /\ M!RestoreOnlyHeld /\ M!HoldKeeps
        /\ M!ReleaseForgets /\ M!TableBound
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

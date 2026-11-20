@@ -23,7 +23,7 @@
 (* CommunityModules (Json, IOUtils) and the environment variable            *)
 (* PINC_TRACE_DIR, the directory that holds dtn_custody.ndjson.            *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils, TraceEnd
 
 VARIABLES i, B, L, nx
 vars == <<i, B, L, nx>>
@@ -130,4 +130,7 @@ TraceSpec == Init /\ [][TNext]_vars /\ WF_vars(TNext)
 
 \* the whole recorded trace is a behaviour of DtnCustodyOps
 TraceAccepted == <>(i = Len(Trace) + 1)
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

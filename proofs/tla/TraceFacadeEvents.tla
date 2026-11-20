@@ -19,7 +19,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds facade_events.ndjson. *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, TLC, Json, IOUtils, TraceEnd
 VARIABLES i, s
 vars == <<i, s>>
 
@@ -61,4 +61,7 @@ TraceSpec == Init /\ [][TNext]_vars
 \* along the trace: at most EVENTS queued, in the order pushed
 Inv == /\ Len(s.q) <= 1024
        /\ \A k \in 2..Len(s.q) : s.q[k] > s.q[k - 1]
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

@@ -24,7 +24,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds dtn_want.ndjson.      *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils, TraceEnd
 
 VARIABLE c
 
@@ -72,4 +72,7 @@ EventsOK == c.t = "event" => EvOK
 \* every answer kind occurs
 Covered == c.t = "root" =>
                \A kd \in {"ask", "decodable", "stuck"} : \E j \in 1..Len(Trace) : Trace[j].kind = kd
+\* the end check (TraceEnd.tla): the state of the last line was reached in a trace that has one
+ReplayAtEnd == ReplaySeen(c.t = "event" /\ c.i = Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

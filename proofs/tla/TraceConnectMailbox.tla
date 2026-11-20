@@ -17,7 +17,7 @@
 (* variable PINC_TRACE_DIR, the directory that holds                       *)
 (* connect_mailbox.ndjson.                                                 *)
 (***************************************************************************)
-EXTENDS ConnectMailboxOps, Json, IOUtils
+EXTENDS ConnectMailboxOps, Json, IOUtils, TraceEnd
 
 VARIABLES i, c, mb
 vars == <<i, c, mb>>
@@ -72,4 +72,7 @@ TraceSpec == Init /\ [][TNext]_vars /\ WF_vars(TNext)
 \* the whole recorded trace is a behaviour of ConnectMailboxOps.tla
 TraceAccepted == <>(i = Len(Trace) + 1)
 Inv == TRUE
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

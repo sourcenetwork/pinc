@@ -19,7 +19,7 @@
 (* variable PINC_TRACE_DIR, the directory that holds                       *)
 (* connect_records.ndjson.                                                 *)
 (***************************************************************************)
-EXTENDS ConnectRecordsOps, Json, IOUtils
+EXTENDS ConnectRecordsOps, Json, IOUtils, TraceEnd
 
 VARIABLES i, cf, R
 vars == <<i, cf, R>>
@@ -70,4 +70,7 @@ TraceSpec == Init /\ [][TNext]_vars /\ WF_vars(TNext)
 \* the whole recorded trace is a behaviour of ConnectRecordsOps.tla
 TraceAccepted == <>(i = Len(Trace) + 1)
 Inv == TRUE
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

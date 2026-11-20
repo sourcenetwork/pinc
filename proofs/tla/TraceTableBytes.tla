@@ -18,7 +18,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds table_bytes.ndjson.   *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, TLC, Json, IOUtils, TraceEnd
 
 VARIABLE c
 
@@ -52,4 +52,7 @@ TraceSpec == Init /\ [][Next]_c
 
 (* every recorded event equals the code's operator and the specification *)
 EventsOK == c.t = "event" => Ev(Trace[c.i])
+\* the end check (TraceEnd.tla): the state of the last line was reached in a trace that has one
+ReplayAtEnd == ReplaySeen(c.t = "event" /\ c.i = Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

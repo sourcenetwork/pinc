@@ -42,7 +42,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR.                                                *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils, TraceEnd
 CONSTANTS MAXREV, FILE
 
 VARIABLES hook, revoked, cache, known, sess, borrowed, last, i
@@ -92,4 +92,7 @@ Next == \/ i <= Len(Trace) /\ Step /\ i' = i + 1
 TraceSpec == Init /\ [][Next]_<<mvars, i>>
 
 Inv == M!NoLiveRevoked /\ M!AdmitSound /\ M!RevokedBound
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

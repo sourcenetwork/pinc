@@ -28,7 +28,7 @@
 (* variable PINC_TRACE_DIR, the directory that holds                       *)
 (* connect_carriers.ndjson.                                                 *)
 (***************************************************************************)
-EXTENDS ConnectCarriersOps, TLC, Json, IOUtils
+EXTENDS ConnectCarriersOps, TLC, Json, IOUtils, TraceEnd
 
 VARIABLES i, c, cf
 vars == <<i, c, cf>>
@@ -66,8 +66,10 @@ TraceSpec == Init /\ [][TNext]_vars /\ WF_vars(TNext)
 
 \* the whole recorded trace is a behaviour of ConnectCarriersOps.tla
 TraceAccepted == <>(i = Len(Trace) + 1)
-\* the check's postcondition: some behaviour took every event (the node's slowness chosen at a drive may leave the
-\* other branch without a next step: that is not an error, so the config does not check deadlock)
-Accepted == TLCGet("stats").diameter = Len(Trace) + 1
 Inv == TRUE
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one (the node's slowness
+\* chosen at a drive may leave the other branch without a next step: that is not an error, so the config does not
+\* check deadlock)
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

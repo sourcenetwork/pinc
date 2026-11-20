@@ -37,7 +37,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds facade_turn.ndjson.   *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils, TraceEnd
 
 VARIABLES sb, st, tk, drv, flag, driver, sock, fed, arrived, starts, done, took, hw, i
 mvars == <<sb, st, tk, drv, flag, driver, sock, fed, arrived, starts, done, took, hw>>
@@ -75,4 +75,7 @@ Next == \/ i <= Len(Trace) /\ Step /\ i' = i + 1
 TraceSpec == Init /\ [][Next]_<<mvars, i>>
 
 Inv == M!Inv
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

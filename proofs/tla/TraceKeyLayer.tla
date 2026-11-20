@@ -31,7 +31,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds keylayer.ndjson.      *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils, TraceEnd
 
 VARIABLES i, rs
 vars == <<i, rs>>
@@ -180,4 +180,7 @@ Inv ==
             /\ rs.nd[n + 1].rph = (rs.nd[n + 1].cur.g % 2 = 1)
             /\ rs.nd[n + 1].sk.g = KR!Depth(rs.nd[n + 1].sk.sec)
             /\ rs.nd[n + 1].cur.g = KR!Depth(rs.nd[n + 1].cur.sec)
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

@@ -33,7 +33,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds keyroll.ndjson.       *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils, TraceEnd
 
 VARIABLES i, rs
 vars == <<i, rs>>
@@ -210,4 +210,7 @@ Inv ==
     rs.run > 0 =>
         /\ \A n \in 0..1 : rs.rolls[n].st \in {"idle", "req"} /\ (rs.rolls[n].st = "req" => rs.rolls[n].req # KR!NONE)
         /\ \A s \in 0..3 : RC!Depth(rs.keys[s].sec) = rs.keys[s].gen
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

@@ -18,7 +18,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds cc.ndjson.            *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils, TraceEnd
 
 CONSTANTS MS, SEC, TOP, MAXC, MINC, INITC, BETALIM, MINMSS, MAXMSS, MINSAMP, EXITCW, GFAST, GMID, U32MAX, IRTT, BURST
 VARIABLES i, x, p
@@ -64,4 +64,7 @@ TNext == Step \/ Finished
 TraceSpec == Init /\ [][TNext]_vars
 
 Inv == x.cwnd >= MINC /\ x.cwnd <= MAXC /\ x.streak <= 4 /\ p.tokens >= 1 /\ p.tokens <= BURST
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

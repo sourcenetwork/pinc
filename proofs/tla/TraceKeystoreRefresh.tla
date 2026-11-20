@@ -29,7 +29,7 @@
 (* variable PINC_TRACE_DIR, the directory that holds                       *)
 (* keystore_refresh.ndjson.                                                *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils, TraceEnd
 VARIABLE x
 
 K == INSTANCE KeystoreRefresh WITH STD <- TRUE, MAXSTEPS <- 0, src <- "drbg", key <- [b |-> <<"S1">>, m |-> {}],
@@ -92,4 +92,7 @@ AllOK == /\ \A r \in DOMAIN Trace : Trace[r].t = "ksr" /\ Trace[r].op \in {"run"
          /\ Cardinality(Terms) = Cardinality(Bytes)
          \* the operating system stores never call fresh (also part of RunOK, stated for the reader)
          /\ \A r \in Runs : Trace[r].src = "os" => Trace[r].asked = 0
+\* the end check (TraceEnd.tla): the one state checks every line of a trace that has one
+ReplayAtEnd == ReplaySeen(TRUE)
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

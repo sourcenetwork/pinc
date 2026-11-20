@@ -25,7 +25,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds connect_ws.ndjson.    *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, TLC, Json, IOUtils, TraceEnd
 VARIABLES i, mp, pr, im
 vars == <<i, mp, pr, im>>
 INSTANCE ConnectWsOps WITH MP <- mp, Wrong <- "none"
@@ -59,4 +59,7 @@ TNext == Step \/ Finished
 TraceSpec == Init /\ [][TNext]_vars
 
 Inv == mp <= 65535
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

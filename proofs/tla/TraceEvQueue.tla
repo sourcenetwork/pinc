@@ -20,7 +20,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds evqueue.ndjson.       *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, TLC, Json, IOUtils, TraceEnd
 VARIABLES i, q, cap
 vars == <<i, q, cap>>
 INSTANCE EvQueueOps
@@ -44,4 +44,7 @@ TraceSpec == Init /\ [][TNext]_vars
 
 \* the queue never holds more than its places, and the written prefix never passes them
 Inv == q.len <= cap /\ Len(q.w) <= cap
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

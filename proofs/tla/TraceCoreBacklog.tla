@@ -35,7 +35,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds core_backlog.ndjson.  *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils, TraceEnd
 
 VARIABLES i, qcap, q, room, ow, live
 vars == <<i, qcap, q, room, ow, live>>
@@ -116,4 +116,7 @@ TraceSpec == Init /\ [][TNext]_vars
 Inv == /\ ow \subseteq live
        /\ q + Cardinality(ow) <= qcap \/ qcap = 0
        /\ room = qcap - q
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

@@ -17,7 +17,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds held.ndjson.          *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, TLC, Json, IOUtils, TraceEnd
 VARIABLES i, r, cap
 vars == <<i, r, cap>>
 INSTANCE HeldOps
@@ -56,4 +56,7 @@ TraceSpec == Init /\ [][TNext]_vars
 
 \* the ring never grows
 Inv == r.len \in 0..cap
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

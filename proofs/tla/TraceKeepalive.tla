@@ -13,7 +13,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds keepalive.ndjson.     *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, TLC, Json, IOUtils, TraceEnd
 VARIABLE i
 vars == <<i>>
 INSTANCE KeepaliveOps
@@ -38,4 +38,7 @@ Step == /\ i <= Len(Trace) /\ Trace[i].t = "cka" /\ EventOK(Trace[i]) /\ i' = i 
 Finished == i > Len(Trace) /\ UNCHANGED vars
 Next == Step \/ Finished
 TraceSpec == Init /\ [][Next]_vars
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

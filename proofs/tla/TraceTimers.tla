@@ -42,7 +42,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds timers.ndjson.        *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, TLC, Json, IOUtils, TraceEnd
 CONSTANTS IDLE, HOLD, WAKE, LDM, CF, IR
 VARIABLES i, s, closes
 vars == <<i, s, closes>>
@@ -106,4 +106,7 @@ TraceSpec == Init /\ [][TNext]_vars
 
 \* at most one CLOSE leaves each connection of a run
 Inv == \A x \in {"a", "b"} : closes[x] <= 1
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

@@ -13,7 +13,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds silence.ndjson.       *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, TLC, Json, IOUtils, Nanos
+EXTENDS Integers, Sequences, TLC, Json, IOUtils, Nanos, TraceEnd
 
 VARIABLE c
 
@@ -39,4 +39,7 @@ EventsOK ==
         IN /\ ev.t = "sil"
            /\ IF ev.op = "give" THEN L(ev.r) = GiveUp(L(ev.srtt), ev.thin)
               ELSE ev.op = "heal" /\ L(ev.r) = HealAfter(L(ev.keep), L(ev.srtt), ev.thin)
+\* the end check (TraceEnd.tla): the state of the last line was reached in a trace that has one
+ReplayAtEnd == ReplaySeen(c.t = "event" /\ c.i = Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

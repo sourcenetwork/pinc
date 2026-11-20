@@ -19,7 +19,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds connect_mapped.ndjson.*)
 (***************************************************************************)
-EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils, ConnectMappedOps
+EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils, ConnectMappedOps, TraceEnd
 
 VARIABLES i, S
 vars == <<i, S>>
@@ -50,4 +50,7 @@ TraceSpec == Init /\ [][TNext]_vars
 \* the documented invariants hold on every recorded state
 Inv == /\ S.cls = 2 => AnyLive(LiveOf(S, ReflList(S)))
        /\ S.live = LiveOf(S, ReflList(S))
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

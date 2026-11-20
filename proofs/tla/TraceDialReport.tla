@@ -63,7 +63,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds dial_report.ndjson.   *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, TLC, Json, IOUtils, TraceEnd
 
 VARIABLES now, alive, inc, ticket, cached, held, d, steady, floor, limits, i, cut
 mvars == <<now, alive, inc, ticket, cached, held, d, steady, floor, limits>>
@@ -115,4 +115,7 @@ TraceSpec == Init /\ [][Next]_<<mvars, i, cut>>
 
 Inv == /\ M!TypeOK /\ M!NoLingering /\ M!ReachLive /\ M!ThinKeepsLimit /\ M!FloorOnLimit /\ M!SubAtOnce
        /\ M!AnsweredOnlyHeard /\ M!AnsweredWhenDone
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

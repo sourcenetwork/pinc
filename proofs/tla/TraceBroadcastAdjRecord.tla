@@ -30,7 +30,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and PINC_TRACE_DIR, the *)
 (* directory that holds bcast/adj_record.ndjson.                           *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils, TraceEnd
 
 VARIABLES i, keys, orc
 vars == <<i, keys, orc>>
@@ -94,4 +94,7 @@ TraceSpec == Init /\ [][TNext]_vars
 
 \* one key per index, and one node id per key
 KeysOK == \A a, b \in keys : a.k = b.k <=> a = b
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

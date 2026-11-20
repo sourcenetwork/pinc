@@ -117,7 +117,8 @@ trap 'rm -rf "$dir" "$jtmp_root"' EXIT
 trace_tlc() { # trace_tlc <spec> <what> : TLC of the newer era over the recorded ndjson in $dir
     local out t0=$SECONDS
     # -Xss: TLC's evaluator recurses deeply on the larger builder tables, which overflows the default thread stack.
-    out=$(JAVA_TOOL_OPTIONS="$(jopts)" PINC_TRACE_DIR="$dir" java -Xss256m -XX:+UseParallelGC -cp "$TRACE_TLC:$COMMUNITY" tlc2.TLC -workers "$WORKERS" \
+    # One worker: the end check (proofs/tla/TraceEnd.tla) keeps its mark in a TLC register, which is per worker.
+    out=$(JAVA_TOOL_OPTIONS="$(jopts)" PINC_TRACE_DIR="$dir" java -Xss256m -XX:+UseParallelGC -cp "$TRACE_TLC:$COMMUNITY" tlc2.TLC -workers 1 \
         -metadir "proofs/tla/states/$1" -config "$(cfg "$1")" "proofs/tla/$1.tla" 2>&1) \
         || { echo "$out" >&2; echo "proofs: the recorded $2 trace is not a behaviour of its TLA+ model" >&2; exit 1; }
     echo "tlc $1: $(echo "$out" | grep -E 'states generated, ' | tail -1) [$((SECONDS - t0))s]"

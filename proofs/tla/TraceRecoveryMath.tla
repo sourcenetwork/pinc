@@ -17,7 +17,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds recovery_math.ndjson. *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, TLC, Json, IOUtils, TraceEnd
 VARIABLE c
 INSTANCE RecoveryMathOps
 
@@ -41,4 +41,7 @@ EventsOK == c.t = "ev" =>
     IN /\ e.t \in {"icbrt", "sat"}
        /\ (e.t = "icbrt" => IcbrtEv(e))
        /\ (e.t = "sat" => SatEv(e))
+\* the end check (TraceEnd.tla): the state of the last line was reached in a trace that has one
+ReplayAtEnd == ReplaySeen(c.t = "ev" /\ c.j = Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

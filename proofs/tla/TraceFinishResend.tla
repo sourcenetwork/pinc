@@ -23,7 +23,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds finish_resend.ndjson. *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, TLC, Json, IOUtils, TraceEnd
 
 VARIABLES pto, rtt, thin, sends, first, waits, i
 mvars == <<pto, rtt, thin, sends, first, waits>>
@@ -63,4 +63,7 @@ TraceSpec == Init /\ [][TNext]_vars
 \* the invariants of FinishResend.cfg, in every run (none before the first Finish)
 Inv == waits # <<>> => /\ F!FirstBounded /\ F!FirstAtPto /\ F!WaitsCapped /\ F!WaitsGrow /\ F!ThinWaits
                        /\ F!WaitsPositive
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

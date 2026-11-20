@@ -22,7 +22,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds dgram_queue.ndjson.   *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils, TraceEnd
 CONSTANT DOC
 VARIABLES i, sq, rq, pl, sd, rd, dims
 vars == <<i, sq, rq, pl, sd, rd, dims>>
@@ -75,4 +75,7 @@ QOK(x) == /\ Len(x.es) <= dims.q /\ x.clen <= dims.c
           /\ \A j \in 1..Len(x.es) : x.es[j].at + x.es[j].len <= CHUNK
           /\ (x.es = <<>> => x.clen = 0)
 Inv == QOK(sq) /\ QOK(rq)
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

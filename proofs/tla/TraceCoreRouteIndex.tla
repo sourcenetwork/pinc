@@ -26,7 +26,7 @@
 (* variable PINC_TRACE_DIR, the directory that holds                       *)
 (* core_route_index.ndjson.                                                *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils, TraceEnd
 
 VARIABLE c
 
@@ -68,4 +68,7 @@ TraceSpec == Init /\ [][Next]_c
 
 \* every recorded table is a state of the model between calls
 EventsOK == c.t = "event" => EvOK
+\* the end check (TraceEnd.tla): the state of the last line was reached in a trace that has one
+ReplayAtEnd == ReplaySeen(c.t = "event" /\ c.i = Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

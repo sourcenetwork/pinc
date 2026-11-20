@@ -27,7 +27,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and PINC_TRACE_DIR, the *)
 (* directory that holds node_values.ndjson.                                *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils, TraceEnd
 VARIABLES i, v
 vars == <<i, v>>
 INSTANCE NodeValuesNetOps
@@ -60,4 +60,7 @@ Inv == LET m == NetOf(v) IN
        /\ \A x \in m.streams : x.owner # 0 => x.owner \in Running(m)
        /\ \A o \in Set(v.lout) : \E x \in Set(v.lsess) : x.sid = o.sid /\ x.peer = o.peer /\ ~x.inc
        /\ Cardinality({x \in m.streams : x.owner = 0}) <= SERVERS
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

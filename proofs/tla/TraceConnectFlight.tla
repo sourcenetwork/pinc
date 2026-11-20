@@ -19,7 +19,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds connect_flight.ndjson.*)
 (***************************************************************************)
-EXTENDS Integers, Sequences, TLC, Json, IOUtils, ConnectFlightOps
+EXTENDS Integers, Sequences, TLC, Json, IOUtils, ConnectFlightOps, TraceEnd
 
 VARIABLE c
 
@@ -38,4 +38,7 @@ TraceSpec == Init /\ [][Next]_c
 
 (* every recorded list is the specification's *)
 EventsOK == c.t = "event" => (Trace[c.i].t = "fl" /\ CandidatesFor(Trace[c.i].v) = Trace[c.i].out)
+\* the end check (TraceEnd.tla): the state of the last line was reached in a trace that has one
+ReplayAtEnd == ReplaySeen(c.t = "event" /\ c.i = Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

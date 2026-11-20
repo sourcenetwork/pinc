@@ -18,7 +18,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds path_held.ndjson.     *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils, TraceEnd
 VARIABLES i, slots
 vars == <<i, slots>>
 
@@ -64,4 +64,7 @@ TraceSpec == Init /\ [][TNext]_vars
 
 \* a path id is in at most one slot
 Inv == \A j, k \in Places(slots) : (j # k /\ On(slots[j]) /\ On(slots[k])) => slots[j][1] # slots[k][1]
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

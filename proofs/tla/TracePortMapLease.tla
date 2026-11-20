@@ -57,7 +57,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds portmap/lease.ndjson. *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, TLC, Json, IOUtils, TraceEnd
 
 VARIABLES now, boot, restarts, gmap, gexp, req, resp, cstep, tries, renewing, pub, started, renewAt, cexp,
           prevAt, prevSrv, heardBoot, grantBoot, renewTried, lapseUntried, floorEnd, annNext, lastBrought, fast,
@@ -108,4 +108,7 @@ TraceSpec == TraceInit /\ [][TraceNext]_<<i, tv>>
 TraceInv ==
     /\ M!TypeOK /\ M!HeldByGateway /\ M!StoppedUnpublished /\ M!LeaseLive /\ M!RenewedBeforeLapse
     /\ M!AnnounceKeeps /\ M!AnnounceSpaced
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i = Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

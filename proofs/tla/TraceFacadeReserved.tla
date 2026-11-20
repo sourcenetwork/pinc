@@ -16,7 +16,7 @@
 (* variable PINC_TRACE_DIR, the directory that holds                       *)
 (* facade_reserved.ndjson.                                                 *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils, TraceEnd
 VARIABLE x
 
 R == INSTANCE FacadeReserved WITH cs <- [d |-> <<>>, want |-> FALSE, root |-> TRUE]
@@ -40,4 +40,7 @@ AllOK == /\ \A k \in DOMAIN Trace : Trace[k].t = "reserved" /\ EvOK(k)
          /\ {Trace[k].k : k \in Of("stmt")} = 1..4
          \* every case of the model was recorded
          /\ {c.d : c \in R!Cut} \subseteq {Trace[k].d : k \in Of("case")}
+\* the end check (TraceEnd.tla): the one state checks every line of a trace that has one
+ReplayAtEnd == ReplaySeen(TRUE)
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

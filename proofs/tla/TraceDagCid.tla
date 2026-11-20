@@ -16,7 +16,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and PINC_TRACE_DIR, the *)
 (* directory that holds tla/dag_cid.ndjson.                                *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, TLC, Json, IOUtils, TraceEnd
 
 VARIABLE c
 
@@ -94,4 +94,7 @@ EventsOK ==
           [] ev.t = "verify" -> VerifyEv(ev)
           [] ev.t = "forblock" -> ForBlockEv(ev)
           [] OTHER -> FALSE
+\* the end check (TraceEnd.tla): the state of the last line was reached in a trace that has one
+ReplayAtEnd == ReplaySeen(c.t = "event" /\ c.i = Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

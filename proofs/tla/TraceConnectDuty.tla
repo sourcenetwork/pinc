@@ -26,7 +26,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds connect_duty.ndjson.  *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, TLC, Json, IOUtils, ConnectDutyOps
+EXTENDS Integers, Sequences, TLC, Json, IOUtils, ConnectDutyOps, TraceEnd
 
 VARIABLES i, d, dtop, rd, rtop
 vars == <<i, d, dtop, rd, rtop>>
@@ -64,4 +64,7 @@ Finished == i > Len(Trace) /\ UNCHANGED vars
 TNext == Step \/ Finished
 (* A recorded call that is not the model's step leaves no successor: TLC reports the deadlock at that event. *)
 TraceSpec == Init /\ [][TNext]_vars
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

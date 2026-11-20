@@ -29,7 +29,7 @@
 (* CommunityModules (Json, IOUtils) and PINC_TRACE_DIR, the directory that *)
 (* holds relay-carriers.ndjson.                                            *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils, TraceEnd
 CONSTANTS HS, CAP, BL, HSD, IDL, PAUSE, CHK, NODES
 VARIABLES i, m, t
 vars == <<i, m, t>>
@@ -100,4 +100,7 @@ Inv == /\ m.c.hs = Cardinality({k \in Live(m) : m.c.cs[k].node = 0}) /\ m.c.hs <
        /\ Sessions(m) <= CAP
        /\ \A h \in 1..Len(m.ends) : m.ends[h] <= 1 /\ ~(h \in m.drop /\ m.ends[h] > 0)
        /\ \A k \in Live(m) : m.ends[m.c.cs[k].h] = 0 /\ m.c.cs[k].h \notin m.drop
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

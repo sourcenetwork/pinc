@@ -38,7 +38,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment      *)
 (* variable PINC_TRACE_DIR, the directory that holds values_sys.ndjson.     *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils, ValuesSysCore
+EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils, ValuesSysCore, TraceEnd
 
 VARIABLES i, T
 vars == <<i, T>>
@@ -155,4 +155,7 @@ Inv ==
         /\ SoundStore(T, Grps) /\ SoundEvents(T, Grps) /\ OneFinalP(T)
         /\ ReasonOk(T, T.W, T.L, T.empty, ~T.badroot, T.fin = "Store", T.dl >= 0, T.dl)
 
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

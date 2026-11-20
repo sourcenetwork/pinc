@@ -32,7 +32,7 @@
 (* variable PINC_TRACE_DIR, the directory that holds membership.ndjson.     *)
 (* Lean counterpart: Pinc/TraceMembership.lean.                             *)
 (***************************************************************************)
-EXTENDS MembershipOps, Json, IOUtils
+EXTENDS MembershipOps, Json, IOUtils, TraceEnd
 
 VARIABLES i, nodes, chk
 vars == <<i, nodes, chk>>
@@ -163,4 +163,7 @@ TrOK == chk.tr
 SealedOK == chk.sealed
 StOK == chk.st
 RetOK == chk.ret
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Tr))
+ReplayEnded == ReplayRead(Len(Tr))
 =============================================================================

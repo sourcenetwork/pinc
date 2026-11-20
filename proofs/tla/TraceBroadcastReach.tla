@@ -33,7 +33,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and PINC_TRACE_DIR, the *)
 (* directory that holds bcast/reach.ndjson.                                *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils, TraceEnd
 
 CONSTANTS N, HubCount, Liars, MaxChanges, MaxLoss, MaxExpire, MaxLeave, TableBytes, RecBase, SigUnits,
           Mutual, Rebuild, Tomb, ScopedRepair, Closed, EvictAny, Batch, Told, Waits, Charge
@@ -89,4 +89,7 @@ TNext == Step \/ Finished
 TraceSpec == Init /\ [][TNext]_vars
 
 Inv == M!DeliverySound /\ M!EdgesGood /\ M!LabelsFresh /\ M!Bounds /\ M!BoundedReports /\ M!ClosedTold
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

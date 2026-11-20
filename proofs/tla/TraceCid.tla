@@ -24,7 +24,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds cid.ndjson.           *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils, TraceEnd
 
 CONSTANTS SLOTS, LOOK, FIXED, SKIP, BUMP
 VARIABLES i, c, ids
@@ -70,4 +70,7 @@ NoColl == \A j \in 2..Len(ids) : ids[j] = j - 1
 Inv == /\ c.sec => \A j \in (c.hi - LOOK + 1)..(c.hi + LOOK) : j >= 1 => IsLocal(c, j)
        /\ NoColl => (c.sec => \A j \in (c.hi + 1)..(c.hi + LOOK) : Has(c, j))
        /\ (c.cf = 0 \/ c.cf < c.ns)
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

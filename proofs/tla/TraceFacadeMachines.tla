@@ -21,7 +21,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds both files.           *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, TLC, Json, IOUtils, TraceEnd
 VARIABLE i
 
 Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/facade_machines_std.ndjson")
@@ -49,4 +49,7 @@ TraceSpec == Init /\ [][Step \/ Finished]_i
 Inv == i > Len(Trace) =>
     /\ \E k \in DOMAIN Trace : ~Trace[k].std
     /\ \E k, m \in DOMAIN Trace : k # m /\ Trace[k].std /\ Trace[m].std /\ Trace[k].thread = Trace[m].thread
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

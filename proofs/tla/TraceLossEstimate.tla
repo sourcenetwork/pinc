@@ -16,7 +16,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds loss_estimate.ndjson. *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, TLC, Json, IOUtils, TraceEnd
 VARIABLES i, v
 vars == <<i, v>>
 INSTANCE LossEstimateOps
@@ -49,4 +49,7 @@ TraceSpec == Init /\ [][TNext]_vars
 
 \* the documented range
 Inv == v \in 0..SCALE
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

@@ -51,7 +51,7 @@
 (* variable PINC_TRACE_DIR, the directory that holds                       *)
 (* connect_own_timer.ndjson.                                               *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, Json, IOUtils
+EXTENDS Integers, Sequences, Json, IOUtils, TraceEnd
 
 REPUB == 1800000   \* RECORD_REPUBLISH_NS, in ms
 RETRY == 2000      \* HOME_RETRY_NS, in ms
@@ -109,4 +109,7 @@ ChangeSeen == \E j, k \in 1..Len(Trace) :
 VARIABLE x
 Init == x = 0
 Next == UNCHANGED x
+\* the end check (TraceEnd.tla): the one state checks every line of a trace that has one
+ReplayAtEnd == ReplaySeen(TRUE)
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

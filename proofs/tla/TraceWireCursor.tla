@@ -18,7 +18,7 @@
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and PINC_TRACE_DIR.     *)
 (***************************************************************************)
-EXTENDS WireCursorOps, Json, IOUtils
+EXTENDS WireCursorOps, Json, IOUtils, TraceEnd
 
 VARIABLE c
 
@@ -100,4 +100,7 @@ Next ==
 TraceSpec == Init /\ [][Next]_c
 
 EventsOK == c.t = "event" => EventOK(Trace[c.i])
+\* the end check (TraceEnd.tla): the state of the last line was reached in a trace that has one
+ReplayAtEnd == ReplaySeen(c.t = "event" /\ c.i = Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

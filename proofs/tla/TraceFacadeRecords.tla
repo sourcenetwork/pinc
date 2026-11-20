@@ -25,7 +25,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds facade_records.ndjson. *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, TLC, Json, IOUtils, TraceEnd
 
 VARIABLES published, store, known, peak, answer, i
 mvars == <<published, store, known, peak, answer>>
@@ -55,4 +55,7 @@ Next == \/ i <= Len(Trace) /\ Step /\ i' = i + 1
 TraceSpec == Init /\ [][Next]_<<mvars, i>>
 
 Inv == M!KnownGenuine /\ M!NoRollback /\ M!LookupNewest /\ M!AnswerGenuine
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

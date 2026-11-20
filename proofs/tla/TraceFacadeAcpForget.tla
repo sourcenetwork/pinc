@@ -38,7 +38,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds facade_acp.ndjson.    *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils, TraceEnd
 
 VARIABLES hook, revoked, cache, known, last, out, sess, cut, i
 mvars == <<hook, revoked, cache, known, last, out, sess, cut>>
@@ -90,4 +90,7 @@ TraceSpec == Init /\ [][Next]_<<mvars, i>>
 
 Inv == M!DecideFresh /\ M!CacheSound /\ M!KnownSound /\ M!NoDialRevoked /\ M!NoCrossAllow /\ M!NoCrossDeny
        /\ M!NoCut
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

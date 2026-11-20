@@ -16,7 +16,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds timer_bound.ndjson.   *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils, Nanos
+EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils, Nanos, TraceEnd
 CONSTANTS N, TICK, CMAX
 VARIABLES i, st
 vars == <<i, st>>
@@ -52,4 +52,7 @@ TraceSpec == Init /\ [][TNext]_vars
 
 \* the held time is set exactly while the last call left a deadline stuck, and a tick after it
 Inv == st.held # Nil => st.last # Nil /\ st.held = <<SatAdd(st.last[1], TICK)>>
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

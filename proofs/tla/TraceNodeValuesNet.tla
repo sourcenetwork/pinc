@@ -20,7 +20,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds node_values_net.ndjson.*)
 (***************************************************************************)
-EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils, TraceEnd
 VARIABLES i, s, w, pv, pw
 vars == <<i, s, w, pv, pw>>
 INSTANCE NodeValuesNetOps
@@ -66,4 +66,7 @@ TraceSpec == Init /\ [][TNext]_vars
 
 Inv == /\ Len(s.provs) <= w /\ Cardinality(s.streams) <= w /\ s.provs = Trim(s.provs) /\ Exact(s)
        /\ Cardinality(pv) <= pw
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

@@ -27,7 +27,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds packet_kind.ndjson.   *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, TLC, Json, IOUtils, TraceEnd
 
 VARIABLE c
 
@@ -50,4 +50,7 @@ TraceSpec == Init /\ [][Next]_c
 
 \* every recorded event is the model's (one state: the invariant quantifies over the events)
 EventsOK == Len(Trace) > 0 /\ \A k \in 1..Len(Trace) : EvOK(Trace[k])
+\* the end check (TraceEnd.tla): the one state checks every line of a trace that has one
+ReplayAtEnd == ReplaySeen(TRUE)
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

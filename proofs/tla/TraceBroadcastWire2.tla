@@ -19,7 +19,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and PINC_TRACE_DIR, the *)
 (* directory that holds bcast/wire2.ndjson.                                *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, TLC, Json, IOUtils, TraceEnd
 
 VARIABLE c
 
@@ -63,4 +63,7 @@ EventsOK ==
         IN /\ ev.t = "w2"
            /\ CASE ev.op = "parse" -> ParseEv(ev) [] ev.op = "prefix" -> PrefixEv(ev) [] ev.op = "write" -> WriteEv(ev)
                 [] ev.op \notin {"parse", "prefix", "write"} -> FALSE
+\* the end check (TraceEnd.tla): the state of the last line was reached in a trace that has one
+ReplayAtEnd == ReplaySeen(c.t = "event" /\ c.i = Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

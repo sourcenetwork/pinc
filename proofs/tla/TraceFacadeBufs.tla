@@ -25,7 +25,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds both files.           *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils, TraceEnd
 VARIABLES i, st, cf
 vars == <<i, st, cf>>
 
@@ -89,4 +89,7 @@ TraceSpec == Init /\ [][TNext]_vars
 \* along the trace: no pool holds more than POOLED, a held buffer has its endpoint's length
 Inv == /\ \A q \in 1..2 : Len(st.pools[q]) <= 8
        /\ \A h \in DOMAIN st.held : st.held[h] # P!NoBuf => st.held[h].len = cf.lens[Ep(cf, h)]
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================

@@ -28,7 +28,7 @@
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and PINC_TRACE_DIR, the *)
 (* directory that holds node_portmap.ndjson.                               *)
 (***************************************************************************)
-EXTENDS Integers, Sequences, TLC, Json, IOUtils
+EXTENDS Integers, Sequences, TLC, Json, IOUtils, TraceEnd
 VARIABLES i, v
 vars == <<i, v>>
 
@@ -61,4 +61,7 @@ Inv == /\ v.on => v.conn = v.held /\ v.given = v.held
        /\ ~v.on => v.conn = 0 /\ ~v.dl
        /\ v.ret \in 0..RETIRING
        /\ Done
+\* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
+ReplayAtEnd == ReplaySeen(i > Len(Trace))
+ReplayEnded == ReplayRead(Len(Trace))
 =============================================================================
