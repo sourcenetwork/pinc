@@ -451,6 +451,7 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `NodeSets_two` | SIDS {1, 2} -> {1} (one session at a time: two rounds share it, or the other peer's dial is refused), ATTEMPTS 2 -> 1 (a round ends Exhausted at its first failure; the retries are the quick NodeSets profile's), TMAX 1 -> 0 (no saturated clock; the quick NodeSets profile keeps it) |
 | `NodeSets_way` | SIDS {1, 2, 3} -> {1, 2} (a dial, a filler's session, and the endpoint refusing a third), NSTARTS 2 -> 1 (one round in all: a start refused Busy is not reached, NodeSets_busy is its witness) |
 | `NodeSilence` | Pts -> PtsQuick (the widths 2^j - 1, 2^j, 2^j + 1 for 8 of the 65 j: 0, 1, 2, 32, 61 to 64; every constant's edge kept): 209 -> 38 points |
+| `NodeTimerBound` | CMAX 2 -> 1 (the counters saturate at 1, still reached) |
 | `Orphan` | the time scaled down: LIFE 2 -> 1, TAKE_LIFE 2 -> 1, TMAX 4 -> 2; MAX 2 -> 1, HMAX 4 -> 3 |
 | `PortMapLease` | last tick MaxT 7 -> 4, tries Tries 2 -> 1; bounded by constraint: behaviours of depth 14 (PortMapLeaseQuickBound) |
 | `PrekeyCache` | MaxClock 6 -> 4 (the cache fills, a get refreshes the older entry, the next insert evicts the least recently used) |
