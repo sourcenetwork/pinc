@@ -187,8 +187,8 @@ Ovh0(kd) == CASE kd = "array" -> 3 [] kd = "ring" -> 0 [] kd = "pool" -> 12
 
 (* The cases are the states of one machine, so TLC enumerates them without building a set of all of them. *)
 Seeds ==
-    UNION {{[f |-> "new", kind |-> kd, bits |-> bits, n |-> n] : n \in Caps(bits)} :
-             kd \in {"array", "ring", "pool", "slab"}, bits \in {32, 64}}
+    (UNION {{[f |-> "new", kind |-> kd, bits |-> bits, n |-> n] : n \in Caps(bits)} :
+              kd \in {"array", "ring", "pool", "slab"}, bits \in {32, 64}})
     \cup {[f |-> "zeroed", kind |-> "none", bits |-> bits, n |-> U!Zero] : bits \in {32, 64}}
 
 Expand(sd) ==

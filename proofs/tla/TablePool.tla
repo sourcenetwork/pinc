@@ -65,7 +65,8 @@ Datas == UNION {[1..k -> 1..BV] : k \in 0..(Z + 1)}
 
 DoTake ==
     LET x == Take(s)
-    IN /\ x.r[2] = "none" \/ takes[x.r[3]] < TMAX
+    \* an IF, not a disjunction: TLC takes every disjunct of an action, and takes[-1] is no value
+    IN /\ IF x.r[2] = "none" THEN TRUE ELSE takes[x.r[3]] < TMAX
        /\ s' = x.s
        /\ res' = <<"take", x.r[2], x.r[3]>>
        /\ want' = <<"take", IF out = 0..(S - 1) THEN "none" ELSE "ok", x.r[3]>>
@@ -117,5 +118,5 @@ RefusedUnchanged == [][res'[2] \in {"none", "stale", "length"} => UNCHANGED <<s,
 
 \* reachability witnesses: every slot is out; a handle of an earlier take of its slot is live again
 NotExhausted == s.free > 0
-NoOldMatch == \A i \in 0..(S - 1), t \in 1..(takes[i] - 1) : ~Live(s, i, (2 * t - 1) % (GM + 1))
+NoOldMatch == \A i \in 0..(S - 1) : \A t \in 1..(takes[i] - 1) : ~Live(s, i, (2 * t - 1) % (GM + 1))
 =============================================================================
