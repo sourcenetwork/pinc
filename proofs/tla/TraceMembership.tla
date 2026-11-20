@@ -34,8 +34,8 @@
 (***************************************************************************)
 EXTENDS MembershipOps, Json, IOUtils, TraceEnd
 
-VARIABLES i, nodes, chk
-vars == <<i, nodes, chk>>
+VARIABLES i, nodes, ret
+vars == <<i, nodes, ret>>
 
 Tr == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/membership.ndjson")
 Ev == Tr[i]
@@ -84,7 +84,7 @@ ClEq(S, o) == SeqEq(o.cl, S.cl, Ident)
 EvEq(S, o) == SeqEq(o.ev, S.ev, EvOf)
 TrEq(S, o) == SeqEq(o.tr, S.tr, TrOf)
 
-StEq(S, st) ==
+StEq(S, st, now) ==
     LET ks == Ordered(DOMAIN S.members, NONE)
         rs == Ordered(DOMAIN S.roster, NONE)
     IN /\ Len(st.members) = Len(ks)
@@ -99,47 +99,57 @@ StEq(S, st) ==
        /\ \A x \in 1..Len(rs) : st.roster[x][1] = rs[x] /\ L(st.roster[x][2]) = S.roster[rs[x]].renewed
        /\ st.sealfailed = S.sealFailed
        /\ L(st.maxframe) = S.maxFrame
-       /\ st.hu = Ordered({x \in ({S.me} \cup DOMAIN S.up) : HubUp(S, L(Ev.now), x)}, NONE)
+       /\ st.hu = Ordered({x \in ({S.me} \cup DOMAIN S.up) : HubUp(S, now, x)}, NONE)
 
-Flags(S, o, st, ret) ==
-    [sent |-> SentEq(S, o), bc |-> BcEq(S, o), cl |-> ClEq(S, o), ev |-> EvEq(S, o), tr |-> TrEq(S, o),
-     sealed |-> OptL(o.sealed) = S.loc.sealed, st |-> StEq(S, st), ret |-> ret]
-
-Init == i = 1 /\ nodes = [n \in 0..80 |-> <<>>]
-        /\ chk = [sent |-> TRUE, bc |-> TRUE, cl |-> TRUE, ev |-> TRUE, tr |-> TRUE, sealed |-> TRUE, st |-> TRUE, ret |-> TRUE]
+\* The runs of the trace are worlds of their own (the test makes a new one for each run), so a line of a new run
+\* finds every slot empty; each run starts a slot before it calls it. The state holds only the nodes of the run.
+NoNodes == [n \in 0..80 |-> <<>>]
+Init == i = 1 /\ nodes = NoNodes /\ ret = "ok"
 
 (* ---- one event ---- *)
-Cur == nodes[Ev.n][1]
+\* Each step applies the line's call once and keeps the node it leaves and what the call returned; the checks of
+\* the line are the invariants below, on the state after it. TLC evaluates an operator's argument again at each of
+\* its uses in a step, and the model's call was used by every check; the \E over a one-value set evaluates the call
+\* and its env once, and a state predicate reads the node from the state.
+Pre == IF i > 1 /\ Tr[i - 1].run # Ev.run THEN NoNodes ELSE nodes
+Cur == Pre[Ev.n][1]
 Now == L(Ev.now)
 
-Done(S, ret) == /\ nodes' = [nodes EXCEPT ![Ev.n] = <<S>>]
-                /\ chk' = Flags(S, Ev.out, Ev.st, ret)
+Done(S, r) == nodes' = [Pre EXCEPT ![Ev.n] = <<S>>] /\ ret' = r
 
+\* a failed start leaves the slot as it was
 StartEv ==
-    LET r == CallStart([me |-> Ev.me, isHub |-> Ev.hub, hubs |-> Ev.hubs], EnvOf(Ev.env), Now, L(Ev.wall), L(Ev.floor))
-    IN /\ Ev.op = "start"
-       /\ IF r.err = "ok"
-          THEN Done(r.S, Ev.ret = "ok")
-          ELSE /\ nodes' = nodes
-               /\ chk' = Flags(IF nodes[Ev.n] = <<>> THEN r.S ELSE Cur, Ev.out, Ev.st, Ev.ret = r.err)
+    /\ Ev.op = "start"
+    /\ \E r \in {CallStart([me |-> Ev.me, isHub |-> Ev.hub, hubs |-> Ev.hubs], EnvOf(Ev.env), Now, L(Ev.wall), L(Ev.floor))} :
+          IF r.err = "ok" THEN Done(r.S, "ok") ELSE nodes' = Pre /\ ret' = r.err
 
-CallEv(op, S1) == /\ Ev.op = op /\ Done(S1, TRUE)
+\* the call of op on the node of the line, with the line's env
+Call(op, F(_)) == /\ Ev.op = op /\ \E env \in {EnvOf(Ev.env)} : \E S \in {F(env)} : Done(S, "ok")
 
-UpEv == CallEv("up", CallUp(Cur, EnvOf(Ev.env), Now, Ev.peer, Ev.inc))
-DownEv == CallEv("dn", CallDown(Cur, EnvOf(Ev.env), Now, Ev.peer, L(Ev.code)))
-BytesEv == /\ Ev.op = "by" /\ L(Ev.mf) = Cur.maxFrame
-           /\ CallEv("by", CallBytes(Cur, EnvOf(Ev.env), Now, Ev.peer, [x \in 1..Len(Ev.fs) |-> FrameOf(Ev.fs[x].f)], Ev.bad))
-TimeoutEv == CallEv("to", CallTimeout(Cur, EnvOf(Ev.env), Now))
-GoneEv == CallEv("cg", CallCarrierGone(Cur, EnvOf(Ev.env), Now, Ev.member))
-ReturnEv == CallEv("cr", CallCarrierReturn(Cur, EnvOf(Ev.env), Now, Ev.member))
-LeaveEv == CallEv("lv", CallLeave(Cur, EnvOf(Ev.env)))
-MovedEv == CallEv("mv", CallMoved(Cur, EnvOf(Ev.env), Now))
-SnapshotEv == CallEv("sn", CallSnapshotTo(Cur, EnvOf(Ev.env), Now, Ev.peer))
-MaxFrameEv == CallEv("sm", CallSetMaxFrame(Cur, EnvOf(Ev.env), L(Ev.mf)))
+UpOf(env) == CallUp(Cur, env, Now, Ev.peer, Ev.inc)
+DownOf(env) == CallDown(Cur, env, Now, Ev.peer, L(Ev.code))
+BytesOf(env) == CallBytes(Cur, env, Now, Ev.peer, [x \in 1..Len(Ev.fs) |-> FrameOf(Ev.fs[x].f)], Ev.bad)
+TimeoutOf(env) == CallTimeout(Cur, env, Now)
+GoneOf(env) == CallCarrierGone(Cur, env, Now, Ev.member)
+ReturnOf(env) == CallCarrierReturn(Cur, env, Now, Ev.member)
+LeaveOf(env) == CallLeave(Cur, env)
+MovedOf(env) == CallMoved(Cur, env, Now)
+SnapshotOf(env) == CallSnapshotTo(Cur, env, Now, Ev.peer)
+MaxFrameOf(env) == CallSetMaxFrame(Cur, env, L(Ev.mf))
+
+UpEv == Call("up", UpOf)
+DownEv == Call("dn", DownOf)
+BytesEv == Ev.op = "by" /\ L(Ev.mf) = Cur.maxFrame /\ Call("by", BytesOf)
+TimeoutEv == Call("to", TimeoutOf)
+GoneEv == Call("cg", GoneOf)
+ReturnEv == Call("cr", ReturnOf)
+LeaveEv == Call("lv", LeaveOf)
+MovedEv == Call("mv", MovedOf)
+SnapshotEv == Call("sn", SnapshotOf)
+MaxFrameEv == Call("sm", MaxFrameOf)
 RevokeEv ==
-    LET r == CallRevoke(Cur, EnvOf(Ev.env), Now, Ev.member)
-    IN /\ Ev.op = "rv" /\ nodes' = [nodes EXCEPT ![Ev.n] = <<r.S>>]
-       /\ chk' = Flags(r.S, Ev.out, Ev.st, Ev.ret = (IF r.ok THEN "ok" ELSE "full"))
+    /\ Ev.op = "rv"
+    /\ \E r \in {CallRevoke(Cur, EnvOf(Ev.env), Now, Ev.member)} : Done(r.S, IF r.ok THEN "ok" ELSE "full")
 
 Step ==
     /\ i <= Len(Tr)
@@ -154,15 +164,32 @@ TNext == Step \/ Finished
 
 TraceSpec == Init /\ [][TNext]_vars
 
-(* every field of every recorded call equals the model's *)
-SentOK == chk.sent
-BcOK == chk.bc
-ClOK == chk.cl
-EvOK == chk.ev
-TrOK == chk.tr
-SealedOK == chk.sealed
-StOK == chk.st
-RetOK == chk.ret
+\* The states seen are told apart by the line index alone (VIEW in the config): every line is the step of exactly one
+\* of StartEv .. RevokeEv (each requires its op) and each sets nodes' and ret' as functions of the state and the line,
+\* so a behaviour has one state per index and the view merges none. TLC then does not fingerprint the nodes of the
+\* run (71 of them in the snapshot run) at every state; the same traces are accepted, and every invariant is still
+\* checked in every state.
+IdxView == i
+
+(* every field of every recorded call equals the model's: the line last applied (i - 1) against the node it left *)
+Last == Tr[i - 1]
+Lf(F(_, _)) == i > 1 => nodes[Last.n] # <<>> /\ F(nodes[Last.n][1], Last)
+SentAt(S, l) == SentEq(S, l.out)
+BcAt(S, l) == BcEq(S, l.out)
+ClAt(S, l) == ClEq(S, l.out)
+EvAt(S, l) == EvEq(S, l.out)
+TrAt(S, l) == TrEq(S, l.out)
+SealedAt(S, l) == OptL(l.out.sealed) = S.loc.sealed
+StAt(S, l) == StEq(S, l.st, L(l.now))
+SentOK == Lf(SentAt)
+BcOK == Lf(BcAt)
+ClOK == Lf(ClAt)
+EvOK == Lf(EvAt)
+TrOK == Lf(TrAt)
+SealedOK == Lf(SealedAt)
+StOK == Lf(StAt)
+\* what start and revoke returned; every other call returns nothing
+RetOK == i > 1 /\ Last.op \in {"start", "rv"} => Last.ret = ret
 \* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
 ReplayAtEnd == ReplaySeen(i > Len(Tr))
 ReplayEnded == ReplayRead(Len(Tr))
