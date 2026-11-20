@@ -122,10 +122,15 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
     }
 
     pub(super) fn queue_pulse(&mut self, node: NodeId) {
-        if let Some(t) = self.hub.as_mut()
-            && t.work.len() < WORK_BACKLOG
-        {
-            t.work.push(Work::Pulse(node));
+        let queued = self.hub.as_mut().is_some_and(|t| {
+            let room = t.work.len() < WORK_BACKLOG;
+            if room {
+                t.work.push(Work::Pulse(node));
+            }
+            room
+        });
+        if !queued && self.hub.is_some() {
+            self.counters.hub_dropped += 1;
         }
     }
 
@@ -351,5 +356,21 @@ mod tests {
         );
         assert_eq!(core.sm.mailbox_pending(&m).0, 0);
         assert_eq!(core.counters.refused, refused);
+    }
+
+    /// A pulse that does not fit the queue is counted as dropped.
+    #[test]
+    fn a_pulse_past_the_queue_is_counted() {
+        let identity = Rc::new(RefCell::new(Identity::from_seed_with(&[7; 32], &[0; 32]).unwrap()));
+        let local: SocketAddr = "192.0.2.1:4000".parse().unwrap();
+        let mut core =
+            Core::<(), SoftwareStore, AllowAll>::new(identity, AllowAll, &[], Limits::default(), Some(local), T0)
+                .unwrap();
+        for _ in 0..WORK_BACKLOG {
+            core.queue_pulse(node(1));
+        }
+        assert_eq!(core.counters.hub_dropped, 0);
+        core.queue_pulse(node(1));
+        assert_eq!(core.counters.hub_dropped, 1, "the pulse was dropped without a count");
     }
 }
