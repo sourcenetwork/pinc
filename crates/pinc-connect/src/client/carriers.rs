@@ -243,6 +243,11 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
     /// would not fit is dropped (the oldest first); transport recovery resends it.
     pub(super) fn send_packet(&mut self, now: u64, i: usize, dst: &NodeId, packet: &[u8]) {
         let Some(r) = self.rly.get(i) else { return };
+        if !r.cfg.is_some_and(|c| c.has_carrier()) {
+            // A relay reached over UDP only has no carrier to send on or to dial.
+            self.dropped += 1;
+            return;
+        }
         let relay_id = r.cfg.map(|c| c.id);
         let ctx = self.ctx(i);
         let act = {

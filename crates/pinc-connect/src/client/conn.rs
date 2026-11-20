@@ -10,8 +10,9 @@
 //! transmits to such an address with `Connectivity::route`, and gives the endpoint what
 //! [`Connectivity::poll_inbound`] yields.
 //!
-//! Carriers. For each relay a [`Link`] keeps the timing and a [`ProtectedCarrier`] the secured stream. The fallback
-//! order is UDP, then TCP, then WebSocket: a failed dial changes the stream kind for the next one. A frame sent
+//! Carriers. For each relay a [`Link`] keeps the timing and a [`ProtectedCarrier`] the secured stream. The stream kind
+//! is TCP, then WebSocket: a failed dial tries the other kind next. A relay with neither address is reached over UDP
+//! only and has no carrier. A frame sent
 //! while the carrier is not open waits in a bounded queue (the oldest is dropped when it is full; recovery resends
 //! it). A key operation of a carrier handshake is raised exactly as the endpoint raises its own
 //! ([`Connectivity::key_request`], [`Connectivity::key_response`]).
@@ -87,6 +88,14 @@ pub struct RelayCfg {
     pub tcp: Option<SocketAddr>,
     /// Its WebSocket carrier address (port 443 by default).
     pub ws: Option<SocketAddr>,
+}
+
+impl RelayCfg {
+    /// Whether the relay has a stream address (TCP or WebSocket) to dial. One without is reached over UDP only.
+    #[must_use]
+    pub const fn has_carrier(&self) -> bool {
+        self.tcp.is_some() || self.ws.is_some()
+    }
 }
 
 /// How the connectivity layer starts.

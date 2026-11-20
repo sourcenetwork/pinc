@@ -69,15 +69,19 @@ pub struct Rig {
 
 impl Rig {
     pub fn new(identity: &LocalIdentity, prekey: pinc_security::PrekeyInfo) -> Self {
+        Self::with_tcp(identity, prekey, Some(RELAY_TCP.parse().unwrap()))
+    }
+
+    /// A rig whose relay has `tcp` for its carrier address, or none (a relay reached over UDP only).
+    pub fn with_tcp(identity: &LocalIdentity, prekey: pinc_security::PrekeyInfo, tcp: Option<SocketAddr>) -> Self {
         let relay_kp = ed(0x77);
         let relay_id = id(&relay_kp);
         let udp: SocketAddr = RELAY_UDP.parse().unwrap();
-        let tcp: SocketAddr = RELAY_TCP.parse().unwrap();
         let mut relays = [None; 1];
         relays[0] = Some(RelayCfg {
             id: relay_id,
             udp: Some(udp),
-            tcp: Some(tcp),
+            tcp,
             ws: None,
         });
         let cfg = Config {
@@ -111,7 +115,7 @@ impl Rig {
             peer: None,
             relay_id,
             udp,
-            tcp,
+            tcp: tcp.unwrap_or_else(|| RELAY_TCP.parse().unwrap()),
         }
     }
 

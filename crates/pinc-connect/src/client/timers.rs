@@ -17,7 +17,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
         let mut t = if self.has_relays() { self.next_probe } else { u64::MAX };
         for i in 0..R {
             let ctx = self.ctx(i);
-            if let Some(r) = self.rly.get(i).filter(|r| r.cfg.is_some())
+            if let Some(r) = self.rly.get(i).filter(|r| r.cfg.is_some_and(|c| c.has_carrier()))
                 && let Some(d) = r.link.next_deadline(now, &self.shared, &ctx)
             {
                 t = t.min(d);
@@ -76,7 +76,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
             self.sign.wall_ms = wall_ms;
         }
         for i in 0..R {
-            if self.rly.get(i).is_none_or(|r| r.cfg.is_none()) {
+            if self.rly.get(i).is_none_or(|r| !r.cfg.is_some_and(|c| c.has_carrier())) {
                 continue;
             }
             for _ in 0..4 {

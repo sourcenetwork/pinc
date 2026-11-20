@@ -101,3 +101,53 @@ fn a_relay_datagram_from_the_address_its_session_runs_over_is_taken() {
         assert!(!rig.conn.handle_udp(1000 * SEC, other, &buf[..n]));
     });
 }
+
+#[test]
+fn a_relay_reached_over_udp_only_costs_no_dial_loop() {
+    big_stack(|| {
+        let host = Box::new(Host::new(0x31, "192.168.1.2:4433".parse().unwrap(), 1000 * SEC));
+        let (identity, prekey) = (host.identity, host.prekey_info.clone());
+        let mut rig = Rig::with_tcp(&identity, prekey, None);
+        let mut now = 1000 * SEC;
+        let Rig {
+            conn,
+            relay,
+            sink,
+            drbg,
+            udp,
+            ..
+        } = &mut rig;
+        let mut env = Env {
+            provider: &Software,
+            now,
+            drbg,
+        };
+        conn.probe_all(now, &mut env);
+        let mut buf = vec![0u8; 2048];
+        let (to, n) = conn.poll_udp(&mut buf).expect("a probe");
+        assert_eq!(to, *udp);
+        let src: SocketAddr = "198.51.100.5:20000".parse().unwrap();
+        relay.datagram(now, src, None, &buf[..n], sink).unwrap();
+        let reply = sink
+            .effects()
+            .into_iter()
+            .find_map(|r| if let Rec::Udp(_, b) = r { Some(b) } else { None })
+            .expect("the relay answers");
+        assert!(conn.handle_udp(now, *udp, &reply));
+        assert_eq!(conn.home(), Some(0));
+        // A relay with no TCP or WebSocket address has no stream to open or close, however long the node waits.
+        for _ in 0..400 {
+            now += SEC / 10;
+            let mut env = Env {
+                provider: &Software,
+                now,
+                drbg,
+            };
+            conn.tick(now, &mut env, Some(now / 1_000_000));
+            assert!(
+                conn.poll_io().is_none(),
+                "a stream request for a relay with no carrier at {now}"
+            );
+        }
+    });
+}
