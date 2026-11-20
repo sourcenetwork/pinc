@@ -243,7 +243,13 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `DtnRs_mds` | Mds -> MdsQuick: the Cauchy minors up to 4 x 4 -> 3 x 3 |
 | `DtnScenario_chain` | MaxMsgs 2 -> 1 |
 | `DtnScenario_contacts` | MaxMsgs 2 -> 1 |
+| `DtnScenario_cycle` | MaxMsgs 2 -> 1 |
+| `DtnScenario_expiry` | MaxTime 3 -> 2 |
+| `DtnScenario_forget` | N 3 -> 2 |
+| `DtnScenario_live` | MaxTime 3 -> 2 |
 | `DtnScenario_live_relay` | MaxMsgs 2 -> 1 |
+| `DtnScenario_nolive` | MaxTime 3 -> 2 |
+| `DtnScenario_pressure` | N 3 -> 2 |
 | `DtnScenario_replay` | MaxTime 3 -> 1, Exp 3 -> 1 (Exp = MaxTime: a replay is tried before and at the expiry), MaxMsgs 2 -> 1 |
 | `DtnScenario_spray` | MaxMsgs 2 -> 1, Budget 4 -> 3 |
 | `DtnScenario_tight` | MaxMsgs 2 -> 1, Budget 4 -> 3 |
