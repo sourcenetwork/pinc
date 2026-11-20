@@ -22,7 +22,9 @@ the credit meets in `admits`; the whole window is counted from the stream's firs
   (`canSend_raise`), so the streams let go are the first ones opened, in order, and stay let go.
 * The control frames of those streams (#432): a reset, a stop request or a window update leaves only for a stream
   whose ordinal the limit covers (`pending_gated`, through `pendingBy_slot`), and one held for the limit is released
-  once it covers the stream: with a covered slot that has a frame, `pending` gives a frame (`pending_released`).
+  once it covers the stream: with a covered slot that has a frame, `pending` gives a frame (`pending_released`). A
+  stop frame is taken only from a slot whose request waits (`pendingBy_stop`, `pendingBy_no_stop`), so none leaves
+  after the sender's reset (c4a4ad9a, `onReset_ends_stop`).
   `pendingOld_leaks` is the witness of the rule before #432: a stream opened early past a limit of 0 and reset at once
   sent its reset, which names a stream the peer's limit does not cover.
 -/
@@ -195,6 +197,33 @@ theorem pendingBy_slot (due : Slot → Bool) (T : Tab) (hk : (pendingBy due T).2
     apply hm
     simp [pendingBy, ha]
 
+/-- `pendingBy` takes a stop frame only from the slot it picks when that slot's request waits (`stop` 1). -/
+theorem pendingBy_stop (due : Slot → Bool) (T : Tab) (hk : (pendingBy due T).2.1 = "stop") :
+    ∃ i, T.slots.findIdx? due = some i ∧ (T.slots.getD i Slot.new).stop = 1 := by
+  cases ha : T.adpend
+  · cases hf : T.slots.findIdx? due with
+    | none => simp [pendingBy, ha, hf] at hk
+    | some i =>
+      refine ⟨i, rfl, ?_⟩
+      rw [pendingBy_some due T i ha hf] at hk
+      simp only [List.getD_eq_getElem?_getD] at hk ⊢
+      by_cases h1 : (T.slots[i]?.getD Slot.new).srst = 1
+      · simp [h1] at hk
+      · by_cases h2 : (T.slots[i]?.getD Slot.new).stop = 1
+        · exact h2
+        · simp [h1, h2] at hk
+  · simp [pendingBy, ha] at hk
+
+/-- No stop frame is taken from the slot `pendingBy` picks when its request does not wait: after the sender's reset
+none waits (`onReset_ends_stop`), so no stop frame leaves for a reset stream (c4a4ad9a). -/
+theorem pendingBy_no_stop (due : Slot → Bool) (T : Tab) (i : Nat) (hf : T.slots.findIdx? due = some i)
+    (hs : (T.slots.getD i Slot.new).stop ≠ 1) : (pendingBy due T).2.1 ≠ "stop" := by
+  intro hk
+  obtain ⟨j, hj, hsj⟩ := pendingBy_stop due T hk
+  rw [hf] at hj
+  cases hj
+  exact hs hsj
+
 /-- A stream control frame (a reset, a stop request, a window update) leaves only for a stream whose ordinal the
 limit covers: the frame `pending` gives names the stream of a slot that has one and that `canSend` lets go (#432). -/
 theorem pending_gated (T : Tab) (hk : (pending T).2.1 ≠ "none") (hm : (pending T).2.1 ≠ "msts") :
@@ -261,6 +290,8 @@ theorem pendingOld_leaks :
 #audit_axioms Pinc.TransportStreams.canSend_raise
 #audit_axioms Pinc.TransportStreams.pendingBy_some
 #audit_axioms Pinc.TransportStreams.pendingBy_slot
+#audit_axioms Pinc.TransportStreams.pendingBy_stop
+#audit_axioms Pinc.TransportStreams.pendingBy_no_stop
 #audit_axioms Pinc.TransportStreams.pending_gated
 #audit_axioms Pinc.TransportStreams.pending_released
 #audit_axioms Pinc.TransportStreams.pendingOld_leaks

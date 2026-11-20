@@ -352,11 +352,16 @@ def frame (p : P) (T : Tab) (id off len : Nat) (fin diff : Bool) : Tab × String
       (settle p (setSlot T1 i r) i, e2)
 
 /-! ### on_reset -/
+/-- The peer's reset. Once accepted, a stop request that waits or was sent is over (c4a4ad9a): it is acknowledged, so
+one not yet sent is never sent and a lost one is not sent again. -/
 def onReset (p : P) (r : Slot) (code fs : Nat) : Slot × String :=
   if fs > p.maxoff || r.fin.any (· != fs) || fs < r.hi then (r, "FinalSize")
   else if fs > r.limit then (r, "FlowControl")
   else if r.rst.isSome then (r, "ok")
-  else ({ r with hi := fs, fin := some fs, rst := some code, read := fs, contig := fs, held := [], rs := [] }, "ok")
+  else
+    let ack := r.stop == 1 || r.stop == 2
+    ({ r with hi := fs, fin := some fs, rst := some code, read := fs, contig := fs, held := [], rs := [],
+              stop := if ack then 3 else r.stop, qcode := if ack then none else r.qcode }, "ok")
 
 def reset (p : P) (T : Tab) (id code fs : Nat) : Tab × String :=
   let (T1, i, err) := locate p T id

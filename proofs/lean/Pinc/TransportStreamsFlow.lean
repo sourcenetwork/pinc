@@ -17,6 +17,9 @@ Unbounded theorems about the receive half and the table of `Pinc.TransportStream
   meets the table the first arrival met; an admitted stream moves the next index past its own id (STREAM_CAP).
 * `onReset_ok`, `onReset_final_fixed`, `onData_final_fixed`: a reset frees the buffered bytes, leaves nothing
   readable and fixes the final size, and a final size once fixed never changes.
+* `onReset_stop`, `onReset_ends_stop` (c4a4ad9a): the sender's reset ends a stop request that waits or was sent, so
+  none waits to be sent and none is in flight to be sent again; with `pendingBy_no_stop`
+  (`Pinc.TransportStreamsLocal`), no stop frame is taken for a reset stream.
 * `Slot.discard_spec`, `onData_stopped_end_discards`, `stopReq_given_up`, `stopReq_given_up_frees`,
   `stopReq_given_up_keeps`, `stopReq_given_up_rl` (c0706819): a stream given up after its end arrived, or whose end
   arrives after a stop was asked, holds no bytes and is read to its end; the stop request asks nothing and settles it,
@@ -151,6 +154,36 @@ theorem onReset_ok (p : P) (r : Slot) (code fs : Nat) (hn : r.rst = none)
   · by_cases h2 : fs > r.limit
     · simp [h1, h2] at h
     · simp [h1, h2, hn, Slot.readable, Slot.status]
+
+/-- An accepted reset of a stream not reset before acknowledges its stop request when one waits or was sent, and
+forgets its code (c4a4ad9a); a stream never asked stays unasked. -/
+theorem onReset_stop (p : P) (r : Slot) (code fs : Nat) (hn : r.rst = none) (h : (onReset p r code fs).2 = "ok") :
+    (onReset p r code fs).1.stop = (if r.stop = 1 ∨ r.stop = 2 then 3 else r.stop) ∧
+      (onReset p r code fs).1.qcode = (if r.stop = 1 ∨ r.stop = 2 then none else r.qcode) := by
+  unfold onReset at h ⊢
+  by_cases h1 : (fs > p.maxoff || r.fin.any (· != fs) || decide (fs < r.hi)) = true
+  · simp [h1] at h
+  · by_cases h2 : fs > r.limit
+    · simp [h1, h2] at h
+    · by_cases hs1 : r.stop = 1
+      · simp [h1, h2, hn, hs1]
+      · by_cases hs2 : r.stop = 2
+        · simp [h1, h2, hn, hs2]
+        · simp [h1, h2, hn, hs1, hs2]
+
+/-- The sender's reset ends a stop request that waits or was sent (c4a4ad9a): after an accepted reset none waits to be
+sent, so `pending` takes no stop frame for the stream (`pendingBy_no_stop`), and none is in flight, so `ctlLostStop`
+sends none again. -/
+theorem onReset_ends_stop (p : P) (r : Slot) (code fs : Nat) (hn : r.rst = none)
+    (h : (onReset p r code fs).2 = "ok") :
+    (onReset p r code fs).1.stop ≠ 1 ∧ (onReset p r code fs).1.stop ≠ 2 := by
+  obtain ⟨hs, -⟩ := onReset_stop p r code fs hn h
+  rw [hs]
+  by_cases hs1 : r.stop = 1
+  · simp [hs1]
+  · by_cases hs2 : r.stop = 2
+    · simp [hs2]
+    · simp [hs1, hs2]
 
 theorem onReset_final_fixed (p : P) (r : Slot) (code fs f : Nat) (hf : r.fin = some f) :
     (onReset p r code fs).1.fin = some f := by
