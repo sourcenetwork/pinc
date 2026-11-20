@@ -14,6 +14,7 @@
 //! Invariants: restoring bytes that are not exactly one well-formed state changes nothing; the address book never holds
 //! more than [`BOOK_MAX`] nodes or eight addresses of one.
 
+use alloc::collections::BTreeSet;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::net::{IpAddr, SocketAddr};
@@ -165,11 +166,15 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
         if let Some(seq) = seq {
             self.node.restore_record_seq(seq);
         }
-        // Every address is offered (`|` does not short-circuit); a node counts if the book kept one of them.
-        let addresses = book
-            .into_iter()
-            .filter(|(node, addrs)| addrs.iter().fold(false, |kept, a| self.add_address(*node, *a) | kept))
-            .count();
+        // Every address is offered (`|` does not short-circuit); a node counts once if the book kept one of them, however
+        // many entries of the state name it. The set holds at most one key per entry of the state.
+        let mut counted = BTreeSet::new();
+        for (node, addrs) in book {
+            if addrs.iter().fold(false, |kept, a| self.add_address(node, *a) | kept) {
+                counted.insert((node.alg.tag(), node.bytes));
+            }
+        }
+        let addresses = counted.len();
         Ok(Restored {
             tickets: r.tickets,
             peers: r.peers,

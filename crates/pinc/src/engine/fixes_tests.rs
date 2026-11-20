@@ -104,3 +104,22 @@ fn a_dropped_stream_that_holds_no_slot_is_not_listed() {
     c.drop_recv(1, &info, 4 * DISCARDED as u64 + 400);
     assert_eq!(c.sessions.get(&info.id).unwrap().discard.len(), DISCARDED);
 }
+
+#[test]
+fn a_restore_counts_a_node_the_state_names_twice_once() {
+    let mut c = core();
+    let mut state = c.export_state(1).unwrap();
+    let len = u32::from_be_bytes(state[1..5].try_into().unwrap()) as usize;
+    let tail = state.split_off(5 + len);
+    let seq = tail[tail.len() - 8..].to_vec();
+    // One node named by two entries with an address each, and a second node named once.
+    let mut entries = vec![0, 3];
+    for (i, last) in [(1u64, 2u8), (1, 3), (2, 2)] {
+        entries.push(peer(i).alg.tag());
+        entries.extend_from_slice(&peer(i).bytes);
+        entries.extend_from_slice(&[1, 4, 10, 0, 0, last, 0, 9]);
+    }
+    state.extend_from_slice(&entries);
+    state.extend_from_slice(&seq);
+    assert_eq!(c.restore_state(1, &state).unwrap().addresses, 2);
+}
