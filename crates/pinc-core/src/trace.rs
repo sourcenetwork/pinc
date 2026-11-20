@@ -93,7 +93,9 @@ pub enum TraceEvent {
         /// The rule.
         rule: u64,
     },
-    /// A sub-session: 0 opened here, 1 accepted from the peer, 2 closed as an orphan.
+    /// A sub-session: 0 opened here, 1 accepted from the peer, 2 closed as an orphan, 3 a quiet-parent probe
+    /// started, 4 a probe rode its parent, 5 a probe lapsed into its own handshake, 6 a probe ended by the
+    /// application.
     Sub {
         /// The step.
         step: u64,

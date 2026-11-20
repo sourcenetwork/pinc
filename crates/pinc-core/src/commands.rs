@@ -189,6 +189,14 @@ ep_impl! {
                 Ok(Value::None)
             }
             Command::Close { session, error } => {
+                // A dial still probing its quiet parent holds no connection: closing it ends the dial (QUIET_PROBE).
+                if let Some(i) = self
+                    .slot_of_any(session)
+                    .filter(|i| self.slots.get(*i).is_some_and(|s| s.m.probing))
+                {
+                    self.end_probe(i, now);
+                    return Ok(Value::None);
+                }
                 let i = self.live(session)?;
                 let conn = self.slots.get_mut(i).and_then(|s| s.conn.as_mut()).ok_or(CommandError::NoSession)?;
                 let mut env = env!(self, now);
@@ -200,6 +208,10 @@ ep_impl! {
                 for i in 0..K {
                     let Some(slot) = self.slots.get_mut(i) else { break };
                     if !slot.m.in_use {
+                        continue;
+                    }
+                    if slot.conn.is_none() && slot.m.probing {
+                        self.end_probe(i, now);
                         continue;
                     }
                     if let Some(conn) = slot.conn.as_mut() {
@@ -274,6 +286,11 @@ ep_impl! {
                 if let Some(s) = self.slots.get_mut(i) {
                     if sent {
                         s.m.last_tx = now;
+                        // A probe waited for this ping (QUIET_PROBE): it is out with the carrier, and one goes
+                        // per probe.
+                        if s.m.probed_until > now {
+                            s.m.probed_ping_for = s.m.probed_until;
+                        }
                     } else {
                         s.m.last_rx = now;
                     }
@@ -405,7 +422,7 @@ ep_impl! {
     }
 
     /// The local address of the first interface that can reach `remote`.
-    fn route_for(&self, remote: &SocketAddr) -> Option<SocketAddr> {
+    pub(crate) fn route_for(&self, remote: &SocketAddr) -> Option<SocketAddr> {
         self.ifaces.iter().flatten().find(|l| l.is_ipv4() == remote.is_ipv4()).copied()
     }
 
@@ -440,11 +457,45 @@ ep_impl! {
             return self.open_sub_wait(parent, node, alpn, role, now);
         }
         let prekey = self.prekey.clone().ok_or(CommandError::NoPrekey)?;
+        // A parent that has gone quiet (not heard from for [`PARENT_RX`]) may be gone: ask its session for a ping
+        // before committing to a handshake, so a dial to a peer that only stopped talking does not make a second
+        // root beside the session it already has (QUIET_PROBE). The dial's routable addresses go with it, as many
+        // as a connection has paths: the probe's lapse makes the dial's own handshake to them.
+        if let Some(parent) = self.find_quiet_parent(&node, now) {
+            let mut list: [Option<SocketAddr>; NP] = [None; NP];
+            for (d, a) in list.iter_mut().zip(addrs.iter().filter(|a| self.route_for(a).is_some())) {
+                *d = Some(*a);
+            }
+            return self.open_probe(parent, node, alpn, list, role, now);
+        }
         let first = addrs.iter().copied().find(|a| self.route_for(a).is_some()).ok_or(CommandError::NoRoute)?;
         let local = self.route_for(&first).ok_or(CommandError::NoRoute)?;
         let (i, mem) = self.alloc_slot(true, now).ok_or(CommandError::Full)?;
+        self.dial_fresh(i, mem, now, node, alpn_t, &prekey, addrs, role, first, local)?;
+        Ok(self.session_id(i))
+    }
+
+    /// Build the client connection of a fresh dial in slot `i` over `mem`: everything a dial does once its slot is
+    /// taken and its prekey and first address are known. A failed construction retires the slot (its memory went
+    /// with the call) and returns the error.
+    #[inline(never)]
+    #[allow(clippy::too_many_arguments, reason = "the dial's slot, memory, peer, prekey and first address, named once")]
+    pub(crate) fn dial_fresh(
+        &mut self,
+        i: usize,
+        mem: pinc_transport::conn::Resources<'a, S, N, C, F>,
+        now: u64,
+        node: NodeId,
+        alpn: Alpn,
+        prekey: &pinc_security::PrekeyInfo,
+        addrs: &[SocketAddr],
+        role: Role,
+        first: SocketAddr,
+        local: SocketAddr,
+    ) -> Result<(), CommandError> {
+        let alpn_bytes = alpn.as_bytes();
         let pid = self.path_id(local, first);
-        let ticket = self.tickets.take(&node, alpn, now);
+        let ticket = self.tickets.take(&node, alpn_bytes, now);
         let resume = ticket.is_some();
         let short_until = self.short_until();
         let peer_has_prekey = now < short_until && self.ekk.get(&node) == Some(prekey.hash());
@@ -456,9 +507,9 @@ ep_impl! {
         let cfg = self.conn_config(Some(&node));
         let params = ClientParams {
             peer: node,
-            alpn,
+            alpn: alpn_bytes,
             identity: &self.identity,
-            prekey: &prekey,
+            prekey,
             peer_has_prekey,
             ticket,
             path: pid,
@@ -502,9 +553,12 @@ ep_impl! {
         let Some(slot) = self.slots.get_mut(i) else { return Err(CommandError::Full) };
         slot.conn = Some(conn);
         slot.m.peer = Some(node);
-        slot.m.alpn = Some(alpn_t);
+        slot.m.alpn = Some(alpn);
         slot.m.role = role;
         slot.m.optimistic = optimistic;
+        // The slot may be a lapsed quiet-parent probe: its probe, and the parent it named, end here.
+        slot.m.probing = false;
+        slot.m.parent = None;
         trace!(self, now, Session { slot: i as u64, step: 0, dialer: 1 });
         self.link_peer(node, u32::try_from(i).unwrap_or(0));
         self.sync_cids(i, true);
@@ -515,7 +569,7 @@ ep_impl! {
             self.announce(i);
         }
         self.settle(i, now);
-        Ok(self.session_id(i))
+        Ok(())
     }
 
     /// Read state.

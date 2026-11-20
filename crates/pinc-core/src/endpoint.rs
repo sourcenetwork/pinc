@@ -94,6 +94,10 @@ pub struct EndpointConfig {
     pub tickets_per_session: u8,
     /// How long an issued ticket lives, in seconds.
     pub ticket_lifetime_s: u32,
+    /// How long a quiet-parent dial waits for the probed session's answer before it makes its own handshake
+    /// (`QUIET_PROBE`), in nanoseconds. 0, the default: two of the probed session's probe timeouts, the bound
+    /// taken from its round trip.
+    pub probe_window: u64,
 }
 
 /// The path id of entry `index` of the path table, whose entry holds `generation`.
@@ -113,6 +117,7 @@ impl EndpointConfig {
             seed,
             tickets_per_session: 1,
             ticket_lifetime_s: pinc_security::tickets::DEFAULT_TICKET_LIFETIME_S,
+            probe_window: 0,
         }
     }
 }
@@ -707,6 +712,7 @@ ep_impl! {
         let s = self.slots.get(id.slot())?;
         (s.m.in_use && s.m.generation == id.generation() && s.conn.is_some()).then_some(id.slot())
     }
+
 
     /// The session ids of the live sessions, in table order.
     pub fn sessions(&self) -> impl Iterator<Item = SessionId> + '_ {

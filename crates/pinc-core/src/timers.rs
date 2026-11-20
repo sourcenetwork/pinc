@@ -151,8 +151,26 @@ ep_impl! {
     /// As [`settle`](Self::settle); `queue` says whether to put the session on the send queue.
     pub(crate) fn settle_core(&mut self, i: usize, now: u64, queue: bool) {
         self.drain(i, now);
+        // A dial is probing this session's peer and a packet came back (QUIET_PROBE): the dial rides at once
+        // instead of waiting out its window. The scan is gated on the mark only a probe sets, so it costs one
+        // compare for a session no dial is waiting on. Every resolution ends its probe, so the loop ends.
+        if self.slots.get(i).is_some_and(|s| {
+            s.m.in_use && s.m.probed_until > now && now.saturating_sub(s.m.last_rx) < crate::sub::PARENT_RX
+        }) {
+            loop {
+                let Some(w) = self.probes_of(i).next() else { break };
+                self.resolve_probe(w, now);
+            }
+        }
         let Some(slot) = self.slots.get_mut(i) else { return };
         if !slot.m.in_use {
+            return;
+        }
+        // A quiet-parent probe holds no connection: its only deadline is its end (QUIET_PROBE).
+        if slot.conn.is_none() {
+            if slot.m.probing {
+                self.heap.set(i, Some(slot.m.probe_until));
+            }
             return;
         }
         let Some(conn) = slot.conn.as_mut() else { return };
@@ -167,10 +185,11 @@ ep_impl! {
         // may not.
         #[cfg(feature = "trace")]
         let mut rec: Option<SettleRecord> = None;
+        let mut probe_ping = false;
         let plan = if !conn.is_closed() && conn.is_connected() {
             let direct = !conn.active_is_relay();
             let in_flight = conn.recovery().packets_in_flight() > 0;
-            let plan = Inputs {
+            let mut plan = Inputs {
                 role: slot.m.role,
                 dialer: slot.m.client,
                 direct,
@@ -182,6 +201,18 @@ ep_impl! {
                 in_flight,
             }
             .plan();
+            // A dial is probing this session's peer (QUIET_PROBE): one ping goes out for the probe, at once. A
+            // pulse session's keepalive is the layer above's: the plan reports one due now and the carrier
+            // carries it (`Command::Pulse` marks it sent). For the rest the timer sends the session's own ping
+            // (run_timer), so the connection's keepalive stands down until the marker says the ping went.
+            if slot.m.probed_until > now && slot.m.probed_ping_for != slot.m.probed_until {
+                if slot.m.pulse {
+                    plan.ping_at = Some(now);
+                } else {
+                    plan.ping_at = None;
+                    probe_ping = true;
+                }
+            }
             let interval = if slot.m.pulse { None } else { plan.ping_at.map(|p| p.saturating_sub(slot.m.last_tx)) };
             conn.set_keepalive(interval);
             #[cfg(feature = "trace")]
@@ -248,6 +279,9 @@ ep_impl! {
         #[cfg(feature = "trace")]
         let mut standby: Option<u64> = None;
         if let Some(plan) = plan {
+            if probe_ping {
+                note(Some(now));
+            }
             if plan != slot.m.plan {
                 slot.m.plan = plan;
                 trace!(self, now, Keepalive {
@@ -349,6 +383,14 @@ ep_impl! {
             slot.m.acp_recheck = None;
             self.ask_acp(i, now, true);
         }
+        // A quiet-parent probe holds no connection: at its end it rides the probed session or makes its own
+        // handshake (QUIET_PROBE).
+        if self.slots.get(i).is_some_and(|s| s.m.probing) {
+            if now >= self.slots.get(i).map_or(0, |s| s.m.probe_until) {
+                self.resolve_probe(i, now);
+            }
+            return;
+        }
         // Only a session with a re-join running has floors to take and challenges to report: the timer of every
         // other session (a bulk transfer's fires for each paced burst) does none of that work.
         let rejoining = self
@@ -360,6 +402,19 @@ ep_impl! {
         let short_until = self.short_until();
         let Some(slot) = self.slots.get_mut(i) else { return };
         let Some(conn) = slot.conn.as_mut() else { return };
+        // A dial is probing this session's peer (QUIET_PROBE): the session pings its peer at once so the probe
+        // learns whether the peer lives. Pulse sessions ping through the carrier via the plan; the rest ping here,
+        // once per probe: the marker goes even when the path is gone, so the session returns to its own plan
+        // instead of waking for a ping it has nowhere to send.
+        if slot.m.probed_until > now
+            && !slot.m.pulse
+            && slot.m.probed_ping_for != slot.m.probed_until
+        {
+            if let Some(active) = conn.active_path() {
+                let _ = conn.ping_path(active);
+            }
+            slot.m.probed_ping_for = slot.m.probed_until;
+        }
         // A standby path that carried nothing for 5 s while data moves is pinged to keep its mapping open.
         let active = conn.active_path();
         let mut probe: [Option<pinc_transport::conn::PathId>; NP] = [None; NP];

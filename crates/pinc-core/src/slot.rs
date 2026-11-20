@@ -289,6 +289,27 @@ pub(crate) struct Meta<const NP: usize> {
     pub(crate) route: Option<core::net::SocketAddr>,
     /// Close with this code once everything queued has left (a dialer's Finish goes out before its deny).
     pub(crate) deferred_close: Option<u64>,
+    /// This slot holds a quiet-parent probe: no connection, its memory stashed, until `probe_until`.
+    pub(crate) probing: bool,
+    /// The slot of the session this probe waits to hear about.
+    pub(crate) probe_parent: u32,
+    /// The generation the probed slot had when the probe started: the lapse reads the session it probed by
+    /// identity, never whatever came to occupy the slot since.
+    pub(crate) probe_of_gen: u32,
+    /// When the probe lapses into the dial's own handshake.
+    pub(crate) probe_until: u64,
+    /// Whether the probed session had nothing in flight when the probe started: only then is it closed as dead
+    /// when the probe lapses.
+    pub(crate) probe_quiet: bool,
+    /// The addresses the dial that probes gave: the lapse makes the dial's own handshake to these when the
+    /// probed session has none left to read.
+    pub(crate) dial_addrs: [Option<core::net::SocketAddr>; NP],
+    /// On the probed session: the latest end of a probe waiting for its answer (0 for none). While it stands the
+    /// session's next ping is due at once, so the probe learns whether the peer lives.
+    pub(crate) probed_until: u64,
+    /// On the probed session: the `probed_until` epoch the probe's ping was sent for, so one ping goes out per
+    /// probe.
+    pub(crate) probed_ping_for: u64,
 }
 
 impl<const NP: usize> Meta<NP> {
@@ -352,6 +373,14 @@ impl<const NP: usize> Meta<NP> {
         linked: false,
         route: None,
         deferred_close: None,
+        probing: false,
+        probe_parent: NIL,
+        probe_of_gen: 0,
+        probe_until: 0,
+        probe_quiet: false,
+        dial_addrs: [None; NP],
+        probed_until: 0,
+        probed_ping_for: 0,
     };
 
     /// Reset for a new session, keeping the table bookkeeping (generation, list links).
