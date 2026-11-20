@@ -16,7 +16,6 @@ use alloc::vec::Vec;
 use core::future::{Future, poll_fn};
 use core::pin::Pin;
 use core::task::{Context, Poll};
-use std::io;
 
 use pinc_connect::carrier::ws::{self, Decoder, Opcode, Role as WsRole, WsFrame};
 use pinc_connect::client::Io as CarrierIo;
@@ -201,15 +200,20 @@ impl<F: Future> Op<F> {
     }
 }
 
-async fn open_owned<C: Carriers>(c: &C, relay: Relay, kind: CarrierKind) -> io::Result<C::Stream> {
+async fn open_owned<C: Carriers>(c: &C, relay: Relay, kind: CarrierKind) -> Result<C::Stream, C::Error> {
     c.open(&relay, kind).await
 }
 
-async fn read_owned<C: Carriers>(c: &C, s: Rc<C::Stream>, buf: Vec<u8>) -> (io::Result<usize>, Vec<u8>) {
+async fn read_owned<C: Carriers>(c: &C, s: Rc<C::Stream>, buf: Vec<u8>) -> (Result<usize, C::Error>, Vec<u8>) {
     c.read(&s, buf).await
 }
 
-async fn write_owned<C: Carriers>(c: &C, s: Rc<C::Stream>, buf: Vec<u8>, from: usize) -> (io::Result<usize>, Vec<u8>) {
+async fn write_owned<C: Carriers>(
+    c: &C,
+    s: Rc<C::Stream>,
+    buf: Vec<u8>,
+    from: usize,
+) -> (Result<usize, C::Error>, Vec<u8>) {
     c.write(&s, buf, from).await
 }
 
@@ -351,7 +355,7 @@ impl<H: Hosted> Shared<H> {
         }
     }
 
-    fn carrier_opened(&self, r: usize, ver: u64, res: io::Result<Stream<H>>) {
+    fn carrier_opened(&self, r: usize, ver: u64, res: Result<Stream<H>, <H::Carriers as Carriers>::Error>) {
         match res {
             Ok(st) => {
                 let now = self.now();

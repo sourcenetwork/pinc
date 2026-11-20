@@ -271,7 +271,7 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 #[allow(
     clippy::unwrap_used,
     clippy::indexing_slicing,

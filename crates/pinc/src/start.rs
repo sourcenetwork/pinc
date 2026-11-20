@@ -19,11 +19,11 @@ use pinc_crypto::{Drbg, Software};
 use pinc_keystore::KeyStore;
 use pinc_node::{Config as NodeConfig, Ep as _, HUB_ALPN, Node};
 
-use crate::clock::wall_ms;
 use crate::engine::{Admit, Core, CoreConfig};
 use crate::error::{Error, Result};
 use crate::keys::Prekeys;
 use crate::node::{AnyEp, PEERS, RELAYS};
+use crate::platform::Platform;
 
 /// The endpoint configuration `cfg` asks for. An endpoint that serves other nodes, as a hub or in the relay role,
 /// sends no tail repair on its sessions, as a relay host sends none.
@@ -42,6 +42,7 @@ fn endpoint_config<S, A>(cfg: &CoreConfig<S, A>, seed: u64) -> pinc_core::Endpoi
 fn node_config<S: KeyStore, A: Admit>(
     cfg: &CoreConfig<S, A>,
     now: u64,
+    wall_ms: u64,
 ) -> Result<(NodeConfig<RELAYS>, core::net::SocketAddr)> {
     let local = *cfg
         .locals
@@ -74,18 +75,23 @@ fn node_config<S: KeyStore, A: Admit>(
             ..BroadcastLimits::default()
         },
         map_keys: IdKey::new(seed, secrets).map_err(|_| Error::config("the endpoint's map keys are not usable"))?,
-        wall_ms: wall_ms(),
+        wall_ms,
         local,
         trace: false,
     };
     Ok((node_cfg, local))
 }
 
-/// Build a core at time `now`.
+/// Build a core at time `now`. The host's `platform` seeds the prekey store and reads the wall clock the records sign
+/// with.
 ///
 /// # Errors
-/// [`ErrorKind::Config`](crate::ErrorKind::Config) if the limits or the keys are not usable.
-pub(crate) fn build<S: KeyStore, A: Admit>(mut cfg: CoreConfig<S, A>, now: u64) -> Result<Core<S, A>> {
+/// [`ErrorKind::Config`](crate::ErrorKind::Config) if the limits, the keys or the platform are not usable.
+pub(crate) fn build<S: KeyStore, A: Admit, P: Platform>(
+    mut cfg: CoreConfig<S, A>,
+    now: u64,
+    platform: &P,
+) -> Result<Core<S, A>> {
     cfg.limits.check()?;
     if cfg.alpns.len() > crate::mem::MAX_PROTOCOLS {
         return Err(Error::config("an endpoint serves at most eight protocols"));
@@ -98,6 +104,9 @@ pub(crate) fn build<S: KeyStore, A: Admit>(mut cfg: CoreConfig<S, A>, now: u64) 
     cfg.identity.random(&mut node_rnd)?;
     let mut node_seed = [0u8; 8];
     cfg.identity.random(&mut node_seed)?;
+    let mut prekey_reseed = [0u8; 32];
+    cfg.identity.random(&mut prekey_reseed)?;
+    let wall_ms = platform.wall_ns().map_or(0, |ns| ns / 1_000_000);
     let ecfg = endpoint_config(&cfg, u64::from_le_bytes(seed));
     let (drbg, identity) = (Drbg::new(&rnd), cfg.identity.local()?);
     let mut ep = AnyEp::new(
@@ -109,8 +118,12 @@ pub(crate) fn build<S: KeyStore, A: Admit>(mut cfg: CoreConfig<S, A>, now: u64) 
         cfg.limits.pool_chunks,
     )
     .ok_or_else(|| Error::config("a limit is out of range"))?;
-    let mut prekeys = Prekeys::new()?;
-    let prekey = prekeys.rotate(now)?;
+    let mut prekeys = Prekeys::new({
+        let mut seed = [0u8; 32];
+        platform.random(&mut seed)?;
+        seed
+    });
+    let prekey = prekeys.rotate(now, &prekey_reseed)?;
     ep.set_prekey(prekey.clone());
     for a in &cfg.alpns {
         if !ep.register_alpn(a) {
@@ -121,7 +134,7 @@ pub(crate) fn build<S: KeyStore, A: Admit>(mut cfg: CoreConfig<S, A>, now: u64) 
     let key = cfg.identity.take_signer().ok_or_else(|| {
         Error::config("the identity key is held where the broadcast layer cannot sign with it; use a seed or a generated identity")
     })?;
-    let (node_cfg, local) = node_config(&cfg, now)?;
+    let (node_cfg, local) = node_config(&cfg, now, wall_ms)?;
     let mut node = Node::<AnyEp, Software, (), RELAYS, PEERS>::new(
         &node_cfg,
         ep,
@@ -185,7 +198,7 @@ impl PortMapping {
     };
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 #[allow(clippy::unwrap_used, reason = "tests assert")]
 mod tests {
     use alloc::format;
@@ -199,6 +212,7 @@ mod tests {
     use crate::engine::AllowAll;
     use crate::keys::Identity;
     use crate::mem::Limits;
+    use crate::platform::System;
 
     fn cfg(connections: usize) -> CoreConfig<SoftwareStore, AllowAll> {
         CoreConfig {
@@ -240,14 +254,14 @@ mod tests {
     #[test]
     fn the_broadcast_key_is_the_endpoints_map_keys() {
         let c = cfg(1);
-        let (node_cfg, _) = node_config(&c, 0).unwrap();
+        let (node_cfg, _) = node_config(&c, 0, 0).unwrap();
         let (seed, secrets) = c.map_keys.parts();
         assert_eq!(node_cfg.map_keys, IdKey::new(seed, secrets).unwrap());
         let other = CoreConfig {
             map_keys: crate::maps::Keys::for_tests(4),
             ..cfg(1)
         };
-        assert_ne!(node_config(&other, 0).unwrap().0.map_keys, node_cfg.map_keys);
+        assert_ne!(node_config(&other, 0, 0).unwrap().0.map_keys, node_cfg.map_keys);
     }
 
     /// A node repairs the tail of its bursts; an endpoint that is a hub or runs the relay role does not, on any
@@ -271,13 +285,13 @@ mod tests {
     /// The endpoint is built into the heap and ended there: a 1 MiB stack builds and drops one for a few sessions.
     #[test]
     fn a_small_endpoint_builds_and_drops_on_a_one_mebibyte_stack() {
-        on_stack(1024, || drop(build(cfg(4), 1).unwrap()));
+        on_stack(1024, || drop(build(cfg(4), 1, &System).unwrap()));
     }
 
     /// The default 1024 sessions build and drop on a 1 MiB stack: the tables are built on the heap, piece by piece.
     #[test]
     fn a_default_endpoint_builds_and_drops_on_a_one_mebibyte_stack() {
-        on_stack(1024, || drop(build(cfg(1024), 1).unwrap()));
+        on_stack(1024, || drop(build(cfg(1024), 1, &System).unwrap()));
     }
 
     const MS: u64 = 1_000_000;
@@ -287,7 +301,7 @@ mod tests {
         let mut c = cfg(4);
         c.identity = Identity::from_seed(&[seed; 32]).unwrap();
         c.locals = vec![local];
-        (build(c, MS).unwrap(), local)
+        (build(c, MS, &System).unwrap(), local)
     }
     /// Carry datagrams both ways until both ends are at rest, a millisecond a round; the sizes sent go to `log`.
     #[allow(

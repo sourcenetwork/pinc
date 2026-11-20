@@ -13,6 +13,7 @@ use super::topics::ADJ_GAP;
 use super::{AllowAll, Core, CoreConfig, Up};
 use crate::keys::Identity;
 use crate::mem::Limits;
+use crate::platform::System;
 
 const BURST: u64 = 1000;
 
@@ -43,7 +44,7 @@ pub(super) fn core() -> C {
             gateway: None,
         },
     };
-    crate::start::build(cfg, 1).unwrap()
+    crate::start::build(cfg, 1, &System).unwrap()
 }
 
 pub(super) fn peer(i: u64) -> NodeId {

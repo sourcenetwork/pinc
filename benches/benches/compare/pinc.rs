@@ -54,9 +54,9 @@ use futures::StreamExt;
 use futures::channel::mpsc;
 use nuclei::Handle;
 use nuclei::net::UdpSocketBuilder;
-use quinn_udp::{RecvMeta, Transmit, UdpSockRef, UdpSocketState};
-use pinc::{AllowAll, Connection, Endpoint, Io, IoHost, Limits, NodeAddr, RecvStream, SendStream, Pinc};
+use pinc::{AllowAll, Connection, Endpoint, Io, IoHost, Limits, NodeAddr, Pinc, RecvStream, SendStream};
 use pinc_keystore::{KeyStore, SoftwareStore};
+use quinn_udp::{RecvMeta, Transmit, UdpSockRef, UdpSocketState};
 
 const ALPN: &[u8] = b"bench/1";
 /// What the socket's send and receive buffers are asked to hold.
@@ -85,6 +85,9 @@ pub struct Net {
 }
 
 impl Io for Net {
+    type Instant = Instant;
+    type Error = io::Error;
+
     async fn recv(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr, usize)> {
         // One call takes every datagram of one sender the system coalesced; only an empty socket is waited on.
         loop {

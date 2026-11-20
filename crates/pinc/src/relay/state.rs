@@ -111,17 +111,21 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
     ) -> crate::Result<Self> {
         let mut seed = [0u8; 32];
         let mut key = [0u8; 8];
+        let mut pk = [0u8; 32];
+        let mut pk_reseed = [0u8; 32];
         let (id, local) = {
             let mut ident = identity.borrow_mut();
             ident.random(&mut seed)?;
             ident.random(&mut key)?;
+            ident.random(&mut pk)?;
+            ident.random(&mut pk_reseed)?;
             (ident.node_id(), ident.local()?)
         };
         let mut cfg = Config::new(id, u64::from_le_bytes(key));
         cfg.quota = limits.quota;
         cfg.mailbox_max_age_ns = limits.mailbox_max_age_ns;
-        let mut prekeys = Prekeys::new()?;
-        let dial_prekey = prekeys.rotate(now)?;
+        let mut prekeys = Prekeys::new(pk);
+        let dial_prekey = prekeys.rotate(now, &pk_reseed)?;
         let peers = mesh::slots(&id, peers, now);
         Ok(Self {
             sm: new_machine(cfg),

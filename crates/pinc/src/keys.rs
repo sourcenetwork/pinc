@@ -54,20 +54,17 @@ impl Identity {
     ///
     /// # Errors
     /// [`ErrorKind::Config`] if the store cannot start or the seed is refused.
+    #[cfg(feature = "std")]
     pub fn from_seed(seed: &[u8; 32]) -> Result<Self> {
-        let mut store = SoftwareStore::new().map_err(key_error)?;
-        let kp = Keypair::from_seed(IdentityAlg::Ed25519, seed)
-            .map_err(|_| Error::config("the identity seed is not valid"))?;
-        let handle = store.insert(kp);
-        let mut id = Self::from_store(store, handle)?;
-        id.seed = Some(*seed);
-        Ok(id)
+        let store = SoftwareStore::new().map_err(key_error)?;
+        Self::from_seed_in(seed, store)
     }
 
     /// A new Ed25519 identity from operating system randomness, held in a new in-memory store.
     ///
     /// # Errors
     /// [`ErrorKind::Config`] if the operating system has no randomness or the store cannot start.
+    #[cfg(feature = "std")]
     pub fn generate() -> Result<Self> {
         let mut seed = [0u8; 32];
         SoftwareStore::new()
@@ -77,6 +74,37 @@ impl Identity {
         let id = Self::from_seed(&seed);
         seed.fill(0);
         id
+    }
+
+    /// The identity of the Ed25519 key made from `seed`, held in `store`. The store's generator is the caller's to
+    /// seed: `from_seed` seeds it from the operating system, a host without it from its platform.
+    ///
+    /// # Errors
+    /// [`ErrorKind::Config`] if the seed is refused or the store does not take the key.
+    pub fn from_seed_in(seed: &[u8; 32], mut store: SoftwareStore) -> Result<Self> {
+        let kp = Keypair::from_seed(IdentityAlg::Ed25519, seed)
+            .map_err(|_| Error::config("the identity seed is not valid"))?;
+        let handle = store.insert(kp);
+        let mut id = Self::from_store(store, handle)?;
+        id.seed = Some(*seed);
+        Ok(id)
+    }
+
+    /// A new Ed25519 identity from `store`'s own randomness, held in it: the path of a host without the operating
+    /// system, whose store runs on a generator the platform seeded.
+    ///
+    /// # Errors
+    /// [`ErrorKind::Config`] if the store fails.
+    pub(crate) fn generated_in(mut store: SoftwareStore) -> Result<Self> {
+        let mut seed = [0u8; 32];
+        store.random(&mut seed).map_err(key_error)?;
+        let kp = Keypair::from_seed(IdentityAlg::Ed25519, &seed)
+            .map_err(|_| Error::config("the identity seed is not valid"))?;
+        let handle = store.insert(kp);
+        let mut id = Self::from_store(store, handle)?;
+        id.seed = Some(seed);
+        seed.fill(0);
+        Ok(id)
     }
 }
 
@@ -165,18 +193,23 @@ pub(crate) struct Prekeys {
 }
 
 impl Prekeys {
-    pub(crate) fn new() -> Result<Self> {
-        Ok(Self {
-            store: SoftwareStore::new().map_err(key_error)?,
+    /// The prekey store of a host without the operating system: a generator the host's platform seeded, reseeded from
+    /// the endpoint's identity store at every rotation.
+    pub(crate) fn new(seed: [u8; 32]) -> Self {
+        Self {
+            store: SoftwareStore::from_entropy(seed),
             held: Vec::new(),
             next: 1,
             rotate_at: 0,
             used: 0,
-        })
+        }
     }
 
-    /// A new prekey to set on the endpoint; drops all but the previous one.
-    pub(crate) fn rotate(&mut self, now: u64) -> Result<PrekeyInfo> {
+    /// A new prekey to set on the endpoint; drops all but the previous one. `reseed` is fresh entropy for the store:
+    /// the host platform's under `std`, the identity store's own randomness without it, so a store whose state leaked
+    /// does not predict the prekeys made after the rotation.
+    pub(crate) fn rotate(&mut self, now: u64, reseed: &[u8; 32]) -> Result<PrekeyInfo> {
+        self.store.reseed(reseed);
         let (h, ek) = self.store.generate_kem().map_err(key_error)?;
         let gen_id = self.next;
         self.next += 1;
@@ -216,9 +249,9 @@ mod tests {
 
     #[test]
     fn a_prekey_is_replaced_after_64_handshakes_or_its_lifetime() {
-        let mut p = Prekeys::new().unwrap();
+        let mut p = Prekeys::new([9; 32]);
         assert!(p.due(0), "no prekey yet");
-        p.rotate(1).unwrap();
+        p.rotate(1, &[8; 32]).unwrap();
         assert!(!p.due(2));
         let newest = WireHandle(1);
         for _ in 0..PREKEY_USES - 1 {
@@ -227,7 +260,7 @@ mod tests {
         assert!(!p.due(2), "63 handshakes");
         let _ = p.decapsulate(newest, &[]);
         assert!(p.due(2), "the 64th");
-        p.rotate(3).unwrap();
+        p.rotate(3, &[7; 32]).unwrap();
         assert!(!p.due(4), "a new prekey starts at zero");
         // A handshake that began under the previous prekey does not count against the new one.
         let _ = p.decapsulate(newest, &[]);
