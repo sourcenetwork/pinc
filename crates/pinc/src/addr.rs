@@ -420,6 +420,22 @@ mod tests {
             SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::LOCALHOST, 2, 0, 0)),
             SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::LOCALHOST, 2, 1, 0)),
         ];
+        for a in directs {
+            let held = NodeAddr::new(id).with_direct(a).direct[0];
+            // The flow label is dropped, the rest of the address is kept.
+            let want = match a {
+                SocketAddr::V6(v6) => SocketAddr::V6(SocketAddrV6::new(*v6.ip(), v6.port(), 0, v6.scope_id())),
+                v4 @ SocketAddr::V4(_) => v4,
+            };
+            assert_eq!(held, want);
+            writeln!(
+                out,
+                r#"{{"t":"addr","op":"direct","a":{},"held":{}}}"#,
+                jaddr(&a),
+                jaddr(&held)
+            )
+            .unwrap();
+        }
         let relays = ["h://", "://@", "h://h", "wss://r.example:443/x"];
         let mut values = Vec::new();
         for node in [id_of(1, [7; 32]), id_of(2, [9; 32])] {
