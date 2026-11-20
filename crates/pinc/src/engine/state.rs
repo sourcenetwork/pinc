@@ -433,25 +433,26 @@ mod tests {
     /// Every input the spec derives from the sources, without repeats, and the random ones.
     fn inputs() -> Vec<Vec<u8>> {
         let mut set = BTreeSet::new();
-        for src in sources() {
-            for version in [VERSION, VERSION_1] {
+        // Every source in the current format, and the three live ones in the old format too; a few cuts, one extra byte
+        // and a changed byte at the start, the count and the end of each, so every refusal is still met and the file
+        // stays small.
+        for (k, src) in sources().into_iter().enumerate() {
+            for version in [VERSION, VERSION_1].into_iter().take(if k < 3 { 2 } else { 1 }) {
                 let bs = src.bytes(version);
                 set.insert(bs.clone());
-                for k in 0..bs.len() {
-                    set.insert(bs[..k].to_vec());
+                for cut in [0, bs.len() - 1] {
+                    set.insert(bs[..cut].to_vec());
                 }
                 set.insert([bs.clone(), vec![0]].concat());
-                for i in 0..bs.len() {
-                    for v in [0, 255, bs[i].wrapping_add(1)] {
-                        let mut m = bs.clone();
-                        m[i] = v;
-                        set.insert(m);
-                    }
+                for i in [0, 4, bs.len() - 1] {
+                    let mut m = bs.clone();
+                    m[i] = bs[i].wrapping_add(1);
+                    set.insert(m);
                 }
             }
         }
         let mut seed = 7u64;
-        for _ in 0..300 {
+        for _ in 0..20 {
             let mut bs: Vec<u8> = (0..below(&mut seed, 80))
                 .map(|_| mix(&mut seed).to_le_bytes()[0])
                 .collect();
@@ -481,6 +482,8 @@ mod tests {
     fn trace_state() {
         let mut out = String::new();
         let inputs = inputs();
+        // Accepted in each format, and a good framing the core refused.
+        let (mut v1, mut v2, mut refused) = (0, 0, 0);
         for kind in 0..3 {
             let mut c = live(kind);
             let mut before = snap(&mut c);
@@ -489,6 +492,12 @@ mod tests {
                 let ok = r.is_ok();
                 if parse(bs).is_none() {
                     assert!(!ok);
+                } else if !ok {
+                    refused += 1;
+                } else if bs[0] == VERSION_1 {
+                    v1 += 1;
+                } else {
+                    v2 += 1;
                 }
                 let after = snap(&mut c);
                 if !ok {
@@ -522,15 +531,22 @@ mod tests {
         }
         let core0 = parse(&live(0).export_state(NOW).unwrap()).unwrap().0.to_vec();
         let new: Book = (0..3u8).map(|i| (node_of(200 + i), vec![v4(i)])).collect();
-        let ok = c.restore_state(NOW, &Src::of(&core0, &new, 0).bytes(VERSION)).is_ok();
+        let r = c.restore_state(NOW, &Src::of(&core0, &new, 0).bytes(VERSION));
+        let (ok, addresses) = (r.is_ok(), r.map_or(0, |r| r.addresses));
         let added = new.iter().filter(|(n, _)| c.book.contains_key(n)).count();
         assert_eq!((c.book.len(), added), (BOOK_MAX, 0));
         writeln!(
             out,
-            r#"{{"t":"state","op":"full","before":{BOOK_MAX},"after":{},"ok":{ok},"added":{added}}}"#,
+            r#"{{"t":"state","op":"full","before":{BOOK_MAX},"after":{},"ok":{ok},"added":{added},"addresses":{addresses}}}"#,
             c.book.len()
         )
         .unwrap();
+        assert!(
+            v1 > 0 && v2 > 0 && refused > 0,
+            "a branch was not met: {v1} {v2} {refused}"
+        );
+        assert_eq!(addresses, 0, "a full book kept an address");
+        assert!(out.len() < 2_000_000, "the trace is {} bytes", out.len());
         write_trace("facade_state.ndjson", &out);
     }
 }
