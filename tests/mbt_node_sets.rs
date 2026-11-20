@@ -29,6 +29,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::ops::Range;
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
 
 use node_script::{DIALED, id_of};
 use pinc_broadcast::Limits as BLimits;
@@ -757,24 +758,51 @@ fn the_reconcile_layer_matches_the_model() {
     let mut cases = cases.unwrap();
     let head = cases.head.clone();
     let list: Vec<MbtCase> = (&mut cases).map(Result::unwrap).collect();
-    let (n, steps) = std::thread::Builder::new()
-        .stack_size(512 << 20)
-        .spawn(move || {
-            let ids = (id_of(0x41), id_of(0x42));
-            let mut steps = 0usize;
-            for case in &list {
-                let mut run = start(ids);
-                for i in 0..case.steps.len() {
-                    run.step(i, case);
-                    run.compare(i, case);
-                    steps += 1;
-                }
-            }
-            (list.len() as u64, steps as u64)
-        })
-        .unwrap()
-        .join()
-        .unwrap();
+    // The cases run side by side: each builds its own node and shares only the read-only case list and filler ids.
+    let ids = (id_of(0x41), id_of(0x42));
+    let workers = std::thread::available_parallelism().map_or(1, usize::from);
+    let next = AtomicUsize::new(0);
+    let failed = AtomicBool::new(false);
+    let results: Vec<_> = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..workers)
+            .map(|_| {
+                std::thread::Builder::new()
+                    .stack_size(512 << 20)
+                    .spawn_scoped(scope, || {
+                        let (mut n, mut steps) = (0u64, 0u64);
+                        while !failed.load(Relaxed) {
+                            let k = next.fetch_add(1, Relaxed);
+                            let Some(case) = list.get(k) else { break };
+                            let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                let mut run = start(ids);
+                                for i in 0..case.steps.len() {
+                                    run.step(i, case);
+                                    run.compare(i, case);
+                                }
+                            }));
+                            if let Err(p) = ran {
+                                failed.store(true, Relaxed);
+                                eprintln!("node_sets: case {k} failed");
+                                std::panic::resume_unwind(p);
+                            }
+                            n += 1;
+                            steps += case.steps.len() as u64;
+                        }
+                        (n, steps)
+                    })
+                    .unwrap()
+            })
+            .collect();
+        handles.into_iter().map(std::thread::ScopedJoinHandle::join).collect()
+    });
+    let mut sums = Vec::new();
+    for r in results {
+        match r {
+            Ok(c) => sums.push(c),
+            Err(p) => std::panic::resume_unwind(p),
+        }
+    }
+    let (n, steps) = sums.into_iter().fold((0, 0), |a, c| (a.0 + c.0, a.1 + c.1));
     println!("node_sets: {n} cases, {steps} steps");
     let count = |f: &str| head.get(f).and_then(Json::u64).unwrap();
     assert_eq!(
