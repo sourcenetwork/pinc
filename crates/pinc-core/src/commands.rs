@@ -631,7 +631,7 @@ ep_impl! {
                 .slots
                 .iter()
                 .enumerate()
-                .filter(|(_, s)| s.m.in_use && s.conn.is_some())
+                .filter(|(_, s)| s.m.in_use && (s.conn.is_some() || s.m.probing))
                 .nth(n)
                 .map_or(Answer::None, |(i, _)| self.stats_of(i)),
             Query::PeerSession { node, after } => self.peer_session(&node, after),
