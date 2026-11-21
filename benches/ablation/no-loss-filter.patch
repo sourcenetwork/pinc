@@ -1,0 +1,13 @@
+diff --git a/crates/pinc-transport/src/recovery/cubic.rs b/crates/pinc-transport/src/recovery/cubic.rs
+index e3fe5ee7e..ad396ce25 100644
+--- a/crates/pinc-transport/src/recovery/cubic.rs
++++ b/crates/pinc-transport/src/recovery/cubic.rs
+@@ -56,7 +56,7 @@ const BETA_SMALL_NUM: u64 = 85;
+ const BETA_SMALL_DEN: u64 = 100;
+ const FILTER_NUM: u64 = 9;
+ const FILTER_DEN: u64 = 10;
+-const FILTER_MAX_STREAK: u8 = 4;
++const FILTER_MAX_STREAK: u8 = 0; // ablation: no loss filter (was 4)
+ const FILTER_FLOOR: u64 = 4 * MS;
+ /// The streak resets once the last reduction is older than this many smoothed round trips.
+ const FILTER_DECAY_RTTS: u64 = 4;
