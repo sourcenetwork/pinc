@@ -8,26 +8,27 @@
 //! requests in flight per provider, spread over the providers in turn; the library has no verified transfer, so the
 //! fetcher checks the whole value against its BLAKE3 hash at the end, which is inside the time reported.
 //!
-//! Invariants: the swarm is polled by one task that owns it; every message the node publishes that the library refuses
-//! (no peer to send to) is counted and reported, never hidden; a join that finds no mesh peer within its wait is an
+//! Invariants: the swarm is polled by one task that owns it; a message the library refuses for lack of room or of peers
+//! is kept and offered again in order, as the other stacks' publishers wait, until it is accepted or the give-up time of PINC's own publisher
+//! has passed, and every message that waited or was finally refused is counted and reported, never hidden; a join that finds no mesh peer within its wait is an
 //! error; a fetch ends with the hash checked or with the reason it failed.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use futures::{AsyncReadExt, AsyncWriteExt, StreamExt};
-use libp2p::gossipsub::{self, IdentTopic, MessageAuthenticity};
+use libp2p::gossipsub::{self, IdentTopic, MessageAuthenticity, PublishError};
 use libp2p::identity::Keypair;
 use libp2p::request_response::{self, OutboundRequestId, ProtocolSupport};
 use libp2p::swarm::{NetworkBehaviour, SwarmEvent};
 use libp2p::{Multiaddr, PeerId, StreamProtocol, SwarmBuilder};
 use serde_json::{Value, json};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 
-use crate::node::data::{Content, Header, seed32, wall_ns};
+use crate::node::data::{Content, Header, seed32, start_wall_ns, wall_ns};
 use crate::node::proto::{Cmd, Init, Ready};
 use crate::node::shell::{Handler, serve};
 use crate::node::stats::PubSubStats;
@@ -41,6 +42,12 @@ const MAX_MESSAGE: usize = 1 << 20;
 const BLOCK: u64 = 256 << 10;
 /// Block requests in flight per provider.
 const WINDOW: usize = 16;
+/// How long a refused message is offered again. It mirrors `pinc_broadcast::consts::PUB_GIVEUP`, the time after which
+/// PINC's own publisher gives up on a message, so the stacks wait alike.
+const PUB_GIVEUP: Duration = Duration::from_nanos(pinc_broadcast::consts::PUB_GIVEUP);
+/// The first and the longest wait before a held message is offered again when the swarm has made no progress.
+const RETRY_MIN: Duration = Duration::from_millis(5);
+const RETRY_MAX: Duration = Duration::from_millis(250);
 const BLOCKS: StreamProtocol = StreamProtocol::new("/pinc-distributed/blocks/1");
 
 fn keypair(name: &str) -> Result<Keypair, String> {
@@ -189,25 +196,124 @@ impl Job {
     }
 }
 
+/// What the node's publishes came to: messages gossipsub accepted, messages that had to wait, messages dropped, and
+/// the count of those accepted or dropped for a publish call to wait on.
+struct Tally {
+    published: AtomicU64,
+    waited: AtomicU64,
+    refused: AtomicU64,
+    resolved: watch::Sender<u64>,
+}
+
+impl Tally {
+    fn new() -> Self {
+        Self {
+            published: AtomicU64::new(0),
+            waited: AtomicU64::new(0),
+            refused: AtomicU64::new(0),
+            resolved: watch::Sender::new(0),
+        }
+    }
+
+    fn get(counter: &AtomicU64) -> u64 {
+        counter.load(Ordering::Relaxed)
+    }
+
+    fn resolve(&self, counter: &AtomicU64) {
+        counter.fetch_add(1, Ordering::Relaxed);
+        self.resolved.send_modify(|n| *n += 1);
+    }
+}
+
+/// A message gossipsub refused for lack of room or of peers, with the time its wait ends.
+struct Held {
+    topic: String,
+    body: Vec<u8>,
+    deadline: tokio::time::Instant,
+    waited: bool,
+}
+
 /// One libp2p node.
 struct App {
     init: Init,
     me: u16,
     cmds: mpsc::UnboundedSender<SwarmCmd>,
     stats: Arc<std::sync::Mutex<PubSubStats>>,
-    refused: Arc<AtomicU64>,
+    tally: Arc<Tally>,
 }
 
 struct Driver {
     swarm: libp2p::Swarm<Behaviour>,
     stats: Arc<std::sync::Mutex<PubSubStats>>,
-    refused: Arc<AtomicU64>,
+    tally: Arc<Tally>,
+    /// The messages not yet accepted, oldest first: none is offered before the one ahead of it.
+    held: VecDeque<Held>,
+    /// The wait before the held messages are offered again if nothing else prompts it, and when that wait ends.
+    backoff: Duration,
+    retry_at: Option<tokio::time::Instant>,
     served: Option<Content>,
     job: Option<Job>,
 }
 
 impl Driver {
+    /// Offer the held messages in order until one is refused for lack of room or of peers. A permanent refusal, and a
+    /// refusal after the message's wait has ended, drop it and count it; a message left waiting is counted once.
+    /// `timer` is true when the backoff timer prompted this, which lengthens the next wait.
+    fn flush(&mut self, timer: bool) {
+        let now = tokio::time::Instant::now();
+        let mut progress = false;
+        while let Some(front) = self.held.front() {
+            let sent = self
+                .swarm
+                .behaviour_mut()
+                .gossipsub
+                .publish(IdentTopic::new(front.topic.clone()), front.body.clone());
+            match sent {
+                Ok(_) => {
+                    if let Ok(mut s) = self.stats.lock() {
+                        s.published();
+                    }
+                    self.tally.resolve(&self.tally.published);
+                }
+                Err(PublishError::NoPeersSubscribedToTopic | PublishError::AllQueuesFull(_))
+                    if now < front.deadline =>
+                {
+                    break;
+                }
+                Err(_) => self.tally.resolve(&self.tally.refused),
+            }
+            self.held.pop_front();
+            progress = true;
+        }
+        for h in self.held.iter_mut().filter(|h| !h.waited) {
+            h.waited = true;
+            self.tally.waited.fetch_add(1, Ordering::Relaxed);
+        }
+        if self.held.is_empty() {
+            self.retry_at = None;
+            self.backoff = RETRY_MIN;
+        } else if progress || timer || self.retry_at.is_none() {
+            self.backoff = if progress {
+                RETRY_MIN
+            } else {
+                (self.backoff * 2).min(RETRY_MAX)
+            };
+            self.retry_at = Some(now + self.backoff);
+        }
+    }
+
     fn on_event(&mut self, ev: SwarmEvent<BehaviourEvent>) {
+        let progress = matches!(
+            ev,
+            SwarmEvent::ConnectionEstablished { .. } | SwarmEvent::Behaviour(BehaviourEvent::Gossipsub(_))
+        );
+        self.on_swarm_event(ev);
+        if progress && !self.held.is_empty() {
+            self.flush(false);
+        }
+    }
+
+    fn on_swarm_event(&mut self, ev: SwarmEvent<BehaviourEvent>) {
         match ev {
             SwarmEvent::Behaviour(BehaviourEvent::Gossipsub(gossipsub::Event::Message { message, .. })) => {
                 if let Ok(mut s) = self.stats.lock() {
@@ -288,16 +394,14 @@ impl Driver {
                     .count();
                 let _ = done.send(n);
             }
-            SwarmCmd::Publish(t, data) => {
-                if self
-                    .swarm
-                    .behaviour_mut()
-                    .gossipsub
-                    .publish(IdentTopic::new(t), data)
-                    .is_err()
-                {
-                    self.refused.fetch_add(1, Ordering::Relaxed);
-                }
+            SwarmCmd::Publish(topic, body) => {
+                self.held.push_back(Held {
+                    topic,
+                    body,
+                    deadline: tokio::time::Instant::now() + PUB_GIVEUP,
+                    waited: false,
+                });
+                self.flush(false);
             }
             SwarmCmd::Provide(content, done) => {
                 let mut h = blake3::Hasher::new();
@@ -399,12 +503,15 @@ impl App {
             }
         }
         let stats = Arc::new(std::sync::Mutex::new(PubSubStats::new(me_spec.index)));
-        let refused = Arc::new(AtomicU64::new(0));
+        let tally = Arc::new(Tally::new());
         let (tx, mut rx) = mpsc::unbounded_channel::<SwarmCmd>();
         let mut driver = Driver {
             swarm,
             stats: Arc::clone(&stats),
-            refused: Arc::clone(&refused),
+            tally: Arc::clone(&tally),
+            held: VecDeque::new(),
+            backoff: RETRY_MIN,
+            retry_at: None,
             served: None,
             job: None,
         };
@@ -420,6 +527,8 @@ impl App {
                             }
                         }
                     }
+                    () = tokio::time::sleep_until(driver.retry_at.unwrap_or_else(tokio::time::Instant::now)),
+                        if driver.retry_at.is_some() => driver.flush(true),
                     ev = driver.swarm.select_next_some() => driver.on_event(ev),
                     cmd = rx.recv() => match cmd {
                         Some(c) => if !driver.on_cmd(c) { return },
@@ -433,7 +542,7 @@ impl App {
             me: me_spec.index,
             cmds: tx,
             stats,
-            refused,
+            tally,
         });
         let ready = Ready {
             stack: "libp2p".into(),
@@ -481,27 +590,35 @@ impl App {
         interval_us: u64,
         start_ns: u64,
     ) -> Result<Value, String> {
-        let lead = start_ns.saturating_sub(wall_ns());
+        let start_wall = start_wall_ns(start_ns);
+        let lead = start_wall.saturating_sub(wall_ns());
         let start = tokio::time::Instant::now() + Duration::from_nanos(lead);
-        let before = self.refused.load(Ordering::Relaxed);
+        let tally = &self.tally;
+        let (published, waited, refused) = (
+            Tally::get(&tally.published),
+            Tally::get(&tally.waited),
+            Tally::get(&tally.refused),
+        );
+        let mut resolved = tally.resolved.subscribe();
+        let target = *resolved.borrow() + u64::from(count);
         for seq in 0..count {
             tokio::time::sleep_until(start + Duration::from_micros(interval_us * u64::from(seq))).await;
-            let body = Header {
-                origin: self.me,
-                seq,
-                sent_ns: wall_ns(),
-            }
-            .body(size as usize);
+            let body = Header::scheduled(self.me, seq, start_wall, interval_us * 1000).body(size as usize);
             self.cmds
                 .send(SwarmCmd::Publish(topic.to_owned(), body))
                 .map_err(|_| "the swarm stopped")?;
-            if let Ok(mut s) = self.stats.lock() {
-                s.published();
-            }
         }
-        // Give the swarm task the chance to take the last message before the count is read.
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        Ok(json!({ "published": count, "refused": self.refused.load(Ordering::Relaxed) - before }))
+        // Every message is accepted or dropped by the time the last one's wait ends; the margin covers a swarm that
+        // stopped, which resolves nothing.
+        tokio::time::timeout(PUB_GIVEUP + Duration::from_secs(5), resolved.wait_for(|n| *n >= target))
+            .await
+            .map_err(|_| "the swarm did not finish publishing in time".to_owned())?
+            .map_err(|_| "the swarm stopped".to_owned())?;
+        Ok(json!({
+            "published": Tally::get(&tally.published) - published,
+            "waited": Tally::get(&tally.waited) - waited,
+            "refused": Tally::get(&tally.refused) - refused,
+        }))
     }
 
     async fn provide(&self, size: u64, seed: u64) -> Result<Value, String> {
@@ -568,7 +685,14 @@ impl Handler for App {
             } => self.fetch(&value, &providers, timeout_ms).await,
             Cmd::Report => {
                 let rep = self.stats.lock().map_err(|_| "the counters are unavailable")?.report();
-                Ok(json!({ "pubsub": rep, "refused": self.refused.load(Ordering::Relaxed) }))
+                let (waited, refused) = (Tally::get(&self.tally.waited), Tally::get(&self.tally.refused));
+                // The counters are named as PINC's are, so the results show them in the same place.
+                Ok(json!({
+                    "pubsub": rep,
+                    "waited": waited,
+                    "refused": refused,
+                    "counters": { "publish_waited": waited, "publish_refused": refused },
+                }))
             }
             Cmd::Stop => {
                 let _ = self.ask(SwarmCmd::Stop).await;

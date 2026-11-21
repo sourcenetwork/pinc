@@ -1,9 +1,9 @@
 //! What a node counts of the publish and subscribe workload, the same for every stack: distinct deliveries, duplicates,
-//! delivery latency from the header the sender wrote, bytes, and the longest silence between two deliveries.
+//! delivery latency from the scheduled send time in the header the sender wrote, bytes, and the longest silence between two deliveries.
 //!
 //! Invariants: a delivery is counted once per (origin, sequence); the table of seen messages is bounded and a delivery
 //! that finds it full is counted as delivered and as unchecked, never dropped; a latency is the receiver's wall clock
-//! minus the sender's, both read on the same machine or on machines whose clocks the run states are not synchronised.
+//! minus the message's scheduled send time, both read on the same machine or on machines whose clocks the run states are not synchronised.
 
 use std::collections::HashSet;
 
