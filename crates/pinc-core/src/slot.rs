@@ -315,8 +315,8 @@ pub(crate) struct Meta<const NP: usize> {
     /// On the probed session: the latest end of a probe waiting for its answer (0 for none). While it stands the
     /// session's next path challenge is due at once, so the probe learns whether the peer lives.
     pub(crate) probed_until: u64,
-    /// On the probed session: the `probed_until` epoch the probe's challenge was sent for, so one challenge goes out per
-    /// probe.
+    /// On the probed session: the `probed_until` epoch the probe's challenge was sent for, so one challenge goes out
+    /// per probe.
     pub(crate) probed_ping_for: u64,
 }
 

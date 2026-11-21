@@ -187,7 +187,8 @@ impl TNode {
         Self::build(tag, addr, now, IdentityAlg::Ed25519, mtu, true, None, 0)
     }
 
-    /// A node whose quiet-parent dials wait `probe_window` ns for the probed session ([`EndpointConfig::probe_window`]).
+    /// A node whose quiet-parent dials wait `probe_window` ns for the probed session
+    /// ([`EndpointConfig::probe_window`]).
     pub fn with_probe_window(tag: u8, addr: SocketAddr, now: u64, probe_window: u64) -> Self {
         Self::build(tag, addr, now, IdentityAlg::Ed25519, 1500, false, None, probe_window)
     }

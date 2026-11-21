@@ -489,8 +489,9 @@ fn a_dial_to_a_quiet_peer_whose_direct_path_died_connects_over_its_relay() {
         w.dial(secs(2), a, b, vec![sb]);
         w.run(secs(8));
         let root = w.connected(a).expect("the first dial connected");
-        // The direct path between a and b dies, both ways, and never comes back. Nothing of b reaches a for 24 s (b would otherwise
-        // move its session to the relay path and be heard there), then the relay path of a is open again.
+        // The direct path between a and b dies, both ways, and never comes back. Nothing of b reaches a for 24 s (b
+        // would otherwise move its session to the relay path and be heard there), then the relay path of a is open
+        // again.
         w.sim.link_change(secs(8), b, a, LinkChange::Blocked(true));
         w.sim.link_change(secs(8), a, b, LinkChange::Blocked(true));
         w.sim.link_change(secs(8), r, a, LinkChange::Blocked(true));

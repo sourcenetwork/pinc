@@ -9,17 +9,17 @@
 //!
 //! The parent must have been heard from within [`PARENT_RX`]. One that went quiet may be a peer that restarted, so a
 //! dial to it asks first (`QUIET_PROBE`): the dial's slot holds its memory and no connection, and the quiet session
-//! challenges its active path at once (a path challenge, answered with a response the peer sends as soon as it
-//! arrives, where a ping is acknowledged after the peer's acknowledgement delay). As soon as any packet comes back (one the event gate refused too) the
-//! dial rides the session as a sub-session, with the id it already gave the application. When the wait (two of the session's probe timeouts, or `EndpointConfig::probe_window`)
-//! runs out unanswered, the dial makes its own handshake in the same slot, to the caller's first address, the session's
-//! own direct address and then the caller's others, and closes the quiet session only when it is still the one
-//! probed, not a pulse session, still unheard and nothing is in flight on it (the probe's own challenge is never in
-//! flight: only recorded packets count): a session with the application's data in flight ends by its own path
-//! timeout. A lapse waits on another protocol's running
-//! handshake to the peer instead of making a second one. While the probe runs the dial's id holds no session: a write
-//! on it fails at once, closing it ends the dial, and it answers `Stats` as a dial that has not connected and keeps
-//! the `FlightPaths`, `FirstResend` and `HoldFlight` it is sent, applied to the connection it gets. At most
+//! challenges its active path at once (a path challenge, answered with a response the peer sends as soon as it arrives,
+//! where a ping is acknowledged after the peer's acknowledgement delay). As soon as any packet comes back (one the
+//! event gate refused too) the dial rides the session as a sub-session, with the id it already gave the application.
+//! When the wait (two of the session's probe timeouts, or `EndpointConfig::probe_window`) runs out unanswered, the dial
+//! makes its own handshake in the same slot, to the caller's first address, the session's own direct address and then
+//! the caller's others, and closes the quiet session only when it is still the one probed, not a pulse session, still
+//! unheard and nothing is in flight on it (the probe's own challenge is never in flight: only recorded packets count):
+//! a session with the application's data in flight ends by its own path timeout. A lapse waits on another protocol's
+//! running handshake to the peer instead of making a second one. While the probe runs the dial's id holds no session: a
+//! write on it fails at once, closing it ends the dial, and it answers `Stats` as a dial that has not connected and
+//! keeps the `FlightPaths`, `FirstResend` and `HoldFlight` it is sent, applied to the connection it gets. At most
 //! [`MAX_WAITERS`] dials probe one session; past that a dial makes its own handshake.
 //!
 //! The extension frame is repeated by the transport until its packet is acknowledged, so the peer may see it twice;
@@ -80,8 +80,8 @@ ep_impl! {
 
     /// The established session of `peer` a dial may probe (`QUIET_PROBE`): the same live session [`find_parent`]
     /// rides, only that it has not been heard from within [`PARENT_RX`]: a quiet parent. It may be a peer that went
-    /// silent or restarted, so the dial first has the session challenge its path before it makes its own handshake. None
-    /// once [`MAX_WAITERS`] dials probe it.
+    /// silent or restarted, so the dial first has the session challenge its path before it makes its own handshake.
+    /// None once [`MAX_WAITERS`] dials probe it.
     pub(crate) fn find_quiet_parent(&self, peer: &NodeId, now: u64) -> Option<usize> {
         let live = |i: &usize| {
             self.slots.get(*i).is_some_and(|s| {
@@ -206,10 +206,11 @@ ep_impl! {
 
     /// Start the probe of a dial to a quiet parent (`QUIET_PROBE`): the dial's slot takes its memory back and holds no
     /// connection, nothing goes on the wire from the dial, and the application holds its id until the probe
-    /// resolves. The probed session challenges its active path at once (its `probed_until` makes one due), so the probe learns whether
-    /// the peer lives. The dial rides the parent when any packet comes back, else it lapses into its own handshake
-    /// at `probe_until`: the window is `EndpointConfig::probe_window` when set, else two of the session's probe
-    /// timeouts (its round trip plus margin, capped). `addrs` are the dial's routable addresses, kept for the lapse.
+    /// resolves. The probed session challenges its active path at once (its `probed_until` makes one due), so the
+    /// probe learns whether the peer lives. The dial rides the parent when any packet comes back, else it lapses into
+    /// its own handshake at `probe_until`: the window is `EndpointConfig::probe_window` when set, else two of the
+    /// session's probe timeouts (its round trip plus margin, capped). `addrs` are the dial's routable addresses, kept
+    /// for the lapse.
     // Out of line, as `free_slot`: a whole connection moves here.
     #[inline(never)]
     pub(crate) fn open_probe(
@@ -332,7 +333,8 @@ ep_impl! {
         let facts = self.probe_facts(probed, probed_gen, now);
         // A pulse session's liveness is its carrier's, so a late answer is not proof of death: it is never closed.
         // A session an earlier lapse of the same pass closed is not closed a second time.
-        // vertexia: packets in flight stand in for application data in flight, so a session with data in flight is left up until its path times out; exact needs a transport count of unacknowledged stream bytes (pinc#693)
+        // vertexia: packets in flight stand in for application data in flight, so a session with data in flight is
+        // left up until its path times out; exact needs a transport count of unacknowledged stream bytes (pinc#693)
         let quiet = was_quiet
             && same
             && self.slots.get(probed).is_some_and(|s| {
