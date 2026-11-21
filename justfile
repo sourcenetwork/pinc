@@ -170,10 +170,11 @@ test *args:
     cargo nextest run --workspace --all-features --profile ci {{args}}
     cargo nextest run -p pinc --no-default-features --lib --profile ci {{args}}
 
-# The stack tests (a relay's, and the quiet-parent probe's on 1 MiB) in an application's debug build: every crate at opt-level 0 (`--cargo-profile` is cargo's profile,
-# nextest's own `--profile` is its configuration).
+# The stack tests (a relay's, and the quiet-parent probe's on 1 MiB) in an application's debug build: every crate at
+# opt-level 0 (`--cargo-profile` is cargo's profile, nextest's own `--profile` is its configuration). `--test` names
+# the two binaries to build: the filter alone would build every test binary at opt-level 0, tens of gigabytes.
 unoptimised *args:
-    cargo nextest run --cargo-profile unoptimised -p pinc-tests -E 'binary(relay_stack) | (binary(core_sub_probe) & test(one_mebibyte))' {{args}}
+    cargo nextest run --cargo-profile unoptimised -p pinc-tests --test relay_stack --test core_sub_probe -E 'binary(relay_stack) | (binary(core_sub_probe) & test(one_mebibyte))' {{args}}
 
 # The distributed harness's own tests (the orchestration logic; no root, no Docker).
 test-distributed *args:
