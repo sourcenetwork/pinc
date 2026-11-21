@@ -49,11 +49,17 @@ fn a_probing_dial_is_listed_and_closing_it_sends_no_handshake() {
                 },
             )
             .unwrap();
-        assert!(!listed(&net, a).iter().any(|st| st.session == child), "the closed dial is still listed");
+        assert!(
+            !listed(&net, a).iter().any(|st| st.session == child),
+            "the closed dial is still listed"
+        );
         net.run_for(5 * SEC_NS);
         assert!(net.nodes[a].saw(|e| matches!(e, Event::ConnectFailed { session: Some(s), .. } if *s == child)));
         assert!(!net.nodes[a].saw(|e| matches!(e, Event::Connected { session, .. } if *session == child)));
-        assert!(!handshake_since(&net, marker), "a handshake left for the peer of a closed dial");
+        assert!(
+            !handshake_since(&net, marker),
+            "a handshake left for the peer of a closed dial"
+        );
     });
 }
 
@@ -72,7 +78,11 @@ fn a_probe_rides_within_the_round_trip_not_the_peers_acknowledgement_delay() {
         let at = net.nodes[a]
             .time_of(|e| matches!(e, Event::Connected { session, .. } if *session == child))
             .unwrap();
-        assert!(at - t0 < 5 * MS_NS, "the ride took {} ns over a 1 ms round trip", at - t0);
+        assert!(
+            at - t0 < 5 * MS_NS,
+            "the ride took {} ns over a 1 ms round trip",
+            at - t0
+        );
     });
 }
 
@@ -155,7 +165,10 @@ fn lapse_after(window: u64) -> u64 {
     let (mut net, a, b) = silent_parent_waiting(window);
     let (t0, marker) = (net.now, net.captured.len());
     dial(&mut net, a, b, ALPN_B);
-    assert!(net.run(t0 + 30 * SEC_NS, |n| handshake_since(n, marker)), "the probe never lapsed");
+    assert!(
+        net.run(t0 + 30 * SEC_NS, |n| handshake_since(n, marker)),
+        "the probe never lapsed"
+    );
     net.now - t0
 }
 
@@ -164,8 +177,14 @@ fn lapse_after(window: u64) -> u64 {
 fn a_configured_probe_window_sets_the_wait() {
     big_stack(|| {
         let waited = lapse_after(3 * SEC_NS);
-        assert!(waited >= 3 * SEC_NS, "the probe lapsed after {waited} ns, before its window");
-        assert!(waited < 3 * SEC_NS + 500 * MS_NS, "the probe lapsed after {waited} ns, long after its window");
+        assert!(
+            waited >= 3 * SEC_NS,
+            "the probe lapsed after {waited} ns, before its window"
+        );
+        assert!(
+            waited < 3 * SEC_NS + 500 * MS_NS,
+            "the probe lapsed after {waited} ns, long after its window"
+        );
     });
 }
 
@@ -217,7 +236,11 @@ fn a_suspend_and_resume_during_a_probe_leave_one_outcome() {
         net.nodes[a].cmd(now, Command::Resume { moved: false }).unwrap();
         net.run_for(10 * SEC_NS);
         let (connected, failed) = outcomes(&net, a, child);
-        assert_eq!(connected + failed, 1, "the dial ended {connected} times connected and {failed} failed");
+        assert_eq!(
+            connected + failed,
+            1,
+            "the dial ended {connected} times connected and {failed} failed"
+        );
         assert!(
             !listed(&net, a).iter().any(|st| st.session == child && !st.established),
             "a dial is still probing"
@@ -261,17 +284,25 @@ fn the_ninth_dial_past_the_waiter_bound_makes_its_own_handshake() {
         assert!(!handshake_since(&net, marker), "a probing dial sent a handshake");
         let (ninth, _) = dial(&mut net, a, b, ALPN_B);
         net.run_for(MS_NS);
-        assert!(handshake_since(&net, marker), "the ninth dial sent no handshake of its own");
+        assert!(
+            handshake_since(&net, marker),
+            "the ninth dial sent no handshake of its own"
+        );
         assert!(net.run(net.now + 5 * SEC_NS, |n| {
-            eight.iter().chain([&ninth]).all(|d| {
-                n.nodes[a].saw(|e| matches!(e, Event::Connected { session, .. } if session == d))
-            })
+            eight
+                .iter()
+                .chain([&ninth])
+                .all(|d| n.nodes[a].saw(|e| matches!(e, Event::Connected { session, .. } if session == d)))
         }));
         for d in &eight {
-            let Answer::Stats(st) = net.nodes[a].ep.query(Query::Stats(*d)) else { panic!() };
+            let Answer::Stats(st) = net.nodes[a].ep.query(Query::Stats(*d)) else {
+                panic!()
+            };
             assert!(st.sub, "a dial within the bound did not ride");
         }
-        let Answer::Stats(st) = net.nodes[a].ep.query(Query::Stats(ninth)) else { panic!() };
+        let Answer::Stats(st) = net.nodes[a].ep.query(Query::Stats(ninth)) else {
+            panic!()
+        };
         assert!(!st.sub, "the ninth dial rode instead of making its own handshake");
     });
 }
@@ -308,7 +339,11 @@ fn a_ride_while_the_event_queue_is_stalled_connects_once_after_the_host_reads() 
         let marker = net.captured.len();
         let (child, _) = dial(&mut net, a, b, ALPN_B);
         net.run_for(30 * MS_NS);
-        assert_eq!(outcomes(&net, a, child), (0, 0), "the probe resolved before its answer arrived");
+        assert_eq!(
+            outcomes(&net, a, child),
+            (0, 0),
+            "the probe resolved before its answer arrived"
+        );
         let answers: Vec<_> = net.captured[marker..]
             .iter()
             .filter(|(_, to, _)| *to == addr_a)
@@ -323,12 +358,21 @@ fn a_ride_while_the_event_queue_is_stalled_connects_once_after_the_host_reads() 
         }
         // The host reads everything now; the dial must connect exactly once by itself, with nothing more arriving.
         net.run_for(5 * SEC_NS);
-        assert_eq!(outcomes(&net, a, child), (1, 0), "the stalled ride did not connect the dial once");
-        let Answer::Stats(st) = net.nodes[a].ep.query(Query::Stats(child)) else { panic!() };
+        assert_eq!(
+            outcomes(&net, a, child),
+            (1, 0),
+            "the stalled ride did not connect the dial once"
+        );
+        let Answer::Stats(st) = net.nodes[a].ep.query(Query::Stats(child)) else {
+            panic!()
+        };
         assert!(st.sub, "the dial did not ride the quiet session");
         assert_eq!(net.nodes[a].ep.sessions().count(), 2, "a second root exists");
         assert_eq!(net.nodes[a].ep.node_stats().events_lost, 0);
-        let handshakes = net.captured[marker..].iter().filter(|(_, _, d)| d[0] & 0x80 != 0).count();
+        let handshakes = net.captured[marker..]
+            .iter()
+            .filter(|(_, _, d)| d[0] & 0x80 != 0)
+            .count();
         assert_eq!(handshakes, 0, "a handshake left though the peer answered");
     });
 }

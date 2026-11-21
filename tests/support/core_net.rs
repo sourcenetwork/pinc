@@ -197,7 +197,6 @@ impl TNode {
     pub fn owned(tag: u8, addr: SocketAddr, now: u64, spill_slots: usize) -> Self {
         Self::build(tag, addr, now, IdentityAlg::Ed25519, 1500, false, Some(spill_slots), 0)
     }
-
 }
 
 impl<const K: usize> TNode<K> {
@@ -546,7 +545,8 @@ impl CoreNet {
     /// A node whose quiet-parent dials wait `probe_window` ns ([`TNode::with_probe_window`]).
     pub fn add_with_probe_window(&mut self, tag: u8, probe_window: u64) -> usize {
         let addr: SocketAddr = ([10, 0, 0, tag], 4433).into();
-        self.nodes.push(TNode::with_probe_window(tag, addr, self.now, probe_window));
+        self.nodes
+            .push(TNode::with_probe_window(tag, addr, self.now, probe_window));
         self.nodes.len() - 1
     }
 
@@ -584,7 +584,6 @@ impl CoreNet {
         self.nodes.push(TNode::with_whole_flights_at(tag, addr, self.now, mtu));
         self.nodes.len() - 1
     }
-
 }
 
 impl<const K: usize> CoreNet<K> {
@@ -612,8 +611,16 @@ impl<const K: usize> CoreNet<K> {
     /// Add a node with a table of `K` slots.
     pub fn add_k(&mut self, tag: u8) -> usize {
         let addr: SocketAddr = ([10, 0, 0, tag], 4433).into();
-        self.nodes
-            .push(TNode::<K>::build(tag, addr, self.now, IdentityAlg::Ed25519, 1500, false, None, 0));
+        self.nodes.push(TNode::<K>::build(
+            tag,
+            addr,
+            self.now,
+            IdentityAlg::Ed25519,
+            1500,
+            false,
+            None,
+            0,
+        ));
         self.nodes.len() - 1
     }
 

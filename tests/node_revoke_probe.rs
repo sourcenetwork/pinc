@@ -33,7 +33,10 @@ fn a_revoke_during_a_probe_ends_the_dial_and_no_handshake_goes_to_the_peer() {
         let (hub, m) = (w.hubs[0].0, w.members[0]);
         let (hid, haddr) = (w.sim.node(hub).me, w.hubs[0].1.udp);
         w.run(secs(8));
-        assert!(!sessions_of(&w, &hid.bytes).is_empty(), "the member holds no session with the hub");
+        assert!(
+            !sessions_of(&w, &hid.bytes).is_empty(),
+            "the member holds no session with the hub"
+        );
         // The hub falls silent: its session with the member is quiet for over 20 s at the dial.
         w.sim.outage(m, hub, secs(8), secs(300));
         w.run(secs(34));
@@ -50,7 +53,10 @@ fn a_revoke_during_a_probe_ends_the_dial_and_no_handshake_goes_to_the_peer() {
             panic!("the dial was refused")
         };
         let probing = sessions_of(&w, &hid.bytes).into_iter().find(|s| s.session == dial);
-        assert!(probing.is_some_and(|s| !s.established), "the dial is not listed while it probes");
+        assert!(
+            probing.is_some_and(|s| !s.established),
+            "the dial is not listed while it probes"
+        );
         w.sim.command(t, m, NCmd::Revoke(hid.bytes));
         w.run(secs(45));
         assert!(
