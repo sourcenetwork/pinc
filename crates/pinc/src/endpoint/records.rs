@@ -46,35 +46,53 @@ impl<H: Hosted, R: Rendezvous> Endpoint<H, Records<R>> {
     /// This node's record as [`publish_record`](Self::publish_record) sends it: its address ([`addr`](Self::addr)),
     /// its hints and a sequence number above every earlier one (the wall clock in milliseconds, or one more than the
     /// last), signed
-    /// with its identity. With no relay client in the endpoint yet, the home relay field names this node and the
-    /// reachability class says public; the connectivity client fills both once it runs under the facade.
+    /// with its identity. With no relay client in the endpoint the reachability class says public; with one it is the
+    /// class the client observed and the home relay field names the relay the node is homed on now; with none, the home relay
+    /// names this node.
     ///
     /// # Errors
+    /// [`crate::ErrorKind::Busy`] if the hints are being changed, or if the relay client has not classified this
+    /// node or settled it on a relay yet (call again shortly; no sequence number is used up),
     /// [`crate::ErrorKind::Config`] if the key store refuses to sign, [`crate::ErrorKind::Shutdown`] if the endpoint
     /// stopped.
     pub async fn signed_record(&self) -> Result<Vec<u8>> {
         let records = &self.0.discovery;
-        let clock = ns_to_ms(self.0.shared.host.platform().wall_ns());
-        let seq = clock.max(records.seq.get().saturating_add(1));
-        records.seq.set(seq);
         let hints = records
             .hints
             .try_borrow()
             .map(|h| h.clone())
             .map_err(|_| Error::new(ErrorKind::Busy, "the hints are being changed"))?;
         let mut addrs = self.addr().direct;
+        let (mut reach, mut home) = (Reach::Public, self.0.home);
         if self.has_relays() {
-            let seen = self.0.shared.run(|core, _| Try::Done(core.candidates())).await;
-            for a in seen {
+            // One engine call, so the class and the home relay are one observation.
+            let seen = self
+                .0
+                .shared
+                .run(|core, _| Try::Done((core.reach_class().zip(core.home_relay()), core.candidates())))
+                .await;
+            let ((r, h), cands) = (
+                seen.0.ok_or(Error::new(
+                    ErrorKind::Busy,
+                    "the node has not settled on a relay yet, try again shortly",
+                ))?,
+                seen.1,
+            );
+            (reach, home) = (r, h);
+            for a in cands {
                 if !addrs.contains(&a) {
                     addrs.push(a);
                 }
             }
         }
+        // Taken only once the call can succeed, so a refused call does not use up a sequence number.
+        let clock = ns_to_ms(self.0.shared.host.platform().wall_ns());
+        let seq = clock.max(records.seq.get().saturating_add(1));
+        records.seq.set(seq);
         let fields = RecordFields {
-            home: self.0.home,
+            home,
             seq,
-            reach: Reach::Public,
+            reach,
             addrs: addrs.get(..addrs.len().min(MAX_ADDRS)).unwrap_or_default(),
             hints: &hints,
         };

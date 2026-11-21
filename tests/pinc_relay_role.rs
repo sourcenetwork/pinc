@@ -34,6 +34,7 @@ use pinc::{
     Rendezvous,
 };
 use pinc_common::{ECHO, eventually, serve_conn, within};
+use pinc_connect::record::Reach;
 use pinc_connect::relay::rule::HUB_TUNNEL_FRESH_NS;
 use smol::channel::{Receiver, Sender, unbounded};
 
@@ -160,6 +161,19 @@ fn member_with<D: Discovery + 'static>(
     carrier_up: Rc<Cell<bool>>,
     discovery: D,
 ) -> Endpoint<impl Hosted, D> {
+    member_relays(net, at, seed, vec![relay], to_relay, carrier_up, discovery)
+}
+
+/// As [`member_with`], knowing `relays` in the order given.
+fn member_relays<D: Discovery + 'static>(
+    net: Rc<Net>,
+    at: SocketAddr,
+    seed: u8,
+    relays: Vec<Relay>,
+    to_relay: Sender<(Pipe, CarrierKind)>,
+    carrier_up: Rc<Cell<bool>>,
+    discovery: D,
+) -> Endpoint<impl Hosted, D> {
     let rx = net.attach(at);
     let n = net;
     pinc_common::builder()
@@ -167,7 +181,7 @@ fn member_with<D: Discovery + 'static>(
         .unwrap()
         .discovery(discovery)
         .alpn(ECHO)
-        .relays([relay])
+        .relays(relays)
         .local_addr(at)
         .carriers(
             async move |_relay: &Relay, kind: CarrierKind| -> io::Result<Pipe> {
@@ -733,4 +747,123 @@ async fn a_lookup_sees_the_record_a_peer_republished_after_the_looker_knew_one()
         lookup_hints(&a, b.id(), 3).await;
     })
     .await;
+}
+
+/// A member with a record store, the relay it knows and the relay's run. The member is not driven yet.
+fn record_member(
+    net: &Rc<Net>,
+) -> (
+    Endpoint<impl Hosted + 'static, Records<Held>>,
+    Endpoint<impl Hosted + 'static>,
+) {
+    record_member_after(net, Vec::new())
+}
+
+/// As [`record_member`], knowing the relays `before` ahead of the live one.
+fn record_member_after(
+    net: &Rc<Net>,
+    mut before: Vec<Relay>,
+) -> (
+    Endpoint<impl Hosted + 'static, Records<Held>>,
+    Endpoint<impl Hosted + 'static>,
+) {
+    let (to_relay, accepted) = unbounded();
+    let relay = relay_endpoint(Rc::clone(net), addr(RELAY_ADDR), accepted, MemStore::new());
+    let known = Relay::new(relay.id())
+        .with_udp(addr(RELAY_ADDR))
+        .with_tcp(addr(RELAY_ADDR));
+    before.push(known);
+    let a = member_relays(
+        Rc::clone(net),
+        addr(A_ADDR),
+        1,
+        before,
+        to_relay,
+        Rc::new(Cell::new(true)),
+        Records::new(Held::default()),
+    );
+    run_task(&relay).detach();
+    (a, relay)
+}
+
+#[nuclei::test]
+async fn a_record_before_the_relay_client_classified_the_node_is_refused_to_try_again() {
+    let net = Net::new();
+    let (a, _relay) = record_member(&net);
+    let e = within(30, a.signed_record()).await.unwrap_err();
+    assert_eq!(e.kind(), ErrorKind::Busy);
+}
+
+#[nuclei::test]
+async fn a_record_carries_the_class_the_relay_client_observed() {
+    let net = Net::new();
+    let (a, _relay) = record_member(&net);
+    // The relay sees the member at an address it does not hold locally, as behind a translator.
+    net.rebind(addr(A_ADDR), addr(B_MOVED));
+    drive(&a);
+    let got = RefCell::new(None);
+    eventually(30, "the node is classified", || async {
+        match within(30, a.signed_record()).await {
+            Ok(rec) => {
+                *got.borrow_mut() = Some(rec);
+                true
+            }
+            Err(e) => {
+                assert_eq!(e.kind(), ErrorKind::Busy);
+                false
+            }
+        }
+    })
+    .await;
+    let rec = got.take().unwrap();
+    assert_eq!(
+        pinc_connect::record::Record::parse_verified(&rec).unwrap().reach,
+        Reach::Nat
+    );
+}
+
+/// The id of a relay that does not exist.
+fn silent_id() -> NodeId {
+    NodeId {
+        alg: pinc_crypto::IdentityAlg::Ed25519,
+        bytes: [0x99; 32],
+    }
+}
+
+#[nuclei::test]
+async fn a_record_names_the_relay_the_member_is_homed_on_and_a_refused_call_uses_no_sequence_number() {
+    let net = Net::new();
+    // The first relay it knows never answers: nothing is attached at its address.
+    let silent = Relay::new(silent_id()).with_udp(addr("10.0.0.9:7000"));
+    let (a, relay) = record_member_after(&net, vec![silent]);
+    // Many refusals within a few milliseconds: if each used up a number, the sequence would run far ahead of the clock.
+    for _ in 0..20_000 {
+        assert_eq!(within(30, a.signed_record()).await.unwrap_err().kind(), ErrorKind::Busy);
+    }
+    drive(&a);
+    let got = RefCell::new(None);
+    eventually(30, "the node is homed", || async {
+        match within(30, a.signed_record()).await {
+            Ok(rec) => {
+                *got.borrow_mut() = Some(rec);
+                true
+            }
+            Err(e) => {
+                assert_eq!(e.kind(), ErrorKind::Busy);
+                false
+            }
+        }
+    })
+    .await;
+    let rec = got.take().unwrap();
+    let rec = pinc_connect::record::Record::parse_verified(&rec).unwrap();
+    assert_eq!(rec.home, relay.id());
+    assert_ne!(rec.home, silent_id(), "the record names the first configured relay");
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis()
+        .try_into()
+        .unwrap();
+    assert!(rec.seq <= now_ms, "{} ran ahead of the clock {now_ms}", rec.seq);
 }
