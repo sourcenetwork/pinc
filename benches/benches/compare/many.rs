@@ -25,6 +25,40 @@ struct Burst {
     up: Vec<f64>,
     /// The last dial error, else the first reason a client did not start; both when both happened.
     why: String,
+    /// Every failure of a started client, by phase (`connect` or `upload`) and error, with its count.
+    failures: String,
+}
+
+/// The failures of a burst counted by phase and error, as `phase: error xN; ...`.
+#[derive(Default)]
+struct Tally(std::collections::BTreeMap<String, u32>);
+
+impl Tally {
+    fn add(&mut self, phase: &str, e: &str) {
+        *self.0.entry(format!("{phase}: {e}")).or_default() += 1;
+    }
+    fn text(&self) -> String {
+        self.0
+            .iter()
+            .map(|(k, n)| format!("{k} x{n}"))
+            .collect::<Vec<_>>()
+            .join("; ")
+    }
+}
+
+/// Connect to `addr` and upload `each` bytes; a failure names its phase.
+async fn connect_and_upload<L: Lib>(
+    ep: &L::Ep,
+    addr: &str,
+    t: Instant,
+    each: u64,
+) -> Result<(Duration, L::Conn), (&'static str, String)> {
+    let c = L::hello(ep, addr, false)
+        .await
+        .map_err(|e| ("connect", e.to_string()))?;
+    let up = t.elapsed();
+    upload::<L>(&c, each).await.map_err(|e| ("upload", e.to_string()))?;
+    Ok((up, c))
 }
 
 /// The readings around a burst; `None` is a read that failed.
@@ -104,6 +138,7 @@ fn line(lib: &str, b: &Burst, r: &Readings) -> Rec {
         .n("server_cpu_s", server.map_or(f64::NAN, |(a, z)| z.cpu_secs_since(a)))
         .n("client_cpu_s", r.c_end.cpu_secs_since(r.c_made))
         .s("last_error", &b.why)
+        .s("failures", &b.failures)
 }
 
 /// The line of a run whose control connection did not open.
@@ -143,26 +178,22 @@ async fn many_one<L: Lib>(addr: &str, n: usize, each: u64, sink: impl FnOnce(Rec
     for ep in eps {
         let (addr, done) = (addr.to_owned(), done.clone());
         L::spawn(async move {
-            let r = async {
-                let c = L::hello(&ep, &addr, false).await?;
-                let up = t.elapsed();
-                upload::<L>(&c, each).await?;
-                io::Result::Ok((up, c))
-            }
-            .await;
-            let _ = done.unbounded_send((ep, r.map_err(|e| e.to_string())));
+            let r = connect_and_upload::<L>(&ep, &addr, t, each).await;
+            let _ = done.unbounded_send((ep, r));
         });
     }
     drop(done);
     let (mut held, mut up, mut failed) = (Vec::with_capacity(n), Vec::new(), no_endpoint);
+    let mut tally = Tally::default();
     while let Some((ep, r)) = results.next().await {
         match r {
             Ok((u, c)) => {
                 up.push(us(u));
                 held.push((ep, c));
             }
-            Err(e) => {
+            Err((phase, e)) => {
                 failed += 1;
+                tally.add(phase, &e);
                 dial = e;
             }
         }
@@ -179,6 +210,7 @@ async fn many_one<L: Lib>(addr: &str, n: usize, each: u64, sink: impl FnOnce(Rec
         secs,
         up,
         why: why_of(no_endpoint, &start, &dial),
+        failures: tally.text(),
     };
     let readings = Readings {
         s_base,
@@ -188,7 +220,7 @@ async fn many_one<L: Lib>(addr: &str, n: usize, each: u64, sink: impl FnOnce(Rec
         c_peak_reset,
         c_end,
     };
-    sink(line(L::name(), &burst, &readings));
+    sink(line(L::name(), &burst, &readings).wire(&L::wire(&ctl).await));
     for (ep, c) in held {
         L::close(&ep, &c).await;
         L::shutdown(ep).await;
@@ -226,7 +258,7 @@ async fn many_spread<L: Lib>(addr: &str, n: usize, each: u64, sink: impl FnOnce(
     let s_base = server_base::<L>(&ctl).await.ok();
     let c_before = Stats::now();
     let (made, mut made_rx) = mpsc::unbounded::<Result<(), String>>();
-    let (done, mut results) = mpsc::unbounded::<Result<Duration, String>>();
+    let (done, mut results) = mpsc::unbounded::<Result<Duration, (&'static str, String)>>();
     let (ended, mut ended_rx) = mpsc::unbounded::<()>();
     let (mut go, mut release) = (Vec::with_capacity(n), Vec::with_capacity(n));
     let (mut refused, mut start, mut dial) = (0usize, String::new(), String::new());
@@ -250,20 +282,13 @@ async fn many_spread<L: Lib>(addr: &str, n: usize, each: u64, sink: impl FnOnce(
             drop(made);
             let held = match go_rx.await {
                 Ok(t) => {
-                    let r = async {
-                        let c = L::hello(&ep, &addr, false).await?;
-                        let up = t.elapsed();
-                        upload::<L>(&c, each).await?;
-                        io::Result::Ok((up, c))
-                    }
-                    .await;
-                    let held = match r {
+                    let held = match connect_and_upload::<L>(&ep, &addr, t, each).await {
                         Ok((up, c)) => {
                             let _ = done.unbounded_send(Ok(up));
                             Some(c)
                         }
                         Err(e) => {
-                            let _ = done.unbounded_send(Err(e.to_string()));
+                            let _ = done.unbounded_send(Err(e));
                             None
                         }
                     };
@@ -304,14 +329,16 @@ async fn many_spread<L: Lib>(addr: &str, n: usize, each: u64, sink: impl FnOnce(
         let _ = g.send(t);
     }
     let (mut ok, mut up, mut failed) = (0u32, Vec::new(), no_endpoint);
+    let mut tally = Tally::default();
     for _ in 0..n.saturating_sub(no_endpoint as usize) {
         match results.next().await {
             Some(Ok(u)) => {
                 up.push(us(u));
                 ok += 1;
             }
-            Some(Err(e)) => {
+            Some(Err((phase, e))) => {
                 failed += 1;
+                tally.add(phase, &e);
                 dial = e;
             }
             None => break,
@@ -329,6 +356,7 @@ async fn many_spread<L: Lib>(addr: &str, n: usize, each: u64, sink: impl FnOnce(
         secs,
         up,
         why: why_of(no_endpoint, &start, &dial),
+        failures: tally.text(),
     };
     let readings = Readings {
         s_base,
@@ -338,7 +366,7 @@ async fn many_spread<L: Lib>(addr: &str, n: usize, each: u64, sink: impl FnOnce(
         c_peak_reset,
         c_end,
     };
-    sink(line(L::name(), &burst, &readings));
+    sink(line(L::name(), &burst, &readings).wire(&L::wire(&ctl).await));
     for r in release {
         let _ = r.send(());
     }
@@ -691,6 +719,7 @@ mod tests {
             secs: 1.0,
             up: vec![1.0; ok as usize],
             why: String::new(),
+            failures: String::new(),
         };
         let readings = Readings {
             s_base: Some(s_base),

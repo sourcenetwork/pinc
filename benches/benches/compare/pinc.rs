@@ -77,6 +77,9 @@ fn io_err(e: pinc::Error) -> io::Error {
     io::Error::other(e.to_string())
 }
 
+/// Every UDP payload this process's sockets sent.
+static SENT: super::Sent = super::Sent::new();
+
 /// The endpoint's socket and timer: nuclei's, called directly.
 pub struct Net {
     sock: Rc<Handle<UdpSocket>>,
@@ -119,7 +122,10 @@ impl Io for Net {
         };
         loop {
             match self.udp.try_send(UdpSockRef::from(&*self.sock), &transmit) {
-                Ok(()) => return Ok(count),
+                Ok(()) => {
+                    SENT.add(buf.len(), if count > 1 { segment } else { buf.len() });
+                    return Ok(count);
+                }
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => self.sock.writable().await?,
                 Err(e) => return Err(e),
             }
@@ -381,6 +387,34 @@ impl Lib for Pinc1 {
 
     async fn shutdown(ep: Ep) {
         ep.close().await;
+    }
+
+    async fn wire(conn: &Conn) -> super::Wire {
+        let (max, mean) = SENT.read();
+        let (kx_group, kx_source) = if conn.resumed() {
+            (
+                "psk+X25519",
+                "protocol: a resumption is the ticket's PSK with a fresh X25519 (pinc-security message.rs ResumeHello)",
+            )
+        } else {
+            (
+                "X25519+ML-KEM-768",
+                "protocol: every full or prekey handshake is X25519 plus ML-KEM-768 (pinc-security lib.rs)",
+            )
+        };
+        let stats = conn.stats().await.ok();
+        super::Wire {
+            max_udp_payload: max,
+            mean_udp_payload: mean,
+            udp_source: format!(
+                "socket: every send of this process, at the harness's socket; path datagram size now {}",
+                stats.map_or_else(|| "unknown".to_owned(), |s| s.mtu.to_string())
+            ),
+            kx_group: kx_group.into(),
+            kx_source: kx_source.into(),
+            cwnd: stats.map(|s| s.cwnd),
+            knobs: String::new(),
+        }
     }
 }
 

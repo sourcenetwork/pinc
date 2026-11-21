@@ -25,6 +25,12 @@
 //! point (the peak is 0 when it could not be reset). The scenarios are written once against the [`Lib`] trait; each
 //! library's module (`pinc`, `iroh`, `libp2p`) only maps its own endpoint, connection and stream types onto it.
 //!
+//! Every line of `setup`, `latency`, `requests`, `throughput` and `many` also says what went on the wire, as far as
+//! the library lets the harness see: `max_udp_payload` and `mean_udp_payload` (bytes; `null` where the library does
+//! not expose them) with `udp_source`, the key exchange group `kx_group` with `kx_source`, and `knobs` for any opt-in
+//! setting. `throughput <bytes> <streams> [trace_ms]` with `trace_ms > 0` adds `cwnd_trace`, `ms:bytes` samples of
+//! the congestion window, where the library exposes it.
+//!
 //! Invariants: nothing here is specific to one library; a number is printed only when it was measured in this run;
 //! a failure is counted and printed, never dropped.
 
@@ -233,10 +239,79 @@ impl Rec {
         }
         self
     }
+    /// Add what the library tells of the wire.
+    pub fn wire(self, w: &Wire) -> Self {
+        let r = self
+            .n("max_udp_payload", w.max_udp_payload.map_or(f64::NAN, |v| v as f64))
+            .n("mean_udp_payload", w.mean_udp_payload.unwrap_or(f64::NAN))
+            .s("udp_source", &w.udp_source)
+            .s("kx_group", &w.kx_group)
+            .s("kx_source", &w.kx_source);
+        if w.knobs.is_empty() { r } else { r.s("knobs", &w.knobs) }
+    }
     /// Print the line.
     pub fn emit(self) {
         println!("{}}}", self.0);
     }
+}
+
+/// What a library tells of the wire under one connection, for the result lines. `None` and an empty text mean not
+/// exposed; the `*_source` texts say where a number came from, or why there is none.
+#[derive(Clone, Debug, Default)]
+pub struct Wire {
+    /// The largest UDP payload this process sent (where the library exposes only the path's datagram size, that).
+    pub max_udp_payload: Option<u64>,
+    /// The mean UDP payload this process sent, where it is counted.
+    pub mean_udp_payload: Option<f64>,
+    pub udp_source: String,
+    /// The key exchange group of the connection's handshake.
+    pub kx_group: String,
+    pub kx_source: String,
+    /// The congestion window of the connection's path now, in bytes.
+    pub cwnd: Option<u64>,
+    /// The settings this run changed from the library's defaults (empty: none).
+    pub knobs: String,
+}
+
+/// A process's own count of the UDP payloads it sent: the largest, the bytes and the datagrams. A library whose socket
+/// the harness owns (PINC's) counts every send through [`Sent::add`].
+pub struct Sent {
+    max: AtomicU64,
+    bytes: AtomicU64,
+    datagrams: AtomicU64,
+}
+
+impl Sent {
+    pub const fn new() -> Self {
+        Self {
+            max: AtomicU64::new(0),
+            bytes: AtomicU64::new(0),
+            datagrams: AtomicU64::new(0),
+        }
+    }
+    /// One send of `len` bytes, cut by the system into datagrams of `segment` bytes (the last may be shorter).
+    pub fn add(&self, len: usize, segment: usize) {
+        let seg = if segment == 0 { len } else { segment.min(len) };
+        self.max.fetch_max(seg as u64, Relaxed);
+        self.bytes.fetch_add(len as u64, Relaxed);
+        self.datagrams.fetch_add(len.div_ceil(seg.max(1)) as u64, Relaxed);
+    }
+    /// The largest and the mean payload so far; `None` before the first send.
+    pub fn read(&self) -> (Option<u64>, Option<f64>) {
+        let (max, bytes, n) = (self.max.load(Relaxed), self.bytes.load(Relaxed), self.datagrams.load(Relaxed));
+        if n == 0 { (None, None) } else { (Some(max), Some(bytes as f64 / n as f64)) }
+    }
+}
+
+impl Default for Sent {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// The value of the environment variable `k`, when it is set and not empty.
+pub fn knob(k: &str) -> Option<String> {
+    std::env::var(k).ok().filter(|v| !v.is_empty())
 }
 
 /// The send half of a stream.
@@ -324,6 +399,11 @@ pub trait Lib: Sized + 'static {
             say_hello::<Self>(&c).await?;
             Ok(c)
         }
+    }
+    /// What the library tells of the wire under `conn` (see [`Wire`]); the default tells nothing.
+    fn wire(conn: &Self::Conn) -> impl Future<Output = Wire> {
+        let _ = conn;
+        async { Wire::default() }
     }
     /// A line about the library's state after a setup scenario (for example how many resumptions were accepted).
     fn note() -> String {
@@ -455,6 +535,7 @@ async fn setup<L: Lib>(addr: &str, n: usize, resumed: bool) {
         return;
     }
     let (mut v, mut failed, mut why) = (Vec::with_capacity(n), 0u32, String::new());
+    let mut wire = Wire::default();
     for _ in 0..n {
         let ep = match L::client().await {
             Ok(ep) => ep,
@@ -475,6 +556,7 @@ async fn setup<L: Lib>(addr: &str, n: usize, resumed: bool) {
         match L::hello(&ep, addr, resumed).await {
             Ok(c) => {
                 v.push(us(t.elapsed()));
+                wire = L::wire(&c).await;
                 L::close(&ep, &c).await;
             }
             Err(e) => {
@@ -494,11 +576,12 @@ async fn setup<L: Lib>(addr: &str, n: usize, resumed: bool) {
         .n("mean_us", v.iter().sum::<f64>() / v.len() as f64)
         .s("note", &if resumed { L::note() } else { String::new() })
         .s("last_error", &why)
+        .wire(&wire)
         .emit();
 }
 
 /// Upload `total` bytes over `streams` concurrent streams of one connection.
-async fn throughput<L: Lib>(addr: &str, total: u64, streams: usize) {
+async fn throughput<L: Lib>(addr: &str, total: u64, streams: usize, trace_ms: u64) {
     let name = format!("throughput_{streams}s");
     let Ok(ep) = L::client().await else {
         Rec::new(L::name(), &name).s("status", "failed: no endpoint").emit();
@@ -520,19 +603,40 @@ async fn throughput<L: Lib>(addr: &str, total: u64, streams: usize) {
     for _ in 0..streams {
         let (c, done) = (conn.clone(), done.clone());
         L::spawn(async move {
-            let _ = done.unbounded_send(upload::<L>(&c, total / streams as u64).await.is_ok());
+            let _ = done.unbounded_send(upload::<L>(&c, total / streams as u64).await);
         });
     }
     drop(done);
-    let mut ok = 0;
-    while let Some(r) = results.next().await {
-        ok += usize::from(r);
+    // `trace_ms` > 0: the congestion window every `trace_ms` while the streams run, as `ms:bytes` pairs.
+    let trace = std::rc::Rc::new(std::cell::RefCell::new(String::new()));
+    let running = std::rc::Rc::new(std::cell::Cell::new(true));
+    if trace_ms > 0 {
+        let (c, trace, running) = (conn.clone(), trace.clone(), running.clone());
+        L::spawn(async move {
+            while running.get() {
+                let cwnd = L::wire(&c).await.cwnd.map_or_else(|| "null".to_owned(), |v| v.to_string());
+                trace
+                    .borrow_mut()
+                    .push_str(&format!("{}:{cwnd} ", t.elapsed().as_millis()));
+                L::sleep(Duration::from_millis(trace_ms)).await;
+            }
+        });
     }
+    let (mut ok, mut why) = (0usize, String::new());
+    while let Some(r) = results.next().await {
+        match r {
+            Ok(()) => ok += 1,
+            Err(e) if why.is_empty() => why = e.to_string(),
+            Err(_) => {}
+        }
+    }
+    running.set(false);
     let secs = t.elapsed().as_secs_f64();
+    let wire = L::wire(&conn).await;
     let (c1, s1) = (Stats::now(), server_stats::<L>(&conn).await.unwrap_or(s0));
     let moved = (total / streams as u64) * ok as u64;
     let (cc, sc) = (c1.cpu_secs_since(c0), s1.cpu_secs_since(s0));
-    Rec::new(L::name(), &name)
+    let mut r = Rec::new(L::name(), &name)
         .n("bytes", moved as f64)
         .n("streams_ok", ok as f64)
         .n("streams", streams as f64)
@@ -541,7 +645,14 @@ async fn throughput<L: Lib>(addr: &str, total: u64, streams: usize) {
         .n("client_cpu_s", cc)
         .n("server_cpu_s", sc)
         .n("cpu_ns_per_byte", (cc + sc) * 1e9 / moved as f64)
-        .emit();
+        .s("last_error", &why)
+        .wire(&wire);
+    if trace_ms > 0 {
+        r = r
+            .n("trace_ms", trace_ms as f64)
+            .s("cwnd_trace", trace.borrow().trim_end());
+    }
+    r.emit();
     L::close(&ep, &conn).await;
     L::shutdown(ep).await;
 }
@@ -598,9 +709,11 @@ async fn latency<L: Lib>(addr: &str, size: usize, count: usize) {
     }
     let secs = wall.elapsed().as_secs_f64();
     let (c1, s1) = (Stats::now(), server_stats::<L>(&conn).await.unwrap_or(s0));
+    let wire = L::wire(&conn).await;
     v.sort_by(f64::total_cmp);
     let n = v.len().max(1) as f64;
     let mut r = Rec::new(L::name(), &name)
+        .wire(&wire)
         .n("round_trips", v.len() as f64)
         .n("size", size as f64)
         .n("min_us", pct(&v, 0.0))
@@ -679,6 +792,7 @@ async fn requests<L: Lib>(addr: &str, size: usize, count: usize, concurrency: us
     let done = futures::future::join_all((0..concurrency).map(|_| worker(conn.clone()))).await;
     let secs = wall.elapsed().as_secs_f64();
     let (c1, s1) = (Stats::now(), server_stats::<L>(&conn).await.unwrap_or(s0));
+    let wire = L::wire(&conn).await;
     let (mut v, mut failed, mut why) = (Vec::with_capacity(count), 0u32, None);
     for (lat, f, w) in done {
         v.extend(lat);
@@ -710,7 +824,8 @@ async fn requests<L: Lib>(addr: &str, size: usize, count: usize, concurrency: us
         .n("tail_after_open_us", tail_rest)
         .n("rate_per_s", n / secs)
         .n("client_cpu_us_per_req", c1.cpu_secs_since(c0) * 1e6 / n)
-        .n("server_cpu_us_per_req", s1.cpu_secs_since(s0) * 1e6 / n);
+        .n("server_cpu_us_per_req", s1.cpu_secs_since(s0) * 1e6 / n)
+        .wire(&wire);
     if let Some(e) = why {
         r = r.s("status", &format!("{failed} requests failed, the first: {e}"));
     }
@@ -910,7 +1025,7 @@ pub fn run_args<L: Lib>(mut args: Vec<String>) {
                 match scenario.as_str() {
                     "setup" => setup::<L>(&addr, num(a, 0, 200), false).await,
                     "resume" => setup::<L>(&addr, num(a, 0, 200), true).await,
-                    "throughput" => throughput::<L>(&addr, num(a, 0, 1 << 30), num(a, 1, 1)).await,
+                    "throughput" => throughput::<L>(&addr, num(a, 0, 1 << 30), num(a, 1, 1), num(a, 2, 0)).await,
                     "latency" => latency::<L>(&addr, num(a, 0, 64), num(a, 1, 100_000)).await,
                     "requests" => requests::<L>(&addr, num(a, 0, 512), num(a, 1, 10_000), num(a, 2, 1)).await,
                     "allocs" => {

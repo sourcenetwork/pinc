@@ -3561,6 +3561,8 @@ dependencies = [
  "iroh",
  "libp2p",
  "libp2p-stream",
+ "libp2p-tls",
+ "noq",
  "nuclei",
  "pinc",
  "pinc-broadcast",
@@ -3577,6 +3579,7 @@ dependencies = [
  "pinc-values",
  "pinc-wire",
  "quinn-udp",
+ "rustls",
  "tokio",
 ]
 

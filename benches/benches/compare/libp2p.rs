@@ -6,6 +6,9 @@
 //! `SwarmBuilder` defaults with a new identity, plus a five minute idle connection timeout (the swarm's default of zero
 //! closes a connection with no stream at once), and tokio's multi-thread runtime with one worker per core. libp2p has
 //! no resumption with early data, so the resumed scenario is not measured.
+//!
+//! Opt-in knob, off by default and recorded in the row's `knobs` when set: `PINC_BENCH_LIBP2P_UPGRADE=v1-lazy` opens
+//! streams with multistream-select V1Lazy instead of the swarm's default V1 (`v1` names the default).
 #![allow(
     missing_docs,
     unsafe_code,
@@ -67,9 +70,31 @@ impl Rx for ReadHalf<Stream> {
     }
 }
 
+/// Whether `PINC_BENCH_LIBP2P_UPGRADE=v1-lazy` asks for multistream-select's V1Lazy on new streams: the dialer sends
+/// its data with the protocol proposal instead of waiting a round trip for the listener to confirm it. Unset (or
+/// `v1`): the swarm's default, V1, under which libp2p-stream negotiates one outbound stream of a connection at a time
+/// (`libp2p-stream` 0.5.0-alpha `handler.rs`, `pending_upgrade`), one round trip each.
+fn v1_lazy() -> io::Result<bool> {
+    match super::knob("PINC_BENCH_LIBP2P_UPGRADE").as_deref() {
+        None | Some("v1") => Ok(false),
+        Some("v1-lazy") => Ok(true),
+        Some(other) => Err(io_err(format!(
+            "PINC_BENCH_LIBP2P_UPGRADE is `v1` or `v1-lazy`, not `{other}`"
+        ))),
+    }
+}
+
 fn swarm() -> io::Result<Swarm<Behaviour>> {
     let base = SwarmBuilder::with_new_identity().with_tokio();
-    let idle = |c: libp2p::swarm::Config| c.with_idle_connection_timeout(Duration::from_secs(300));
+    let lazy = v1_lazy()?;
+    let idle = move |c: libp2p::swarm::Config| {
+        let c = c.with_idle_connection_timeout(Duration::from_secs(300));
+        if lazy {
+            c.with_substream_upgrade_protocol_override(libp2p::core::upgrade::Version::V1Lazy)
+        } else {
+            c
+        }
+    };
     if tcp_variant() {
         Ok(base
             .with_tcp(tcp::Config::default(), noise::Config::new, yamux::Config::default)
@@ -251,4 +276,84 @@ impl Lib for Libp2p {
     async fn shutdown(ep: Ep) {
         let _ = ep.cmds.unbounded_send(Cmd::Stop);
     }
+
+    async fn wire(_conn: &Conn) -> super::Wire {
+        let (udp_source, kx_group, kx_source) = if tcp_variant() {
+            (
+                "not UDP: TCP with Noise and Yamux".to_owned(),
+                "X25519".to_owned(),
+                "protocol: Noise_XX_25519_ChaChaPoly_SHA256 (libp2p-noise)".to_owned(),
+            )
+        } else {
+            (
+                "not exposed: libp2p-quic keeps its quinn connection, with its path MTU and UDP counters, private; \
+                 its MTU discovery uses quinn's defaults (initial 1200 bytes, upper bound 1452); the node's kernel \
+                 counters give the mean"
+                    .to_owned(),
+                tls_group(),
+                "libp2p-tls's client and server configs (those libp2p-quic builds) in one TLS handshake in memory: \
+                 libp2p-quic does not expose the live connection's handshake"
+                    .to_owned(),
+            )
+        };
+        let knobs = if v1_lazy().unwrap_or(false) { "upgrade=v1-lazy" } else { "" };
+        super::Wire {
+            max_udp_payload: None,
+            mean_udp_payload: None,
+            udp_source,
+            kx_group,
+            kx_source,
+            cwnd: None,
+            knobs: knobs.into(),
+        }
+    }
+}
+
+/// The key exchange group libp2p-tls's configs agree on, from one handshake between them in memory (once a process).
+fn tls_group() -> String {
+    static GROUP: OnceLock<String> = OnceLock::new();
+    GROUP
+        .get_or_init(|| tls_handshake().unwrap_or_else(|e| format!("unknown: {e}")))
+        .clone()
+}
+
+fn tls_handshake() -> Result<String, String> {
+    use std::sync::Arc;
+    let (a, b) = (
+        libp2p::identity::Keypair::generate_ed25519(),
+        libp2p::identity::Keypair::generate_ed25519(),
+    );
+    let s_ = |x: &dyn std::fmt::Display| x.to_string();
+    let client = libp2p_tls::make_client_config(&a, Some(b.public().to_peer_id())).map_err(|x| s_(&x))?;
+    let server = libp2p_tls::make_server_config(&b).map_err(|x| s_(&x))?;
+    // libp2p-quic dials with the server name "l".
+    let name = rustls::pki_types::ServerName::try_from("l").map_err(|x| s_(&x))?;
+    let mut c = rustls::ClientConnection::new(Arc::new(client), name).map_err(|x| s_(&x))?;
+    let mut s = rustls::ServerConnection::new(Arc::new(server)).map_err(|x| s_(&x))?;
+    for _ in 0..16 {
+        let mut buf = Vec::new();
+        while c.wants_write() {
+            c.write_tls(&mut buf).map_err(|x| s_(&x))?;
+        }
+        let mut rd = &buf[..];
+        while !rd.is_empty() {
+            s.read_tls(&mut rd).map_err(|x| s_(&x))?;
+            s.process_new_packets().map_err(|x| s_(&x))?;
+        }
+        buf.clear();
+        while s.wants_write() {
+            s.write_tls(&mut buf).map_err(|x| s_(&x))?;
+        }
+        let mut rd = &buf[..];
+        while !rd.is_empty() {
+            c.read_tls(&mut rd).map_err(|x| s_(&x))?;
+            c.process_new_packets().map_err(|x| s_(&x))?;
+        }
+        if !c.is_handshaking() && !s.is_handshaking() {
+            break;
+        }
+    }
+    c.negotiated_key_exchange_group()
+        .map(|g| format!("{:?}", g.name()))
+        .ok_or_else(|| "the handshake did not finish".to_owned())
 }
