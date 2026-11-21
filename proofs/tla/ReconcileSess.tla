@@ -104,7 +104,7 @@ CoreRestartExact(o, S, c) ==
        Bind(CoreFinish(rt[1], FALSE, rt[2], FALSE), LAMBDA msg : Ok(<<rt[1], msg>>)))
 
 CoreCheckMsg(o, S, c) ==
-    LET fp == XorFp(XorFp(FpRange(o, S, 0, c.n), XorH(o, c.here)), XorH(o, c.there))
+    LET fp == CheckFp(o, S, c.n, c.here, c.there)
         o1 == OutHead(OutReset(c.out), 6, <<>>, None)
         c1 == [c EXCEPT !.out = [o1 EXCEPT !.body = o1.body \o fp]]
     IN Bind(CoreFinish(c1, FALSE, 1, FALSE), LAMBDA msg : Ok(<<c1, msg>>))

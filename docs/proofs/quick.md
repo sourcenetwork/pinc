@@ -490,36 +490,36 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `Reach_refuse` | PMAX 9 -> 8 |
 | `Reach_renew` | PMAX 9 -> 8 |
 | `Reasm` | KMAX 5 -> 4 |
-| `Reconcile` | UniMax 5 -> 3; Xor8 <- Xor8Quick and XorTab <- XorTabQuick (the byte XOR from a 16 x 16 table of half bytes) |
+| `Reconcile` | UniMax 5 -> 3 |
 | `ReconcileWire` | BLen 3 -> 2, RAlpha {0, 1, 2, 3} -> {0, 1, 2}, RLen 5 -> 3; Seeds <- SeedsQuick and Expand <- ExpandQuick (smaller literal case domains, see ReconcileWire.tla) |
 | `ReconcileWire_cap1` | BLen 3 -> 2, RAlpha {0, 1, 2, 3} -> {0, 1, 2}, RLen 5 -> 3; Seeds <- SeedsQuick and Expand <- ExpandQuick (smaller literal case domains, see ReconcileWire.tla) |
-| `Reconcile_cap` | UniMax 4 -> 3; Xor8 <- Xor8Quick and XorTab <- XorTabQuick (the byte XOR from a 16 x 16 table of half bytes) |
-| `Reconcile_cold` | UniMax 6 -> 4; Xor8 <- Xor8Quick and XorTab <- XorTabQuick (the byte XOR from a 16 x 16 table of half bytes) |
-| `Reconcile_collide` | UniMax 4 -> 3; Xor8 <- Xor8Quick and XorTab <- XorTabQuick (the byte XOR from a 16 x 16 table of half bytes) |
-| `Reconcile_dense` | UniMax 6 -> 4; Xor8 <- Xor8Quick and XorTab <- XorTabQuick (the byte XOR from a 16 x 16 table of half bytes) |
-| `Reconcile_frames` | UniMax 5 -> 4; Xor8 <- Xor8Quick and XorTab <- XorTabQuick (the byte XOR from a 16 x 16 table of half bytes) |
-| `Reconcile_garbage` | UniMax 3 -> 0; Xor8 <- Xor8Quick and XorTab <- XorTabQuick (the byte XOR from a 16 x 16 table of half bytes) |
-| `Reconcile_garbage3` | UniMax 3 -> 0; Xor8 <- Xor8Quick and XorTab <- XorTabQuick (the byte XOR from a 16 x 16 table of half bytes) |
-| `Reconcile_liar` | UniMax 4 -> 3; Xor8 <- Xor8Quick and XorTab <- XorTabQuick (the byte XOR from a 16 x 16 table of half bytes) |
-| `Reconcile_never` | UniMax 4 -> 3; Xor8 <- Xor8Quick and XorTab <- XorTabQuick (the byte XOR from a 16 x 16 table of half bytes) |
-| `Reconcile_real` | UniMax 585 -> 60 (A has items 5..59, B lacks 40 and 41); the same values, built without the byte XOR table, the sort of every word and SUBSET of the universe (Xor8, XorTab, SubSets, UniSeq, AllSeq, IdxOf <- their Quick twins) |
-| `Reconcile_real_big` | UniMax 585 -> 100 (A has items 5..99, B lacks 40 and 41); the same values, built without the byte XOR table, the sort of every word and SUBSET of the universe (Xor8, XorTab, SubSets, UniSeq, AllSeq, IdxOf <- their Quick twins) |
-| `Reconcile_real_cold` | UniMax 585 -> 45 (the cold sides of 4 items against 42, and 0 against 45); the same values, built without the byte XOR table, the sort of every word and SUBSET of the universe (Xor8, XorTab, SubSets, UniSeq, AllSeq, IdxOf <- their Quick twins) |
-| `Reconcile_real_dense` | UniMax 585 -> 147 (every word under the first byte 1 is still in the universe); the same values, built without the byte XOR table, the sort of every word and SUBSET of the universe (Xor8, XorTab, SubSets, UniSeq, AllSeq, IdxOf <- their Quick twins) |
-| `Reconcile_real_swap` | UniMax 585 -> 60 (B has items 5..59, A lacks 40 and 41); the same values, built without the byte XOR table, the sort of every word and SUBSET of the universe (Xor8, XorTab, SubSets, UniSeq, AllSeq, IdxOf <- their Quick twins) |
-| `Reconcile_real_varlen` | UniMax 585 -> 50 (A has 25 items, B 40); the same values, built without the byte XOR table, the sort of every word and SUBSET of the universe (Xor8, XorTab, SubSets, UniSeq, AllSeq, IdxOf <- their Quick twins) |
-| `Reconcile_reset` | UniMax 3 -> 2; Xor8 <- Xor8Quick and XorTab <- XorTabQuick (the byte XOR from a 16 x 16 table of half bytes) |
-| `Reconcile_varlen` | UniMax 4 -> 3; Xor8 <- Xor8Quick and XorTab <- XorTabQuick (the byte XOR from a 16 x 16 table of half bytes) |
-| `Reconcile_w_chunk` | UniMax 5 -> 4; Xor8 <- Xor8Quick and XorTab <- XorTabQuick (the byte XOR from a 16 x 16 table of half bytes) |
-| `Reconcile_w_cold` | UniMax 5 -> 4; Xor8 <- Xor8Quick and XorTab <- XorTabQuick (the byte XOR from a 16 x 16 table of half bytes) |
-| `Reconcile_w_done` | UniMax 4 -> 2; Xor8 <- Xor8Quick and XorTab <- XorTabQuick (the byte XOR from a 16 x 16 table of half bytes) |
-| `Reconcile_w_exhausted` | UniMax 3 -> 2; Xor8 <- Xor8Quick and XorTab <- XorTabQuick (the byte XOR from a 16 x 16 table of half bytes) |
-| `Reconcile_w_held` | bounds unchanged (UniMax 4 does not reach the witness); Xor8 <- Xor8Quick and XorTab <- XorTabQuick (the byte XOR from a 16 x 16 table of half bytes), so the 65536-entry table is not built at start-up |
-| `Reconcile_w_mismatch` | UniMax 4 -> 3; Xor8 <- Xor8Quick and XorTab <- XorTabQuick (the byte XOR from a 16 x 16 table of half bytes) |
-| `Reconcile_w_miss` | UniMax 4 -> 3; Xor8 <- Xor8Quick and XorTab <- XorTabQuick (the byte XOR from a 16 x 16 table of half bytes) |
-| `Reconcile_w_refused` | bounds unchanged (UniMax 2 does not reach the witness); Xor8 <- Xor8Quick and XorTab <- XorTabQuick (the byte XOR from a 16 x 16 table of half bytes), so the 65536-entry table is not built at start-up |
-| `Reconcile_w_tmr` | bounds unchanged (UniMax 4 does not reach the witness); Xor8 <- Xor8Quick and XorTab <- XorTabQuick (the byte XOR from a 16 x 16 table of half bytes), so the 65536-entry table is not built at start-up |
-| `Reconcile_w_toolarge` | UniMax 4 -> 3; Xor8 <- Xor8Quick and XorTab <- XorTabQuick (the byte XOR from a 16 x 16 table of half bytes) |
+| `Reconcile_cap` | UniMax 4 -> 3 |
+| `Reconcile_cold` | UniMax 6 -> 4 |
+| `Reconcile_collide` | UniMax 4 -> 3 |
+| `Reconcile_dense` | UniMax 6 -> 4 |
+| `Reconcile_frames` | UniMax 5 -> 4 |
+| `Reconcile_garbage` | UniMax 3 -> 0 |
+| `Reconcile_garbage3` | UniMax 3 -> 0 |
+| `Reconcile_liar` | UniMax 4 -> 3 |
+| `Reconcile_never` | UniMax 4 -> 3 |
+| `Reconcile_real` | UniMax 585 -> 60 (A has items 5..59, B lacks 40 and 41); the same values, built without the sort of every word and SUBSET of the universe (SubSets, UniSeq, AllSeq, IdxOf <- their Quick twins) |
+| `Reconcile_real_big` | UniMax 585 -> 100 (A has items 5..99, B lacks 40 and 41); the same values, built without the sort of every word and SUBSET of the universe (SubSets, UniSeq, AllSeq, IdxOf <- their Quick twins) |
+| `Reconcile_real_cold` | UniMax 585 -> 45 (the cold sides of 4 items against 42, and 0 against 45); the same values, built without the sort of every word and SUBSET of the universe (SubSets, UniSeq, AllSeq, IdxOf <- their Quick twins) |
+| `Reconcile_real_dense` | UniMax 585 -> 147 (every word under the first byte 1 is still in the universe); the same values, built without the sort of every word and SUBSET of the universe (SubSets, UniSeq, AllSeq, IdxOf <- their Quick twins) |
+| `Reconcile_real_swap` | UniMax 585 -> 60 (B has items 5..59, A lacks 40 and 41); the same values, built without the sort of every word and SUBSET of the universe (SubSets, UniSeq, AllSeq, IdxOf <- their Quick twins) |
+| `Reconcile_real_varlen` | UniMax 585 -> 50 (A has 25 items, B 40); the same values, built without the sort of every word and SUBSET of the universe (SubSets, UniSeq, AllSeq, IdxOf <- their Quick twins) |
+| `Reconcile_reset` | UniMax 3 -> 2 |
+| `Reconcile_varlen` | UniMax 4 -> 3 |
+| `Reconcile_w_chunk` | UniMax 5 -> 4 |
+| `Reconcile_w_cold` | UniMax 5 -> 4 |
+| `Reconcile_w_done` | UniMax 4 -> 2 |
+| `Reconcile_w_exhausted` | UniMax 3 -> 2 |
+| `Reconcile_w_held` | bounds unchanged (UniMax 4 does not reach the witness) |
+| `Reconcile_w_mismatch` | UniMax 4 -> 3 |
+| `Reconcile_w_miss` | UniMax 4 -> 3 |
+| `Reconcile_w_refused` | bounds unchanged (UniMax 2 does not reach the witness) |
+| `Reconcile_w_tmr` | bounds unchanged (UniMax 4 does not reach the witness) |
+| `Reconcile_w_toolarge` | UniMax 4 -> 3 |
 | `Record` | MaxPn 3 -> 2, AesLimit 2 -> 1, ChachaLimit 2 -> 1, MaxGen 3 -> 2, Sat 3 -> 2 |
 | `Record_chacha` | MaxPn 3 -> 1, AesLimit 2 -> 1, ChachaLimit 2 -> 1, Sat 3 -> 2 |
 | `Recovery` | PNMAX 2 -> 1, SIZES {1, 2} -> {1}, PMAX 1 -> 0, HOR 90 -> 45 (KMAX 4 kept: a probe firing needs send, ack, send, timeout) |
