@@ -361,6 +361,17 @@ fn a_probe_does_not_close_a_parent_with_a_write_in_flight() {
             "the probe closed the parent with the write unacknowledged"
         );
         let _ = child;
+        // The same lapse with nothing written closes the dead parent: the write is what keeps it up, not a
+        // lapse that never closes.
+        let (mut net, a, b, heard) = restarted_peer();
+        net.run_for((heard + 21 * SEC_NS).saturating_sub(net.now));
+        let parent = net.nodes[a].ep.sessions().next().unwrap();
+        dial(&mut net, a, b, ALPN_B);
+        net.run_for(4 * SEC_NS);
+        assert!(
+            !net.nodes[a].ep.sessions().any(|s| s == parent),
+            "the lapse left a dead parent with nothing in flight"
+        );
     });
 }
 

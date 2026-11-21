@@ -178,3 +178,67 @@ fn a_probe_window_over_the_quiet_threshold_is_cut_under_it() {
         assert!(waited < 20 * SEC_NS, "the probe waited {waited} ns");
     });
 }
+
+/// The ends of a dial's probe the application can see: it connected, or it was reported failed.
+fn outcomes(net: &CoreNet, n: usize, dial: pinc_core::SessionId) -> (usize, usize) {
+    (
+        net.nodes[n].count(|e| matches!(e, Event::Connected { session, .. } if *session == dial)),
+        net.nodes[n].count(|e| matches!(e, Event::ConnectFailed { session: Some(s), .. } if *s == dial)),
+    )
+}
+
+/// A shutdown while a dial probes ends the dial (reported failed once) and no handshake goes out for it.
+#[test]
+fn a_shutdown_during_a_probe_ends_the_dial_without_a_handshake() {
+    big_stack(|| {
+        let (mut net, a, b) = silent_parent();
+        let marker = net.captured.len();
+        let (child, _) = dial(&mut net, a, b, ALPN_B);
+        let now = net.now;
+        net.nodes[a].cmd(now, Command::Shutdown).unwrap();
+        net.run_for(5 * SEC_NS);
+        assert_eq!(outcomes(&net, a, child), (0, 1));
+        assert!(!listed(&net, a).iter().any(|st| st.session == child));
+        assert!(!handshake_since(&net, marker), "a handshake left after the shutdown");
+    });
+}
+
+/// A suspend and a resume while a dial probes leave the probe to resolve on its own: the dial ends exactly once,
+/// connected or failed, and nothing is left probing.
+#[test]
+fn a_suspend_and_resume_during_a_probe_leave_one_outcome() {
+    big_stack(|| {
+        let (mut net, a, b) = silent_parent();
+        let (child, _) = dial(&mut net, a, b, ALPN_B);
+        let now = net.now;
+        net.nodes[a].cmd(now, Command::Suspend).unwrap();
+        net.run_for(3 * SEC_NS);
+        let now = net.now;
+        net.nodes[a].cmd(now, Command::Resume { moved: false }).unwrap();
+        net.run_for(10 * SEC_NS);
+        let (connected, failed) = outcomes(&net, a, child);
+        assert_eq!(connected + failed, 1, "the dial ended {connected} times connected and {failed} failed");
+        assert!(
+            !listed(&net, a).iter().any(|st| st.session == child && !st.established),
+            "a dial is still probing"
+        );
+    });
+}
+
+/// A lapse that cannot make its handshake (the node has no interface left to reach the peer from) ends the dial
+/// as failed, once, and leaves no slot probing.
+#[test]
+fn a_lapse_that_cannot_dial_fails_the_dial_once() {
+    big_stack(|| {
+        let (mut net, a, b) = silent_parent();
+        let addr_b = net.nodes[b].addr;
+        net.loss = Some(Box::new(move |_, to, _| to == addr_b));
+        let marker = net.captured.len();
+        let (child, _) = dial(&mut net, a, b, ALPN_B);
+        net.nodes[a].ep.remove_iface(pinc_core::IfaceId(0));
+        net.run_for(5 * SEC_NS);
+        assert_eq!(outcomes(&net, a, child), (0, 1));
+        assert!(!listed(&net, a).iter().any(|st| st.session == child));
+        assert!(!handshake_since(&net, marker), "a handshake left with no interface");
+    });
+}
