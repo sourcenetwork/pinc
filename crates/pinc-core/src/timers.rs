@@ -200,10 +200,10 @@ ep_impl! {
                 in_flight,
             }
             .plan();
-            // A dial is probing this session's peer (QUIET_PROBE): one ping goes out for the probe, at once. A
-            // pulse session's keepalive is the layer above's: the plan reports one due now and the carrier
-            // carries it (`Command::Pulse` marks it sent). For the rest the timer sends the session's own ping
-            // (run_timer), so the connection's keepalive stands down until the marker says the ping went.
+            // A dial is probing this session's peer (QUIET_PROBE): one packet goes out for the probe, at once. A
+            // pulse session's keepalive is the layer above's: the plan reports a ping due now and the carrier
+            // carries it (`Command::Pulse` marks it sent). For the rest the timer challenges the session's path
+            // (run_timer), so the connection's keepalive stands down until the marker says the challenge went.
             if slot.m.probed_until > now && slot.m.probed_ping_for != slot.m.probed_until {
                 if slot.m.pulse {
                     plan.ping_at = Some(now);

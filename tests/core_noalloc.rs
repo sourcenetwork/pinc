@@ -141,7 +141,7 @@ fn a_quiet_parent_probe_rides_lapses_and_ends_without_allocating() {
             net.nodes[0].session(&rep)
         };
         let _ = take_metered_allocs();
-        // The ride: the peer answers the probe's ping.
+        // The ride: the peer answers the probe's challenge.
         let mut net = quiet();
         meter_endpoint_calls(true);
         let rode = probe(&mut net);

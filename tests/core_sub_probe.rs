@@ -1,6 +1,6 @@
-//! The quiet-parent probe (`QUIET_PROBE`, #693): a dial to a peer whose session was not heard for twenty seconds asks
-//! that session for a ping, rides it when the peer answers, and lapses into its own handshake when it does not; and
-//! the plain dial paths the probe shares (a refused dial takes no slot, every routable address is tried).
+//! The quiet-parent probe (`QUIET_PROBE`, #693): a dial to a peer whose session was not heard for twenty seconds has
+//! that session challenge its path, rides it when the peer answers, and lapses into its own handshake when it does not;
+//! and the plain dial paths the probe shares (a refused dial takes no slot, every routable address is tried).
 #![allow(
     clippy::many_single_char_names,
     clippy::unwrap_used,
@@ -72,10 +72,10 @@ fn a_lapsed_probe_whose_handshake_is_never_answered_ends_with_its_early_stream()
 }
 
 /// A dial to a peer whose session has gone quiet (not heard for [`PARENT_RX`], but the peer lives) probes the
-/// session first: the dial asks the parent's session for a ping, and rides it when the peer answers, instead of
+/// session first: the parent's session challenges its path, and the dial rides it when the peer answers, instead of
 /// making a second root beside the old one.
 #[test]
-fn a_dial_to_a_quiet_peer_probes_its_session_rides_it_and_pings_it() {
+fn a_dial_to_a_quiet_peer_probes_its_session_and_rides_it() {
     big_stack(|| {
         let (mut net, a, b) = silent_parent();
         let parent = net.nodes[a].ep.sessions().next().unwrap();
@@ -88,7 +88,7 @@ fn a_dial_to_a_quiet_peer_probes_its_session_rides_it_and_pings_it() {
         let (child, rep) = dial(&mut net, a, b, ALPN_B);
         // The dial reports its id at once and connects when the probe resolves, with the same id.
         assert!(!rep.events.any(is_connected), "the probe does not connect at once");
-        // The probe pings the parent's session: the peer's answer credits the parent's last hear.
+        // The probe challenges the path of the parent's session: the peer's answer credits the parent's last hear.
         net.run_for(SEC_NS);
         let heard_after = match net.nodes[a].ep.query(Query::Stats(parent)) {
             Answer::Stats(st) => st.heard,
@@ -96,7 +96,7 @@ fn a_dial_to_a_quiet_peer_probes_its_session_rides_it_and_pings_it() {
         };
         assert!(
             heard_after > heard_before,
-            "the probe's ping was not answered: the parent was not heard from again"
+            "the probe's challenge was not answered: the parent was not heard from again"
         );
         assert!(
             !handshake_since(&net, marker),
@@ -183,7 +183,7 @@ fn a_write_on_a_probing_dial_fails_fast_and_the_id_connects_after_the_probe() {
 }
 
 /// A second dial for another protocol while a probe runs does not latch onto the probing slot: it probes the same
-/// quiet parent itself, and both probes ride the parent's session when its ping is answered.
+/// quiet parent itself, and both probes ride the parent's session when its challenge is answered.
 #[test]
 fn a_dial_for_another_protocol_during_a_probe_does_not_latch_onto_the_probe() {
     big_stack(|| {

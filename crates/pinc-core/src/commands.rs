@@ -531,7 +531,7 @@ ep_impl! {
             return self.open_sub_wait(parent, node, alpn, role, now);
         }
         let prekey = self.prekey.clone().ok_or(CommandError::NoPrekey)?;
-        // A parent that has gone quiet (not heard from for [`PARENT_RX`]) may be gone: ask its session for a ping
+        // A parent that has gone quiet (not heard from for [`PARENT_RX`]) may be gone: have its session ask
         // before committing to a handshake, so a dial to a peer that only stopped talking does not make a second
         // root beside the session it already has (QUIET_PROBE). The dial's routable addresses go with it, as many
         // as a connection has paths: the probe's lapse makes the dial's own handshake to them.

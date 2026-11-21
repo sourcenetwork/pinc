@@ -270,7 +270,7 @@ fn drop_to(net: &mut CoreNet, b: usize) {
 fn the_quiet_parent_probe_records_its_trace_for_the_model() {
     let out = big_stack(|| {
         let mut rec = Rec::default();
-        // A ride: the peer answers the ping, commands are kept and applied to the ride.
+        // A ride: the peer answers the challenge, commands are kept and applied to the ride.
         {
             rec.start();
             let (mut net, a, b) = silent_parent();
