@@ -445,6 +445,7 @@ ep_impl! {
 
     /// The facts of the probed slot for the trace (`TraceEvent::Probe` bits): pulse, heard, in flight, and whether the
     /// slot still holds the generation `of_gen`. Without the `trace` feature nothing is read.
+    #[cfg_attr(not(feature = "trace"), allow(clippy::unused_self, reason = "only the trace reads the slots"))]
     fn probe_facts(&self, probed: usize, of_gen: u32, now: u64) -> (u64, u64) {
         #[cfg(not(feature = "trace"))]
         {
@@ -476,6 +477,7 @@ ep_impl! {
     }
 
     /// As [`trace_probe`](Self::trace_probe) with the facts read earlier (a lapse reads them before it closes).
+    #[cfg_attr(not(feature = "trace"), allow(clippy::unused_self, reason = "only the trace reads it"))]
     fn trace_probe_with(&mut self, now: u64, step: u64, child: usize, of_gen: u32, (generation, bits): (u64, u64), extra: u64) {
         let child = if child == usize::MAX { u64::MAX } else { child as u64 };
         trace!(self, now, Probe { step, child, r#gen: generation, of_gen: u64::from(of_gen), bits: bits | extra });
