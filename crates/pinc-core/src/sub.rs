@@ -233,7 +233,8 @@ ep_impl! {
         let pid = self.session_id(parent);
         let probed_gen = self.slots.get(parent).map_or(0, |s| s.m.generation);
         // The wait is two of the session's probe timeouts, the bound the issue sets from its round trip; a
-        // configured wait stands in for it.
+        // configured wait stands in for it. Either is cut under the quiet threshold: past it a probed session
+        // that was heard again would be quiet again before its probe ends.
         let wait = if self.cfg.probe_window > 0 {
             self.cfg.probe_window
         } else {
@@ -241,7 +242,8 @@ ep_impl! {
                 .get(parent)
                 .and_then(|s| s.conn.as_ref())
                 .map_or(PROBE_WINDOW, |c| c.recovery().pto_duration().saturating_mul(2))
-        };
+        }
+        .min(PARENT_RX - 1);
         if let Some(s) = self.slots.get_mut(i) {
             s.mem = Some(mem);
             s.m.peer = Some(peer);

@@ -136,3 +136,45 @@ fn a_lapse_dials_the_addresses_a_fresh_dial_dials() {
         assert_eq!(lapse, want, "the lapse went to another set than the fresh dial");
     });
 }
+
+/// As [`silent_parent`], the dialer's quiet-parent wait set to `window`.
+fn silent_parent_waiting(window: u64) -> (CoreNet, usize, usize) {
+    let mut net = CoreNet::new(10 * MS_NS);
+    net.capture = true;
+    let (a, b) = (net.add_with_probe_window(1, window), net.add(2));
+    net.connect_pair(a, b, ALPN_A, Role::Other);
+    net.run_for(SEC_NS);
+    let silent = net.nodes[b].addr;
+    net.loss = Some(Box::new(move |f, _, _| f == silent));
+    net.run_for(25 * SEC_NS);
+    (net, a, b)
+}
+
+/// How long after the dial the first handshake datagram leaves, with the dialer's wait set to `window`.
+fn lapse_after(window: u64) -> u64 {
+    let (mut net, a, b) = silent_parent_waiting(window);
+    let (t0, marker) = (net.now, net.captured.len());
+    dial(&mut net, a, b, ALPN_B);
+    assert!(net.run(t0 + 30 * SEC_NS, |n| handshake_since(n, marker)), "the probe never lapsed");
+    net.now - t0
+}
+
+/// A configured wait stands in for the two probe timeouts: the probe lapses after it, not before.
+#[test]
+fn a_configured_probe_window_sets_the_wait() {
+    big_stack(|| {
+        let waited = lapse_after(3 * SEC_NS);
+        assert!(waited >= 3 * SEC_NS, "the probe lapsed after {waited} ns, before its window");
+        assert!(waited < 3 * SEC_NS + 500 * MS_NS, "the probe lapsed after {waited} ns, long after its window");
+    });
+}
+
+/// A wait of 20 s or more is cut under the quiet threshold, which the model of the probe assumes: a dial never waits
+/// longer on a session that was heard again.
+#[test]
+fn a_probe_window_over_the_quiet_threshold_is_cut_under_it() {
+    big_stack(|| {
+        let waited = lapse_after(60 * SEC_NS);
+        assert!(waited < 20 * SEC_NS, "the probe waited {waited} ns");
+    });
+}

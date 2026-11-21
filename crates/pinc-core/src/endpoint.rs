@@ -96,7 +96,8 @@ pub struct EndpointConfig {
     pub ticket_lifetime_s: u32,
     /// How long a quiet-parent dial waits for the probed session's answer before it makes its own handshake
     /// (`QUIET_PROBE`), in nanoseconds. 0, the default: two of the probed session's probe timeouts, the bound
-    /// taken from its round trip.
+    /// taken from its round trip. A wait of 20 s or more (the time
+    /// after which a session counts as quiet) is cut to just under it.
     pub probe_window: u64,
 }
 
