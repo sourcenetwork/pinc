@@ -16,6 +16,13 @@ The only things taken on trust are the dependencies, not this repository's code:
   only: with it broken, a resumed session is as secret as its ticket's pre-shared key (`ResumedAsPsk`,
   `HandshakeHybrid.resumed_init_as_psk`) and a roll gives no post-compromise security (`KeyRoll_xbroken`,
   `KeyRoll.xbroken_no_post_compromise`).
+- The reconcile fingerprint: two different multisets of items do not share a group sum (the discrete logarithm in
+  the Ristretto group, with BLAKE3 as the map from an item to a point), and two different sums or counts do not
+  share a fingerprint (BLAKE3 collision resistance over the whole 32 bytes). In Lean this is the one hypothesis
+  `EncInj` of the reconcile theorems, an idealisation that no function into 32 bytes has for all lists: no theorem
+  takes it together with the byte bound `HBound`, and `encInj_exists` gives a function that has it. TLC checks the
+  session with an injective fingerprint in the small configs and with a mixing one that is not injective in
+  `Reconcile_real*`.
 - The packet key is an injective function of the traffic secret (a property of the key derivation `expand`; a hypothesis
   of `Record.no_nonce_reuse` and `KeyRoll`), and X25519 gives the same shared value to both sides.
 - Rust `core` and `std` semantics, each stated as a hypothesis of the theorems that use it, never as an axiom:

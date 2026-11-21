@@ -113,7 +113,7 @@ def Core.restartExact (o : Oracle) (S : List Item) (c : Core) : Except Err (Core
 
 /-- `check_msg`: the fingerprint the responder's whole set must have if the reported difference is exact. -/
 def Core.checkMsg (o : Oracle) (S : List Item) (c : Core) : Except Err (Core × List Nat) := do
-  let fp := fpRange o S 0 c.n ^^^ xorH o c.here ^^^ xorH o c.there
+  let fp := checkFp o S c.n c.here c.there
   let c := { c with out := (c.out.reset.head tCHECK [] none) }
   let c := { c with out := { c.out with body := c.out.body ++ fpBytes fp } }
   pure (c, ← c.finish false 1 false)

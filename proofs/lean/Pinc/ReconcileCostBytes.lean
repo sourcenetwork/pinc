@@ -26,7 +26,7 @@ with `s.log` and `s.pend`, `IReach`, `stepsBound`. The new ones:
   or the start of one, so it's never longer than `L` either.
 * `aleaf = 32` and `bleaf = 6` are the code's leaf sizes. The initiator sends a range as ids or items once it holds
   at most 32 items there, and the responder does once it holds at most 6.
-* `varMax = 9` is the room the code sets aside for one count. `fpLen = 16` is a fingerprint, `idLen = 8` an id.
+* `varMax = 9` is the room the code sets aside for one count. `fpLen = 32` is a fingerprint, `idLen = 8` an id.
 * `boundLen L` is what one bound of `L` bytes takes on the wire. That's one byte for the prefix it shares with the
   bound before it, then the length, then the bytes.
 * `itemLen L` is what one whole item of `L` bytes takes, which is its length followed by its bytes.
@@ -214,7 +214,7 @@ theorem beBytes_len : ∀ w v : Nat, (beBytes w v).length = w
   | 0, _ => rfl
   | w + 1, v => by simp [beBytes, beBytes_len w (v / 256)]
 
-/-- A run of ids (the payload `ids_part` writes): `idLen` bytes for each item of `xs`. `o` is the keyed hash. -/
+/-- A run of ids (the payload `ids_part` writes): `idLen` bytes for each item of `xs`. `o` is the hash oracle. -/
 theorem ids_bytes (o : Oracle) : ∀ xs : List Item, ((xs.map (idBytes o)).flatten).length = idLen * xs.length
   | [] => by simp
   | x :: xs => by

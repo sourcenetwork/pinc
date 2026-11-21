@@ -4,7 +4,7 @@ import Pinc.ReconcileApsSplit
 # Reconcile APS, part 2: the abstract part system
 
 The abstract part system (APS) of an honest reconciliation between an initiator holding the sorted set `A` and a
-responder holding the sorted set `B`, with the hash oracle `o` (`o.H` the fingerprint hash, `o.idf` the id).
+responder holding the sorted set `B`, with the hash oracle `o` (`o.enc` the fingerprint of a sum and a count, `o.idf` the id).
 Each arm of `Core::answer` is one `Proc` constructor, and the choices the code makes (leaf or split, the fan of a
 narrowed split, whether a leaf fits a message) are the nondeterminism of the relation:
 
@@ -52,7 +52,8 @@ structure Cfg where
 def Cfg.set (c : Cfg) (toInit : Bool) : List Item := if toInit then c.A else c.B
 
 /-- The fingerprints of the range agree. -/
-def Cfg.fpEq (c : Cfg) (I : Iv) : Prop := xorH c.o (I.items c.A) = xorH c.o (I.items c.B)
+def Cfg.fpEq (c : Cfg) (I : Iv) : Prop :=
+  c.o.enc (sumH (I.items c.A)) (I.items c.A).length = c.o.enc (sumH (I.items c.B)) (I.items c.B).length
 
 /-- The exact merge of a range: `B` items `A` lacks, `A` items `B` lacks. -/
 def Cfg.exactHere (c : Cfg) (I : Iv) : List Item := (I.items c.B).filter (fun x => !c.A.contains x)

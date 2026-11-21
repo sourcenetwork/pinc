@@ -32,7 +32,7 @@ def frameMax : Nat := 0xffffff
 /-- The shared prefix length cap of a bound. -/
 def cplMax : Nat := 255
 /-- Bytes of a range fingerprint, of an item id, and the longest varint. -/
-def fpLen : Nat := 16
+def fpLen : Nat := 32
 def idLen : Nat := 8
 def varMax : Nat := 9
 

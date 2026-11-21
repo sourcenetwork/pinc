@@ -10,7 +10,7 @@ Facts about a single part-processing step, used by the invariants (ReconcileApsS
   arenas only grow by items of the processed interval, and only when no part is left over (the third and fourth);
 * `Proc.safe_adds`: what is added is safe whatever the id function: `here` gets items of `B` that `A` lacks, `there`
   items of `A`, each once;
-* `Proc.cover` (needs `Indep`): in a lossless step (not an ids part) every difference item of the interval is
+* `Proc.cover` (needs `EncInj`): in a lossless step (not an ids part) every difference item of the interval is
   added or lies in a new part;
 * `aps_ids_exact_of_inj`: if the id function is injective on the leaf's items, the ids reply is the exact merge.
 -/
@@ -184,17 +184,17 @@ theorem split_cover (c : Cfg) (T : List Item) (hT : Sorted T) (I : Iv) {fan : Na
   obtain ⟨J, hJ, hJx⟩ := (splitIvs_spec hT I hf hc).1 x hx
   exact ⟨⟨.fp, side, J, d + 1⟩, List.mem_map.mpr ⟨J, hJ, rfl⟩, hJx⟩
 
-/-- A lossless step loses no difference item: with independent hashes, a difference item of the processed interval is
+/-- A lossless step loses no difference item: with a non-colliding fingerprint (`EncInj`), a difference item of the processed interval is
 added or lies in a new part, unless the part is an ids reply. -/
 theorem Proc.cover {c : Cfg} {ex : Bool} {p : Part} {kids : List Part} {ha ta : List Item} {lf : Bool}
-    (hI : Indep c.o) (hp : Proc c ex p kids ha ta lf) (hk : p.kind ≠ .reply true)
+    (hE : EncInj c.o) (hp : Proc c ex p kids ha ta lf) (hk : p.kind ≠ .reply true)
     (x : Item) (hx : p.iv.has x = true) :
     (x ∈ c.B → x ∉ c.A → x ∈ ha ∨ ∃ k ∈ kids, k.iv.has x = true) ∧
     (x ∈ c.A → x ∉ c.B → x ∈ ta ∨ ∃ k ∈ kids, k.iv.has x = true) := by
   have hmin := c.hmin
   cases hp with
   | fpEq h =>
-    have := fp_inj hI (items_nodup c.hA _) (items_nodup c.hB _) h x
+    have := fp_inj hE (items_nodup c.hA _) (items_nodup c.hB _) h x
     refine ⟨fun hB hA => ?_, fun hA hB => ?_⟩
     · exact absurd (mem_items.mp (this.mpr (mem_items.mpr ⟨hB, hx⟩))).1 hA
     · exact absurd (mem_items.mp (this.mp (mem_items.mpr ⟨hA, hx⟩))).1 hB

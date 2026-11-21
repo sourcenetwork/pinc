@@ -49,15 +49,18 @@ theorem readBytes_fp (f : Nat) (rest : List Nat) : readBytes fpLen (fpBytes f ++
   rw [readBytes_ok _ _ (by simp [fpBytes_len]), ← fpBytes_len f]
   simp
 
-theorem fromBE_fpBytes (f : Nat) (h : f < 2 ^ 128) : fromBE (fpBytes f) = f :=
-  fromBE_beBytes fpLen f (by simpa [fpLen] using (by omega : f < 2 ^ 128 ∧ 256 ^ 16 = 2 ^ 128).1)
+theorem fromBE_fpBytes (f : Nat) (h : f < 2 ^ 256) : fromBE (fpBytes f) = f :=
+  fromBE_beBytes fpLen f (by
+    have e : (256 : Nat) ^ 32 = 2 ^ 256 := by decide
+    show f < 256 ^ 32
+    rw [e]; exact h)
 
 theorem fpRange_slice (o : Oracle) {lim S c I} (h : HCtx lim S c I) :
-    fpRange o S (rankOf S I.lo) (rankHi S I.hi) = xorH o (I.items S) := by
-  unfold fpRange; rw [h.ranks.2.2]
+    fpRange o S (rankOf S I.lo) (rankHi S I.hi) = o.enc (sumH (I.items S)) (I.items S).length := by
+  rw [fpRange_eq o S h.ranks.2.1, h.ranks.2.2]
 
-theorem tailPart_fp_equal (o : Oracle) {lim S c} (I : Iv) (h : HCtx lim S c I) (f : Nat) (hf : f < 2 ^ 128)
-    (rest : List Nat) (mark : Nat) (heq : xorH o (I.items S) = f) :
+theorem tailPart_fp_equal (o : Oracle) {lim S c} (I : Iv) (h : HCtx lim S c I) (f : Nat) (hf : f < 2 ^ 256)
+    (rest : List Nat) (mark : Nat) (heq : o.enc (sumH (I.items S)) (I.items S).length = f) :
     tailPart o S c tFP I.lo I.hi (fpBytes f ++ rest) mark = .ok (c, rest) := by
   have hr := h.ranks
   have hs := fpRange_slice o h
@@ -90,10 +93,10 @@ def fpDiffer (o : Oracle) (S : List Item) (c : Core) (lo : Item) (hi : Option It
     let (out, cnt) ← splitFit o lim S c.out lo hi a b mark 3
     pure (({ c with out := out }).bump cnt, r)
 
-theorem tailPart_fp (o : Oracle) {lim S c} (I : Iv) (h : HCtx lim S c I) (f : Nat) (hf : f < 2 ^ 128)
+theorem tailPart_fp (o : Oracle) {lim S c} (I : Iv) (h : HCtx lim S c I) (f : Nat) (hf : f < 2 ^ 256)
     (rest : List Nat) (mark : Nat) :
     tailPart o S c tFP I.lo I.hi (fpBytes f ++ rest) mark =
-      if f = xorH o (I.items S) then .ok (c, rest)
+      if f = o.enc (sumH (I.items S)) (I.items S).length then .ok (c, rest)
       else fpDiffer o S c I.lo I.hi (rankOf S I.lo) (rankHi S I.hi) rest mark := by
   have hr := h.ranks
   have hs := fpRange_slice o h
@@ -103,19 +106,19 @@ theorem tailPart_fp (o : Oracle) {lim S c} (I : Iv) (h : HCtx lim S c I) (f : Na
   | none =>
     simp only [rankHi] at hr hs ⊢
     have hab : ¬ S.length < rankOf S lo := by omega
-    by_cases he : f = xorH o (Iv.items S ⟨lo, none⟩)
+    by_cases he : f = o.enc (sumH (Iv.items S ⟨lo, none⟩)) (Iv.items S ⟨lo, none⟩).length
     · simp only [tailPart, hn, lr, readBytes_fp, fromBE_fpBytes f hf, hs, ← he, hab, Except.mapError, bne_self_eq_false,
         Bool.false_eq_true, ite_false, ite_true, bind, Except.bind, pure, Except.pure, if_pos]
-    · have hne : (f != xorH o (Iv.items S ⟨lo, none⟩)) = true := by simpa using he
+    · have hne : (f != o.enc (sumH (Iv.items S ⟨lo, none⟩)) (Iv.items S ⟨lo, none⟩).length) = true := by simpa using he
       simp only [tailPart, hn, lr, readBytes_fp, fromBE_fpBytes f hf, hs, hne, hab, Except.mapError, ite_true,
         Bool.false_eq_true, ite_false, bind, Except.bind, pure, Except.pure, if_neg he, fpDiffer]
   | some x =>
     simp only [rankHi] at hr hs ⊢
     have hab : ¬ rankOf S x < rankOf S lo := by omega
-    by_cases he : f = xorH o (Iv.items S ⟨lo, some x⟩)
+    by_cases he : f = o.enc (sumH (Iv.items S ⟨lo, some x⟩)) (Iv.items S ⟨lo, some x⟩).length
     · simp only [tailPart, hn, lr, readBytes_fp, fromBE_fpBytes f hf, hs, ← he, hab, Except.mapError, bne_self_eq_false,
         Bool.false_eq_true, ite_false, ite_true, bind, Except.bind, pure, Except.pure, if_pos]
-    · have hne : (f != xorH o (Iv.items S ⟨lo, some x⟩)) = true := by simpa using he
+    · have hne : (f != o.enc (sumH (Iv.items S ⟨lo, some x⟩)) (Iv.items S ⟨lo, some x⟩).length) = true := by simpa using he
       simp only [tailPart, hn, lr, readBytes_fp, fromBE_fpBytes f hf, hs, hne, hab, Except.mapError, ite_true,
         Bool.false_eq_true, ite_false, bind, Except.bind, pure, Except.pure, if_neg he, fpDiffer]
 
@@ -202,9 +205,9 @@ theorem fpDiffer_split (o : Oracle) {lim S c} (I : Iv) (h : HCtx lim S c I) (res
         .ok ((({ c with out :=
             { c.out with
               body := c.out.body ++ (encFps c.out.last ((splitIvs S I fan).zip
-                ((blocksOf S I fan).map fun B => fpBytes (xorH o B)))).1,
+                ((blocksOf S I fan).map fun B => fpBytes (o.enc (sumH B) B.length)))).1,
               last := (encFps c.out.last ((splitIvs S I fan).zip
-                ((blocksOf S I fan).map fun B => fpBytes (xorH o B)))).2 } }).bump (blocksOf S I fan).length), rest) := by
+                ((blocksOf S I fan).map fun B => fpBytes (o.enc (sumH B) B.length)))).2 } }).bump (blocksOf S I fan).length), rest) := by
   have hr := h.ranks
   have hc := h.cnt_eq
   have hlim := h.hlim

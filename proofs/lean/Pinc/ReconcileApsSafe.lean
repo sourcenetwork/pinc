@@ -8,7 +8,7 @@ only items of `A`, each once, whatever the id function), pairwise disjoint pendi
 every pending interval, well-formed parts.
 
 `Lossless` states (an exact pass, or a pass that has not used an ids leaf) also keep `Cov`: every item of the
-symmetric difference is in an arena or in a pending interval (`reach_cov`, needs `Indep`). So a lossless pass that has
+symmetric difference is in an arena or in a pending interval (`reach_cov`, needs `EncInj`). So a lossless pass that has
 no pending part left reports exactly (`final_exact_of_lossless`); a pass 1 with ids leaves always ends `Safe`, and
 `ReconcileApsSession` closes the argument with the final check.
 -/
@@ -208,7 +208,7 @@ theorem init_cov {c : Cfg} {s : St} (h : (∃ ex, Init c ex s) ∨ ColdInit c s)
         exact ⟨fun _ => Or.inr ⟨⟨.full, true, J, 0⟩, List.mem_map.mpr ⟨J, hJ, rfl⟩, hJx⟩,
           fun _ => Or.inr ⟨⟨.full, true, J, 0⟩, List.mem_map.mpr ⟨J, hJ, rfl⟩, hJx⟩⟩
 
-theorem step_cov {c : Cfg} (hI : Indep c.o) {s s' : St} (hn : NoIds s) (hc : CovL c s) (hs : PStep c s s') :
+theorem step_cov {c : Cfg} (hE : EncInj c.o) {s s' : St} (hn : NoIds s) (hc : CovL c s) (hs : PStep c s s') :
     NoIds s' ∧ CovL c s' := by
   cases hs with
   | @step p rest kids ha ta lf hperm hp =>
@@ -257,29 +257,29 @@ theorem step_cov {c : Cfg} (hI : Indep c.o) {s s' : St} (hn : NoIds s) (hc : Cov
       · rcases hcov.1 hx with h | ⟨q, hq, hqx⟩
         · exact Or.inl (List.mem_append_left _ h)
         · rcases (hmem q).mp hq with rfl | hr
-          · rcases (Proc.cover hI hp hpk x hqx).1 hx.1 hx.2 with h | ⟨k, hk, hkx⟩
+          · rcases (Proc.cover hE hp hpk x hqx).1 hx.1 hx.2 with h | ⟨k, hk, hkx⟩
             · exact Or.inl (List.mem_append_right _ h)
             · exact Or.inr ⟨k, List.mem_append_left _ hk, hkx⟩
           · exact Or.inr ⟨q, List.mem_append_right _ hr, hqx⟩
       · rcases hcov.2 hx with h | ⟨q, hq, hqx⟩
         · exact Or.inl (List.mem_append_left _ h)
         · rcases (hmem q).mp hq with rfl | hr
-          · rcases (Proc.cover hI hp hpk x hqx).2 hx.1 hx.2 with h | ⟨k, hk, hkx⟩
+          · rcases (Proc.cover hE hp hpk x hqx).2 hx.1 hx.2 with h | ⟨k, hk, hkx⟩
             · exact Or.inl (List.mem_append_right _ h)
             · exact Or.inr ⟨k, List.mem_append_left _ hk, hkx⟩
           · exact Or.inr ⟨q, List.mem_append_right _ hr, hqx⟩
 
-theorem reach_cov {c : Cfg} (hI : Indep c.o) {s : St} (h : PReach c s) : NoIds s ∧ CovL c s := by
+theorem reach_cov {c : Cfg} (hE : EncInj c.o) {s : St} (h : PReach c s) : NoIds s ∧ CovL c s := by
   induction h with
   | init h => exact init_cov (Or.inl ⟨_, h⟩)
   | cold h => exact init_cov (Or.inr h)
-  | step _ hs ih => exact step_cov hI ih.1 ih.2 hs
+  | step _ hs ih => exact step_cov hE ih.1 ih.2 hs
 
 /-- A lossless pass with nothing pending reports exactly the symmetric difference. -/
-theorem final_exact_of_lossless {c : Cfg} (hI : Indep c.o) {s : St} (h : PReach c s) (hl : Lossless s)
+theorem final_exact_of_lossless {c : Cfg} (hE : EncInj c.o) {s : St} (h : PReach c s) (hl : Lossless s)
     (hp : s.pend = []) : ExactReport c.A c.B s.here s.there := by
   obtain ⟨hsafe, _⟩ := reach_inv h
-  obtain ⟨_, hc⟩ := reach_cov hI h
+  obtain ⟨_, hc⟩ := reach_cov hE h
   have hcov0 := hc hl
   have hcov := hcov0.1
   obtain ⟨h1, h2, h3, h4⟩ := hsafe
