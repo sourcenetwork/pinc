@@ -1,0 +1,38 @@
+# A hand-written fleet for `pinc-distributed run <scenario.toml> --hosts <this file>` (the format of the
+# `hosts.toml` that `terraform apply` writes from hosts.toml.tftpl). Three Linux machines with systemd, `tc` and
+# passwordless `sudo -n`, reachable over SSH from the machine that runs the harness.
+#
+# A node runs on a machine whose `site` is the node's site in the scenario; with no such machine it runs on any, the
+# least loaded first. `tc netem` shapes a scenario link on each machine's egress, per destination machine, so every
+# machine must run the nodes of one site only (the run is refused otherwise). The site names below are three-site's;
+# set them to the scenario's own sites:
+#   three-site           site-a, site-b, site-c   (3 machines)
+#   sync-multi           core, s1, s2, s3         (4 machines)
+#   defra-pushlog-burst  writer, replicas         (2 machines)
+#   wan                  east, west               (2 machines)
+#   lossy, lossy-*mib    near, far                (2 machines)
+#   lan, pubsub-lan      office                   (one site, no link to shape: any machines, `site` unset)
+
+[[hosts]]
+name = "vm-a"
+address = "203.0.113.10"
+private = "10.0.1.10"
+user = "ec2-user"
+site = "site-a"
+key = "/home/runner/.ssh/paper-fleet.pem"
+
+[[hosts]]
+name = "vm-b"
+address = "203.0.113.11"
+private = "10.0.1.11"
+user = "ec2-user"
+site = "site-b"
+key = "/home/runner/.ssh/paper-fleet.pem"
+
+[[hosts]]
+name = "vm-c"
+address = "203.0.113.12"
+private = "10.0.1.12"
+user = "ec2-user"
+site = "site-c"
+key = "/home/runner/.ssh/paper-fleet.pem"
