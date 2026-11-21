@@ -265,7 +265,7 @@ def host_info():
         "rustc": sh("rustc -V").stdout.strip(),
         "rustflags": os.environ.get("RUSTFLAGS", ""),
         "git": sh(f"git -C {ROOT} rev-parse --short HEAD").stdout.strip(),
-        "versions": {n: cargo_lock_version(n) for n in ("iroh", "noq", "libp2p", "libp2p-quic", "libp2p-stream", "quinn", "tokio", "nuclei")},
+        "versions": {n: cargo_lock_version(n) for n in ("iroh", "noq", "libp2p", "libp2p-quic", "quinn", "tokio", "nuclei")},
         "loadavg_at_start": open("/proc/loadavg").read().strip(),
         **settings(),
     }
