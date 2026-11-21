@@ -8,10 +8,10 @@
 //! sends at a time. A reply holds as many parts as fit the message limit; the rest of the answer waits in the replier
 //! and its `more` flag says so (see [`wire`](crate::wire)). The exchange ends when a side sends or receives the empty
 //! count while neither side holds more.
-//! If any leaf part was exchanged, the initiator first sends one check: the fingerprint the responder's whole set
-//! must have if the reported difference is exact. A disagreement (an id collision) restarts the session from the root
+//! If any leaf part was exchanged, the initiator first sends one check: the fingerprint (of the group sum and the
+//! count) the responder's whole set must have if the reported difference is exact. A disagreement (an id collision) restarts the session from the root
 //! with items in place of ids, which cannot collide; a second disagreement is [`Error::Mismatch`]. So a finished
-//! session is exact, not probable, under the keyed-hash assumption on the range fingerprints.
+//! session is exact unless two different multisets share a group sum or a fingerprint (see [`hash`](crate::hash)).
 
 use alloc::vec::Vec;
 
@@ -192,6 +192,15 @@ impl Initiator {
         }
         self.core.end_msg(out)?;
         Ok(Step::Last)
+    }
+
+    /// The difference gathered so far, at any point of a session. For trace tests only.
+    #[cfg(feature = "trace")]
+    pub fn gathered(&self) -> Report<'_> {
+        Report {
+            here: &self.core.here,
+            there: &self.core.there,
+        }
     }
 
     /// The difference, once a session has finished.

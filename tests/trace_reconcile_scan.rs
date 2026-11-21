@@ -1,4 +1,5 @@
 //! The lenient scan of a message and the fault injection of `trace_reconcile`.
+use pinc_reconcile::FP_LEN;
 use pinc_tests::SplitMix64;
 use pinc_wire::varint;
 
@@ -67,7 +68,7 @@ pub fn scan_inner(m: &[u8], first: bool, s: &mut Scan) -> Option<()> {
             skip(m, &mut p, n)?;
         }
         match tag & 0x7f {
-            1 | 6 => skip(m, &mut p, 16)?,
+            1 | 6 => skip(m, &mut p, FP_LEN)?,
             2 => {
                 let c = var(m, &mut p, s)?;
                 skip(m, &mut p, c.checked_mul(8)?)?;

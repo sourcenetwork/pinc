@@ -1,4 +1,4 @@
-//! Property tests: the bound, varint and frame codecs round-trip, the index fingerprints behave as a set XOR, the
+//! Property tests: the bound, varint and frame codecs round-trip, the index range sums behave as a group sum of the items, the
 //! state machines reconcile arbitrary set pairs exactly under arbitrary limits, and arbitrary bytes never panic them.
 #![allow(
     clippy::unwrap_used,
@@ -14,7 +14,7 @@ mod common;
 
 use common::{index, run_with, sorted, sym_diff};
 use pinc_reconcile::wire::{count, frame_body, frame_len, put_bound, put_varint, read_bound};
-use pinc_reconcile::{Fingerprint, Initiator, ItemIndex, Limits, Responder};
+use pinc_reconcile::{Fingerprint, Initiator, ItemIndex, Limits, Responder, SetSum, item_sum};
 use pinc_wire::Reader;
 use proptest::prelude::*;
 
@@ -25,6 +25,16 @@ fn small_item() -> impl Strategy<Value = Vec<u8>> {
 
 fn small_set() -> impl Strategy<Value = Vec<Vec<u8>>> {
     prop::collection::vec(small_item(), 0..120).prop_map(sorted)
+}
+
+/// The sum of the points of `items`, computed here from the public hash and nothing of the index.
+fn total(items: &[Vec<u8>]) -> SetSum {
+    items.iter().fold(SetSum::zero(), |acc, it| acc + item_sum(it))
+}
+
+/// The fingerprint of a whole set, from the public hashes alone.
+fn whole(items: &[Vec<u8>]) -> Fingerprint {
+    Fingerprint::of(&total(items), items.len() as u64)
 }
 
 proptest! {
@@ -73,18 +83,41 @@ proptest! {
     }
 
     #[test]
-    fn a_range_fingerprint_is_the_xor_of_its_items(set in small_set(), x in 0usize..130, y in 0usize..130) {
+    fn a_range_sum_is_the_sum_of_its_items(set in small_set(), x in 0usize..130, y in 0usize..130) {
         let ix = index(&set);
         let (a, b) = (x.min(y).min(set.len()), x.max(y).min(set.len()));
-        let want = set[a..b].iter().fold(Fingerprint::ZERO, |acc, it| acc ^ Fingerprint::of_item(it));
-        prop_assert_eq!(ix.fingerprint(a, b).unwrap(), want);
+        prop_assert_eq!(ix.sum(a, b).unwrap(), total(&set[a..b]));
     }
 
     #[test]
-    fn the_xor_of_two_set_fingerprints_is_the_fingerprint_of_the_difference(a in small_set(), b in small_set()) {
+    fn the_sum_of_two_sets_differs_by_the_sum_of_their_difference(a in small_set(), b in small_set()) {
         let (only_b, only_a) = sym_diff(&a, &b);
-        let fp = |s: &[Vec<u8>]| s.iter().fold(Fingerprint::ZERO, |acc, it| acc ^ Fingerprint::of_item(it));
-        prop_assert_eq!(fp(&a) ^ fp(&b), fp(&only_a) ^ fp(&only_b));
+        prop_assert_eq!(total(&a) - total(&b), total(&only_a) - total(&only_b));
+    }
+
+    #[test]
+    fn two_different_sets_of_the_same_size_have_different_fingerprints(set in small_set(), x in small_item(), at in 0usize..130) {
+        prop_assume!(!set.is_empty() && !set.contains(&x));
+        let mut other = set.clone();
+        other[at % set.len()] = x;
+        let other = sorted(other);
+        prop_assert_eq!(other.len(), set.len());
+        prop_assert_ne!(whole(&other), whole(&set));
+    }
+
+    #[test]
+    fn a_set_has_one_fingerprint_in_any_insertion_order(mut set in small_set()) {
+        let forward = whole(&set);
+        set.reverse();
+        prop_assert_eq!(whole(&set), forward);
+    }
+
+    #[test]
+    fn a_repeated_item_does_not_collapse_to_the_set_without_it(set in small_set(), x in small_item()) {
+        let mut twice = set.clone();
+        twice.extend([x.clone(), x]);
+        prop_assert_ne!(whole(&twice), whole(&set));
+        prop_assert_ne!(total(&twice), total(&set));
     }
 
     #[test]

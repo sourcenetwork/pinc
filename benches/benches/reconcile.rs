@@ -15,10 +15,11 @@ use std::collections::BTreeSet;
 use std::hint::black_box;
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use pinc_reconcile::{Initiator, Limits, MemIndex, Responder, Step};
+use pinc_reconcile::{Fingerprint, Initiator, ItemIndex, Limits, MemIndex, Responder, Step};
 
 const N: usize = 1_000_000;
 const ITEM: usize = 40;
+const INDEX_N: usize = 100_000;
 const DIFFS: [usize; 7] = [0, 1, 10, 100, 1000, 10_000, 100_000];
 const LIMITS: [(&str, usize); 2] = [("default", 0x00ff_ffff), ("16k", 16_384)];
 
@@ -147,5 +148,27 @@ fn reconcile(c: &mut Criterion) {
     eprintln!("load average (1, 5, 15 min) at end: {}", load_average());
 }
 
-criterion_group!(benches, reconcile);
+/// The cost of building a `MemIndex` (per item: the time divided by `INDEX_N`) and of one range fingerprint (the index sum and the keyed hash of it).
+fn index_costs(c: &mut Criterion) {
+    let mut rng = SplitMix64(0x1de7);
+    let mut set: Vec<Vec<u8>> = (0..INDEX_N).map(|_| rng.item()).collect();
+    set.sort_unstable();
+    set.dedup();
+    let mut group = c.benchmark_group("index");
+    group.sample_size(10);
+    group.throughput(Throughput::Elements(set.len() as u64));
+    group.bench_function("build_per_item", |bench| bench.iter(|| black_box(index(&set))));
+    let ix = index(&set);
+    let (a, b) = (set.len() / 3, set.len() / 3 * 2);
+    group.throughput(Throughput::Elements(1));
+    group.bench_function("range_fingerprint", |bench| {
+        bench.iter(|| {
+            let sum = ix.sum(black_box(a), black_box(b)).unwrap();
+            black_box(Fingerprint::of(&sum, (b - a) as u64))
+        });
+    });
+    group.finish();
+}
+
+criterion_group!(benches, reconcile, index_costs);
 criterion_main!(benches);

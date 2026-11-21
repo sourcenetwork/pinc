@@ -1,11 +1,12 @@
-//! An in-memory [`ItemIndex`] over a sorted list, with a prefix table of fingerprints.
+//! An in-memory [`ItemIndex`] over a sorted list, with a prefix table of sums.
 //!
-//! Invariants: the items are strictly ascending (checked at build time) and immutable. A range fingerprint is the
-//! XOR of two prefix entries, so it costs two reads however long the range; a rank is a binary search.
+//! Invariants: the items are strictly ascending (checked at build time) and immutable. A range sum is the
+//! difference of two prefix entries, so it costs two reads and one group subtraction however long the range, and an
+//! entry costs `size_of::<SetSum>()` bytes (160 bytes, checked by a test); a rank is a binary search.
 
 use alloc::vec::Vec;
 
-use crate::hash::Fingerprint;
+use crate::hash::{SetSum, item_sum};
 use crate::index::ItemIndex;
 
 /// Why a [`MemIndex`] could not be built or read.
@@ -26,7 +27,7 @@ pub enum MemError {
 pub struct MemIndex {
     data: Vec<u8>,
     ends: Vec<usize>,
-    prefix: Vec<Fingerprint>,
+    prefix: Vec<SetSum>,
 }
 
 impl MemIndex {
@@ -38,16 +39,16 @@ impl MemIndex {
         let mut ix = Self {
             data: Vec::new(),
             ends: Vec::new(),
-            prefix: alloc::vec![Fingerprint::ZERO],
+            prefix: alloc::vec![SetSum::zero()],
         };
-        let mut acc = Fingerprint::ZERO;
+        let mut acc = SetSum::zero();
         for item in items {
             if ix.item(ix.ends.len().wrapping_sub(1)).is_some_and(|prev| prev >= item) {
                 return Err(MemError::Unsorted);
             }
             ix.data.extend_from_slice(item);
             ix.ends.push(ix.data.len());
-            acc ^= Fingerprint::of_item(item);
+            acc += item_sum(item);
             ix.prefix.push(acc);
         }
         Ok(ix)
@@ -99,13 +100,34 @@ impl ItemIndex for MemIndex {
         Ok(item.len())
     }
 
-    fn fingerprint(&self, a: usize, b: usize) -> Result<Fingerprint, MemError> {
+    fn sum(&self, a: usize, b: usize) -> Result<SetSum, MemError> {
         if a > b {
             return Err(MemError::OutOfRange);
         }
         match (self.prefix.get(a), self.prefix.get(b)) {
-            (Some(&x), Some(&y)) => Ok(x ^ y),
+            (Some(&x), Some(&y)) => Ok(y - x),
             _ => Err(MemError::OutOfRange),
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, reason = "tests may assert")]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_prefix_entry_is_160_bytes() {
+        assert_eq!(core::mem::size_of::<SetSum>(), 160);
+    }
+
+    #[test]
+    fn a_range_sum_is_the_sum_of_its_items() {
+        let items: [&[u8]; 4] = [b"a", b"b", b"c", b"d"];
+        let ix = MemIndex::from_sorted(items).unwrap();
+        assert_eq!(ix.sum(1, 3), Ok(item_sum(b"b") + item_sum(b"c")));
+        assert_eq!(ix.sum(2, 2), Ok(SetSum::zero()));
+        assert_eq!(ix.sum(3, 2), Err(MemError::OutOfRange));
+        assert_eq!(ix.sum(0, 5), Err(MemError::OutOfRange));
     }
 }
