@@ -50,7 +50,6 @@ iroh-gossip = { version = "0.102.0", default-features = false, features = ["net"
 iroh-blobs = { version = "0.104.1", default-features = false }
 blake3 = "1.8.7"
 libp2p = { version = "0.57.1", default-features = false }
-libp2p-stream = "0.5.0-alpha"
 # Segmented UDP sends and coalesced receives for the PINC host, the calls the compared libraries use.
 quinn-udp = "0.5.16"
 
@@ -125,7 +124,6 @@ iroh-gossip = { workspace = true }
 iroh-blobs = { workspace = true }
 blake3 = { workspace = true }
 libp2p = { workspace = true, features = ["tokio", "quic", "tcp", "noise", "yamux", "macros", "gossipsub", "request-response"] }
-libp2p-stream = { workspace = true }
 quinn-udp = { workspace = true }
 
 [lints]
