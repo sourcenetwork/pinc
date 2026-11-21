@@ -139,7 +139,15 @@ trace_tlc() { # trace_tlc <spec> <what> : TLC of the newer era over the recorded
 }
 . scripts/proofs/trace.sh
 while [ -n "$(jobs -rp)" ]; do wait -n || exit 1; done
-proofs/lean/.lake/build/bin/replay "$dir"/*.ndjson
+proofs/lean/.lake/build/bin/replay "${lean_traces[@]}"
+# A trace recorded but read by neither the Lean replay nor a TLA+ trace spec would look checked while nothing checks it.
+lean_names=" "; for f in "${lean_traces[@]}"; do lean_names+="${f##*/} "; done
+for f in "$dir"/*.ndjson; do
+    n=${f##*/}
+    case "$lean_names" in *" $n "*) continue ;; esac
+    grep -qF -e "/$n\"" -e "\"$n\"" proofs/tla/Trace*.tla proofs/tla/Trace*.cfg \
+        || { echo "proofs: no check reads the recorded trace $n" >&2; exit 1; }
+done
 
 echo "-- model-based tests"
 mbt_cases() { # mbt_cases <spec> <cfg> <out> : TLC's state graph of <cfg> as paths that take every edge, in $dir/mbt/<out>
