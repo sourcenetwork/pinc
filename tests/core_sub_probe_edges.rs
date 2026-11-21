@@ -299,7 +299,6 @@ fn stall_events(ep: &mut CoreEp, now: u64) {
 /// The peer's answer to a probe reaches a dialer whose event queue is full and unread: once the host reads, the dial
 /// connects once as a sub-session of the quiet session, with no handshake and no second root.
 #[test]
-#[ignore = "defect: a PATH_RESPONSE arriving while the event queue is stalled is gated (rx.rs deliver, recv.rs raises_event) and never sent again, so the probe lapses into a second root"]
 fn a_ride_while_the_event_queue_is_stalled_connects_once_after_the_host_reads() {
     big_stack(|| {
         let (mut net, a, b) = silent_parent();

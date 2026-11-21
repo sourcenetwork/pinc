@@ -10,7 +10,7 @@
 //! The parent must have been heard from within [`PARENT_RX`]. One that went quiet may be a peer that restarted, so a
 //! dial to it asks first (`QUIET_PROBE`): the dial's slot holds its memory and no connection, and the quiet session
 //! challenges its active path at once (a path challenge, answered with a response the peer sends as soon as it
-//! arrives, where a ping is acknowledged after the peer's acknowledgement delay). As soon as any packet comes back the
+//! arrives, where a ping is acknowledged after the peer's acknowledgement delay). As soon as any packet comes back (one the event gate refused too) the
 //! dial rides the session as a sub-session, with the id it already gave the application. When the wait (two of the session's probe timeouts, or `EndpointConfig::probe_window`)
 //! runs out unanswered, the dial makes its own handshake in the same slot, to the caller's first address, the session's
 //! own direct address and then the caller's others, and closes the quiet session only when it is still the one
