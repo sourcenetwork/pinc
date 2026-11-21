@@ -250,6 +250,9 @@ def settings():
     value = os.environ.get("PINC_BENCH_ENDPOINTS", "1")
     if value != "1":
         found["endpoints"] = value
+    # PINC reads the interface size from PINC_BENCH_MTU and, unset or not a number, probes the device's largest datagram.
+    mtu = os.environ.get("PINC_BENCH_MTU", "")
+    found["mtu"] = int(mtu) if mtu.isascii() and mtu.isdigit() and int(mtu) <= 65535 else None
     return found
 
 
@@ -407,6 +410,12 @@ def write_md(out, info, libs, profiles, scen, results, a):
     md.append(f"Date {datetime.date.today().isoformat()}, host `{info['host']}`: {info['cpu']}, {info['cores']} cores, {info['mem_gib']} GiB, kernel {info['kernel']}, {info['rustc']}, commit {info['git']}.")
     md.append("Versions: " + ", ".join(f"{k} {v}" for k, v in info["versions"].items()) + ". Every library compiled with `RUSTFLAGS=" + (info.get("rustflags") or "") + "`.")
     md.append("Every cell is the median over the repetitions with the range [min..max]; a single value is one run. The client and the server are two processes on loopback.")
+    mtu = info.get("mtu")
+    md.append(
+        f"PINC was given an interface size of {mtu} bytes (`PINC_BENCH_MTU`)."
+        if mtu is not None
+        else "`PINC_BENCH_MTU` was not set to a number: the PINC endpoint probes the device's largest datagram."
+    )
     if "endpoints" in info:
         md.append(
             f"PINC runs `{info['endpoints']}` endpoints (`PINC_BENCH_ENDPOINTS`) on every scenario's server; "
