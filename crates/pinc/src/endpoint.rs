@@ -645,8 +645,9 @@ impl<H: Hosted, D: Discovery> Endpoint<H, D> {
     /// A peer whose session has gone quiet (not heard from for over 20 s) is probed first: the session checks its
     /// path at once, and this call returns a sub-session of it when the peer answers. When it does not within two of
     /// the session's probe timeouts, this call makes its own handshake, or waits for another protocol's handshake to
-    /// the peer that is already running instead of making a second. The check is almost always still unanswered by
-    /// then, so the quiet session is rarely closed by the dial: it normally ends by its own timeout.
+    /// the peer that is already running instead of making a second. The dial closes the quiet session only when
+    /// nothing of the application's is in flight on it and it is not kept alive through a relay carrier; otherwise
+    /// the quiet session ends by its own timeout.
     ///
     /// Dropping the future closes a session that was about to open.
     ///

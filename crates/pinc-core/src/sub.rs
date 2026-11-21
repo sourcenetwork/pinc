@@ -14,8 +14,9 @@
 //! dial rides the session as a sub-session, with the id it already gave the application. When the wait (two of the session's probe timeouts, or `EndpointConfig::probe_window`)
 //! runs out unanswered, the dial makes its own handshake in the same slot, to the caller's first address, the session's
 //! own direct address and then the caller's others, and closes the quiet session only when it is still the one
-//! probed, not a pulse session, still unheard and nothing is in flight on it, which the probe's own unanswered challenge
-//! usually prevents: a dead session then ends by its own path timeout. A lapse waits on another protocol's running
+//! probed, not a pulse session, still unheard and nothing is in flight on it (the probe's own challenge is never in
+//! flight: only recorded packets count): a session with the application's data in flight ends by its own path
+//! timeout. A lapse waits on another protocol's running
 //! handshake to the peer instead of making a second one. While the probe runs the dial's id holds no session: a write
 //! on it fails at once, closing it ends the dial, and it answers `Stats` as a dial that has not connected and keeps
 //! the `FlightPaths`, `FirstResend` and `HoldFlight` it is sent, applied to the connection it gets. At most
@@ -223,8 +224,7 @@ ep_impl! {
         let alpn = Alpn::new(alpn).ok_or(CommandError::BadAlpn)?;
         let (i, mem) = self.alloc_slot(true, now).ok_or(CommandError::Full)?;
         // Nothing may be lost by closing the probed session on a lapse: it is quiet, so nothing of the
-        // application's should be in flight on it; noted now, before the probe's own challenge leaves, and checked
-        // again when the probe resolves.
+        // application's should be in flight on it; noted now and checked again when the probe resolves.
         let quiet = self
             .slots
             .get(parent)
@@ -332,7 +332,7 @@ ep_impl! {
         let facts = self.probe_facts(probed, probed_gen, now);
         // A pulse session's liveness is its carrier's, so a late answer is not proof of death: it is never closed.
         // A session an earlier lapse of the same pass closed is not closed a second time.
-        // vertexia: packets in flight stand in for application data in flight, so the probe's own unanswered challenge usually keeps a dead session up until its path times out; exact needs a transport count of unacknowledged stream bytes (pinc#693)
+        // vertexia: packets in flight stand in for application data in flight, so a session with data in flight is left up until its path times out; exact needs a transport count of unacknowledged stream bytes (pinc#693)
         let quiet = was_quiet
             && same
             && self.slots.get(probed).is_some_and(|s| {
