@@ -181,7 +181,7 @@ impl<const K: usize, const D: usize> Agent<K, D> {
             config: format!(
                 "the PINC node over its UDP endpoint (up to {K} sessions, 1 MiB stream windows, {} streams each way, {batch} datagrams per send, interface size {mtu}, a topic log of {} MiB on a hub) with relay carriers over TCP; {}",
                 super::core::stream_limit(),
-                super::core::TOPIC_LOG_BYTES >> 20,
+                pinc_broadcast::consts::DEFAULT_LOG_BYTES >> 20,
                 if spec.is_hub {
                     "this node is a hub"
                 } else {
