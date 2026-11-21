@@ -382,7 +382,8 @@ ep_impl! {
         now: u64,
     ) -> Result<(), CommandError> {
         let mut ids: [Option<(pinc_transport::conn::PathId, PathInfo)>; NP] = [None; NP];
-        for (d, a) in ids.iter_mut().zip(relay_first(addrs)) {
+        let (set, n) = self.dial_set([], relay_first(addrs).copied());
+        for (d, a) in ids.iter_mut().zip(set.iter().take(n)) {
             *d = self.route_for(a).map(|l| (self.path_id(l, *a), path_info(a, self.cfg.conn.interface_mtu)));
         }
         let conn = self.slots.get_mut(i).and_then(|s| s.conn.as_mut()).ok_or(CommandError::NoSession)?;
@@ -471,6 +472,28 @@ ep_impl! {
         self.ifaces.iter().flatten().find(|l| l.is_ipv4() == remote.is_ipv4()).copied()
     }
 
+    /// The addresses a dial reaches, in order: those of `lead` first, then those of `rest`; only the routable ones,
+    /// none twice, at most NP (a connection holds that many paths). A fresh dial, a quiet-parent dial and its
+    /// lapse, and the flight paths a dial is sent all choose their addresses here, so each reaches the same set.
+    pub(crate) fn dial_set(
+        &self,
+        lead: impl IntoIterator<Item = SocketAddr>,
+        rest: impl IntoIterator<Item = SocketAddr>,
+    ) -> ([SocketAddr; NP], usize) {
+        let mut set = [SocketAddr::from(([0, 0, 0, 0], 0)); NP];
+        let mut n = 0;
+        for a in lead.into_iter().chain(rest) {
+            if self.route_for(&a).is_some()
+                && !set.get(..n).unwrap_or_default().contains(&a)
+                && let Some(d) = set.get_mut(n)
+            {
+                *d = a;
+                n += 1;
+            }
+        }
+        (set, n)
+    }
+
     // Out of line, as `free_slot`: a whole connection moves here.
     #[inline(never)]
     fn connect(
@@ -513,16 +536,19 @@ ep_impl! {
         // root beside the session it already has (QUIET_PROBE). The dial's routable addresses go with it, as many
         // as a connection has paths: the probe's lapse makes the dial's own handshake to them.
         if let Some(parent) = self.find_quiet_parent(&node, now) {
+            let (set, n) = self.dial_set([], addrs.iter().copied());
             let mut list: [Option<SocketAddr>; NP] = [None; NP];
-            for (d, a) in list.iter_mut().zip(addrs.iter().filter(|a| self.route_for(a).is_some())) {
+            for (d, a) in list.iter_mut().zip(set.iter().take(n)) {
                 *d = Some(*a);
             }
             return self.open_probe(parent, node, alpn, list, role, now);
         }
-        let first = addrs.iter().copied().find(|a| self.route_for(a).is_some()).ok_or(CommandError::NoRoute)?;
+        let (set, n) = self.dial_set([], addrs.iter().copied());
+        let set = set.get(..n).unwrap_or_default();
+        let first = *set.first().ok_or(CommandError::NoRoute)?;
         let local = self.route_for(&first).ok_or(CommandError::NoRoute)?;
         let (i, mem) = self.alloc_slot(true, now).ok_or(CommandError::Full)?;
-        self.dial_fresh(i, mem, now, node, alpn_t, &prekey, addrs, role, first, local)?;
+        self.dial_fresh(i, mem, now, node, alpn_t, &prekey, set, role, first, local)?;
         Ok(self.session_id(i))
     }
 

@@ -360,23 +360,15 @@ ep_impl! {
             }
             return;
         }
-        // The addresses the lapse dials: the caller's first stays first (the connectivity client reselects against
-        // it), then the session's own direct one, then the caller's others, none twice; the session's own is first
-        // when the caller gave none.
-        let mut list = [SocketAddr::from(([0, 0, 0, 0], 0)); NP];
-        let mut n = 0;
-        for a in addrs.first().copied().flatten().into_iter().chain(learned).chain(addrs.iter().skip(1).copied().flatten()) {
-            if !list.get(..n).unwrap_or_default().contains(&a)
-                && let Some(d) = list.get_mut(n)
-            {
-                *d = a;
-                n += 1;
-            }
-        }
+        // The addresses the lapse dials, chosen as a fresh dial chooses them: the caller's first stays first (the
+        // connectivity client reselects against it), then the session's own direct one, then the caller's others; the
+        // session's own is first when the caller gave none.
+        let (list, n) =
+            self.dial_set(addrs.first().copied().flatten().into_iter().chain(learned), addrs.iter().skip(1).copied().flatten());
         let list = list.get(..n).unwrap_or_default();
         // The dial keeps its slot: the memory the probe held becomes the handshake's. Everything that can refuse
         // is asked before the memory is taken, so a refusal frees the slot with its memory.
-        let route = list.iter().find_map(|a| self.route_for(a).map(|l| (*a, l)));
+        let route = list.first().and_then(|a| self.route_for(a).map(|l| (*a, l)));
         let (Some((first, local)), Some(prekey)) = (route, self.prekey.clone()) else {
             self.trace_probe_with(now, 3, i, probed_gen, facts, closed);
             self.fail_probe(i, session, now);
@@ -429,17 +421,18 @@ ep_impl! {
         self.slot_of_any(id).filter(|i| self.slots.get(*i).is_some_and(|s| s.m.probing))
     }
 
-    /// Keep the latest `FlightPaths` of probing dial `i`: its routable addresses, relay first, replace
+    /// Keep the latest `FlightPaths` of probing dial `i`: its routable addresses, relay first, chosen as a fresh
+    /// dial chooses them ([`dial_set`](Self::dial_set)) with the dial's own first address ahead, replace
     /// `dial_addrs[1..]` (the connectivity client gives `Connect` one address, and names the full current set at
     /// each `FlightPaths`, so the latest is exact), to be applied when the dial gets its connection.
     pub(crate) fn keep_flight_paths(&mut self, i: usize, addrs: &[SocketAddr], skip_primary: bool) {
-        let mut kept: [Option<SocketAddr>; NP] = [None; NP];
-        for (d, a) in kept.iter_mut().skip(1).zip(relay_first(addrs).filter(|a| self.route_for(a).is_some())) {
-            *d = Some(*a);
-        }
+        let lead = self.slots.get(i).and_then(|s| s.m.dial_addrs.first().copied().flatten());
+        let (set, n) = self.dial_set(lead, relay_first(addrs).copied());
+        // The dial's own first address keeps slot 0; the others take the rest of the set.
+        let mut kept = set.iter().take(n).skip(usize::from(lead.is_some())).copied();
         if let Some(s) = self.slots.get_mut(i) {
-            for (d, k) in s.m.dial_addrs.iter_mut().zip(kept).skip(1) {
-                *d = k;
+            for d in s.m.dial_addrs.iter_mut().skip(1) {
+                *d = kept.next();
             }
             s.m.probe_fanout = true;
             s.m.probe_skip_primary = skip_primary;

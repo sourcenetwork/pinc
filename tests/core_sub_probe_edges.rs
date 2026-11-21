@@ -11,7 +11,10 @@
     clippy::cast_possible_truncation
 )]
 
-use pinc_core::{Answer, Command, Event, Query};
+use std::collections::BTreeSet;
+use std::net::SocketAddr;
+
+use pinc_core::{Answer, Command, Event, Query, Role};
 use pinc_tests::*;
 
 /// Every entry `SessionAt` lists on node `n`, as its counters.
@@ -70,5 +73,66 @@ fn a_probe_rides_within_the_round_trip_not_the_peers_acknowledgement_delay() {
             .time_of(|e| matches!(e, Event::Connected { session, .. } if *session == child))
             .unwrap();
         assert!(at - t0 < 5 * MS_NS, "the ride took {} ns over a 1 ms round trip", at - t0);
+    });
+}
+
+/// The addresses the handshake datagrams `from` sent since `marker` went to.
+fn handshake_targets(net: &CoreNet, marker: usize, from: SocketAddr) -> BTreeSet<SocketAddr> {
+    net.captured[marker..]
+        .iter()
+        .filter(|(f, _, d)| *f == from && d[0] & 0x80 != 0)
+        .map(|(_, t, _)| *t)
+        .collect()
+}
+
+/// Dial `to` from node `a` with `addrs`, name the same addresses for the flight, run five seconds with nothing
+/// reaching `to` (so a probe lapses): where the handshake went.
+fn dialed_set(net: &mut CoreNet, a: usize, to: usize, addrs: &[SocketAddr]) -> BTreeSet<SocketAddr> {
+    let (peer, now, addr_to) = (net.nodes[to].node, net.now, net.nodes[to].addr);
+    net.loss = Some(Box::new(move |_, t, _| t == addr_to));
+    let marker = net.captured.len();
+    let rep = net.nodes[a]
+        .cmd(
+            now,
+            Command::Connect {
+                node: peer,
+                alpn: ALPN_B,
+                addrs,
+                role: Role::Other,
+            },
+        )
+        .unwrap();
+    let session = net.nodes[a].session(&rep);
+    net.nodes[a]
+        .cmd(
+            now,
+            Command::FlightPaths {
+                session,
+                addrs,
+                skip_primary: false,
+            },
+        )
+        .unwrap();
+    net.run_for(5 * SEC_NS);
+    handshake_targets(net, marker, net.nodes[a].addr)
+}
+
+/// With more addresses than a connection has paths, and addresses the node cannot route among them, a lapsed probe
+/// dials the set a fresh dial of the same addresses dials: the routable ones in the caller's order, at most as many
+/// as the paths.
+#[test]
+fn a_lapse_dials_the_addresses_a_fresh_dial_dials() {
+    big_stack(|| {
+        let x = |n: u8| -> SocketAddr { ([192, 0, 2, n], 4433).into() };
+        let v6 = |n: u16| -> SocketAddr { format!("[2001:db8::{n}]:4433").parse().unwrap() };
+        let (mut fresh_net, fa, fb) = closed_parent();
+        let addrs = [x(1), v6(1), v6(2), v6(3), fresh_net.nodes[fb].addr, x(2), x(3), x(4)];
+        let fresh = dialed_set(&mut fresh_net, fa, fb, &addrs);
+        let (mut lapse_net, la, lb) = silent_parent();
+        let addrs = [x(1), v6(1), v6(2), v6(3), lapse_net.nodes[lb].addr, x(2), x(3), x(4)];
+        let lapse = dialed_set(&mut lapse_net, la, lb, &addrs);
+        let want: BTreeSet<SocketAddr> = [x(1), lapse_net.nodes[lb].addr, x(2), x(3)].into();
+        assert_eq!(fresh, want, "the fresh dial went to another set");
+        assert_eq!(lapse, want, "the lapse went to another set than the fresh dial");
     });
 }
