@@ -77,32 +77,34 @@ async fn one(ctx: &Ctx, b: &Cluster, stack: Stack, w: &Dtn, size: u64, rep: u32,
     let nonce = wall_ns();
     let plan = &ctx.plan;
     let sealed = w.sealed_len(size).unwrap_or(size);
-    let set = AppSet::new(b, plan, stack).with_dtn(|i| {
-        let n = plan.nodes.get(i)?;
-        if stack != Stack::Pinc || !rules::runs_layer(n.role) {
-            return None;
-        }
-        let own = w.node(&n.name);
-        #[allow(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            clippy::cast_precision_loss
-        )]
-        let budget = own
-            .and_then(|o| o.budget_bundles)
-            .map_or(64 << 20, |k| (k * sealed as f64) as u64);
-        Some(DtnInit {
-            budget,
-            retry_ms: 3_000,
-            max_sends: 8,
-            dir: own
-                .filter(|o| o.persist)
-                .map(|_| format!("/tmp/pinc-dtn/{nonce}/{}", n.name)),
-            tamper_slices: own.is_some_and(|o| o.tamper_slices),
-            tamper_one_slice: own.is_some_and(|o| o.tamper_one_slice),
-            tamper_heads: own.is_some_and(|o| o.tamper_heads),
-        })
-    });
+    let set = AppSet::new(b, plan, stack)
+        .with_identity_salt(ctx.sc.identity_salt())
+        .with_dtn(|i| {
+            let n = plan.nodes.get(i)?;
+            if stack != Stack::Pinc || !rules::runs_layer(n.role) {
+                return None;
+            }
+            let own = w.node(&n.name);
+            #[allow(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                clippy::cast_precision_loss
+            )]
+            let budget = own
+                .and_then(|o| o.budget_bundles)
+                .map_or(64 << 20, |k| (k * sealed as f64) as u64);
+            Some(DtnInit {
+                budget,
+                retry_ms: 3_000,
+                max_sends: 8,
+                dir: own
+                    .filter(|o| o.persist)
+                    .map(|_| format!("/tmp/pinc-dtn/{nonce}/{}", n.name)),
+                tamper_slices: own.is_some_and(|o| o.tamper_slices),
+                tamper_one_slice: own.is_some_and(|o| o.tamper_one_slice),
+                tamper_heads: own.is_some_and(|o| o.tamper_heads),
+            })
+        });
     let outcome = if stack == Stack::Pinc {
         body(ctx, b, &set, w, size, &mut r).await
     } else {
@@ -252,7 +254,10 @@ async fn judge(
             .collect();
         logs.insert(n.name.clone(), lives);
     }
-    let o = rules::evaluate(&w.checks, bundles, &logs, t0_ms, |n| node_id(n).ok().map(|id| id.bytes));
+    let salt = ctx.sc.identity_salt();
+    let o = rules::evaluate(&w.checks, bundles, &logs, t0_ms, |n| {
+        node_id(n, salt).ok().map(|id| id.bytes)
+    });
     r.node.extend(o.metrics);
     r.node.insert("checks_passed".into(), json!(o.passed));
     r.node.insert("checks".into(), json!(w.checks.len()));

@@ -42,6 +42,11 @@ impl PeerSpec {
     }
 }
 
+#[allow(clippy::trivially_copy_pass_by_ref, reason = "serde passes a reference")]
+fn is_zero(n: &u32) -> bool {
+    *n == 0
+}
+
 /// What a node program is started with, as its first input line.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Init {
@@ -55,6 +60,10 @@ pub struct Init {
     pub mtu: u32,
     /// The most nodes that may be in the group: sizes the PINC endpoint.
     pub sessions: u32,
+    /// The scenario's identity salt (see `Scenario::identity_salt`): PINC nodes derive every node's id from its name
+    /// and this, so each process derives every peer's id with no table.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub identity_salt: u32,
     /// Ask the site's router for a port mapping: the node's site has a port-mapping service.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub portmap: bool,

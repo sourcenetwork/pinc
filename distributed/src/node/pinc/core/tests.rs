@@ -27,6 +27,7 @@ struct World {
 fn spec(name: &str, addr: &str, hubs: &[HubAddr], is_hub: bool) -> Spec {
     Spec {
         name: name.into(),
+        identity_salt: 0,
         addr: addr.parse().unwrap(),
         hubs: hubs.to_vec(),
         is_hub,
@@ -41,7 +42,7 @@ fn spec(name: &str, addr: &str, hubs: &[HubAddr], is_hub: bool) -> Spec {
 impl World {
     fn new() -> Self {
         let hub = HubAddr {
-            id: node_id("hub").unwrap(),
+            id: node_id("hub", 0).unwrap(),
             udp: "10.0.0.1:4433".parse().unwrap(),
             tcp: "10.0.0.1:443".parse().unwrap(),
         };
@@ -126,7 +127,7 @@ fn what_a_relay_path_writes_onto_a_carrier_leaves_in_the_same_drain() {
         .spawn(|| {
             let mut w = World::new();
             let base = w.cores[0].now();
-            let b = node_id("b").unwrap().bytes;
+            let b = node_id("b", 0).unwrap().bytes;
             for k in 0..4000u64 {
                 let now = base + k * MS;
                 if k == 1500 {
@@ -159,7 +160,7 @@ fn only_a_node_told_to_asks_its_router_for_a_mapping() {
         .stack_size(512 << 20)
         .spawn(|| {
             let hub = HubAddr {
-                id: node_id("hub").unwrap(),
+                id: node_id("hub", 0).unwrap(),
                 udp: "10.0.0.1:4433".parse().unwrap(),
                 tcp: "10.0.0.1:443".parse().unwrap(),
             };

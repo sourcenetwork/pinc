@@ -58,10 +58,10 @@ pub struct DtnLog {
 }
 
 impl DtnLog {
-    /// A log that names the scenario's nodes `peers`.
-    pub fn new<'a>(peers: impl Iterator<Item = &'a str>) -> Self {
+    /// A log that names the scenario's nodes `peers`, whose ids derive under identity `salt`.
+    pub fn new<'a>(peers: impl Iterator<Item = &'a str>, salt: u32) -> Self {
         let names = peers
-            .filter_map(|n| node_id(n).ok().map(|id| (tag(&id.bytes), n.to_owned())))
+            .filter_map(|n| node_id(n, salt).ok().map(|id| (tag(&id.bytes), n.to_owned())))
             .collect();
         Self {
             names,

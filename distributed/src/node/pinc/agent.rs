@@ -85,6 +85,8 @@ struct Agent<const K: usize, const D: usize> {
     reach: Vec<ReachRun>,
     core: Core<K, D>,
     me: u16,
+    /// The scenario's identity salt, which every peer's id derives under.
+    salt: u32,
     hubs: Vec<[u8; 32]>,
     stats: PubSubStats,
     pubs: Vec<PubRun>,
@@ -113,11 +115,12 @@ fn unhex32(s: &str) -> Option<[u8; 32]> {
 }
 
 impl<const K: usize, const D: usize> Agent<K, D> {
+    #[allow(clippy::too_many_lines, reason = "the node's start-up reads in one piece")]
     fn new(init: &Init, mtu: u16, batch: usize) -> Result<(Self, Ready), String> {
         let me_spec = init
             .me()
-            .ok_or_else(|| format!("{} is not a node of the scenario", init.name))?
-            .clone();
+            .cloned()
+            .ok_or_else(|| format!("{} is not a node of the scenario", init.name))?;
         let addr = SocketAddr::new(IpAddr::V4(me_spec.ip), me_spec.port(UDP_PORT));
         // Relay servers first, on their one port: a node reaches a peer through its first relay until a direct path
         // works. A relay server is a hub too (pinc_relay's default), so the node joins through it like any hub.
@@ -125,14 +128,14 @@ impl<const K: usize, const D: usize> Agent<K, D> {
         for p in init.peers.iter().filter(|p| p.role == Role::RelayServer) {
             let at = SocketAddr::new(IpAddr::V4(p.public_ip), p.port(UDP_PORT));
             hubs.push(HubAddr {
-                id: node_id(&p.name)?,
+                id: node_id(&p.name, init.identity_salt)?,
                 udp: at,
                 tcp: at,
             });
         }
         for p in init.peers.iter().filter(|p| matches!(p.role, Role::Hub | Role::Relay)) {
             hubs.push(HubAddr {
-                id: node_id(&p.name)?,
+                id: node_id(&p.name, init.identity_salt)?,
                 udp: SocketAddr::new(IpAddr::V4(p.public_ip), p.port(UDP_PORT)),
                 tcp: SocketAddr::new(IpAddr::V4(p.public_ip), p.port(TCP_PORT)),
             });
@@ -144,6 +147,7 @@ impl<const K: usize, const D: usize> Agent<K, D> {
         }
         let spec = Spec {
             name: init.name.clone(),
+            identity_salt: init.identity_salt,
             addr,
             hubs,
             is_hub: me_spec.role != Role::Peer,
@@ -155,7 +159,7 @@ impl<const K: usize, const D: usize> Agent<K, D> {
         };
         let mut apps = super::apps::VApps::default();
         if let Some(d) = init.dtn.clone() {
-            apps.dtn = DtnStore::new(&init.name, d)?;
+            apps.dtn = DtnStore::new(&init.name, init.identity_salt, d)?;
         }
         let mut core = Core::<K, D>::new(&spec, apps)?;
         // A harness built with PINC_REACH=mesh measures delivery scoped to the connected component (pinc#86): every
@@ -169,7 +173,7 @@ impl<const K: usize, const D: usize> Agent<K, D> {
                 .iter()
                 .filter(|p| p.role == Role::Peer && p.name != init.name)
             {
-                peers.push(node_id(&p.name)?.bytes);
+                peers.push(node_id(&p.name, init.identity_salt)?.bytes);
             }
             core.set_adjacent(&peers)
                 .map_err(|e| format!("the adjacency record was refused: {e}"))?;
@@ -208,12 +212,13 @@ impl<const K: usize, const D: usize> Agent<K, D> {
             Self {
                 core,
                 me,
+                salt: init.identity_salt,
                 hubs: hub_ids,
                 stats: PubSubStats::new(me),
                 pubs: Vec::new(),
                 waits: Vec::new(),
                 reach: Vec::new(),
-                dtn: DtnLog::new(init.peers.iter().map(|p| p.name.as_str())),
+                dtn: DtnLog::new(init.peers.iter().map(|p| p.name.as_str()), init.identity_salt),
                 stopping: false,
             },
             ready,
@@ -304,7 +309,7 @@ impl<const K: usize, const D: usize> Agent<K, D> {
                 }
             }
             Cmd::Reconcile { peer, set, timeout_ms } => {
-                let Ok(peer_id) = node_id(&peer) else {
+                let Ok(peer_id) = node_id(&peer, self.salt) else {
                     out.push(Reply::fail(id, format!("{peer} has no identity")));
                     return;
                 };
@@ -351,7 +356,8 @@ impl<const K: usize, const D: usize> Agent<K, D> {
                     m,
                     slice_log,
                 };
-                let sent = opener(&to).and_then(|o| self.core.dtn_send(now, &o.keys, &payload(seed, size), &plan));
+                let sent =
+                    opener(&to, self.salt).and_then(|o| self.core.dtn_send(now, &o.keys, &payload(seed, size), &plan));
                 out.push(match sent {
                     Ok(b) => Reply::ok(id, json!({ "bundle": format!("{:016x}", btag(&b)) })),
                     Err(e) => Reply::fail(id, format!("the bundle was not made: {e}")),
@@ -370,7 +376,7 @@ impl<const K: usize, const D: usize> Agent<K, D> {
                 timeout_ms,
                 hold_ms,
             } => {
-                let Ok(peer_id) = node_id(&peer) else {
+                let Ok(peer_id) = node_id(&peer, self.salt) else {
                     out.push(Reply::fail(id, format!("{peer} has no identity")));
                     return;
                 };
@@ -426,7 +432,10 @@ impl<const K: usize, const D: usize> Agent<K, D> {
             out.push(Reply::fail(id, "the value to fetch needs a root and a size"));
             return;
         };
-        let ids: Result<Vec<[u8; 32]>, String> = providers.iter().map(|p| node_id(p).map(|n| n.bytes)).collect();
+        let ids: Result<Vec<[u8; 32]>, String> = providers
+            .iter()
+            .map(|p| node_id(p, self.salt).map(|n| n.bytes))
+            .collect();
         let Ok(ids) = ids else {
             out.push(Reply::fail(id, "a provider has no identity"));
             return;

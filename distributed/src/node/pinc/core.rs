@@ -31,7 +31,7 @@ use super::apps::{VApps, VStore};
 use super::hub::{Collect, HubRelay, HubSide, RStream};
 use super::keys::answer;
 use super::tracelog::TraceLog;
-use crate::node::data::{seed_bytes, seed32};
+use crate::node::data::{identity_seed, seed_bytes, seed32};
 
 /// Relays (hubs) a node knows.
 pub const NRL: usize = 4;
@@ -78,6 +78,8 @@ pub struct HubAddr {
 pub struct Spec {
     /// The node's name; its keys derive from it.
     pub name: String,
+    /// The scenario's identity salt, which every node derives the keys from alongside the name.
+    pub identity_salt: u32,
     /// Where it listens (UDP and TCP).
     pub addr: SocketAddr,
     /// The hubs, this node's own entry included when it is one.
@@ -166,22 +168,22 @@ pub enum NCmd {
     Leave,
 }
 
-/// The identity key of a node name.
+/// The identity key of a node name under the scenario's identity `salt`.
 ///
 /// # Errors
 /// The key could not be made from the name's seed.
-pub fn keypair(name: &str) -> Result<Keypair, String> {
+pub fn keypair(name: &str, salt: u32) -> Result<Keypair, String> {
     let alg = IdentityAlg::Ed25519;
-    Keypair::from_seed(alg, &seed_bytes(name, "pinc-identity", alg.seed_len()))
+    Keypair::from_seed(alg, &identity_seed(name, salt, alg.seed_len()))
         .map_err(|_| format!("the identity of {name} could not be made"))
 }
 
-/// The node id of a node name.
+/// The node id of a node name under the scenario's identity `salt`.
 ///
 /// # Errors
 /// The key could not be made from the name's seed.
-pub fn node_id(name: &str) -> Result<NodeId, String> {
-    keypair(name).map(|k| k.node_id())
+pub fn node_id(name: &str, salt: u32) -> Result<NodeId, String> {
+    keypair(name, salt).map(|k| k.node_id())
 }
 
 /// One transmit for the runtime layer to send.
@@ -244,7 +246,7 @@ fn build<const K: usize, const D: usize>(
     now: u64,
     apps: VApps,
 ) -> Result<(Box<VNode<K, D>>, Keypair, SoftPrekeys<Software>, Drbg), String> {
-    let kp = keypair(&spec.name)?;
+    let kp = keypair(&spec.name, spec.identity_salt)?;
     let identity =
         LocalIdentity::from_keypair(&kp, KeyHandle(1)).map_err(|_| "the identity key was refused".to_owned())?;
     let prov = Software;
@@ -314,7 +316,7 @@ fn build<const K: usize, const D: usize>(
         trace: apps.dtn.is_on() || spec.trace,
     };
     let drbg2 = Drbg::new(&seed32(&spec.name, "pinc-node-drbg"));
-    let kp2 = keypair(&spec.name)?;
+    let kp2 = keypair(&spec.name, spec.identity_salt)?;
     let node = Node::with_apps(
         &ncfg,
         *ep,

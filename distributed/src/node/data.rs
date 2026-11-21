@@ -45,6 +45,17 @@ pub fn seed_bytes(name: &str, purpose: &str, len: usize) -> Vec<u8> {
     out
 }
 
+/// The seed of a node's PINC identity key. Salt 0 is the plain label; another salt joins the label, which is how a
+/// scenario gets identities under which the custody moves it declares go up the order of ids (see `Scenario::identity_salt`).
+/// Every place that derives a PINC identity from a name calls this.
+pub fn identity_seed(name: &str, salt: u32, len: usize) -> Vec<u8> {
+    if salt == 0 {
+        seed_bytes(name, "pinc-identity", len)
+    } else {
+        seed_bytes(name, &format!("pinc-identity-{salt}"), len)
+    }
+}
+
 /// A 32-byte seed for `name` and `purpose`.
 pub fn seed32(name: &str, purpose: &str) -> [u8; 32] {
     let mut s = [0u8; 32];

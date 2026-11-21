@@ -23,6 +23,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
+use crate::node::pinc::node_id;
 use crate::node::proto::{DtnReport, DtnWhat};
 use crate::scenario::{NodeSpec, Problem, Role, Scenario, Stack};
 
@@ -159,6 +160,31 @@ pub struct Move {
     pub to: String,
 }
 
+/// The salts tried before a scenario's custody moves are refused: each move halves the chance a salt fits, so a few
+/// thousand cover a handful of moves, and a set that cannot fit (a loop) is told apart from one that is only unlucky.
+const SALT_TRIES: u32 = 4096;
+
+/// The smallest salt below [`SALT_TRIES`] under which `id` ranks every move's `to` above its `from`.
+fn search_salt(moves: &[&Move], id: impl Fn(&str, u32) -> Option<[u8; 32]>) -> Result<u32, String> {
+    let up = |salt: u32, m: &Move| matches!((id(&m.from, salt), id(&m.to, salt)), (Some(a), Some(b)) if b > a);
+    let mut last = None;
+    for salt in 0..SALT_TRIES {
+        match moves.iter().find(|m| !up(salt, m)) {
+            None => return Ok(salt),
+            Some(m) => last = Some(*m),
+        }
+    }
+    Err(last.map_or_else(
+        || "no identities could be made for the custody moves".to_owned(),
+        |m| {
+            format!(
+                "custody cannot move from {} to {} under any node ids; check that the custody moves do not form a loop",
+                m.from, m.to
+            )
+        },
+    ))
+}
+
 /// A rule checked against the nodes' logs.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "rule", rename_all = "kebab-case")]
@@ -264,7 +290,28 @@ impl Dtn {
         self.nodes.iter().find(|n| n.name == name)
     }
 
+    /// The scenario's identity salt: the smallest one under which every custody move its checks declare goes up the
+    /// order of node ids, so the move can happen (custody only ever moves up). Salt 0 is the plain identities.
+    ///
+    /// # Errors
+    /// No salt in the search bound fits the moves, for instance two moves that go in a circle; the message names a move.
+    pub fn identity_salt(&self) -> Result<u32, String> {
+        let moves: Vec<&Move> = self
+            .checks
+            .iter()
+            .filter_map(|c| match c {
+                Check::Custody { moves } => Some(moves),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        search_salt(&moves, |name, salt| node_id(name, salt).ok().map(|id| id.bytes))
+    }
+
     pub(crate) fn check(&self, sc: &Scenario, nodes: &BTreeMap<&str, &NodeSpec>, out: &mut Vec<Problem>) {
+        if let Err(e) = self.identity_salt() {
+            out.push(Problem::new("workload.checks", e));
+        }
         let mut name = |path: String, n: &str| {
             if !nodes.contains_key(n) {
                 out.push(Problem::new(path, "no node has this name"));
@@ -715,9 +762,65 @@ pub fn runs_layer(role: Role) -> bool {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, reason = "tests assert")]
 mod tests {
     use super::*;
     use crate::node::proto::DtnEntry;
+
+    fn mv(from: &str, to: &str) -> Move {
+        Move {
+            from: from.into(),
+            to: to.into(),
+        }
+    }
+
+    /// Ids that wrap: a name's byte times the salt plus one, modulo a prime, so the order of two names changes with it.
+    fn wrapping(name: &str, salt: u32) -> Option<[u8; 32]> {
+        let b = u32::from(*name.as_bytes().first()?);
+        Some([u8::try_from(b * (salt + 1) % 251).ok()?; 32])
+    }
+
+    #[test]
+    fn a_move_that_fits_the_plain_ids_gets_salt_zero() {
+        assert_eq!(search_salt(&[&mv("a", "b")], wrapping), Ok(0));
+        assert_eq!(search_salt(&[], wrapping), Ok(0));
+    }
+
+    #[test]
+    fn a_move_that_goes_down_gets_the_smallest_salt_that_lifts_it() {
+        let m = mv("b", "a");
+        let salt = search_salt(&[&m], wrapping).unwrap();
+        assert!(salt > 0);
+        assert!(wrapping("a", salt) > wrapping("b", salt));
+        assert!((0..salt).all(|s| wrapping("a", s) <= wrapping("b", s)));
+    }
+
+    #[test]
+    fn two_moves_need_one_salt_that_lifts_both() {
+        let (x, y) = (mv("b", "a"), mv("c", "b"));
+        let salt = search_salt(&[&x, &y], wrapping).unwrap();
+        assert!(wrapping("a", salt) > wrapping("b", salt) && wrapping("b", salt) > wrapping("c", salt));
+        assert!((0..salt).all(|s| search_salt(&[&x, &y], |n, t| if t == s { wrapping(n, t) } else { None }).is_err()));
+    }
+
+    #[test]
+    fn a_loop_of_moves_is_refused_naming_a_move() {
+        let (x, y) = (mv("a", "b"), mv("b", "a"));
+        let e = search_salt(&[&x, &y], wrapping).unwrap_err();
+        assert!(e.contains("custody cannot move from"), "{e}");
+        assert!(e.contains("a to b") || e.contains("b to a"), "{e}");
+    }
+
+    #[test]
+    fn the_plain_ids_rank_the_laptop_above_the_cloud_so_a_salt_is_needed() {
+        // The reason the salt exists: under the plain ids custody cannot move from the laptop to the cloud.
+        let rank = |n: &str| node_id(n, 0).unwrap().bytes;
+        assert!(rank("laptop") > rank("cloud"));
+        let m = mv("laptop", "cloud");
+        let salt = search_salt(&[&m], |n, s| node_id(n, s).ok().map(|id| id.bytes)).unwrap();
+        assert!(salt > 0);
+        assert!(node_id("cloud", salt).unwrap().bytes > node_id("laptop", salt).unwrap().bytes);
+    }
 
     fn life(entries: &[(u64, DtnWhat)]) -> Vec<DtnReport> {
         vec![DtnReport {

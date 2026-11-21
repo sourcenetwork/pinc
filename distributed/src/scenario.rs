@@ -556,6 +556,16 @@ impl Scenario {
         toml::to_string_pretty(self).map_err(|e| e.to_string())
     }
 
+    /// The salt every PINC node derives node ids under: 0 unless the delay-tolerant workload declares custody moves that
+    /// the plain ids would not allow (see `Dtn::identity_salt`). A scenario that [`validate`](Self::validate) passes
+    /// has one; the nodes are told it and the orchestrator ranks nodes by it.
+    pub fn identity_salt(&self) -> u32 {
+        match &self.workload {
+            Workload::Dtn(w) => w.identity_salt().unwrap_or(0),
+            _ => 0,
+        }
+    }
+
     /// The nodes, groups expanded, in order.
     pub fn expand(&self) -> Vec<NodeSpec> {
         let sites: BTreeMap<&str, usize> = self
