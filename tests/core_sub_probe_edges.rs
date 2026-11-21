@@ -14,7 +14,7 @@
 use std::collections::BTreeSet;
 use std::net::SocketAddr;
 
-use pinc_core::{Answer, Command, Event, Query, Role};
+use pinc_core::{Answer, Command, CommandError, ConnectFailure, Event, Query, Role};
 use pinc_tests::*;
 
 /// Every entry `SessionAt` lists on node `n`, as its counters.
@@ -238,7 +238,97 @@ fn a_lapse_that_cannot_dial_fails_the_dial_once() {
         net.nodes[a].ep.remove_iface(pinc_core::IfaceId(0));
         net.run_for(5 * SEC_NS);
         assert_eq!(outcomes(&net, a, child), (0, 1));
+        assert!(net.nodes[a].saw(|e| matches!(
+            e,
+            Event::ConnectFailed { session: Some(s), reason: ConnectFailure::Refused, .. } if *s == child
+        )));
         assert!(!listed(&net, a).iter().any(|st| st.session == child));
         assert!(!handshake_since(&net, marker), "a handshake left with no interface");
+    });
+}
+
+/// Eight dials probe one quiet session; the ninth is past the waiter bound and makes its own handshake at once. The
+/// eight still ride the session when the peer answers.
+#[test]
+fn the_ninth_dial_past_the_waiter_bound_makes_its_own_handshake() {
+    big_stack(|| {
+        let (mut net, a, b) = silent_parent();
+        let marker = net.captured.len();
+        let eight: Vec<_> = (0..8).map(|_| dial(&mut net, a, b, ALPN_B).0).collect();
+        // One way takes 10 ms, so no answer is back yet: nothing but the eight probes has left.
+        net.run_for(MS_NS);
+        assert!(!handshake_since(&net, marker), "a probing dial sent a handshake");
+        let (ninth, _) = dial(&mut net, a, b, ALPN_B);
+        net.run_for(MS_NS);
+        assert!(handshake_since(&net, marker), "the ninth dial sent no handshake of its own");
+        assert!(net.run(net.now + 5 * SEC_NS, |n| {
+            eight.iter().chain([&ninth]).all(|d| {
+                n.nodes[a].saw(|e| matches!(e, Event::Connected { session, .. } if session == d))
+            })
+        }));
+        for d in &eight {
+            let Answer::Stats(st) = net.nodes[a].ep.query(Query::Stats(*d)) else { panic!() };
+            assert!(st.sub, "a dial within the bound did not ride");
+        }
+        let Answer::Stats(st) = net.nodes[a].ep.query(Query::Stats(ninth)) else { panic!() };
+        assert!(!st.sub, "the ninth dial rode instead of making its own handshake");
+    });
+}
+
+/// Fill the host's event queue without reading it: dialing this node itself fails at once with an event each time,
+/// until the endpoint holds commands back.
+fn stall_events(ep: &mut CoreEp, now: u64) {
+    let me = ep.identity().node_id();
+    for _ in 0..10_000 {
+        let cmd = Command::Connect {
+            node: me,
+            alpn: ALPN_A,
+            addrs: &[],
+            role: Role::Other,
+        };
+        match ep.command(now, cmd) {
+            Err(CommandError::Refused) => {}
+            Err(CommandError::EventsPending) => return,
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+    panic!("the queue never stalled");
+}
+
+/// The peer's answer to a probe reaches a dialer whose event queue is full and unread: once the host reads, the dial
+/// connects once as a sub-session of the quiet session, with no handshake and no second root.
+#[test]
+#[ignore = "defect: a PATH_RESPONSE arriving while the event queue is stalled is gated (rx.rs deliver, recv.rs raises_event) and never sent again, so the probe lapses into a second root"]
+fn a_ride_while_the_event_queue_is_stalled_connects_once_after_the_host_reads() {
+    big_stack(|| {
+        let (mut net, a, b) = silent_parent();
+        let addr_a = net.nodes[a].addr;
+        // The peer's answers are held back on the wire; the test hands them over by hand.
+        net.loss = Some(Box::new(move |_, to, _| to == addr_a));
+        let marker = net.captured.len();
+        let (child, _) = dial(&mut net, a, b, ALPN_B);
+        net.run_for(30 * MS_NS);
+        assert_eq!(outcomes(&net, a, child), (0, 0), "the probe resolved before its answer arrived");
+        let answers: Vec<_> = net.captured[marker..]
+            .iter()
+            .filter(|(_, to, _)| *to == addr_a)
+            .cloned()
+            .collect();
+        assert!(!answers.is_empty(), "the peer sent no answer to the probe");
+        net.loss = None;
+        let t = net.now;
+        stall_events(&mut net.nodes[a].ep, t);
+        for (from, to, mut data) in answers {
+            net.nodes[a].ep.handle_datagram(t, to, from, &mut data);
+        }
+        // The host reads everything now; the dial must connect exactly once by itself, with nothing more arriving.
+        net.run_for(5 * SEC_NS);
+        assert_eq!(outcomes(&net, a, child), (1, 0), "the stalled ride did not connect the dial once");
+        let Answer::Stats(st) = net.nodes[a].ep.query(Query::Stats(child)) else { panic!() };
+        assert!(st.sub, "the dial did not ride the quiet session");
+        assert_eq!(net.nodes[a].ep.sessions().count(), 2, "a second root exists");
+        assert_eq!(net.nodes[a].ep.node_stats().events_lost, 0);
+        let handshakes = net.captured[marker..].iter().filter(|(_, _, d)| d[0] & 0x80 != 0).count();
+        assert_eq!(handshakes, 0, "a handshake left though the peer answered");
     });
 }

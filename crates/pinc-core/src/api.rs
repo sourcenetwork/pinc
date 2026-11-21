@@ -45,7 +45,8 @@ impl SessionId {
 /// Why a dial did not produce a session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConnectFailure {
-    /// The node is this one, or no address could be used.
+    /// The node is this one, or no address could be used (a dial whose quiet-parent probe lapsed with no address to
+    /// dial reports this too).
     Refused,
     /// The access check denied the peer.
     Denied,
