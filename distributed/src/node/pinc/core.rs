@@ -33,8 +33,6 @@ use super::keys::answer;
 use super::tracelog::TraceLog;
 use crate::node::data::{seed_bytes, seed32};
 
-/// The bytes of messages a hub keeps for each topic in the harness.
-pub const TOPIC_LOG_BYTES: usize = 16 << 20;
 /// Relays (hubs) a node knows.
 pub const NRL: usize = 4;
 
@@ -308,12 +306,7 @@ fn build<const K: usize, const D: usize>(
         is_hub: spec.is_hub,
         version: 1,
         alpn: HUB_ALPN,
-        // A hub serves a subscriber on a slow path from the topic's log, so the log must hold the largest burst a
-        // scenario publishes (2,000 messages of 4 KiB): 16 MiB a topic where the default is 4.
-        limits: pinc_broadcast::Limits {
-            log_bytes: TOPIC_LOG_BYTES,
-            ..pinc_broadcast::Limits::default()
-        },
+        limits: pinc_broadcast::Limits::default(),
         map_keys: map_keys(&spec.name)?,
         wall_ms,
         local: spec.addr,
