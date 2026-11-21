@@ -24,7 +24,7 @@ use core::mem;
 use pinc_wire::{Reader, varint};
 
 use crate::error::{Error, Reason};
-use crate::hash::{FP_LEN, Fingerprint, ID_LEN, item_id, item_sum};
+use crate::hash::{FP_LEN, Fingerprint, ID_LEN, SetSum, item_id, item_sum};
 use crate::index::ItemIndex;
 use crate::limits::Limits;
 use crate::wire::{
@@ -352,6 +352,19 @@ fn merge<I: ItemIndex>(
     }
 }
 
+/// The point of an item of ours: the one-item sum of the index when its position holds exactly that item (the index
+/// maps items with [`item_sum`]), else the item mapped to the group.
+fn own_sum<I: ItemIndex>(idx: &I, sc: &mut Scratch, n: usize, item: &[u8]) -> Result<SetSum, Error<I::Error>> {
+    let r = rank(idx, item)?;
+    if r < n {
+        let len = read(idx, r, &mut sc.p)?;
+        if sc.p.get(..len) == Some(item) {
+            return idx.sum(r, r + 1).map_err(Error::Index);
+        }
+    }
+    Ok(item_sum(item))
+}
+
 /// Append `item` to `arena` unless the report would pass `max`.
 fn push<E>(arena: &mut Arena, other: usize, max: usize, item: &[u8]) -> Result<(), Error<E>> {
     if arena.data.len() + other + item.len() + varint::MAX_LEN > max {
@@ -558,8 +571,6 @@ impl Core {
     pub(crate) fn check_msg<I: ItemIndex>(&mut self, idx: &I, out: &mut Vec<u8>) -> Result<(), Error<I::Error>> {
         // The responder's set is the initiator's, plus what only the peer has (`here`), minus what only the initiator
         // has (`there`); the sign matters, the group is not XOR.
-        // vertexia: maps every reported item to the group; the initiator's own items (`there`) could come from the
-        // index (a rank, then a one-item sum) if a large difference shows in a profile.
         let mut sum = idx.sum(0, self.n).map_err(Error::Index)?;
         for (arena, add) in [(&self.here, true), (&self.there, false)] {
             let mut rest = arena.data.as_slice();
@@ -569,7 +580,7 @@ impl Core {
                 if add {
                     sum += item_sum(item);
                 } else {
-                    sum -= item_sum(item);
+                    sum -= own_sum(idx, &mut self.sc, self.n, item)?;
                 }
                 rest = rest.get(used + item.len()..).unwrap_or_default();
             }
@@ -926,8 +937,10 @@ fn reply<E>(out: &mut Out, lo: &[u8], hi: Option<&[u8]>, c: usize, seen: &[u8], 
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, reason = "tests may assert")]
 mod tests {
     use super::*;
+    use crate::mem::MemIndex;
 
     #[test]
     fn a_rollback_to_the_start_of_a_message_reads_nothing_an_earlier_message_left() {
@@ -951,5 +964,28 @@ mod tests {
             [] as [u8; 0],
             "the last bound came back from the earlier message"
         );
+    }
+
+    /// The final check equals the one made by mapping every reported item, whether or not the index agrees with the
+    /// report: an item it holds, one it lacks that ranks onto another item, one past its end, and the empty item.
+    #[test]
+    fn the_check_matches_mapping_every_item() {
+        let ix = MemIndex::from_sorted([b"a".as_slice(), b"c", b"e", b"g"]).unwrap();
+        let mut c = Core::new(Limits::default(), true);
+        c.n = ix.len();
+        let (there, here): ([&[u8]; 4], [&[u8]; 1]) = ([b"c", b"d", b"z", b""], [b"b"]);
+        for item in there {
+            push::<()>(&mut c.there, c.here.data.len(), 1 << 20, item).unwrap();
+        }
+        for item in here {
+            push::<()>(&mut c.here, c.there.data.len(), 1 << 20, item).unwrap();
+        }
+        let mut sum = (0..ix.len()).fold(SetSum::zero(), |s, i| s + item_sum(ix.item(i).unwrap()));
+        sum = there.iter().fold(sum, |s, i| s - item_sum(i));
+        sum = here.iter().fold(sum, |s, i| s + item_sum(i));
+        let want = Fingerprint::of(&sum, 4 + 1 - 4);
+        let mut out = Vec::new();
+        c.check_msg(&ix, &mut out).unwrap();
+        assert_eq!(out.get(out.len() - FP_LEN..), Some(want.to_bytes().as_slice()));
     }
 }

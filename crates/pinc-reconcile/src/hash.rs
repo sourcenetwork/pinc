@@ -54,6 +54,9 @@ pub struct Fingerprint([u8; FP_LEN]);
 
 impl Fingerprint {
     /// The fingerprint of a range whose items sum to `sum` and number `count`.
+    // vertexia: one encoding per fingerprint, which is one field inversion (about 4.6 us); a batch would share it
+    // across the parts of a message, but the curve library's batch function allocates and a warm session allocates
+    // nothing. Upgrade: a batch encoding that writes into the caller's buffers.
     #[allow(clippy::indexing_slicing, reason = "FP_LEN is at most 32, checked above")]
     pub fn of(sum: &SetSum, count: u64) -> Self {
         let mut msg = [0u8; 40];
