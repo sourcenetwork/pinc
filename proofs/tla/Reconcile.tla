@@ -15,13 +15,29 @@
 (* the id function (idf(x) = rank(x) mod IdMod, so IdMod = 1 collides all  *)
 (* ids and IdMod >= |U| is injective).                                     *)
 (*                                                                         *)
-(* HASH MODEL (the explicit assumption). Mode "onehot": item i of the      *)
-(* universe hashes to bit i of the 128 bits, so the item hashes are XOR    *)
-(* independent and a range fingerprint is the indicator of the range's     *)
-(* items: equal fingerprints iff equal item sets. This states the 2^-128   *)
-(* assumption exactly. Mode "mix": a pseudo-random 16 byte value per item  *)
-(* (for universes above 128 items); independence is then checked by the    *)
-(* exactness invariants themselves.                                        *)
+(* HASH MODEL (the explicit assumption). The code fingerprints a range as  *)
+(* a hash of the group sum of its items and their count; the model uses    *)
+(* the ideal hash, a homomorphism from signed multisets of items into 32   *)
+(* bytes added bytewise modulo 256 (ReconcileOps.tla: AddFp, SubFp).       *)
+(* Mode "onehot": item i of the universe (0-based, in LexLt order) is the  *)
+(* vector with 1 in byte i, so the fingerprint of a signed multiset is its *)
+(* coefficient vector modulo 256. That is injective as long as two         *)
+(* coefficients that can occur never differ by a multiple of 256. A        *)
+(* coefficient in a range is 0 or 1; in a final check it is 1 for the      *)
+(* whole set plus the occurrences in `here` minus those in `there`. Every  *)
+(* occurrence in `here` or `there` costs at least one byte of the report,  *)
+(* so it is at most MaxReportC, and a coefficient lies in -MaxReportC ..   *)
+(* 1 + MaxReportC, a window of 2 MaxReportC + 2 values. The ASSUME below   *)
+(* requires the universe to have at most FPLEN = 32 items and the window   *)
+(* to fit in 256 (1 + MaxReportC < 128), so equal fingerprints mean equal  *)
+(* signed multisets even for a peer that repeats an item; a duplicate does *)
+(* not cancel. This states the no-collision assumption exactly. The count *)
+(* of the code's fingerprint is the sum of the coefficients, which the     *)
+(* injective sum already determines, so the model does not fold it in.     *)
+(* Mode "mix" is not that: a pseudo-random 32 byte value per item under    *)
+(* bytewise addition, not injective, kept to exercise the code path with   *)
+(* realistic bytes (universes above 32 items). The exactness claims of     *)
+(* the model rest on the onehot configs.                                   *)
 (*                                                                         *)
 (* PROPERTIES (INVARIANTS, over every behaviour of every case):            *)
 (*  Terminates     the run reaches done / failed / exhausted within        *)
@@ -80,7 +96,7 @@
 (* three; the factor 2 is the exact pass; n + 2 the chunks of a cold side) *)
 (*   RoundsBound = 2 PartsBound + 8 (a message holds a part, or is an      *)
 (*                 empty acknowledgement of a message that holds more)      *)
-(*   BytesBound  = PartsBound (1 + 2 BL(mi) + 16) + 4 D leafItems ItemCost *)
+(*   BytesBound  = PartsBound (1 + 2 BL(mi) + 32) + 4 D leafItems ItemCost *)
 (*                 + n ItemCost + (RoundsBound + 1) (3 + 9) + mi + 18      *)
 (* with BL(m) = 1 + len(venc(m)) + m, ItemCost = 8 + 9 + mi, leafItems =   *)
 (* max(ALEAF, 6).                                                          *)
@@ -110,10 +126,13 @@ Gen(st, k) == IF k = 0 THEN <<>> ELSE LET s2 == (st * 75 + 74) % 65537 IN <<s2 %
 
 HashOf(n) ==
     IF HashMode = "onehot"
-    THEN [i \in 1..FPLEN |-> IF i = n \div 8 + 1 THEN Pow2(n % 8) ELSE 0]
+    THEN [i \in 1..FPLEN |-> IF i = n + 1 THEN 1 ELSE 0]
     ELSE Gen(n + 5, FPLEN)
 
 AllSeq == SortedSeq(UniAll)
+(* the one-hot values need a byte per item of the whole word space, not only of the universe, and every coefficient
+   (at most MaxReportC occurrences, see the HASH MODEL) must stay inside a window of 256 values *)
+ASSUME HashMode = "onehot" => Len(AllSeq) <= FPLEN /\ 1 + MaxReportC < 128
 MkOracle(idm) == [H |-> [i \in 1..Len(AllSeq) |-> <<AllSeq[i], HashOf(i - 1)>>],
                   idb |-> [i \in 1..Len(AllSeq) |-> <<AllSeq[i], BeBytes(IDLEN, (i - 1) % idm)>>]]
 

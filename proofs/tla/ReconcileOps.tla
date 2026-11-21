@@ -21,10 +21,20 @@
 (* too large, a length past the buffer, a cold item count that dwarfs the  *)
 (* responder's). The encoder is exact for every value below BIG.           *)
 (*                                                                         *)
-(* The hashes are an oracle `o`: o.H[x] is the 16 byte fingerprint of an   *)
-(* item and o.idb[x] its id (8 bytes). The XOR           *)
-(* independence of the item hashes is an assumption of the properties, not *)
-(* of the model; the one-hot oracle of Reconcile.tla states it exactly.    *)
+(* Fingerprints. The code maps each item to an element of a commutative   *)
+(* group; the sum of a range is the group sum of its items, and the wire   *)
+(* fingerprint (32 bytes) is a hash of the encoded sum and the count of    *)
+(* the items. The model works in the ideal case of that hash, an oracle    *)
+(* `o` in one of two modes, told apart by the fields of `o`:               *)
+(*  model mode: o.H[x] is the value of an item, a vector of 32 bytes, and  *)
+(*   the sum is the bytewise sum modulo 256 (AddFp, SubFp). The oracle of  *)
+(*   Reconcile.tla makes that map injective on every signed multiset that  *)
+(*   occurs (see there); the count is then a function of the sum (the sum  *)
+(*   of the coefficients), so the model leaves it out of the fingerprint.  *)
+(*  trace mode: o.FR and o.FC are the real fingerprints the Rust code      *)
+(*   recorded (TraceReconcile.tla): FpRange and CheckFp are lookups, and   *)
+(*   a fingerprint the trace does not hold is a TLC error, not a guess.    *)
+(* In both modes o.idb[x] is the id of an item (8 bytes).                  *)
 (*                                                                         *)
 (* Lean: Pinc/ReconcileWire.lean (Reconcile.readBound, putBound, ...),     *)
 (* ReconcileWireProofs (round trip and canonical form).                    *)
@@ -35,7 +45,7 @@ CONSTANTS SPLIT, ALEAF, BLEAF, COLD_RATIO, MAX_NEST, CPL_MAX, FRAME_MAX
 
 BIG == 8388608
 VARMAX == 9
-FPLEN == 16
+FPLEN == 32
 IDLEN == 8
 SeenBytes == (ALEAF + 7) \div 8
 
@@ -70,21 +80,10 @@ Pow2(i) == IF i = 0 THEN 1 ELSE 2 * Pow2(i - 1)
 BitOf(x, i) == (x \div Pow2(i)) % 2
 SetBitByte(x, i) == IF BitOf(x, i) = 1 THEN x ELSE x + Pow2(i)
 
-XorBit(a, b, i) == (BitOf(a, i) + BitOf(b, i)) % 2
-Xor8Slow(a, b) ==
-    XorBit(a, b, 0) + 2 * XorBit(a, b, 1) + 4 * XorBit(a, b, 2) + 8 * XorBit(a, b, 3)
-    + 16 * XorBit(a, b, 4) + 32 * XorBit(a, b, 5) + 64 * XorBit(a, b, 6) + 128 * XorBit(a, b, 7)
-(* the byte XOR as a table, computed once *)
-XorTab == [a \in 0..255 |-> [b \in 0..255 |-> Xor8Slow(a, b)]]
-Xor8(a, b) == XorTab[a][b]
-(* the quick profile (quick/Reconcile*.cfg substitute Xor8 <- Xor8Quick and XorTab <- XorTabQuick): the byte XOR from
-   the table of the 16 x 16 pairs of half bytes, equal to Xor8 on every pair of bytes, so the 65536 entries of XorTab
-   are not built at start-up *)
-XorTabQuick == [a \in 0..15 |-> [b \in 0..15 |-> Xor8Slow(a, b)]]
-Xor8Quick(a, b) == XorTabQuick[a \div 16][b \div 16] * 16 + XorTabQuick[a % 16][b % 16]
-
-Zero16 == [i \in 1..FPLEN |-> 0]
-XorFp(f, g) == [i \in 1..FPLEN |-> Xor8(f[i], g[i])]
+Zero32 == [i \in 1..FPLEN |-> 0]
+(* the group of the fingerprints in model mode: 32 bytes, added and subtracted bytewise modulo 256 *)
+AddFp(f, g) == [i \in 1..FPLEN |-> (f[i] + g[i]) % 256]
+SubFp(f, g) == [i \in 1..FPLEN |-> (f[i] + 256 - g[i]) % 256]
 
 RECURSIVE BeBytes(_, _)
 BeBytes(w, v) == IF w = 0 THEN <<>> ELSE BeBytes(w - 1, v \div 256) \o <<v % 256>>
@@ -180,8 +179,8 @@ ReadItem(lim, S, i) ==
     IF i >= Len(S) THEN Er("index")
     ELSE IF Len(S[i + 1]) <= lim.maxItem THEN Ok(S[i + 1]) ELSE Er("index")
 
-(* The hash oracle holds sorted tables of <<item, value>> pairs, looked up by binary search: o.H the 16 byte
-   fingerprints, o.idb the 8 byte ids. A missing item stops TLC with an error. *)
+(* The hash oracle holds sorted tables of <<item, value>> pairs, looked up by binary search: o.H the 32 byte
+   item values (model mode), o.idb the 8 byte ids. A missing item stops TLC with an error. *)
 RECURSIVE BinGet(_, _, _, _)
 BinGet(tab, lo, hi, x) ==
     IF lo > hi THEN tab[0][2]
@@ -191,15 +190,28 @@ BinGet(tab, lo, hi, x) ==
 HOf(o, x) == BinGet(o.H, 1, Len(o.H), x)
 IdOf(o, x) == BinGet(o.idb, 1, Len(o.idb), x)
 
-RECURSIVE XorH(_, _)
-XorH(o, xs) == IF xs = <<>> THEN Zero16 ELSE XorFp(HOf(o, Head(xs)), XorH(o, Tail(xs)))
+(* trace mode: the oracle carries the recorded tables *)
+IsTrace(o) == "FR" \in DOMAIN o
 
-(* the XOR over the positions a..b-1 (0-based) of S *)
-RECURSIVE XorRange(_, _, _, _)
-XorRange(o, S, a, b) == IF a >= b THEN Zero16 ELSE XorFp(HOf(o, S[a + 1]), XorRange(o, S, a + 1, b))
+(* the group sum of the items of a sequence *)
+RECURSIVE SumH(_, _)
+SumH(o, xs) == IF xs = <<>> THEN Zero32 ELSE AddFp(HOf(o, Head(xs)), SumH(o, Tail(xs)))
+
+(* the group sum over the positions a..b-1 (0-based) of S *)
+RECURSIVE SumRange(_, _, _, _)
+SumRange(o, S, a, b) == IF a >= b THEN Zero32 ELSE AddFp(HOf(o, S[a + 1]), SumRange(o, S, a + 1, b))
 
 Slice(S, a, b) == IF b <= a THEN <<>> ELSE SubSeq(S, a + 1, b)
-FpRange(o, S, a, b) == XorRange(o, S, a, b)
+
+(* The fingerprint of the positions a..b-1 of S. Trace mode: o.FR is a function of <<a, b>> for this role's set; a
+   range it does not hold makes TLC stop with an error (a function applied outside its domain). *)
+FpRange(o, S, a, b) == IF IsTrace(o) THEN o.FR[<<a, b>>] ELSE SumRange(o, S, a, b)
+
+(* The initiator's final check: the sum of its set S[0..n-1] plus the sum of the items it lacks (here) minus the sum of
+   the items the peer lacks (there). Trace mode: o.FC is a function of <<here, there>>, the item lists in arrival order. *)
+CheckFp(o, S, n, here, there) ==
+    IF IsTrace(o) THEN o.FC[<<here, there>>]
+    ELSE SubFp(AddFp(SumRange(o, S, 0, n), SumH(o, here)), SumH(o, there))
 
 RECURSIVE DataLen(_)
 DataLen(xs) == IF xs = <<>> THEN 0 ELSE Len(Venc(Len(Head(xs)))) + Len(Head(xs)) + DataLen(Tail(xs))

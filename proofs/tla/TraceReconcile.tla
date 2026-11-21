@@ -12,10 +12,28 @@
 (* cut, an extension, a dropped or doubled part, a changed tag or count)    *)
 (* and records every handler call: who, which, the bytes delivered to it,  *)
 (* and the step and bytes it wrote or the error it returned. A case line   *)
+(* carries the two sets, both sides' limits, the set reference, the real   *)
+(* ids (ID, sorted by item: the real id of every item of the sets) and two *)
+(* tables of real fingerprints. The fingerprint of a range is a hash of    *)
+(* the group sum of its items and their count, and the model does not      *)
+(* recompute it: FR is [side, a, b, fp] for the range of positions a..b of *)
+(* the set of that side (0 the initiator's A, 1 the responder's B), one    *)
+(* row for every range the real code asked its index for, and FC is        *)
+(* [here, there, fp] for the real final check of the initiator's arenas    *)
+(* `here` and `there` (item lists in arrival order) at each moment it      *)
+(* wrote one. Each role's operators run with an oracle built from them     *)
+(* once per case (CaseEv): FpRange is a lookup of (a, b) in the rows of    *)
+(* the role's side and CheckFp a lookup of (here, there). A fingerprint    *)
+(* the model asks for that the trace does not hold is not a guess: TLC     *)
+(* stops with an error (a function applied outside its domain), so a       *)
+(* missing row fails the replay at that line and is never agreement. The   *)
+(* fingerprints are 32 bytes.                                              *)
+(*                                                                         *)
+(* and the step and bytes it wrote or the error it returned. A case line   *)
 (* carries the two sets, both sides' limits, the set reference and the     *)
 (* keyed hash tables, sorted by item (the real fingerprint of every item that can be       *)
 (* hashed and the real id of every item of the sets), so the model runs    *)
-(* with the real hash: the XOR of 16 byte values, bytewise.                *)
+(* with the real fingerprints (32 bytes).                                  *)
 (*                                                                         *)
 (* Every call must be the step the operators of ReconcileSess.tla (InitStart,*)
 (* InitHandle, RespHandle, RespResume, the same operators the system       *)
@@ -50,9 +68,19 @@ Init ==
     /\ rsp = NewResponder(LimOfJ(<<1, 100, 100, 100>>))
     /\ cs = [none |-> TRUE]
 
+(* the oracle of the role on `side`: the recorded range fingerprints of that side keyed by (a, b), the recorded final
+   checks keyed by (here, there), the real ids *)
+OracleOf(E, side) ==
+    LET rows == {E.FR[k] : k \in DOMAIN E.FR}
+        mine == {r \in rows : r[1] = side}
+        fcs == {E.FC[k] : k \in DOMAIN E.FC}
+    IN [FR |-> [k \in {<<r[2], r[3]>> : r \in mine} |-> (CHOOSE r \in mine : r[2] = k[1] /\ r[3] = k[2])[4]],
+        FC |-> [k \in {<<r[1], r[2]>> : r \in fcs} |-> (CHOOSE r \in fcs : r[1] = k[1] /\ r[2] = k[2])[3]],
+        idb |-> E.ID]
+
 CaseEv ==
     /\ Ev.e = "case"
-    /\ cs' = [A |-> Ev.A, B |-> Ev.B, o |-> [H |-> Ev.H, idb |-> Ev.ID],
+    /\ cs' = [A |-> Ev.A, B |-> Ev.B, oI |-> OracleOf(Ev, 0), oR |-> OracleOf(Ev, 1),
               ref |-> Ev.ref, lr |-> LimOfJ(Ev.limR)]
     /\ ini' = NewInitiator(LimOfJ(Ev.limI))
     /\ rsp' = NewResponder(LimOfJ(Ev.limR))
@@ -71,21 +99,21 @@ Agrees(r) ==
     ELSE ~r.ok /\ r.err = Ev.err
 
 IStartEv ==
-    LET r == InitStart(cs.o, cs.A, ini, cs.ref)
+    LET r == InitStart(cs.oI, cs.A, ini, cs.ref)
     IN /\ Ev.who = "I" /\ Ev.call = "start"
        /\ IF Ev.ok THEN r.ok /\ r.v[2] = Ev.out /\ Ev.step = "send" ELSE ~r.ok /\ r.err = Ev.err
        /\ ini' = IF r.ok THEN r.v[1] ELSE ini
        /\ UNCHANGED <<cs, rsp>>
 
 IHandleEv ==
-    LET r == InitHandle(cs.o, cs.A, ini, Ev.in)
+    LET r == InitHandle(cs.oI, cs.A, ini, Ev.in)
     IN /\ Ev.who = "I" /\ Ev.call = "handle"
        /\ Agrees(r)
        /\ ini' = IF r.ok THEN r.v[3] ELSE IniAfterErr(ini)
        /\ UNCHANGED <<cs, rsp>>
 
 RHandleEv ==
-    LET r == RespHandle(cs.o, cs.B, rsp, Ev.in)
+    LET r == RespHandle(cs.oR, cs.B, rsp, Ev.in)
     IN /\ Ev.who = "R" /\ Ev.call = "handle"
        /\ Agrees(r)
        /\ rsp' = IF r.ok THEN r.v[3] ELSE RespAfterErr(rsp, Ev.in)
