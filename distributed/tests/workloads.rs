@@ -135,6 +135,7 @@ fn group(stack: Stack, net: u8, peers: u16) -> Vec<(Init, Role)> {
                     peers: specs.clone(),
                     mtu: 1500,
                     sessions: 16,
+                    identity_salt: 0,
                     iroh_gossip_max: None,
                     dtn: None,
                     trace: false,
@@ -418,7 +419,7 @@ fn pinc_carries_a_bundle_to_a_node_that_comes_online_after_its_source_left() {
         Check::Copies,
         Check::NoRefetch { at: dst.into() },
     ];
-    let o = evaluate(&checks, &sent, &logs, sent_at, |n| node_id(n).ok().map(|i| i.bytes));
+    let o = evaluate(&checks, &sent, &logs, sent_at, |n| node_id(n, 0).ok().map(|i| i.bytes));
     assert_eq!(o.failures, Vec::<String>::new(), "{logs:#?}");
     assert_eq!(o.passed, 4);
 }
@@ -495,4 +496,33 @@ fn a_traced_pinc_node_reports_its_packet_log_and_an_untraced_one_does_not() {
         assert!(entries.iter().any(|e| e[1] == kind), "no {kind} entry");
     }
     assert!(entries.iter().all(|e| e[0].is_u64() && e[2].is_string()));
+}
+
+/// Every scenario that declares custody moves can run them: each goes up the order of node ids under the scenario's
+/// identity salt, and the salt is the one the nodes are told.
+#[test]
+fn every_declared_custody_move_goes_up_the_node_ids() {
+    use pinc_distributed::dtn::Check;
+    use pinc_distributed::scenario::{Scenario, Workload};
+    let dir = format!("{}/scenarios", env!("CARGO_MANIFEST_DIR"));
+    let mut seen = 0;
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_none_or(|e| e != "toml") {
+            continue;
+        }
+        let sc = Scenario::parse(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let Workload::Dtn(w) = &sc.workload else { continue };
+        let salt = sc.identity_salt();
+        eprintln!("identity salt {salt}: {}", sc.name);
+        for c in &w.checks {
+            let Check::Custody { moves } = c else { continue };
+            for m in moves {
+                let id = |n: &str| node_id(n, salt).unwrap().bytes;
+                assert!(id(&m.to) > id(&m.from), "{}: {} to {} goes down", sc.name, m.from, m.to);
+                seen += 1;
+            }
+        }
+    }
+    assert!(seen >= 6, "{seen} custody moves found");
 }

@@ -14,7 +14,7 @@ use serde_json::{Map, Value};
 use super::agent::UDP_PORT;
 use super::core::node_id;
 use crate::node::app::{emit, for_each_request};
-use crate::node::data::seed_bytes;
+use crate::node::data::identity_seed;
 use crate::node::proto::{Cmd, Init, Ready, Reply};
 
 /// Where the container backend mounts the binary named by `PINC_RELAY_BIN`.
@@ -48,7 +48,7 @@ pub fn run(init: &Init) -> Result<(), String> {
     let dir = std::env::temp_dir().join(format!("pinc-relay-{}", init.name));
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let identity = dir.join("identity");
-    std::fs::write(&identity, hex(&seed_bytes(&init.name, "pinc-identity", 32)))
+    std::fs::write(&identity, hex(&identity_seed(&init.name, init.identity_salt, 32)))
         .map_err(|e| format!("{}: {e}", identity.display()))?;
     let metrics = SocketAddr::from(([127, 0, 0, 1], me.port(METRICS_PORT)));
     let config = dir.join("relay.toml");
@@ -74,7 +74,7 @@ pub fn run(init: &Init) -> Result<(), String> {
     BufReader::new(stdout)
         .read_line(&mut line)
         .map_err(|e| format!("pinc_relay said nothing: {e}"))?;
-    let want = pinc::node_to_string(&node_id(&init.name)?);
+    let want = pinc::node_to_string(&node_id(&init.name, init.identity_salt)?);
     // "relay and hub <id> on <address>", or "relay <id> on <address>" with the hub off.
     let words: Vec<&str> = line.split_whitespace().collect();
     let id = words
@@ -86,7 +86,7 @@ pub fn run(init: &Init) -> Result<(), String> {
     }
     let ready = Ready {
         stack: "pinc".into(),
-        id: hex(&node_id(&init.name)?.bytes),
+        id: hex(&node_id(&init.name, init.identity_salt)?.bytes),
         config: format!("pinc_relay ({}): {}", bin.to_string_lossy(), line.trim()),
     };
     println!("READY {}", serde_json::to_string(&ready).map_err(|e| e.to_string())?);

@@ -171,6 +171,7 @@ impl<'a> AppSet<'a> {
                 peers: peers.clone(),
                 mtu: plan.mtu,
                 sessions,
+                identity_salt: 0,
                 iroh_gossip_max: None,
                 dtn: None,
                 trace: false,
@@ -186,6 +187,14 @@ impl<'a> AppSet<'a> {
             archived: Mutex::new(vec![Vec::new(); plan.nodes.len()]),
             replay: Mutex::new(vec![Vec::new(); plan.nodes.len()]),
         }
+    }
+
+    /// Set the identity salt every node derives the PINC ids under.
+    pub(crate) fn with_identity_salt(mut self, salt: u32) -> Self {
+        for init in &mut self.inits {
+            init.identity_salt = salt;
+        }
+        self
     }
 
     /// Set each node's delay-tolerant delivery: `f` is given the node's index and gives its settings.

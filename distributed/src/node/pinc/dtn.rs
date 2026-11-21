@@ -32,13 +32,13 @@ pub struct Opener {
 ///
 /// # Errors
 /// The node's identity could not be made.
-pub fn opener(name: &str) -> Result<Opener, String> {
+pub fn opener(name: &str, salt: u32) -> Result<Opener, String> {
     let p = Software;
     let (dk, ek) = p.kem_keygen(&seed32(name, "pinc-dtn-kem-d"), &seed32(name, "pinc-dtn-kem-z"));
     let xs = p.x25519_secret(&seed32(name, "pinc-dtn-x25519"));
     Ok(Opener {
         keys: RecipientKeys {
-            node: node_id(name)?,
+            node: node_id(name, salt)?,
             epoch: 1,
             kem_ek: p.kem_encaps_key_bytes(&ek),
             x25519: p.x25519_public(&xs),
@@ -72,6 +72,8 @@ fn unhex(s: &str) -> Option<[u8; 32]> {
 type Span = ([u8; 32], u64, u64);
 
 struct On {
+    /// The scenario's identity salt, which the peers' ids derive under.
+    salt: u32,
     key: Keypair,
     open: Opener,
     init: DtnInit,
@@ -92,10 +94,11 @@ impl DtnStore {
     ///
     /// # Errors
     /// The node's keys could not be made or its kept store could not be read.
-    pub fn new(name: &str, init: DtnInit) -> Result<Self, String> {
+    pub fn new(name: &str, salt: u32, init: DtnInit) -> Result<Self, String> {
         let mut on = On {
-            key: keypair(name)?,
-            open: opener(name)?,
+            salt,
+            key: keypair(name, salt)?,
+            open: opener(name, salt)?,
             init,
             bundles: BTreeMap::new(),
             records: BTreeMap::new(),
@@ -138,7 +141,7 @@ impl DtnStore {
             Some(ws) => Some((
                 t0_ms,
                 ws.iter()
-                    .map(|w| node_id(&w.peer).map(|id| (id.bytes, w.from_ms, w.to_ms)))
+                    .map(|w| node_id(&w.peer, on.salt).map(|id| (id.bytes, w.from_ms, w.to_ms)))
                     .collect::<Result<_, _>>()?,
             )),
         };
