@@ -9,11 +9,12 @@
 //!
 //! The parent must have been heard from within [`PARENT_RX`]. One that went quiet may be a peer that restarted, so a
 //! dial to it asks first (`QUIET_PROBE`): the dial's slot holds its memory and no connection, and the quiet session
-//! sends one ping at once. As soon as any packet comes back the dial rides the session as a sub-session, with the id it
-//! already gave the application. When the wait (two of the session's probe timeouts, or `EndpointConfig::probe_window`)
+//! challenges its active path at once (a path challenge, answered with a response the peer sends as soon as it
+//! arrives, where a ping is acknowledged after the peer's acknowledgement delay). As soon as any packet comes back the
+//! dial rides the session as a sub-session, with the id it already gave the application. When the wait (two of the session's probe timeouts, or `EndpointConfig::probe_window`)
 //! runs out unanswered, the dial makes its own handshake in the same slot, to the caller's first address, the session's
 //! own direct address and then the caller's others, and closes the quiet session only when it is still the one
-//! probed, not a pulse session, still unheard and nothing is in flight on it, which the probe's own unanswered ping
+//! probed, not a pulse session, still unheard and nothing is in flight on it, which the probe's own unanswered challenge
 //! usually prevents: a dead session then ends by its own path timeout. A lapse waits on another protocol's running
 //! handshake to the peer instead of making a second one. While the probe runs the dial's id holds no session: a write
 //! on it fails at once, closing it ends the dial, and it answers `Stats` as a dial that has not connected and keeps
@@ -78,7 +79,7 @@ ep_impl! {
 
     /// The established session of `peer` a dial may probe (`QUIET_PROBE`): the same live session [`find_parent`]
     /// rides, only that it has not been heard from within [`PARENT_RX`]: a quiet parent. It may be a peer that went
-    /// silent or restarted, so the dial first asks the session for a ping before it makes its own handshake. None
+    /// silent or restarted, so the dial first has the session challenge its path before it makes its own handshake. None
     /// once [`MAX_WAITERS`] dials probe it.
     pub(crate) fn find_quiet_parent(&self, peer: &NodeId, now: u64) -> Option<usize> {
         let live = |i: &usize| {
@@ -204,7 +205,7 @@ ep_impl! {
 
     /// Start the probe of a dial to a quiet parent (`QUIET_PROBE`): the dial's slot takes its memory back and holds no
     /// connection, nothing goes on the wire from the dial, and the application holds its id until the probe
-    /// resolves. The probed session pings at once (its `probed_until` makes one due), so the probe learns whether
+    /// resolves. The probed session challenges its active path at once (its `probed_until` makes one due), so the probe learns whether
     /// the peer lives. The dial rides the parent when any packet comes back, else it lapses into its own handshake
     /// at `probe_until`: the window is `EndpointConfig::probe_window` when set, else two of the session's probe
     /// timeouts (its round trip plus margin, capped). `addrs` are the dial's routable addresses, kept for the lapse.
@@ -222,7 +223,7 @@ ep_impl! {
         let alpn = Alpn::new(alpn).ok_or(CommandError::BadAlpn)?;
         let (i, mem) = self.alloc_slot(true, now).ok_or(CommandError::Full)?;
         // Nothing may be lost by closing the probed session on a lapse: it is quiet, so nothing of the
-        // application's should be in flight on it; noted now, before the probe's own ping leaves, and checked
+        // application's should be in flight on it; noted now, before the probe's own challenge leaves, and checked
         // again when the probe resolves.
         let quiet = self
             .slots
@@ -329,7 +330,7 @@ ep_impl! {
         let facts = self.probe_facts(probed, probed_gen, now);
         // A pulse session's liveness is its carrier's, so a late answer is not proof of death: it is never closed.
         // A session an earlier lapse of the same pass closed is not closed a second time.
-        // vertexia: packets in flight stand in for application data in flight, so the probe's own unanswered ping usually keeps a dead session up until its path times out; exact needs a transport count of unacknowledged stream bytes (pinc#693)
+        // vertexia: packets in flight stand in for application data in flight, so the probe's own unanswered challenge usually keeps a dead session up until its path times out; exact needs a transport count of unacknowledged stream bytes (pinc#693)
         let quiet = was_quiet
             && same
             && self.slots.get(probed).is_some_and(|s| {
@@ -538,7 +539,7 @@ ep_impl! {
         })
     }
 
-    /// Mark the probed session of a new probe so its next ping is due at once, and recompute the mark when the
+    /// Mark the probed session of a new probe so its next challenge is due at once, and recompute the mark when the
     /// probes of `parent` end: with none left, the session's keepalive returns to its own schedule.
     pub(crate) fn recompute_probed(&mut self, parent: usize, now: u64) {
         let until = self.probes_of(parent).filter_map(|w| self.slots.get(w).map(|s| s.m.probe_until)).max();

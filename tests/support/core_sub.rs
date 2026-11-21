@@ -56,7 +56,12 @@ pub fn write_new(net: &mut CoreNet, n: usize, s: SessionId, data: &[u8]) {
 
 /// Two connected nodes whose parent session has not heard its peer for 25 seconds, with the session still up.
 pub fn silent_parent() -> (CoreNet, usize, usize) {
-    let mut net = CoreNet::new(10 * MS_NS);
+    silent_parent_at(10 * MS_NS)
+}
+
+/// As [`silent_parent`] over a link with the one-way `delay`.
+pub fn silent_parent_at(delay: u64) -> (CoreNet, usize, usize) {
+    let mut net = CoreNet::new(delay);
     net.capture = true;
     let (a, b) = (net.add(1), net.add(2));
     net.connect_pair(a, b, ALPN_A, Role::Other);

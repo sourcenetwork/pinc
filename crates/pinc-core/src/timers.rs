@@ -405,16 +405,18 @@ ep_impl! {
         let short_until = self.short_until();
         let Some(slot) = self.slots.get_mut(i) else { return };
         let Some(conn) = slot.conn.as_mut() else { return };
-        // A dial is probing this session's peer (QUIET_PROBE): the session pings its peer at once so the probe
-        // learns whether the peer lives. Pulse sessions ping through the carrier via the plan; the rest ping here,
-        // once per probe: the marker goes even when the path is gone, so the session returns to its own plan
-        // instead of waking for a ping it has nowhere to send.
+        // A dial is probing this session's peer (QUIET_PROBE): the session challenges its active path at once so the
+        // probe learns whether the peer lives. A challenge is answered by a response sent as soon as it arrives, where
+        // a ping is acknowledged after the peer's acknowledgement delay. Pulse sessions ask through the carrier via the
+        // plan; the rest challenge here, once per probe: the marker goes even when the path is gone, so the session
+        // returns to its own plan instead of waking for a challenge it has nowhere to send.
+        let mut env = env!(self, now);
         if slot.m.probed_until > now
             && !slot.m.pulse
             && slot.m.probed_ping_for != slot.m.probed_until
         {
             if let Some(active) = conn.active_path() {
-                let _ = conn.ping_path(active);
+                let _ = conn.probe(&mut env, active);
             }
             slot.m.probed_ping_for = slot.m.probed_until;
         }
@@ -432,7 +434,6 @@ ep_impl! {
                 n += 1;
             }
         }
-        let mut env = env!(self, now);
         for id in probe.iter().flatten() {
             let _ = conn.ping_path(*id);
             if let Some(p) = slot.m.stamp(*id) {

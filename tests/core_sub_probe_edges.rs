@@ -53,3 +53,22 @@ fn a_probing_dial_is_listed_and_closing_it_sends_no_handshake() {
         assert!(!handshake_since(&net, marker), "a handshake left for the peer of a closed dial");
     });
 }
+
+/// The probe challenges the path of the quiet session instead of pinging it: a path challenge is answered at once,
+/// where the acknowledgement of a ping waits for the peer's acknowledgement delay (up to 25 ms). Over a link with a
+/// round trip of 1 ms the dial rides within a few round trips, far under that delay.
+#[test]
+fn a_probe_rides_within_the_round_trip_not_the_peers_acknowledgement_delay() {
+    big_stack(|| {
+        let (mut net, a, b) = silent_parent_at(MS_NS / 2);
+        let t0 = net.now;
+        let (child, _) = dial(&mut net, a, b, ALPN_B);
+        assert!(net.run(t0 + SEC_NS, |n| {
+            n.nodes[a].saw(|e| matches!(e, Event::Connected { session, .. } if *session == child))
+        }));
+        let at = net.nodes[a]
+            .time_of(|e| matches!(e, Event::Connected { session, .. } if *session == child))
+            .unwrap();
+        assert!(at - t0 < 5 * MS_NS, "the ride took {} ns over a 1 ms round trip", at - t0);
+    });
+}

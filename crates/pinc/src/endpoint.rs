@@ -642,7 +642,7 @@ impl<H: Hosted, D: Discovery> Endpoint<H, D> {
     /// answers; [`Connection::answered`] waits for it. Such a connection to a peer that stopped ends as
     /// [`Connection::answered`] says; the connect timeout bounds only the wait for this call.
     ///
-    /// A peer whose session has gone quiet (not heard from for over 20 s) is probed first: the session is pinged at
+    /// A peer whose session has gone quiet (not heard from for over 20 s) is probed first: the session challenges its path at
     /// once, and this call returns a sub-session of it when the peer answers, or, when it does not within two of the
     /// session's probe timeouts, makes its own handshake and closes the quiet session only when nothing is in flight
     /// on it and it is not kept alive through a relay carrier; otherwise the quiet session ends by its own timeout.
