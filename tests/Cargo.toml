@@ -1847,3 +1847,11 @@ path = "trace_dial_report.rs"
 [[test]]
 name = "trace_facade_turn"
 path = "trace_facade_turn.rs"
+
+[[test]]
+name = "portmap_noalloc"
+path = "portmap_noalloc.rs"
+
+[[test]]
+name = "keystore_noalloc"
+path = "keystore_noalloc.rs"
