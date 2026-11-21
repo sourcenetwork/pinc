@@ -6,8 +6,6 @@
 #[macro_use]
 mod pinc_common;
 
-use std::time::Duration;
-
 use pinc::{Connection, ErrorKind, Hosted, NodeAddr};
 use pinc_common::{ECHO, SINK, serve_conn, within};
 
@@ -113,17 +111,15 @@ async fn a_protocol_opened_over_a_session_is_answered_once_the_peer_answers() {
     .await;
 }
 
+/// The limit is above both ends of the dial: about 3 s when the node is not thin (the dial ends after its fourth
+/// unanswered first flight), and the 60 s handshake limit when a stalled host made the node thin (it measured a round
+/// trip of 250 ms or more, and the early end does not apply to it). A connect timeout does not bound it: that ends
+/// a dial only until it is handed over, and this one is handed over at once.
 #[nuclei::test]
 async fn a_dial_to_a_peer_that_stopped_is_handed_over_but_never_answered() {
-    within(30, async {
+    within(120, async {
         let (to, task) = peer!();
-        // A short connect timeout, so the dial's own bound is far inside the test's.
-        let client = pinc_common::bind(
-            pinc_common::builder()
-                .alpn(ECHO)
-                .connect_timeout(Duration::from_secs(3)),
-        )
-        .await;
+        let client = pinc_common::client().await;
         let first = client.connect(to.clone(), ECHO).await.unwrap();
         echo_once(&first).await;
         first.close(0).await;
