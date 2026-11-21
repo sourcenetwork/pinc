@@ -1,0 +1,13 @@
+diff --git a/crates/pinc-transport/src/recovery/loss_estimate.rs b/crates/pinc-transport/src/recovery/loss_estimate.rs
+index 421403edc..0bf8d6725 100644
+--- a/crates/pinc-transport/src/recovery/loss_estimate.rs
++++ b/crates/pinc-transport/src/recovery/loss_estimate.rs
+@@ -19,7 +19,7 @@ use core::sync::atomic::{AtomicU32, Ordering};
+ /// The scale of the estimate: 65536 means every packet was lost.
+ pub const SCALE: u32 = 65_536;
+ /// Tail repair needs an estimate of at least this (328/65536, about 0.5 %).
+-pub const REPAIR_THRESHOLD: u32 = 328;
++pub const REPAIR_THRESHOLD: u32 = 65_537; // ablation: no tail repair, above SCALE so never reached (was 328)
+ /// A connection must be at least this old (2 s) before it repairs its tail.
+ pub const REPAIR_MIN_AGE: u64 = 2 * SECOND;
+ /// The averaging gain is 1/2^`GAIN_SHIFT` (1/32).
