@@ -1,0 +1,45 @@
+name = "defra-pushlog-burst-library-log"
+about = "DefraDB's pushlog fan-out in a burst: one writer pushes 2000 updates of 4 KiB as fast as 10000 a second to 10 replicators across a WAN (20 ms round trip, 100 Mbit/s each way). PINC hubs keep the library's default 4 MiB topic log instead of the harness's 16 MiB."
+stacks = ["pinc", "iroh", "libp2p"]
+repetitions = 3
+
+[resources]
+cpus = 1
+memory_mib = 512
+
+[[sites]]
+name = "writer"
+pos = [120, 200]
+
+[[sites]]
+name = "replicas"
+pos = [520, 200]
+
+[[nodes]]
+name = "hub"
+site = "writer"
+role = "hub"
+
+[[nodes]]
+name = "w"
+site = "writer"
+
+[[nodes]]
+name = "r"
+site = "replicas"
+count = 10
+
+[[links]]
+a = "writer"
+b = "replicas"
+shape = { delay_ms = 10, rate_mbit = 100 }
+
+[workload]
+kind = "pubsub"
+publishers = ["w"]
+messages = 2000
+size = 4096
+rate_hz = 10000
+warmup_s = 8
+drain_s = 15
+pinc_library_topic_log = true
