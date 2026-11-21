@@ -9,7 +9,7 @@
 
 use pinc_core::{Answer, Command, Event, Query, Reply, Role, SessionId, Value};
 
-use crate::{ALPN_A, CoreNet, MS_NS, SEC_NS, TNode};
+use crate::{ALPN_A, CK, CoreNet, MS_NS, SEC_NS, TNode};
 
 /// Whether `e` reports a session connected.
 pub fn is_connected(e: &Event) -> bool {
@@ -17,7 +17,7 @@ pub fn is_connected(e: &Event) -> bool {
 }
 
 /// Dial `b` from `a` for `alpn` at the net's time: the session id and the reply.
-pub fn dial(net: &mut CoreNet, a: usize, b: usize, alpn: &[u8]) -> (SessionId, Reply) {
+pub fn dial<const K: usize>(net: &mut CoreNet<K>, a: usize, b: usize, alpn: &[u8]) -> (SessionId, Reply) {
     let (peer, to, now) = (net.nodes[b].node, net.nodes[b].addr, net.now);
     let rep = net.nodes[a].connect(now, peer, alpn, to, Role::Other).unwrap();
     (net.nodes[a].session(&rep), rep)
@@ -61,9 +61,14 @@ pub fn silent_parent() -> (CoreNet, usize, usize) {
 
 /// As [`silent_parent`] over a link with the one-way `delay`.
 pub fn silent_parent_at(delay: u64) -> (CoreNet, usize, usize) {
-    let mut net = CoreNet::new(delay);
+    silent_parent_k::<CK>(delay)
+}
+
+/// As [`silent_parent_at`] with a table of `K` slots on both nodes.
+pub fn silent_parent_k<const K: usize>(delay: u64) -> (CoreNet<K>, usize, usize) {
+    let mut net = CoreNet::<K>::new_k(delay);
     net.capture = true;
-    let (a, b) = (net.add(1), net.add(2));
+    let (a, b) = (net.add_k(1), net.add_k(2));
     net.connect_pair(a, b, ALPN_A, Role::Other);
     net.run_for(SEC_NS);
     let silent = net.nodes[b].addr;
@@ -98,7 +103,7 @@ pub fn closed_parent() -> (CoreNet, usize, usize) {
 }
 
 /// Whether a datagram with a long header left since `marker`: a handshake started.
-pub fn handshake_since(net: &CoreNet, marker: usize) -> bool {
+pub fn handshake_since<const K: usize>(net: &CoreNet<K>, marker: usize) -> bool {
     net.captured[marker..].iter().any(|(_, _, d)| d[0] & 0x80 != 0)
 }
 

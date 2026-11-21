@@ -252,7 +252,8 @@ fn a_lapse_that_cannot_dial_fails_the_dial_once() {
 #[test]
 fn the_ninth_dial_past_the_waiter_bound_makes_its_own_handshake() {
     big_stack(|| {
-        let (mut net, a, b) = silent_parent();
+        // Ten sessions at once (the parent, eight probes and the ninth dial) need more slots than the shared table.
+        let (mut net, a, b) = silent_parent_k::<12>(10 * MS_NS);
         let marker = net.captured.len();
         let eight: Vec<_> = (0..8).map(|_| dial(&mut net, a, b, ALPN_B).0).collect();
         // One way takes 10 ms, so no answer is back yet: nothing but the eight probes has left.
