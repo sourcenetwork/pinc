@@ -9,8 +9,8 @@ The IDS arm on an honest ids list: `idsArm_leaf` (the reply part with the rposit
 
 namespace Pinc.Reconcile
 
-/-- The fingerprints and ids are the 128-bit and 64-bit values the wire carries. -/
-def HBound (o : Oracle) : Prop := (∀ x, o.H x < 2 ^ 128) ∧ (∀ x, o.idf x < 2 ^ 64)
+/-- The fingerprints and ids are the 256-bit and 64-bit values the wire carries. -/
+def HBound (o : Oracle) : Prop := (∀ s c, o.enc s c < 2 ^ 256) ∧ (∀ x, o.idf x < 2 ^ 64)
 
 /-- The bitmap after matching each of our items to its position among the initiator's ids. -/
 def bmFold (o : Oracle) (is : List Nat) (xs : List Item) (seen : List Nat) : List Nat :=
@@ -106,9 +106,9 @@ theorem idsArm_split (o : Oracle) {lim S c} (I : Iv) (h : HCtx lim S c I)
         .ok ((({ c with out :=
             { c.out with
               body := c.out.body ++ (encFps c.out.last ((splitIvs S I fan).zip
-                ((blocksOf S I fan).map fun B => fpBytes (xorH o B)))).1,
+                ((blocksOf S I fan).map fun B => fpBytes (o.enc (sumH B) B.length)))).1,
               last := (encFps c.out.last ((splitIvs S I fan).zip
-                ((blocksOf S I fan).map fun B => fpBytes (xorH o B)))).2 } }).bump (blocksOf S I fan).length),
+                ((blocksOf S I fan).map fun B => fpBytes (o.enc (sumH B) B.length)))).2 } }).bump (blocksOf S I fan).length),
           rest) := by
   have hr := h.ranks
   have hc := h.cnt_eq

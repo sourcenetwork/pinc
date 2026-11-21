@@ -108,9 +108,9 @@ theorem fullArm_split (o : Oracle) {lim S c} (I : Iv) (h : HCtx lim S c I)
         .ok ((({ c with out :=
             { c.out with
               body := c.out.body ++ (encFps c.out.last ((splitIvs S I fan).zip
-                ((blocksOf S I fan).map fun B => fpBytes (xorH o B)))).1,
+                ((blocksOf S I fan).map fun B => fpBytes (o.enc (sumH B) B.length)))).1,
               last := (encFps c.out.last ((splitIvs S I fan).zip
-                ((blocksOf S I fan).map fun B => fpBytes (xorH o B)))).2 } }).bump (blocksOf S I fan).length),
+                ((blocksOf S I fan).map fun B => fpBytes (o.enc (sumH B) B.length)))).2 } }).bump (blocksOf S I fan).length),
           rest) := by
   have hr := h.ranks
   have hc := h.cnt_eq

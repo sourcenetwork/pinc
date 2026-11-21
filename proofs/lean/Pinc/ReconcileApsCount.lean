@@ -137,7 +137,7 @@ theorem Cfg.delta_pos_of_not_fpEq (c : Cfg) {I : Iv} (h : ¬ c.fpEq I) : 1 ≤ c
   have e1 : c.exactHere I = [] := List.length_eq_zero_iff.mp (by omega)
   have e2 : c.exactThere I = [] := List.length_eq_zero_iff.mp (by omega)
   unfold Cfg.fpEq
-  apply xorH_perm
+  suffices hp : (I.items c.A).Perm (I.items c.B) by rw [sumH_perm hp, hp.length_eq]
   rw [List.perm_ext_iff_of_nodup (items_nodup c.hA I) (items_nodup c.hB I)]
   intro x
   constructor

@@ -3,7 +3,7 @@ import Pinc.ReconcileApsCost
 /-!
 # Reconcile APS, part 8: progress, termination and the cost bound
 
-For an honest pair of sorted sets, any independent-or-not hash, any id function and any choice of the code's
+For an honest pair of sorted sets, any hash, any id function and any choice of the code's
 nondeterminism (`fits`, the fan of a split, the order parts are processed), from the first message of a pass (`Init`):
 
 * `aps_progress`: a state with a pending part always has a step (the code never gets stuck);

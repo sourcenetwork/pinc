@@ -84,9 +84,9 @@ theorem splitGo_spec (o : Oracle) (lim : Limits) (S : List Item) (hS : Sorted S)
       splitParts.go o lim S hi b step x l out cnt fuel = .ok
         ({ out with
             body := out.body ++ (encFps out.last ((ivsOf hi l (chunkBy step ((S.drop x).take (b - x)).length ((S.drop x).take (b - x)))).zip
-              ((chunkBy step ((S.drop x).take (b - x)).length ((S.drop x).take (b - x))).map fun B => fpBytes (xorH o B)))).1,
+              ((chunkBy step ((S.drop x).take (b - x)).length ((S.drop x).take (b - x))).map fun B => fpBytes (o.enc (sumH B) B.length)))).1,
             last := (encFps out.last ((ivsOf hi l (chunkBy step ((S.drop x).take (b - x)).length ((S.drop x).take (b - x)))).zip
-              ((chunkBy step ((S.drop x).take (b - x)).length ((S.drop x).take (b - x))).map fun B => fpBytes (xorH o B)))).2 },
+              ((chunkBy step ((S.drop x).take (b - x)).length ((S.drop x).take (b - x))).map fun B => fpBytes (o.enc (sumH B) B.length)))).2 },
          cnt + (chunkBy step ((S.drop x).take (b - x)).length ((S.drop x).take (b - x))).length) := by
   intro fuel
   induction fuel with
@@ -130,8 +130,8 @@ theorem splitGo_spec (o : Oracle) (lim : Limits) (S : List Item) (hS : Sorted S)
           rw [this, head_take_slice S (x + step) _ (by omega), List.getElem?_eq_getElem h2]
         rw [chunkBy_cons step _ hLne, hL', hfuel]
         rw [ivsOf_two hi l _ _ _ _ hlast hhead]
-        have hfp : fpRange o S x (x + step) = xorH o (((S.drop x).take (b - x)).take step) := by
-          rw [htake]; unfold fpRange; congr 2; omega
+        have hfp : fpRange o S x (x + step) = o.enc (sumH (((S.drop x).take (b - x)).take step)) (((S.drop x).take (b - x)).take step).length := by
+          rw [htake, fpRange_eq o S (by omega), Nat.add_sub_cancel_left]
         rw [splitParts.go]
         simp only [hxb, if_true, hy', hy, readItem_ok lim S hlen _ h1, readItem_ok lim S hlen _ h2,
           show ¬ (cpl (S[x + step - 1]'h1) (S[x + step]'h2) + 1 > (S[x + step]'h2).length) from by omega, if_false]
@@ -145,7 +145,8 @@ theorem splitGo_spec (o : Oracle) (lim : Limits) (S : List Item) (hS : Sorted S)
           List.take_of_length_le (by omega)
         have hcb : ∀ n, chunkBy step n ([] : List Item) = [] := fun n => by cases n <;> simp [chunkBy]
         rw [chunkBy_cons step _ hLne, hDrop, hcb, hTake]
-        have hfp : fpRange o S x b = xorH o ((S.drop x).take (b - x)) := rfl
+        have hfp : fpRange o S x b = o.enc (sumH ((S.drop x).take (b - x))) ((S.drop x).take (b - x)).length :=
+          fpRange_eq o S (by omega)
         rw [splitParts.go]
         simp only [hxb, if_true, hy', show ¬ (b < b) from by omega, if_false]
         have hf1 : 1 ≤ f := by omega
@@ -165,9 +166,9 @@ theorem splitParts_spec (o : Oracle) (lim : Limits) (S : List Item) (hS : Sorted
     splitParts o lim S out I.lo I.hi (rankOf S I.lo) (rankHi S I.hi) fan = .ok
       ({ out with
           body := out.body ++ (encFps out.last ((splitIvs S I fan).zip
-            ((blocksOf S I fan).map fun B => fpBytes (xorH o B)))).1,
+            ((blocksOf S I fan).map fun B => fpBytes (o.enc (sumH B) B.length)))).1,
           last := (encFps out.last ((splitIvs S I fan).zip
-            ((blocksOf S I fan).map fun B => fpBytes (xorH o B)))).2 },
+            ((blocksOf S I fan).map fun B => fpBytes (o.enc (sumH B) B.length)))).2 },
        (blocksOf S I fan).length) := by
   have hsl := slice_eq_filter I.lo I.hi S hS
   have hL : (S.drop (rankOf S I.lo)).take (rankHi S I.hi - rankOf S I.lo) = I.items S := hsl

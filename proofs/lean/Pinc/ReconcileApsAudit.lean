@@ -5,7 +5,7 @@ import Pinc.ReconcileApsIds
 # Reconcile APS: dependency audit of the main theorems
 
 The abstract part system (ReconcileApsSplit .. ReconcileApsIds) proves, for sorted sets and any choice of the code's
-nondeterminism, any id function and (where stated) independent hashes:
+nondeterminism, any id function and (where stated) a fingerprint that does not collide on the sums of lists (`EncInj`):
 
 * `splitIvs_spec`: a split is a partition into at most `fan` blocks, each holding fewer receiver items;
 * `reach_inv`: safety in every reachable state (arenas safe whatever the ids, pending intervals disjoint);

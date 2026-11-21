@@ -1,12 +1,11 @@
 import Pinc.ReconcileMachine
 
 /-!
-# Reconcile algebra: the order, the rank, the slices and the XOR fingerprint of a sorted index
+# Reconcile algebra: the order, the rank and the slices of a sorted index
 
 The facts the correctness proofs of the session use about the model's index: `lexLt` is a strict total order (the byte
 order of the items), the items of a range `lo..hi` are the slice `a..b` of the ranks of its bounds, a separator `q[..cpl p q + 1]`
-of `p < q` cuts between them, and the XOR of item hashes is a linear map (`xorH`), so under the one assumption that the
-hashes are XOR-independent (`Indep`), equal fingerprints mean equal parity sets.
+of `p < q` cuts between them.
 -/
 
 namespace Pinc.Reconcile

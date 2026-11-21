@@ -196,7 +196,7 @@ theorem trail_depth {c : Cfg} {f : Nat} (hfl : 2 ≤ f) (hfm : f ≤ c.minFan) {
 ## 6. The same facts for the code's own rules
 
 `machineCfg lim o A B hA hB` is the model with the leaf rule of the code: `lim` are the size limits of a session
-(`Limits` in the Rust crate), `o` the keyed hash, `hA` and `hB` the proofs that the two lists are sorted. Its smallest
+(`Limits` in the Rust crate), `o` the hash oracle, `hA` and `hB` the proofs that the two lists are sorted. Its smallest
 fan is 2, because the code may narrow a cut that far, so the readings below use fan 2.
 -/
 theorem machine_equal_sets_cost {lim : Limits} {o : Oracle} {A B : List Item} (hA : Sorted A) (hB : Sorted B)

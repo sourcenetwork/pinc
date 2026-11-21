@@ -9,16 +9,26 @@ initiator and the responder. A message is the list of its bytes; a handler takes
 the bytes it writes with the step, or the error. The order of every read, check and write follows the Rust code, so
 the error a message gets is the code's.
 
-The item index is a strictly ascending list `S`; the keyed hashes are the oracle `Oracle` (`H` for the 128-bit
-fingerprint of an item, `idf` for the 64-bit id), so any hash, including a colliding one, is a model. The assumption
-on fingerprints (the item hashes are independent over XOR) is a hypothesis of the theorems, not part of the model.
+The item index is a strictly ascending list `S`; the hashes are the oracle `Oracle` (`enc` the 256-bit fingerprint of a
+sum and a count of items, `idf` the 64-bit id), so any hash, including a colliding one, is a model. The sum of a list
+of items is its signed multiset (`Sum`, the free commutative group on the items, which is what the group sum of the
+code is when the discrete logarithm is hard). The one assumption on fingerprints (`EncInj`: `enc` does not collide
+on the sums that lists produce) is a hypothesis of the theorems, not part of the model.
 -/
 
 namespace Pinc.Reconcile
 
-/-- The hashes: `H` is the 128-bit fingerprint of one item, `idf` its 64-bit id. -/
+/-- A sum of items: the signed multiset, the free commutative group on the items, as the coefficient of every item.
+Addition and subtraction are pointwise. -/
+abbrev Sum := Item → Int
+
+instance : Add Sum := ⟨fun f g y => f y + g y⟩
+instance : Sub Sum := ⟨fun f g y => f y - g y⟩
+
+/-- The hashes: `enc` is the 256-bit fingerprint of a sum and of the count of items summed, `idf` the 64-bit id of an
+item. -/
 structure Oracle where
-  H : Item → Nat
+  enc : Sum → Nat → Nat
   idf : Item → Nat
 
 /-- `Limits`. -/
@@ -63,11 +73,17 @@ def readItem (lim : Limits) (S : List Item) (i : Nat) : Except Err Item :=
   | some x => if x.length ≤ lim.maxItem then .ok x else .error .index
   | none => .error .index
 
-/-- The XOR of the item hashes of a list. -/
-def xorH (o : Oracle) (xs : List Item) : Nat := xs.foldl (fun acc x => acc ^^^ o.H x) 0
+/-- The sum of a list of items: how often each item occurs in it. -/
+def sumH (xs : List Item) : Sum := fun y => (xs.count y : Int)
 
-/-- `fingerprint(a, b)`: the XOR over the positions `a..b`. -/
-def fpRange (o : Oracle) (S : List Item) (a b : Nat) : Nat := xorH o ((S.drop a).take (b - a))
+/-- `fingerprint(a, b)`: the encoding of the sum over the positions `a..b` and of their count `b - a`. -/
+def fpRange (o : Oracle) (S : List Item) (a b : Nat) : Nat := o.enc (sumH ((S.drop a).take (b - a))) (b - a)
+
+/-- The final check the initiator sends: the encoding of the sum of its first `n` items plus the items it lacks minus
+the items the peer lacks, and of the count `n + |here| - |there|` (natural subtraction, which stops at zero, as the
+code's saturating subtraction does). -/
+def checkFp (o : Oracle) (S : List Item) (n : Nat) (here there : List Item) : Nat :=
+  o.enc (sumH ((S.drop 0).take n) + sumH here - sumH there) (n + here.length - there.length)
 
 def fpBytes (v : Nat) : List Nat := beBytes fpLen v
 

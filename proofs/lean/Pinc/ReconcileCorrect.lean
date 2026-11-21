@@ -46,13 +46,13 @@ def machineCfg (lim : Limits) (o : Oracle) (A B : List Item) (hA : Sorted A) (hB
     · exact fitsM_small lim A hA it I h
 
 theorem machine_session_exact {lim : Limits} {o : Oracle} {A B : List Item} (hA : Sorted A) (hB : Sorted B)
-    (hI : Indep o) :
+    (hE : EncInj o) :
     (∀ s, PReach (machineCfg lim o A B hA hB) s → s.exact = false → s.pend = [] →
       (CheckPasses (machineCfg lim o A B hA hB) s ↔ ExactReport A B s.here s.there) ∧
       (s.leafed = false → ExactReport A B s.here s.there)) ∧
     (∀ s, PReach (machineCfg lim o A B hA hB) s → s.exact = true → s.pend = [] →
       ExactReport A B s.here s.there ∧ CheckPasses (machineCfg lim o A B hA hB) s) :=
-  aps_session_exact (c := machineCfg lim o A B hA hB) hI
+  aps_session_exact (c := machineCfg lim o A B hA hB) hE
 
 theorem machine_steps_bound {lim : Limits} {o : Oracle} {A B : List Item} (hA : Sorted A) (hB : Sorted B)
     {s : St} (h : IReach (machineCfg lim o A B hA hB) s) (hp : s.pend = []) :
@@ -67,6 +67,10 @@ theorem machine_depth_bound {lim : Limits} {o : Oracle} {A B : List Item} (hA : 
 #audit_axioms Pinc.Reconcile.splitParts_spec
 #audit_axioms Pinc.Reconcile.fitsM_small
 #audit_axioms Pinc.Reconcile.leafOk_total
+#audit_axioms Pinc.Reconcile.fp_inj
+#audit_axioms Pinc.Reconcile.check_detects_wrong
+#audit_axioms Pinc.Reconcile.exact_passes_check
+#audit_axioms Pinc.Reconcile.encInj_exists
 #audit_axioms Pinc.Reconcile.machine_session_exact
 #audit_axioms Pinc.Reconcile.machine_steps_bound
 #audit_axioms Pinc.Reconcile.machine_depth_bound

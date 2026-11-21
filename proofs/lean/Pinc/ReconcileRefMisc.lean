@@ -15,16 +15,16 @@ theorem rankOf_nil (S : List Item) : rankOf S [] = 0 := by
   intro x _; simp [lexLt_nil_right]
 
 theorem tailPart_check (o : Oracle) (S : List Item) (c : Core) (hinit : c.init = false) (hn : c.n = S.length)
-    (f : Nat) (hf : f < 2 ^ 128) (rest : List Nat) (mark : Nat) :
+    (f : Nat) (hf : f < 2 ^ 256) (rest : List Nat) (mark : Nat) :
     tailPart o S c tCHECK [] none (fpBytes f ++ rest) mark =
-      if xorH o S = f then .ok (c, rest)
+      if o.enc (sumH S) S.length = f then .ok (c, rest)
       else .ok ((({ c with out := c.out.addW .miss }).bump 1), rest) := by
-  have hfp : fpRange o S 0 c.n = xorH o S := by
+  have hfp : fpRange o S 0 c.n = o.enc (sumH S) S.length := by
     unfold fpRange; rw [hn]; simp
-  by_cases he : xorH o S = f
+  by_cases he : o.enc (sumH S) S.length = f
   · simp [tailPart, hinit, rankOf_nil, readBytes_fp, fromBE_fpBytes f hf, hfp, he, lr, Except.mapError, tFP, tCHECK,
       tIDS, tFULL, tCOLD, tREPLY, tMISS, bind, Except.bind, pure, Except.pure]
-  · have he' : ¬ f = xorH o S := fun h => he h.symm
+  · have he' : ¬ f = o.enc (sumH S) S.length := fun h => he h.symm
     simp [tailPart, hinit, rankOf_nil, readBytes_fp, fromBE_fpBytes f hf, hfp, he, he', lr, Except.mapError, tFP,
       tCHECK, tIDS, tFULL, tCOLD, tREPLY, tMISS, bind, Except.bind, pure, Except.pure, Out.addW, WP.enc, Out.head]
 
