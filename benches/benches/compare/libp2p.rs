@@ -1,8 +1,10 @@
 //! The comparison harness for rust-libp2p (see `compare/mod.rs`).
 //!
 //! Two transports, chosen with `--variant=quic` (the default) or `--variant=tcp`: QUIC (`libp2p-quic`, its built-in
-//! TLS and stream multiplexing) and TCP with Noise and Yamux, the stack most libp2p deployments run. Streams come from
-//! `libp2p-stream`, so a stream opens with libp2p's protocol negotiation, as an application's would. Defaults: the
+//! TLS and stream multiplexing) and TCP with Noise and Yamux, the stack most libp2p deployments run. A stream opens
+//! with libp2p's protocol negotiation, as an application's would, through the behaviour in `libp2p_streams.rs`, which
+//! negotiates every requested open at once (the `libp2p-stream` crate negotiates one at a time per connection, which
+//! would cap the request test at one stream per round trip). Defaults: the
 //! `SwarmBuilder` defaults with a new identity, plus a five minute idle connection timeout (the swarm's default of zero
 //! closes a connection with no stream at once), and tokio's multi-thread runtime with one worker per core. libp2p has
 //! no resumption with early data, so the resumed scenario is not measured.
@@ -33,6 +35,7 @@ use std::io;
 use std::sync::OnceLock;
 use std::time::Duration;
 
+use super::libp2p_streams::{Behaviour, Control};
 use super::{Lib, Rx, Tx};
 use futures::channel::mpsc;
 use futures::io::{ReadHalf, WriteHalf};
@@ -40,7 +43,6 @@ use futures::{AsyncReadExt, AsyncWriteExt, StreamExt};
 use libp2p::multiaddr::Protocol;
 use libp2p::swarm::{Stream, SwarmEvent};
 use libp2p::{Multiaddr, PeerId, StreamProtocol, Swarm, SwarmBuilder, noise, tcp, yamux};
-use libp2p_stream::{Behaviour, Control};
 
 const PROTO: StreamProtocol = StreamProtocol::new("/bench/1");
 

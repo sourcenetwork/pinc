@@ -55,6 +55,7 @@ use futures::channel::mpsc;
 
 pub mod iroh;
 pub mod libp2p;
+mod libp2p_streams;
 mod many;
 pub mod pinc;
 

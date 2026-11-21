@@ -35,7 +35,6 @@ criterion = "0.7.0"
 # The libraries PINC is measured against, and what they need.
 iroh = "1.4.1"
 libp2p = { version = "0.57.1", default-features = false }
-libp2p-stream = "0.5.0-alpha"
 # Segmented UDP sends and coalesced receives for the PINC host, the calls the compared libraries use.
 quinn-udp = "0.5.16"
 futures = { version = "0.3.34", default-features = false }
@@ -97,7 +96,6 @@ nuclei = { workspace = true }
 
 iroh = { workspace = true }
 libp2p = { workspace = true, features = ["tokio", "quic", "tcp", "noise", "yamux", "macros"] }
-libp2p-stream = { workspace = true }
 quinn-udp = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "time", "io-util", "sync"] }
 futures = { workspace = true, features = ["std", "async-await"] }
