@@ -404,12 +404,15 @@ impl<const K: usize, const D: usize> Agent<K, D> {
                     restored: [r.held, r.partial, r.received, r.dropped].map(|n| n as u64),
                     lost: self.dtn.lost,
                 };
+                let (max, mean) = super::net::SENT.read();
                 let mut v = json!({
                     "pubsub": self.stats.report(),
                     "counters": self.core.counters,
                     "members": self.core.node.membership().member_count(),
                     "dtn": dtn,
                     "portmap": self.core.portmap_report(),
+                    // Every UDP payload the node's socket sent since its program started.
+                    "wire": {"max_udp_payload": max, "mean_udp_payload": mean},
                 });
                 if let (Some(l), Some(m)) = (self.core.tlog.as_ref(), v.as_object_mut()) {
                     m.insert("trace".into(), l.report());

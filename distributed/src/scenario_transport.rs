@@ -44,6 +44,10 @@ pub enum TransportTest {
         bytes: u64,
         /// Concurrent streams.
         streams: u32,
+        /// Sample the congestion window every `trace_ms` milliseconds into the row's `cwnd_trace` (0, the default: no
+        /// trace). PINC and iroh expose the window; libp2p does not, so its samples are `null`.
+        #[serde(default)]
+        trace_ms: u32,
     },
     /// `connections` clients at once, each moving `bytes_each`.
     Many {
@@ -74,7 +78,16 @@ impl TransportTest {
                 requests.to_string(),
                 concurrency.to_string(),
             ],
-            Self::Throughput { bytes, streams } => vec!["throughput".into(), bytes.to_string(), streams.to_string()],
+            Self::Throughput {
+                bytes,
+                streams,
+                trace_ms,
+            } => vec![
+                "throughput".into(),
+                bytes.to_string(),
+                streams.to_string(),
+                trace_ms.to_string(),
+            ],
             Self::Many {
                 connections,
                 bytes_each,
@@ -122,7 +135,11 @@ impl TransportTest {
                     && (1..=10_000_000).contains(&requests)
                     && (1..=1024).contains(&concurrency)
             }
-            Self::Throughput { bytes, streams } => (1..=1 << 40).contains(&bytes) && (1..=256).contains(&streams),
+            Self::Throughput {
+                bytes,
+                streams,
+                trace_ms,
+            } => (1..=1 << 40).contains(&bytes) && (1..=256).contains(&streams) && trace_ms <= 60_000,
             Self::Many {
                 connections,
                 bytes_each,
