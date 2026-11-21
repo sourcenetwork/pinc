@@ -8,6 +8,7 @@ use alloc::rc::Rc;
 use alloc::vec::Vec;
 use core::net::SocketAddr;
 
+use pinc_connect::record::Reach;
 use pinc_core::{Answer, Command, CommandError, IfaceEvent, NodeStats, Query, Role, SessionId, SessionStats, Value};
 use pinc_crypto::NodeId;
 use pinc_keystore::KeyStore;
@@ -656,6 +657,11 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
         let mut c = [any; pinc_connect::record::MAX_ADDRS];
         let n = self.node.connectivity().candidates(&mut c);
         c.get(..n).unwrap_or_default().to_vec()
+    }
+
+    /// The reachability class the connectivity client observed, once it has classified this node.
+    pub(crate) fn reach_class(&self) -> Option<Reach> {
+        self.node.connectivity().class()
     }
 
     /// Put `hints` in the record the relays hold for this node.

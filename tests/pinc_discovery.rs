@@ -25,7 +25,7 @@ use std::time::{Duration, Instant};
 use nuclei::Handle;
 use pinc::{Builder, Discovery, Endpoint, ErrorKind, Hosted, LOOKUP_WAIT, MAX_HINTS, NodeId, Records, Rendezvous};
 use pinc_common::{ECHO, bind, builder, lo, serve_conn, within};
-use pinc_connect::record::Record;
+use pinc_connect::record::{Reach, Record};
 use pinc_keystore::KeyStore;
 
 /// The pointer `DefraDB` keeps in its discovery record: 38 bytes.
@@ -70,7 +70,7 @@ async fn peer(table: &Table) -> Endpoint<impl Hosted, Records<Table>> {
 async fn the_signed_record_still_verifies_beside_the_sign_guard() {
     let ep = bind(builder().discovery(Records::new(Table::default()))).await;
     let rec = within(30, ep.signed_record()).await.unwrap();
-    Record::parse_verified(&rec).unwrap();
+    assert_eq!(Record::parse_verified(&rec).unwrap().reach, Reach::Public);
     // A real record's bytes are the protocol's own statement: the public sign refuses them.
     let e = within(30, ep.sign(&rec)).await.unwrap_err();
     assert_eq!(e.kind(), pinc::ErrorKind::Config);

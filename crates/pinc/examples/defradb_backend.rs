@@ -297,7 +297,18 @@ impl<H: Hosted + 'static> PincTransport<H> {
     /// Put `DefraDB`'s service-record pointer in this node's record and publish it.
     pub async fn set_service_pointer(&self, pointer: &[u8; POINTER_LEN]) -> Result<(), Error> {
         self.ep.set_hints(pointer)?;
-        self.ep.publish_record().await
+        // The record waits for the relay client to settle on a relay: retry while it says so, to a deadline.
+        let end = Instant::now() + Duration::from_secs(30);
+        let mut wait = Duration::from_millis(1);
+        loop {
+            match self.ep.publish_record().await {
+                Err(e) if e.kind() == ErrorKind::Busy && Instant::now() < end => {
+                    nuclei::time::sleep(wait).await;
+                    wait = (wait * 2).min(Duration::from_millis(100));
+                }
+                done => return done,
+            }
+        }
     }
 
     /// The service-record pointer `peer` published, if it published one.
