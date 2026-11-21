@@ -1,5 +1,5 @@
 //! What the node programs of all three stacks share: the values they publish and serve, how a message carries its
-//! own origin and send time, the histogram their latencies go into, and the identity every stack derives from a node's
+//! own origin and scheduled send time, the histogram their latencies go into, and the identity every stack derives from a node's
 //! name.
 //!
 //! Invariants: the bytes of a value are a pure function of its seed and offset, so a provider and a checker never need
@@ -17,6 +17,11 @@ pub fn wall_ns() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX))
+}
+
+/// The wall-clock start of a publication asked to begin at `start_ns`, where 0 means now.
+pub fn start_wall_ns(start_ns: u64) -> u64 {
+    if start_ns == 0 { wall_ns() } else { start_ns }
 }
 
 /// A deterministic byte string of `len` bytes for a node and a purpose: the same name gives every stack, and every
@@ -146,11 +151,23 @@ pub struct Header {
     pub origin: u16,
     /// The sender's message number from 0.
     pub seq: u32,
-    /// The sender's wall clock at publication, in nanoseconds.
+    /// The message's scheduled send time on the sender's wall clock, in nanoseconds: the publication's start plus
+    /// its number times the interval, however late the sender got to it.
     pub sent_ns: u64,
 }
 
 impl Header {
+    /// The header of message `seq` of a publication that starts at `start_ns` on the wall clock (0 is now) and sends one
+    /// message every `interval_ns`. Every stack stamps with this, so a delivery time counts the wait of a publisher
+    /// that could not send on schedule.
+    pub fn scheduled(origin: u16, seq: u32, start_ns: u64, interval_ns: u64) -> Self {
+        Self {
+            origin,
+            seq,
+            sent_ns: start_ns.saturating_add(interval_ns.saturating_mul(u64::from(seq))),
+        }
+    }
+
     /// A body of `size` bytes (at least [`HEADER`]) that starts with this header.
     pub fn body(&self, size: usize) -> Vec<u8> {
         let mut b = vec![0xA5u8; size.max(HEADER)];
@@ -285,6 +302,14 @@ mod tests {
         Content::new(7, 1 << 20).fill(0, &mut a);
         Content::new(8, 1 << 20).fill(0, &mut b);
         assert_ne!(a[8..], b[8..]);
+    }
+
+    #[test]
+    fn a_header_is_stamped_with_its_scheduled_send_time() {
+        let h = Header::scheduled(3, 4, 1_000_000_000, 250_000);
+        assert_eq!((h.origin, h.seq, h.sent_ns), (3, 4, 1_001_000_000));
+        assert_eq!(Header::scheduled(3, 0, 5, 250_000).sent_ns, 5);
+        assert_eq!(Header::scheduled(0, u32::MAX, u64::MAX, 1).sent_ns, u64::MAX);
     }
 
     #[test]

@@ -21,7 +21,7 @@ use super::dtn::{DtnStore, opener};
 use super::dtnlog::{DtnLog, payload};
 use super::net::{Net, Streams, Wire};
 use crate::node::app::emit;
-use crate::node::data::{Content, item, wall_ns};
+use crate::node::data::{Content, item, start_wall_ns, wall_ns};
 use crate::node::proto::{Cmd, DtnReport, Init, Ready, Reply, Request};
 use crate::node::stats::PubSubStats;
 use crate::scenario::Role;
@@ -43,6 +43,9 @@ struct PubRun {
     interval_ns: u64,
     sent: u32,
     next: u64,
+    /// The wall-clock start of the run, in nanoseconds: the schedule the messages are stamped with, which `next` (on the
+    /// node's own clock) does not carry.
+    start_wall: u64,
     /// A message the node had no room to track, with the time in its header unchanged: it is offered again first.
     held: Option<Vec<u8>>,
     /// The run waits for one of the node's publishes to end before it offers `held` again.
@@ -254,7 +257,8 @@ impl<const K: usize, const D: usize> Agent<K, D> {
                 interval_us,
                 start_ns,
             } => {
-                let lead = start_ns.saturating_sub(wall_ns());
+                let start_wall = start_wall_ns(start_ns);
+                let lead = start_wall.saturating_sub(wall_ns());
                 self.pubs.push(PubRun {
                     req: id,
                     topic: topic.into_bytes(),
@@ -263,6 +267,7 @@ impl<const K: usize, const D: usize> Agent<K, D> {
                     interval_ns: interval_us * 1000,
                     sent: 0,
                     next: now + lead,
+                    start_wall,
                     held: None,
                     blocked: false,
                 });
@@ -533,17 +538,13 @@ impl<const K: usize, const D: usize> Agent<K, D> {
             let mut burst = 0;
             while run.sent < run.count && run.next <= now && burst < BURST && !run.blocked {
                 let body = run.held.take().unwrap_or_else(|| {
-                    crate::node::data::Header {
-                        origin: self.me,
-                        seq: run.sent,
-                        sent_ns: wall_ns(),
-                    }
-                    .body(run.size)
+                    crate::node::data::Header::scheduled(self.me, run.sent, run.start_wall, run.interval_ns)
+                        .body(run.size)
                 });
                 match self.core.publish(now, &run.topic, &body) {
                     Ok(()) => self.stats.published(),
-                    // The publisher waits as a caller of an awaited publish does: the same message, with the time
-                    // it was first offered, goes again when the node has room to track it.
+                    // The publisher waits as a caller of an awaited publish does: the same message, with its
+                    // scheduled send time, goes again when the node has room to track it.
                     Err(pinc_broadcast::Refused::Backlog) => {
                         *self.core.counters.entry("publish_waited").or_insert(0) += 1;
                         run.held = Some(body);

@@ -17,7 +17,7 @@ const TESTS = {
 const KINDS = [["transport", "Transport tests"], ["pubsub", "Publish and subscribe"], ["sync", "Sync a value"], ["reconcile", "Reconcile sets"]];
 const HINTS = {
   transport: "Transport tests: the comparison benches' scenarios between a client and a server node; each pair runs every test, every stack, every repetition.",
-  pubsub: "Every node joins the topic through the hubs; the publishers send at their rate and the subscribers' deliveries are counted: latency, losses, duplicates, bytes on the wire.",
+  pubsub: "Every node joins the topic through the hubs; the publishers send at their rate and the subscribers' deliveries are counted: delivery time from the scheduled send, losses, duplicates, bytes on the wire.",
   sync: "The providers hold a value of each size in turn; the consumers fetch it at once. Time, goodput and bytes on the wire per payload byte.",
   reconcile: "Two nodes hold sets of the same size that differ in a few items on each side; the second starts the round. Only stacks with a reconciliation protocol are measured.",
 };

@@ -30,7 +30,7 @@ use iroh_gossip::{Gossip, TopicId};
 use serde_json::{Value, json};
 use tokio::sync::Mutex as AsyncMutex;
 
-use crate::node::data::{Content, Header, seed32, wall_ns};
+use crate::node::data::{Content, Header, seed32, start_wall_ns, wall_ns};
 use crate::node::proto::{Cmd, Init, Ready};
 use crate::node::shell::{Handler, serve};
 use crate::node::stats::PubSubStats;
@@ -158,16 +158,12 @@ impl App {
         let guard = self.sender.lock().await;
         let sender = guard.as_ref().ok_or("join the topic before publishing to it")?.clone();
         drop(guard);
-        let lead = start_ns.saturating_sub(wall_ns());
+        let start_wall = start_wall_ns(start_ns);
+        let lead = start_wall.saturating_sub(wall_ns());
         let start = tokio::time::Instant::now() + Duration::from_nanos(lead);
         for seq in 0..count {
             tokio::time::sleep_until(start + Duration::from_micros(interval_us * u64::from(seq))).await;
-            let body = Header {
-                origin: self.me,
-                seq,
-                sent_ns: wall_ns(),
-            }
-            .body(size as usize);
+            let body = Header::scheduled(self.me, seq, start_wall, interval_us * 1000).body(size as usize);
             sender
                 .broadcast(Bytes::from(body))
                 .await

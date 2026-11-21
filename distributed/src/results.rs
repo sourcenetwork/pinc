@@ -128,6 +128,7 @@ pub fn metrics_of(test: &str) -> Vec<Metric> {
     let mut v = match test {
         "pubsub" => {
             let mut x = vec![
+                // From the scheduled send time of a message to its delivery, so a publisher that waited shows it.
                 m(Node("p50_us"), "delivery latency p50", "us", Lower),
                 m(Node("p99_us"), "delivery latency p99", "us", Lower),
                 m(Node("loss_pct"), "messages lost", "%", Lower),

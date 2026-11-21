@@ -150,7 +150,8 @@ pub enum Cmd {
         size: u32,
         /// Microseconds between two messages.
         interval_us: u64,
-        /// The wall clock time of the first, in nanoseconds since the epoch; zero for now.
+        /// The wall clock time of the first, in nanoseconds since the epoch; zero for now. Each message is stamped with its
+        /// scheduled send time: this plus its number times the interval.
         start_ns: u64,
     },
     /// Make a value of `size` bytes from `seed` available to others; the reply carries what a fetcher needs.
@@ -299,7 +300,7 @@ pub struct PubSubReport {
     pub unchecked: u64,
     /// Payload bytes delivered.
     pub bytes: u64,
-    /// Delivery latency in microseconds.
+    /// Delivery latency in microseconds, from the message's scheduled send time to its delivery.
     pub latency_us: Hist,
     /// Distinct deliveries per origin index.
     pub per_origin: std::collections::BTreeMap<u16, u64>,
