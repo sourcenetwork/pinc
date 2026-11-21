@@ -35,6 +35,11 @@ criterion = "0.7.0"
 # The libraries PINC is measured against, and what they need.
 iroh = "1.4.1"
 libp2p = { version = "0.57.1", default-features = false }
+# What the comparison reads of the libraries' handshakes: iroh's handshake data (noq's type), and libp2p-tls's configs
+# in one handshake in memory. The versions and features are the ones the libraries already use.
+noq = { version = "1.4.0", default-features = false, features = ["rustls"] }
+libp2p-tls = "0.7.0"
+rustls = { version = "0.23.46", default-features = false, features = ["std"] }
 # Segmented UDP sends and coalesced receives for the PINC host, the calls the compared libraries use.
 quinn-udp = "0.5.16"
 futures = { version = "0.3.34", default-features = false }
@@ -96,6 +101,9 @@ nuclei = { workspace = true }
 
 iroh = { workspace = true }
 libp2p = { workspace = true, features = ["tokio", "quic", "tcp", "noise", "yamux", "macros"] }
+noq = { workspace = true }
+libp2p-tls = { workspace = true }
+rustls = { workspace = true }
 quinn-udp = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "time", "io-util", "sync"] }
 futures = { workspace = true, features = ["std", "async-await"] }
