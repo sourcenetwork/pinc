@@ -17,7 +17,7 @@ use std::thread;
 use common::{Dir, End, assert_exact, fixed_set, index, mutate, pair, run_with};
 use pinc_reconcile::wire::{frame_body, tag};
 use pinc_reconcile::{
-    Error, Fingerprint, Initiator, ItemIndex, Limits, MemError, MemIndex, Reason, Responder, RunError, item_id,
+    Error, Initiator, ItemIndex, Limits, MemError, MemIndex, Reason, Responder, RunError, SetSum, item_id, item_sum,
 };
 use pinc_tests::SplitMix64;
 
@@ -91,12 +91,12 @@ impl ItemIndex for Lying<'_> {
     fn read(&self, i: usize, buf: &mut [u8]) -> Result<usize, MemError> {
         self.0.read(i, buf)
     }
-    fn fingerprint(&self, a: usize, b: usize) -> Result<Fingerprint, MemError> {
-        let fp = self.0.fingerprint(a, b)?;
+    fn sum(&self, a: usize, b: usize) -> Result<SetSum, MemError> {
+        let sum = self.0.sum(a, b)?;
         Ok(if a == 0 && b == self.0.len() {
-            fp ^ Fingerprint::of_item(b"lie")
+            sum + item_sum(b"lie")
         } else {
-            fp
+            sum
         })
     }
 }

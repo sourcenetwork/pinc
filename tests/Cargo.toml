@@ -27,7 +27,7 @@ pinc-membership = { workspace = true, features = ["alloc"] }
 pinc-sim = { workspace = true, features = ["reference", "suite"] }
 pinc-connect = { workspace = true, features = ["trace"] }
 pinc-portmap = { workspace = true, features = ["trace"] }
-pinc-reconcile = { workspace = true, features = ["alloc"] }
+pinc-reconcile = { workspace = true, features = ["alloc", "trace"] }
 pinc-dtn = { workspace = true }
 pinc-values = { workspace = true }
 pinc-core = { workspace = true, features = ["alloc", "trace", "inject"] }

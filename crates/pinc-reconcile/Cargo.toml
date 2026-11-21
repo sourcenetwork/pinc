@@ -13,6 +13,8 @@ publish.workspace = true
 default = []
 # The session state machines, the drivers over a channel and the in-memory index. The codec and the traits need none.
 alloc = []
+# Test-only accessor on the initiator for the difference gathered so far, for trace validation. Costs nothing when off.
+trace = ["alloc"]
 
 [dependencies]
 pinc-wire = { workspace = true }

@@ -5,9 +5,15 @@
 //!
 //! What is recorded is every handler call: who made it (`I` the initiator, `R` the responder), which (`start`,
 //! `handle`, `resume`), the bytes delivered to it (after any tampering), and the step and the bytes it wrote, or the
-//! error it returned. A case line carries the two sets, the limits of both sides, the set reference and the keyed
-//! hash tables (the real `Fingerprint::of_item` of every item that can be hashed and the real `item_id` of every
-//! item of the two sets), so the checkers run the model with the real hash. The families: empty, equal, cold,
+//! error it returned. A case line carries the two sets, the limits of both sides, the set reference and the hash
+//! tables, so the checkers run the model with the real hashes: `ID` (the real `item_id` of every item of the two
+//! sets), `FR` (`[side, a, b, fingerprint]`: the fingerprint of the items at positions `a..b` of side 0, the
+//! initiator's set `A`, or side 1, the responder's set `B`, for every range either index was asked for, and always
+//! for every empty range `(k, k)` of each side, with the empty sum and count 0) and `FC` (`[here, there, fingerprint]`:
+//! the final check the initiator wrote after it had gathered those two item lists, in arrival order). A fingerprint
+//! is 32 bytes. Every one is computed here from the public hash functions (`item_sum`, `Fingerprint::of`) and the
+//! sets alone, from prefix sums of the item points, and never read back from the index or the session under test, so
+//! the rows are the independent statement the models check the code against. The families: empty, equal, cold,
 //! tiny, dense, variable-length, prefix and empty items, differences of every size under the default limit and under
 //! the smallest limits (chunked rounds, frames, narrowing), index and size errors, round and report limits, a forced
 //! id collision, a lying answer to the final check, resets, a started-again initiator, and fault injection (one
@@ -36,16 +42,72 @@
 #[path = "reconcile_common.rs"]
 mod common;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Write as _;
 
 use common::{Dir, Item, fixed_set, index, mutate, sorted, sym_diff, var_set};
-use pinc_reconcile::{Error, Fingerprint, Initiator, Limits, MemError, MemIndex, Reason, Responder, Step, item_id};
+use pinc_reconcile::wire::tag;
+use pinc_reconcile::{
+    Error, FP_LEN, Fingerprint, Initiator, ItemIndex, Limits, MemError, MemIndex, Reason, Responder, SetSum, Step,
+    item_id, item_sum,
+};
 use pinc_tests::{SplitMix64, trace_cases};
 
 #[path = "trace_reconcile_scan.rs"]
 mod scanmod;
 use scanmod::{fix_len, mutate_msg, scan};
+
+/// An index that notes the range of every `sum` call that succeeds, for the `FR` rows.
+struct Rec<'a> {
+    ix: &'a MemIndex,
+    asked: RefCell<BTreeSet<(usize, usize)>>,
+}
+
+impl<'a> Rec<'a> {
+    fn new(ix: &'a MemIndex) -> Self {
+        Self {
+            ix,
+            asked: RefCell::default(),
+        }
+    }
+}
+
+impl ItemIndex for Rec<'_> {
+    type Error = MemError;
+    fn count(&self) -> Result<usize, MemError> {
+        self.ix.count()
+    }
+    fn rank(&self, bound: &[u8]) -> Result<usize, MemError> {
+        self.ix.rank(bound)
+    }
+    fn read(&self, i: usize, buf: &mut [u8]) -> Result<usize, MemError> {
+        self.ix.read(i, buf)
+    }
+    fn sum(&self, a: usize, b: usize) -> Result<SetSum, MemError> {
+        let s = self.ix.sum(a, b)?;
+        self.asked.borrow_mut().insert((a, b));
+        Ok(s)
+    }
+}
+
+/// The rows of a case that go with one part of the output: the ranges asked and the final checks written.
+#[derive(Default)]
+struct Rows {
+    fr: BTreeSet<(u8, usize, usize)>,
+    fc: Vec<(Vec<Item>, Vec<Item>)>,
+}
+
+impl Rows {
+    fn append(&mut self, o: &mut Rows) {
+        self.fr.append(&mut o.fr);
+        for row in o.fc.drain(..) {
+            if !self.fc.contains(&row) {
+                self.fc.push(row);
+            }
+        }
+    }
+}
 
 type Err = Error<MemError>;
 
@@ -115,6 +177,8 @@ struct Tr {
     tla_fit: usize,
     stats: BTreeMap<String, usize>,
     next_id: u32,
+    /// The point of every item seen so far, so the oracle hashes each item to the group once.
+    points: HashMap<Item, SetSum>,
 }
 
 struct Case {
@@ -127,10 +191,10 @@ struct Case {
     rf: Vec<u8>,
     norm: String,
     big: String,
-    norm_h: BTreeSet<Item>,
-    big_h: BTreeSet<Item>,
+    norm_rows: Rows,
+    big_rows: Rows,
     cur: String,
-    cur_h: BTreeSet<Item>,
+    cur_rows: Rows,
     cur_big: bool,
     r_fresh: bool,
     stats: BTreeMap<String, usize>,
@@ -153,10 +217,10 @@ impl Case {
             rf: rf.to_vec(),
             norm: String::new(),
             big: String::new(),
-            norm_h: BTreeSet::new(),
-            big_h: BTreeSet::new(),
+            norm_rows: Rows::default(),
+            big_rows: Rows::default(),
             cur: String::new(),
-            cur_h: BTreeSet::new(),
+            cur_rows: Rows::default(),
             cur_big: false,
             r_fresh: true,
             stats: BTreeMap::new(),
@@ -165,7 +229,7 @@ impl Case {
 
     fn begin(&mut self) {
         self.cur.clear();
-        self.cur_h.clear();
+        self.cur_rows = Rows::default();
         self.cur_big = false;
     }
 
@@ -173,13 +237,13 @@ impl Case {
         if !self.on {
             return;
         }
-        let (out, h) = if self.cur_big {
-            (&mut self.big, &mut self.big_h)
+        let (out, rows) = if self.cur_big {
+            (&mut self.big, &mut self.big_rows)
         } else {
-            (&mut self.norm, &mut self.norm_h)
+            (&mut self.norm, &mut self.norm_rows)
         };
         out.push_str(&self.cur);
-        h.append(&mut self.cur_h);
+        rows.append(&mut self.cur_rows);
     }
 
     fn stat(&mut self, k: String) {
@@ -198,7 +262,36 @@ impl Case {
         if self.on {
             let s = scan(m, first);
             self.cur_big |= s.big;
-            self.cur_h.extend(s.items);
+        }
+    }
+
+    /// Note the ranges the two indexes were asked for since the last call.
+    fn absorb(&mut self, ia: &Rec, ib: &Rec) {
+        if self.on {
+            for (side, rec) in [(0u8, ia), (1, ib)] {
+                self.cur_rows
+                    .fr
+                    .extend(rec.asked.take().into_iter().map(|(a, b)| (side, a, b)));
+            }
+        }
+    }
+
+    /// Note the final check, if the initiator's last call wrote one into `out`.
+    fn check(&mut self, init: &Initiator, out: &[u8], first: bool) {
+        if self.on
+            && scan(out, first)
+                .parts
+                .iter()
+                .any(|&(at, _)| out[at] & 0x7f == tag::CHECK)
+        {
+            let g = init.gathered();
+            let row = (
+                g.missing_here().map(<[u8]>::to_vec).collect(),
+                g.missing_there().map(<[u8]>::to_vec).collect(),
+            );
+            if !self.cur_rows.fc.contains(&row) {
+                self.cur_rows.fc.push(row);
+            }
         }
     }
 
@@ -249,20 +342,14 @@ impl Case {
 
     /// Write the case into the trace.
     fn finish(self, tr: &mut Tr) {
-        for (n, (body, extra)) in [(&self.norm, &self.norm_h), (&self.big, &self.big_h)]
+        for (n, (body, rows)) in [(&self.norm, &self.norm_rows), (&self.big, &self.big_rows)]
             .into_iter()
             .enumerate()
         {
             if !self.on || body.is_empty() {
                 continue;
             }
-            let mut hs: BTreeSet<&Item> = extra.iter().collect();
-            hs.extend(self.a.iter());
-            hs.extend(self.b.iter());
-            let h: Vec<String> = hs
-                .iter()
-                .map(|x| format!("[{},{}]", list(x), list(&Fingerprint::of_item(x).to_bytes())))
-                .collect();
+            let (fr, fc) = oracle(&mut tr.points, &self.a, &self.b, rows);
             let ids: Vec<String> = self
                 .a
                 .iter()
@@ -274,11 +361,12 @@ impl Case {
             let mut case = String::new();
             writeln!(
                 case,
-                r#"{{"t":"rc","e":"case","id":{},"A":{},"B":{},"H":[{}],"ID":[{}],"limI":{},"limR":{},"ref":{}}}"#,
+                r#"{{"t":"rc","e":"case","id":{},"A":{},"B":{},"FR":[{}],"FC":[{}],"ID":[{}],"limI":{},"limR":{},"ref":{}}}"#,
                 self.id,
                 items_json(&self.a),
                 items_json(&self.b),
-                h.join(","),
+                fr.join(","),
+                fc.join(","),
                 ids.join(","),
                 lim_json(&self.li),
                 lim_json(&self.lr),
@@ -301,6 +389,49 @@ impl Case {
     }
 }
 
+/// The `FR` and `FC` rows of a case, computed from the sets and the public hashes alone.
+fn oracle(points: &mut HashMap<Item, SetSum>, a: &[Item], b: &[Item], rows: &Rows) -> (Vec<String>, Vec<String>) {
+    let mut point = |x: &Item| *points.entry(x.clone()).or_insert_with(|| item_sum(x));
+    let prefix = |set: &[Item], point: &mut dyn FnMut(&Item) -> SetSum| {
+        let mut p = vec![SetSum::default()];
+        for x in set {
+            let next = p[p.len() - 1] + point(x);
+            p.push(next);
+        }
+        p
+    };
+    let (pa, pb) = (prefix(a, &mut point), prefix(b, &mut point));
+    let mut fr = rows.fr.clone();
+    for (side, len) in [(0u8, a.len()), (1, b.len())] {
+        fr.extend((0..=len).map(|k| (side, k, k)));
+    }
+    let fr = fr
+        .iter()
+        .map(|&(side, x, y)| {
+            let p = if side == 0 { &pa } else { &pb };
+            let fp = Fingerprint::of(&(p[y] - p[x]), (y - x) as u64);
+            format!("[{side},{x},{y},{}]", list(&fp.to_bytes()))
+        })
+        .collect();
+    let fc = rows
+        .fc
+        .iter()
+        .map(|(here, there)| {
+            let mut sum = pa[a.len()];
+            for x in here {
+                sum += point(x);
+            }
+            for x in there {
+                sum -= point(x);
+            }
+            let count = (a.len() + here.len()).saturating_sub(there.len());
+            let fp = Fingerprint::of(&sum, count as u64);
+            format!("[{},{},{}]", items_json(here), items_json(there), list(&fp.to_bytes()))
+        })
+        .collect();
+    (fr, fc)
+}
+
 /// The report of a session: the items missing here and there.
 type Report = (Vec<Item>, Vec<Item>);
 
@@ -317,21 +448,16 @@ fn session(
     cut: Option<usize>,
 ) -> Result<Option<Report>, Err> {
     cs.begin();
-    let r = run(cs, init, resp, ia, ib, tamper, cut);
+    let (ra, rb) = (Rec::new(ia), Rec::new(ib));
+    let r = run(cs, init, resp, &ra, &rb, tamper, cut);
+    cs.absorb(&ra, &rb);
     cs.end();
     r
 }
 
 /// A refused message ends the session of the object that refused it: the next call, the message that would end the
 /// exchange, is recorded too (it is refused with `State`, or for a fresh responder, as a first message).
-fn refused_again(
-    cs: &mut Case,
-    init: &mut Initiator,
-    resp: &mut Responder,
-    ia: &MemIndex,
-    ib: &MemIndex,
-    responder: bool,
-) {
+fn refused_again(cs: &mut Case, init: &mut Initiator, resp: &mut Responder, ia: &Rec, ib: &Rec, responder: bool) {
     const END: [u8; 4] = [0, 0, 1, 0];
     let mut out = Vec::new();
     if responder {
@@ -347,8 +473,8 @@ fn run(
     cs: &mut Case,
     init: &mut Initiator,
     resp: &mut Responder,
-    ia: &MemIndex,
-    ib: &MemIndex,
+    ia: &Rec,
+    ib: &Rec,
     tamper: &mut dyn FnMut(Dir, &mut Vec<u8>),
     cut: Option<usize>,
 ) -> Result<Option<Report>, Err> {
@@ -361,6 +487,9 @@ fn run(
     let rf = cs.rf.clone();
     let r = init.start(ia, &rf, &mut tx);
     cs.ev("I", "start", &[], r.map(|()| Step::Send), &tx);
+    if r.is_ok() {
+        cs.check(init, &tx, true);
+    }
     r?;
     macro_rules! check_cut {
         () => {
@@ -401,11 +530,14 @@ fn run(
         let mut next = None;
         for mut m in replies {
             check_cut!();
-            tamper(Dir::ToInitiator, &mut m);
             assert!(m.len() <= capr + 3, "a responder message passes the frame cap");
+            tamper(Dir::ToInitiator, &mut m);
             cs.note(&m, false);
             let r = init.handle(ia, &m, &mut tx);
             cs.ev("I", "handle", &m, r, &tx);
+            if matches!(r, Ok(Step::Send | Step::Last | Step::Chunk)) {
+                cs.check(init, &tx, false);
+            }
             if r.is_err() {
                 refused_again(cs, init, resp, ia, ib, false);
             }
@@ -458,7 +590,7 @@ fn honest(tr: &mut Tr, a: &[Item], b: &[Item], li: Limits, lr: Limits) -> Case {
     let (ia, ib) = (index(a), index(b));
     let (mut init, mut resp) = (Initiator::new(li), Responder::new(lr));
     let rep = session(&mut cs, &mut init, &mut resp, &ia, &ib, &mut nothing, None)
-        .expect("an honest session ends")
+        .unwrap_or_else(|e| panic!("an honest session ends: {e:?} {} {} {li:?} {lr:?}", a.len(), b.len()))
         .expect("an honest session finishes");
     assert_exact(&rep, a, b);
     cs
@@ -518,7 +650,9 @@ fn basic_cases(tr: &mut Tr, rng: &mut SplitMix64) {
             let li = if len == 6 { small_limits(len, 0) } else { d };
             cases.push(honest(tr, &base, &other, d, d));
             cases.push(honest(tr, &base, &other, li, li));
-            cases.push(honest(tr, &other, &base, li, small_limits(len, 40)));
+            // The initiator's default limit sends a 16-way split, which the small responder must still receive.
+            let extra = if len == 40 { 40 + 16 * (FP_LEN - 16) } else { 40 };
+            cases.push(honest(tr, &other, &base, li, small_limits(len, extra)));
         }
     }
     // Variable length items, prefixes of one another, the empty item.
@@ -835,8 +969,10 @@ fn header_cases(tr: &mut Tr, rng: &mut SplitMix64) {
         cs.note(&msg, true);
         cs.r_fresh = false;
         let mut rx = Vec::new();
-        let r = resp.handle(&ib, &msg, &mut rx);
+        let rb = Rec::new(&ib);
+        let r = resp.handle(&rb, &msg, &mut rx);
         cs.ev("R", "handle", &msg, r, &rx);
+        cs.absorb(&Rec::new(&ia), &rb);
         cs.end();
     }
     // A header that names a longer reference than the limit allows.

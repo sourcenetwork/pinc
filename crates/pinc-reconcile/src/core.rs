@@ -24,7 +24,7 @@ use core::mem;
 use pinc_wire::{Reader, varint};
 
 use crate::error::{Error, Reason};
-use crate::hash::{FP_LEN, Fingerprint, ID_LEN, item_id};
+use crate::hash::{FP_LEN, Fingerprint, ID_LEN, item_id, item_sum};
 use crate::index::ItemIndex;
 use crate::limits::Limits;
 use crate::wire::{
@@ -158,6 +158,12 @@ impl Bounds {
     }
 }
 
+/// The fingerprint of the positions `a..b` of the index: the one place a range fingerprint is made, for the parts a
+/// side writes and the ones it compares.
+fn range_fp<I: ItemIndex>(idx: &I, a: usize, b: usize) -> Result<Fingerprint, Error<I::Error>> {
+    Ok(Fingerprint::of(&idx.sum(a, b).map_err(Error::Index)?, (b - a) as u64))
+}
+
 /// Split `a..b` (within `lo..hi`) into `fan` fingerprint parts; returns the part count.
 fn split<I: ItemIndex>(
     out: &mut Out,
@@ -184,8 +190,7 @@ fn split<I: ItemIndex>(
         } else {
             out.head(tag::FP, &sc.l, hi)?;
         }
-        out.body
-            .extend_from_slice(&idx.fingerprint(x, y).map_err(Error::Index)?.to_bytes());
+        out.body.extend_from_slice(&range_fp(idx, x, y)?.to_bytes());
         cnt += 1;
         mem::swap(&mut sc.l, &mut sc.r);
         x = y;
@@ -551,16 +556,28 @@ impl Core {
 
     /// The final check: the fingerprint the responder's whole set must have if the reported difference is exact.
     pub(crate) fn check_msg<I: ItemIndex>(&mut self, idx: &I, out: &mut Vec<u8>) -> Result<(), Error<I::Error>> {
-        let mut fp = idx.fingerprint(0, self.n).map_err(Error::Index)?;
-        for arena in [&self.here, &self.there] {
+        // The responder's set is the initiator's, plus what only the peer has (`here`), minus what only the initiator
+        // has (`there`); the sign matters, the group is not XOR.
+        // vertexia: maps every reported item to the group; the initiator's own items (`there`) could come from the
+        // index (a rank, then a one-item sum) if a large difference shows in a profile.
+        let mut sum = idx.sum(0, self.n).map_err(Error::Index)?;
+        for (arena, add) in [(&self.here, true), (&self.there, false)] {
             let mut rest = arena.data.as_slice();
             while let Ok((len, used)) = varint::decode(rest) {
                 let item = usize::try_from(len).ok().and_then(|l| rest.get(used..used + l));
                 let Some(item) = item else { break };
-                fp ^= Fingerprint::of_item(item);
+                if add {
+                    sum += item_sum(item);
+                } else {
+                    sum -= item_sum(item);
+                }
                 rest = rest.get(used + item.len()..).unwrap_or_default();
             }
         }
+        let fp = Fingerprint::of(
+            &sum,
+            (self.n as u64 + self.here.n as u64).saturating_sub(self.there.n as u64),
+        );
         self.out.reset();
         self.out.head(tag::CHECK, &[], None)?;
         self.out.body.extend_from_slice(&fp.to_bytes());
@@ -741,7 +758,7 @@ impl Core {
             match kind {
                 tag::FP => {
                     let fp = Fingerprint::from_bytes(r.read_array::<FP_LEN>().map_err(|_| Reason::Truncated)?);
-                    if idx.fingerprint(a, b).map_err(Error::Index)? != fp {
+                    if range_fp(idx, a, b)? != fp {
                         let items = !init || *exact;
                         let leaf = if init { ALEAF } else { BLEAF };
                         if b - a <= leaf && leaf_ok(sc, idx, out.cap, (lo, hi), (a, b, items))? {
@@ -862,7 +879,7 @@ impl Core {
                     if !lo.is_empty() || !bounds.inf {
                         return Err(Reason::Bound.into());
                     }
-                    if idx.fingerprint(0, n).map_err(Error::Index)? != fp {
+                    if range_fp(idx, 0, n)? != fp {
                         out.head(tag::MISS, &[], None)?;
                         ans.cnt += 1;
                     }

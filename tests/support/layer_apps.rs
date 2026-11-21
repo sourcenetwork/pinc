@@ -25,7 +25,7 @@ use pinc_dtn::forward::Policy;
 use pinc_dtn::head::BundleId;
 use pinc_dtn::seal::RecipientKeys;
 use pinc_node::{Apps, DtnApp, Enabled, Recipient, SetsApp};
-use pinc_reconcile::{Fingerprint, ItemIndex, Limits, MemError, MemIndex};
+use pinc_reconcile::{ItemIndex, Limits, MemError, MemIndex, SetSum};
 use pinc_sim::WALL_EPOCH;
 use pinc_values::source::ValueSource;
 use pinc_values::store::{StoreError, ValueRead, ValueStore, verified_after};
@@ -181,8 +181,8 @@ impl ItemIndex for RcIndex {
     fn read(&self, i: usize, buf: &mut [u8]) -> Result<usize, MemError> {
         self.0.read(i, buf)
     }
-    fn fingerprint(&self, a: usize, b: usize) -> Result<Fingerprint, MemError> {
-        self.0.fingerprint(a, b)
+    fn sum(&self, a: usize, b: usize) -> Result<SetSum, MemError> {
+        self.0.sum(a, b)
     }
 }
 

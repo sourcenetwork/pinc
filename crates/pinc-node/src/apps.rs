@@ -226,8 +226,8 @@ impl ItemIndex for NoIndex {
     fn read(&self, _i: usize, _buf: &mut [u8]) -> Result<usize, ()> {
         Err(())
     }
-    fn fingerprint(&self, _a: usize, _b: usize) -> Result<pinc_reconcile::Fingerprint, ()> {
-        Ok(pinc_reconcile::Fingerprint::ZERO)
+    fn sum(&self, _a: usize, _b: usize) -> Result<pinc_reconcile::SetSum, ()> {
+        Ok(pinc_reconcile::SetSum::zero())
     }
 }
 

@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use pinc_node::{Apps, Enabled, NoDtn, SetsApp};
-use pinc_reconcile::{Fingerprint, ItemIndex, MemError, MemIndex};
+use pinc_reconcile::{ItemIndex, MemError, MemIndex, SetSum};
 
 use super::values::VStore;
 use crate::suite::crypto::Tracked;
@@ -29,8 +29,8 @@ impl ItemIndex for RcIndex {
     fn read(&self, i: usize, buf: &mut [u8]) -> Result<usize, MemError> {
         self.0.read(i, buf)
     }
-    fn fingerprint(&self, a: usize, b: usize) -> Result<Fingerprint, MemError> {
-        self.0.fingerprint(a, b)
+    fn sum(&self, a: usize, b: usize) -> Result<SetSum, MemError> {
+        self.0.sum(a, b)
     }
 }
 
