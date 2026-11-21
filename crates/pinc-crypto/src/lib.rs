@@ -2,7 +2,7 @@
 //!
 //! The [`Provider`] trait covers the per-packet and per-handshake primitives (AEAD, header protection, SHA-256,
 //! X25519, ML-KEM-768); [`Software`] implements it from vetted pure-Rust crates. [`identity`] holds the signature
-//! algorithms and node ids, [`kdf`] the BLAKE3 key derivation, [`Transcript`] the injective handshake hash and
+//! algorithms and node ids, [`kdf`] the BLAKE3 key derivation, [`setsum`] the multiset hash over the Ristretto group, [`Transcript`] the injective handshake hash and
 //! [`Drbg`] the seeded generator.
 //!
 //! The crate is `no_std`; with the `alloc` feature it allocates in one place, once per ML-DSA-65 or hybrid key pair:
@@ -28,6 +28,7 @@ pub mod identity;
 pub mod kdf;
 pub mod provider;
 pub mod secret;
+pub mod setsum;
 pub mod software;
 #[cfg(feature = "derive-trace")]
 pub mod trace;
@@ -39,5 +40,6 @@ pub use identity::{IdentityAlg, Keypair, NodeId};
 pub use kdf::{expand, extract, labels};
 pub use provider::{Aead, Capabilities, Provider};
 pub use secret::{Secret, ct_eq};
+pub use setsum::SetSum;
 pub use software::Software;
 pub use transcript::Transcript;

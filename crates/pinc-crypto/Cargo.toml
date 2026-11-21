@@ -24,6 +24,7 @@ pinc-wire = { workspace = true }
 blake3 = { workspace = true, features = ["zeroize"] }
 sha2 = { workspace = true }
 x25519-dalek = { workspace = true, features = ["zeroize"] }
+curve25519-dalek = { workspace = true }
 ed25519-dalek = { workspace = true, features = ["zeroize"] }
 p256 = { workspace = true, features = ["ecdsa"] }
 ml-kem = { workspace = true, features = ["zeroize"] }
