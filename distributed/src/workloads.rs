@@ -27,7 +27,7 @@ pub struct Pubsub {
     pub subscribers: Vec<String>,
     /// Messages each publisher sends.
     pub messages: u32,
-    /// Bytes of each message, including its 16-byte header.
+    /// Bytes of each message, including its 24-byte header.
     #[serde(default = "size_default")]
     pub size: u32,
     /// Messages per second from each publisher.
@@ -46,6 +46,10 @@ pub struct Pubsub {
     /// 4096 bytes); unset, the harness's 1 MiB. A message over it is not delivered, and the counts show that.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub iroh_gossip_max: Option<u32>,
+    /// `true`: a PINC hub keeps the library's default topic log (`pinc_broadcast::Limits::default().log_bytes`, 4 MiB)
+    /// instead of the harness's 16 MiB. Unset or `false`: the harness's, as every run before had.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pinc_library_topic_log: bool,
 }
 
 fn topic_default() -> String {
@@ -153,8 +157,8 @@ impl Pubsub {
                 "use 1 to 1000000 messages per publisher",
             ));
         }
-        if !(16..=(1 << 20)).contains(&self.size) {
-            out.push(Problem::new("workload.size", "use 16 bytes to 1 MiB"));
+        if !(24..=(1 << 20)).contains(&self.size) {
+            out.push(Problem::new("workload.size", "use 24 bytes to 1 MiB"));
         }
         if !(self.rate_hz.is_finite() && (0.01..=1_000_000.0).contains(&self.rate_hz)) {
             out.push(Problem::new(

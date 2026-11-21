@@ -18,6 +18,9 @@ use quinn_udp::{RecvMeta, Transmit, UdpSockRef, UdpSocketState};
 
 use super::core::{StreamEv, StreamId};
 
+/// Every UDP payload this node program sent: the largest, the mean (the node's `Report`, under `wire`).
+pub static SENT: crate::node::transport::compare::Sent = crate::node::transport::compare::Sent::new();
+
 /// What the socket's send and receive buffers are asked to hold.
 const SOCKET_BUFFER: u32 = 8 << 20;
 
@@ -90,7 +93,10 @@ impl Net {
         };
         loop {
             match self.udp.try_send(UdpSockRef::from(&*self.sock), &transmit) {
-                Ok(()) => return Ok(()),
+                Ok(()) => {
+                    SENT.add(buf.len(), if count > 1 { segment } else { buf.len() });
+                    return Ok(());
+                }
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => self.sock.writable().await?,
                 // A packet the network refused (no route yet, a full queue) is lost like any other.
                 Err(e)

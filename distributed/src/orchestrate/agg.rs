@@ -22,6 +22,7 @@ pub(crate) fn merge_lives(lives: &[PubSubReport], published: &BTreeMap<u16, u32>
         out.unchecked += l.unchecked;
         out.bytes += l.bytes;
         out.latency_us.merge(&l.latency_us);
+        out.latency_intended_us.merge(&l.latency_intended_us);
         for (o, n) in &l.per_origin {
             *out.per_origin.entry(*o).or_insert(0) += n;
         }
@@ -50,7 +51,7 @@ pub(crate) struct Subscriber {
 pub(crate) fn pubsub_figures(subs: &[Subscriber], publishers: &BTreeMap<u16, u32>) -> Map<String, Value> {
     let mut out = Map::new();
     let (mut expected, mut delivered, mut duplicates, mut unchecked, mut missing) = (0u64, 0u64, 0u64, 0u64, 0u32);
-    let mut lat = Hist::default();
+    let (mut lat, mut lat_intended) = (Hist::default(), Hist::default());
     let mut gap: Option<f64> = None;
     for s in subs {
         let owed: u64 = publishers
@@ -65,6 +66,7 @@ pub(crate) fn pubsub_figures(subs: &[Subscriber], publishers: &BTreeMap<u16, u32
                 duplicates += r.duplicates;
                 unchecked += r.unchecked;
                 lat.merge(&r.latency_us);
+                lat_intended.merge(&r.latency_intended_us);
                 gap = match (gap, r.gap_max_ms) {
                     (Some(a), Some(b)) => Some(a.max(b)),
                     (a, b) => a.or(b),
@@ -89,6 +91,12 @@ pub(crate) fn pubsub_figures(subs: &[Subscriber], publishers: &BTreeMap<u16, u32
     }
     if let Some(p) = lat.quantile(0.99) {
         out.insert("p99_us".into(), json!(p));
+    }
+    // From the time the schedule meant each message to go: every wait of a publisher held back by its stack counts.
+    for (k, q) in [("p50_intended_us", 0.5), ("p99_intended_us", 0.99), ("p999_intended_us", 0.999)] {
+        if let Some(p) = lat_intended.quantile(q) {
+            out.insert(k.into(), json!(p));
+        }
     }
     if let Some(g) = gap {
         out.insert("gap_max_ms".into(), json!(g));
@@ -121,6 +129,8 @@ mod tests {
         r.duplicates = dups;
         for l in lat_us {
             r.latency_us.add(*l);
+            // A publisher held back 500 us more than its stamp says.
+            r.latency_intended_us.add(*l + 500);
         }
         r.gap_max_ms = gap;
         r
@@ -161,6 +171,7 @@ mod tests {
         assert_eq!(f["gap_max_ms"], json!(40.0));
         // 10 values of 1 ms and 15 of 3 ms: the median is the 13th of 25, a 3 ms value.
         assert!((f["p50_us"].as_f64().unwrap() - 3000.0).abs() < 60.0);
+        assert!((f["p50_intended_us"].as_f64().unwrap() - 3500.0).abs() < 70.0);
     }
 
     #[test]

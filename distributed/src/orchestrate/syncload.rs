@@ -164,6 +164,16 @@ async fn sync_body(ctx: &Ctx, b: &Cluster, set: &AppSet<'_>, w: &ValueSync, size
     #[allow(clippy::cast_precision_loss)]
     r.node
         .insert("bytes".into(), json!(size as f64 * consumers.len() as f64));
+    // The largest UDP payload each provider and consumer sent, where its stack reports it (PINC's nodes).
+    let mut wire = serde_json::Map::new();
+    for &i in providers.iter().chain(&consumers) {
+        if let Ok(v) = set.call(i, Cmd::Report, Duration::from_secs(5)).await
+            && let (Some(m), Some(n)) = (super::pubsub::max_udp_payload(&[v]), ctx.plan.nodes.get(i))
+        {
+            wire.insert(n.name.clone(), m.into());
+        }
+    }
+    super::pubsub::insert_wire(&mut r.node, wire);
     // A relay server counts the packets it forwarded: few once the pairs hold a direct path, all of them when none
     // can be punched.
     for (i, _) in ctx

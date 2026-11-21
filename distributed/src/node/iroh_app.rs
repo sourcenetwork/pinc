@@ -30,7 +30,7 @@ use iroh_gossip::{Gossip, TopicId};
 use serde_json::{Value, json};
 use tokio::sync::Mutex as AsyncMutex;
 
-use crate::node::data::{Content, Header, seed32, wall_ns};
+use crate::node::data::{Content, Header, intended_ns, seed32, wall_ns};
 use crate::node::proto::{Cmd, Init, Ready};
 use crate::node::shell::{Handler, serve};
 use crate::node::stats::PubSubStats;
@@ -158,22 +158,37 @@ impl App {
         let guard = self.sender.lock().await;
         let sender = guard.as_ref().ok_or("join the topic before publishing to it")?.clone();
         drop(guard);
-        let lead = start_ns.saturating_sub(wall_ns());
+        let now_wall = wall_ns();
+        let lead = start_ns.saturating_sub(now_wall);
         let start = tokio::time::Instant::now() + Duration::from_nanos(lead);
+        let start_wall = start_ns.max(now_wall);
         for seq in 0..count {
             tokio::time::sleep_until(start + Duration::from_micros(interval_us * u64::from(seq))).await;
             let body = Header {
                 origin: self.me,
                 seq,
                 sent_ns: wall_ns(),
+                intended_ns: intended_ns(start_wall, interval_us, seq),
             }
             .body(size as usize);
-            sender
-                .broadcast(Bytes::from(body))
-                .await
-                .map_err(|e| format!("a message could not be published: {e}"))?;
+            // Back-pressure is the awaited broadcast itself: it holds the message until the gossip actor takes it (a
+            // wait is counted when it did not take it at once). A refusal drops the message and is counted, as on
+            // every stack.
+            let mut send = std::pin::pin!(sender.broadcast(Bytes::from(body)));
+            let first = futures::poll!(send.as_mut());
+            let waited = first.is_pending();
+            let r = match first {
+                std::task::Poll::Ready(r) => r,
+                std::task::Poll::Pending => send.await,
+            };
             if let Ok(mut s) = self.stats.lock() {
-                s.published();
+                if waited {
+                    s.count("publish_waited");
+                }
+                match r {
+                    Ok(()) => s.published(),
+                    Err(_) => s.count("publish_refused"),
+                }
             }
         }
         Ok(json!({ "published": count }))
@@ -225,8 +240,8 @@ impl Handler for App {
                 ..
             } => self.publish(count, size, interval_us, start_ns).await,
             Cmd::Report => {
-                let rep = self.stats.lock().map_err(|_| "the counters are unavailable")?.report();
-                Ok(json!({ "pubsub": rep }))
+                let s = self.stats.lock().map_err(|_| "the counters are unavailable")?;
+                Ok(json!({ "pubsub": s.report(), "counters": s.counters() }))
             }
             Cmd::Stop => {
                 self.router

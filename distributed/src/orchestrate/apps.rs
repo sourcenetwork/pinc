@@ -172,6 +172,7 @@ impl<'a> AppSet<'a> {
                 mtu: plan.mtu,
                 sessions,
                 iroh_gossip_max: None,
+                pinc_library_topic_log: false,
                 dtn: None,
                 trace: false,
                 portmap: plan.sites.get(n.site).is_some_and(|s| s.portmap.is_some()),
@@ -210,6 +211,14 @@ impl<'a> AppSet<'a> {
     pub(crate) fn with_trace(mut self, on: bool) -> Self {
         for i in &mut self.inits {
             i.trace = on;
+        }
+        self
+    }
+
+    /// Have every PINC hub keep the library's default topic log when `on` (see `Pubsub::pinc_library_topic_log`).
+    pub(crate) fn with_pinc_library_topic_log(mut self, on: bool) -> Self {
+        for i in &mut self.inits {
+            i.pinc_library_topic_log = on;
         }
         self
     }

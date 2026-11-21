@@ -136,6 +136,7 @@ fn group(stack: Stack, net: u8, peers: u16) -> Vec<(Init, Role)> {
                     mtu: 1500,
                     sessions: 16,
                     iroh_gossip_max: None,
+                    pinc_library_topic_log: false,
                     dtn: None,
                     trace: false,
                     portmap: false,

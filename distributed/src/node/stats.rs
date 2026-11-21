@@ -23,6 +23,9 @@ pub struct PubSubStats {
     last_ns: u64,
     gap_max_ns: u64,
     gap_at_ns: u64,
+    /// The publisher's counts of how its stack took its messages (`publish_waited`, `publish_refused`), for a stack
+    /// whose node keeps none of its own.
+    counters: std::collections::BTreeMap<&'static str, u64>,
 }
 
 impl PubSubStats {
@@ -36,7 +39,18 @@ impl PubSubStats {
             last_ns: 0,
             gap_max_ns: 0,
             gap_at_ns: 0,
+            counters: std::collections::BTreeMap::new(),
         }
+    }
+
+    /// Count one `what` of the publisher.
+    pub fn count(&mut self, what: &'static str) {
+        *self.counters.entry(what).or_insert(0) += 1;
+    }
+
+    /// The publisher's counts.
+    pub fn counters(&self) -> &std::collections::BTreeMap<&'static str, u64> {
+        &self.counters
     }
 
     /// This node published a message.
@@ -61,6 +75,9 @@ impl PubSubStats {
         self.rep.bytes += body.len() as u64;
         *self.rep.per_origin.entry(h.origin).or_insert(0) += 1;
         self.rep.latency_us.add(now_ns.saturating_sub(h.sent_ns) / 1000);
+        self.rep
+            .latency_intended_us
+            .add(now_ns.saturating_sub(h.intended_ns) / 1000);
         if self.first_ns.is_none() {
             self.first_ns = Some(now_ns);
         } else {
@@ -92,7 +109,13 @@ mod tests {
     use super::*;
 
     fn body(origin: u16, seq: u32, sent_ns: u64) -> Vec<u8> {
-        Header { origin, seq, sent_ns }.body(64)
+        Header {
+            origin,
+            seq,
+            sent_ns,
+            intended_ns: sent_ns,
+        }
+        .body(64)
     }
 
     #[test]

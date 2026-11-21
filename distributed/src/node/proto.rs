@@ -61,6 +61,9 @@ pub struct Init {
     /// The largest iroh gossip message, when the workload sets one (see `Pubsub::iroh_gossip_max`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub iroh_gossip_max: Option<u32>,
+    /// A PINC hub keeps the library's default topic log, not the harness's (see `Pubsub::pinc_library_topic_log`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pinc_library_topic_log: bool,
     /// Delay-tolerant delivery for this node, on the stacks that have it (PINC); none leaves it off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dtn: Option<DtnInit>,
@@ -299,8 +302,12 @@ pub struct PubSubReport {
     pub unchecked: u64,
     /// Payload bytes delivered.
     pub bytes: u64,
-    /// Delivery latency in microseconds.
+    /// Delivery latency in microseconds, from the time in the header the publisher stamped at its first offer.
     pub latency_us: Hist,
+    /// Delivery latency in microseconds from the time the schedule meant the message to go (`Header::intended_ns`):
+    /// every wait of a publisher held back by its stack counts.
+    #[serde(default)]
+    pub latency_intended_us: Hist,
     /// Distinct deliveries per origin index.
     pub per_origin: std::collections::BTreeMap<u16, u64>,
     /// The longest time between two deliveries in milliseconds; absent with fewer than two.

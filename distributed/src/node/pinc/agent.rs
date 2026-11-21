@@ -41,6 +41,8 @@ struct PubRun {
     count: u32,
     size: usize,
     interval_ns: u64,
+    /// The wall clock time the run's first message is meant to go, in nanoseconds.
+    start_wall: u64,
     sent: u32,
     next: u64,
     /// A message the node had no room to track, with the time in its header unchanged: it is offered again first.
@@ -146,6 +148,7 @@ impl<const K: usize, const D: usize> Agent<K, D> {
             is_hub: me_spec.role != Role::Peer,
             mtu,
             trace: init.trace,
+            topic_log_bytes: super::core::topic_log_bytes(init.pinc_library_topic_log),
             batch,
             pool_chunks: 1024,
             portmap: init.portmap,
@@ -178,7 +181,7 @@ impl<const K: usize, const D: usize> Agent<K, D> {
             config: format!(
                 "the PINC node over its UDP endpoint (up to {K} sessions, 1 MiB stream windows, {} streams each way, {batch} datagrams per send, interface size {mtu}, a topic log of {} MiB on a hub) with relay carriers over TCP; {}",
                 super::core::stream_limit(),
-                super::core::TOPIC_LOG_BYTES >> 20,
+                spec.topic_log_bytes >> 20,
                 if spec.is_hub {
                     "this node is a hub"
                 } else {
@@ -254,13 +257,15 @@ impl<const K: usize, const D: usize> Agent<K, D> {
                 interval_us,
                 start_ns,
             } => {
-                let lead = start_ns.saturating_sub(wall_ns());
+                let now_wall = wall_ns();
+                let lead = start_ns.saturating_sub(now_wall);
                 self.pubs.push(PubRun {
                     req: id,
                     topic: topic.into_bytes(),
                     count,
                     size: size as usize,
                     interval_ns: interval_us * 1000,
+                    start_wall: start_ns.max(now_wall),
                     sent: 0,
                     next: now + lead,
                     held: None,
@@ -393,12 +398,15 @@ impl<const K: usize, const D: usize> Agent<K, D> {
                     restored: [r.held, r.partial, r.received, r.dropped].map(|n| n as u64),
                     lost: self.dtn.lost,
                 };
+                let (max, mean) = super::net::SENT.read();
                 let mut v = json!({
                     "pubsub": self.stats.report(),
                     "counters": self.core.counters,
                     "members": self.core.node.membership().member_count(),
                     "dtn": dtn,
                     "portmap": self.core.portmap_report(),
+                    // Every UDP payload the node's socket sent since its program started.
+                    "wire": {"max_udp_payload": max, "mean_udp_payload": mean},
                 });
                 if let (Some(l), Some(m)) = (self.core.tlog.as_ref(), v.as_object_mut()) {
                     m.insert("trace".into(), l.report());
@@ -537,6 +545,9 @@ impl<const K: usize, const D: usize> Agent<K, D> {
                         origin: self.me,
                         seq: run.sent,
                         sent_ns: wall_ns(),
+                        intended_ns: run
+                            .start_wall
+                            .saturating_add(run.interval_ns.saturating_mul(u64::from(run.sent))),
                     }
                     .body(run.size)
                 });

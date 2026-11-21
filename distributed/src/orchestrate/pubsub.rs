@@ -81,6 +81,7 @@ async fn one(ctx: &Ctx, b: &Cluster, stack: Stack, w: &Pubsub, rep: u32, pair: &
     let mut row = base_row(ctx, stack, w, rep, pair);
     let set = AppSet::new(b, &ctx.plan, stack)
         .with_iroh_gossip_max(w.iroh_gossip_max)
+        .with_pinc_library_topic_log(w.pinc_library_topic_log)
         .with_trace(tracefile::wanted(ctx, stack));
     let outcome = body(ctx, b, &set, w, stack, &mut row).await;
     if let Some(note) = set.configs().await.into_iter().next() {
@@ -157,10 +158,14 @@ async fn body(ctx: &Ctx, b: &Cluster, set: &AppSet<'_>, w: &Pubsub, stack: Stack
     let mut counters = Map::new();
     // The members each node's membership roster holds at the end: what the hub's snapshots and events told it.
     let mut members = Map::new();
+    let mut wire = Map::new();
     for (i, n) in ctx.plan.nodes.iter().enumerate() {
         let mut sum: BTreeMap<String, u64> = BTreeMap::new();
         let reports = set.reports(i).await;
         tracefile::write(ctx, stack, row, &n.name, &reports);
+        if let Some(m) = max_udp_payload(&reports) {
+            wire.insert(n.name.clone(), m.into());
+        }
         if let Some(m) = reports.last().and_then(|v| v.get("members")) {
             members.insert(n.name.clone(), m.clone());
         }
@@ -181,6 +186,7 @@ async fn body(ctx: &Ctx, b: &Cluster, set: &AppSet<'_>, w: &Pubsub, stack: Stack
     if !members.is_empty() {
         row.node.insert("members".into(), Value::Object(members));
     }
+    insert_wire(&mut row.node, wire);
     if !notes.is_empty() {
         row.node.insert("faults_note".into(), Value::String(notes.join("; ")));
     }
@@ -188,4 +194,46 @@ async fn body(ctx: &Ctx, b: &Cluster, set: &AppSet<'_>, w: &Pubsub, stack: Stack
         row.status = "not measured: no message was owed to any subscriber".into();
     }
     Ok(())
+}
+
+/// The largest UDP payload a node's reports say its socket sent (PINC's nodes report it; iroh and libp2p own their
+/// sockets and do not, so their rows carry the kernel's per-interface counters only).
+pub(crate) fn max_udp_payload(reports: &[Value]) -> Option<u64> {
+    reports
+        .iter()
+        .filter_map(|v| v.pointer("/wire/max_udp_payload").and_then(Value::as_u64))
+        .max()
+}
+
+/// Put each node's largest UDP payload (`wire`) and the largest of all (`max_udp_payload`) into a row, if any.
+pub(crate) fn insert_wire(node: &mut Map<String, Value>, wire: Map<String, Value>) {
+    if let Some(m) = wire.values().filter_map(Value::as_u64).max() {
+        node.insert("max_udp_payload".into(), m.into());
+        node.insert("wire".into(), Value::Object(wire));
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod wire_tests {
+    use super::*;
+
+    #[test]
+    fn the_largest_payload_is_the_largest_of_every_report_and_a_row_without_one_gets_none() {
+        let reports = [
+            serde_json::json!({"wire": {"max_udp_payload": 1200}}),
+            serde_json::json!({"wire": {"max_udp_payload": 1452}}),
+            serde_json::json!({"wire": {"max_udp_payload": null}}),
+        ];
+        assert_eq!(max_udp_payload(&reports), Some(1452));
+        assert_eq!(max_udp_payload(&[serde_json::json!({"pubsub": {}})]), None);
+        let mut node = Map::new();
+        insert_wire(&mut node, Map::new());
+        assert!(node.is_empty());
+        let mut wire = Map::new();
+        wire.insert("a".into(), 1200.into());
+        wire.insert("b".into(), 1452.into());
+        insert_wire(&mut node, wire);
+        assert_eq!(node.get("max_udp_payload"), Some(&Value::from(1452)));
+    }
 }

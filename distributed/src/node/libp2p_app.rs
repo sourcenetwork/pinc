@@ -27,7 +27,7 @@ use libp2p::{Multiaddr, PeerId, StreamProtocol, SwarmBuilder};
 use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot};
 
-use crate::node::data::{Content, Header, seed32, wall_ns};
+use crate::node::data::{Content, Header, intended_ns, seed32, wall_ns};
 use crate::node::proto::{Cmd, Init, Ready};
 use crate::node::shell::{Handler, serve};
 use crate::node::stats::PubSubStats;
@@ -122,10 +122,22 @@ struct Behaviour {
     blocks: request_response::Behaviour<BlockCodec>,
 }
 
+/// What gossipsub did with a message offered to it.
+enum Took {
+    Yes,
+    /// Back-pressure: offer the same message again.
+    NotYet,
+    /// Refused for good (too large, a signing failure, a duplicate): the message is dropped.
+    Refused,
+}
+
+/// How long a publisher held back by gossipsub waits before it offers the message again.
+const RETRY: Duration = Duration::from_millis(1);
+
 enum SwarmCmd {
     Subscribe(String, oneshot::Sender<Result<(), String>>),
     MeshPeers(String, oneshot::Sender<usize>),
-    Publish(String, Vec<u8>),
+    Publish(String, Vec<u8>, oneshot::Sender<Took>),
     Provide(Content, oneshot::Sender<[u8; 32]>),
     Fetch {
         size: u64,
@@ -288,16 +300,20 @@ impl Driver {
                     .count();
                 let _ = done.send(n);
             }
-            SwarmCmd::Publish(t, data) => {
-                if self
-                    .swarm
-                    .behaviour_mut()
-                    .gossipsub
-                    .publish(IdentTopic::new(t), data)
-                    .is_err()
-                {
-                    self.refused.fetch_add(1, Ordering::Relaxed);
-                }
+            SwarmCmd::Publish(t, data, done) => {
+                let took = match self.swarm.behaviour_mut().gossipsub.publish(IdentTopic::new(t), data) {
+                    Ok(_) => Took::Yes,
+                    // Back-pressure: every peer's queue is full, or no peer is in the topic yet.
+                    Err(
+                        libp2p::gossipsub::PublishError::AllQueuesFull(_)
+                        | libp2p::gossipsub::PublishError::NoPeersSubscribedToTopic,
+                    ) => Took::NotYet,
+                    Err(_) => {
+                        self.refused.fetch_add(1, Ordering::Relaxed);
+                        Took::Refused
+                    }
+                };
+                let _ = done.send(took);
             }
             SwarmCmd::Provide(content, done) => {
                 let mut h = blake3::Hasher::new();
@@ -481,8 +497,10 @@ impl App {
         interval_us: u64,
         start_ns: u64,
     ) -> Result<Value, String> {
-        let lead = start_ns.saturating_sub(wall_ns());
+        let now_wall = wall_ns();
+        let lead = start_ns.saturating_sub(now_wall);
         let start = tokio::time::Instant::now() + Duration::from_nanos(lead);
+        let start_wall = start_ns.max(now_wall);
         let before = self.refused.load(Ordering::Relaxed);
         for seq in 0..count {
             tokio::time::sleep_until(start + Duration::from_micros(interval_us * u64::from(seq))).await;
@@ -490,17 +508,30 @@ impl App {
                 origin: self.me,
                 seq,
                 sent_ns: wall_ns(),
+                intended_ns: intended_ns(start_wall, interval_us, seq),
             }
             .body(size as usize);
-            self.cmds
-                .send(SwarmCmd::Publish(topic.to_owned(), body))
-                .map_err(|_| "the swarm stopped")?;
-            if let Ok(mut s) = self.stats.lock() {
-                s.published();
+            // An awaited publish, as on the other stacks: under back-pressure the same message (its header unchanged)
+            // is offered again until gossipsub takes it; a refusal drops it, counted.
+            loop {
+                let (tx, rx) = oneshot::channel();
+                self.cmds
+                    .send(SwarmCmd::Publish(topic.to_owned(), body.clone(), tx))
+                    .map_err(|_| "the swarm stopped")?;
+                let took = rx.await.map_err(|_| "the swarm stopped")?;
+                if let Ok(mut s) = self.stats.lock() {
+                    match took {
+                        Took::Yes => s.published(),
+                        Took::Refused => s.count("publish_refused"),
+                        Took::NotYet => s.count("publish_waited"),
+                    }
+                }
+                if !matches!(took, Took::NotYet) {
+                    break;
+                }
+                tokio::time::sleep(RETRY).await;
             }
         }
-        // Give the swarm task the chance to take the last message before the count is read.
-        tokio::time::sleep(Duration::from_millis(50)).await;
         Ok(json!({ "published": count, "refused": self.refused.load(Ordering::Relaxed) - before }))
     }
 
@@ -567,8 +598,12 @@ impl Handler for App {
                 timeout_ms,
             } => self.fetch(&value, &providers, timeout_ms).await,
             Cmd::Report => {
-                let rep = self.stats.lock().map_err(|_| "the counters are unavailable")?.report();
-                Ok(json!({ "pubsub": rep, "refused": self.refused.load(Ordering::Relaxed) }))
+                let s = self.stats.lock().map_err(|_| "the counters are unavailable")?;
+                Ok(json!({
+                    "pubsub": s.report(),
+                    "counters": s.counters(),
+                    "refused": self.refused.load(Ordering::Relaxed),
+                }))
             }
             Cmd::Stop => {
                 let _ = self.ask(SwarmCmd::Stop).await;

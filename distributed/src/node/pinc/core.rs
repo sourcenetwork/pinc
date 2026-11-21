@@ -35,6 +35,15 @@ use crate::node::data::{seed_bytes, seed32};
 
 /// The bytes of messages a hub keeps for each topic in the harness.
 pub const TOPIC_LOG_BYTES: usize = 16 << 20;
+
+/// The topic log a hub keeps: the library's default when `library`, else [`TOPIC_LOG_BYTES`].
+pub fn topic_log_bytes(library: bool) -> usize {
+    if library {
+        pinc_broadcast::Limits::default().log_bytes
+    } else {
+        TOPIC_LOG_BYTES
+    }
+}
 /// Relays (hubs) a node knows.
 pub const NRL: usize = 4;
 
@@ -90,6 +99,8 @@ pub struct Spec {
     pub mtu: u16,
     /// Keep the node's trace and packet log (see [`TraceLog`]).
     pub trace: bool,
+    /// The bytes of messages a hub keeps for each topic (see [`topic_log_bytes`]).
+    pub topic_log_bytes: usize,
     /// Datagrams per transmit (segmentation offload), at least 1.
     pub batch: usize,
     /// The 16 KiB buffer chunks each session may hold.
@@ -311,7 +322,7 @@ fn build<const K: usize, const D: usize>(
         // A hub serves a subscriber on a slow path from the topic's log, so the log must hold the largest burst a
         // scenario publishes (2,000 messages of 4 KiB): 16 MiB a topic where the default is 4.
         limits: pinc_broadcast::Limits {
-            log_bytes: TOPIC_LOG_BYTES,
+            log_bytes: spec.topic_log_bytes,
             ..pinc_broadcast::Limits::default()
         },
         map_keys: map_keys(&spec.name)?,

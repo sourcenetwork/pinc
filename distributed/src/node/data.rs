@@ -137,7 +137,7 @@ impl Content {
 /// Magic of a workload message.
 const MAGIC: u16 = 0xD157;
 /// Bytes of the header of a workload message.
-pub const HEADER: usize = 16;
+pub const HEADER: usize = 24;
 
 /// The header of a workload message: who sent it, which of the sender's messages it is, and when.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -146,8 +146,16 @@ pub struct Header {
     pub origin: u16,
     /// The sender's message number from 0.
     pub seq: u32,
-    /// The sender's wall clock at publication, in nanoseconds.
+    /// The sender's wall clock at publication (its first offer to the stack), in nanoseconds.
     pub sent_ns: u64,
+    /// The wall clock time the schedule meant the message to go, in nanoseconds: the run's start plus `seq`
+    /// intervals. A latency from it counts every wait of the publisher (no coordinated omission).
+    pub intended_ns: u64,
+}
+
+/// The wall clock time message `seq` of a run that starts at `start_ns`, `interval_us` apart, is meant to go.
+pub fn intended_ns(start_ns: u64, interval_us: u64, seq: u32) -> u64 {
+    start_ns.saturating_add(interval_us.saturating_mul(1000).saturating_mul(u64::from(seq)))
 }
 
 impl Header {
@@ -159,6 +167,7 @@ impl Header {
             &self.origin.to_be_bytes(),
             &self.seq.to_be_bytes(),
             &self.sent_ns.to_be_bytes(),
+            &self.intended_ns.to_be_bytes(),
         ]
         .concat();
         if let Some(dst) = b.get_mut(..HEADER) {
@@ -172,11 +181,13 @@ impl Header {
         let (magic, rest) = body.split_first_chunk::<2>()?;
         let (origin, rest) = rest.split_first_chunk::<2>()?;
         let (seq, rest) = rest.split_first_chunk::<4>()?;
-        let (sent, _) = rest.split_first_chunk::<8>()?;
+        let (sent, rest) = rest.split_first_chunk::<8>()?;
+        let (intended, _) = rest.split_first_chunk::<8>()?;
         (u16::from_be_bytes(*magic) == MAGIC).then(|| Self {
             origin: u16::from_be_bytes(*origin),
             seq: u32::from_be_bytes(*seq),
             sent_ns: u64::from_be_bytes(*sent),
+            intended_ns: u64::from_be_bytes(*intended),
         })
     }
 }
@@ -293,11 +304,13 @@ mod tests {
             origin: 513,
             seq: 70_000,
             sent_ns: 1_700_000_000_123_456_789,
+            intended_ns: 1_700_000_000_000_000_000,
         };
-        assert_eq!(Header::parse(&h.body(16)), Some(h));
+        assert_eq!(Header::parse(&h.body(24)), Some(h));
         assert_eq!(Header::parse(&h.body(1000)), Some(h));
         assert_eq!(h.body(3).len(), HEADER);
-        assert_eq!(Header::parse(&[0; 15]), None);
+        assert_eq!(Header::parse(&[0; 23]), None);
+        assert_eq!(intended_ns(1_000, 250, 4), 1_000 + 4 * 250_000);
         assert_eq!(Header::parse(&[0; 64]), None);
     }
 

@@ -32,6 +32,7 @@ fn spec(name: &str, addr: &str, hubs: &[HubAddr], is_hub: bool) -> Spec {
         is_hub,
         mtu: 1500,
         trace: false,
+        topic_log_bytes: super::TOPIC_LOG_BYTES,
         batch: 1,
         pool_chunks: 1024,
         portmap: false,

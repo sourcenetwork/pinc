@@ -113,6 +113,7 @@ fn pinc_endpoints_default_to_one_and_per_core_is_read_validated_and_refused_when
         t.tests.push(TransportTest::Throughput {
             bytes: 1 << 20,
             streams: 1,
+            trace_ms: 0,
         });
     }
     let problems: Vec<_> = sc
