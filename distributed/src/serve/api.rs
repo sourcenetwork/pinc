@@ -170,19 +170,14 @@ fn scenario_dir(app: &App) -> PathBuf {
 
 fn scenarios(app: &App) -> Resp {
     let mut out = Vec::new();
-    let mut files: Vec<PathBuf> = std::fs::read_dir(scenario_dir(app))
-        .map(|d| {
-            d.filter_map(|e| e.ok().map(|e| e.path()))
-                .filter(|p| p.extension().is_some_and(|x| x == "toml"))
-                .collect()
-        })
-        .unwrap_or_default();
+    let mut files: Vec<PathBuf> = std::fs::read_dir(scenario_dir(app)).map_or_default(|d| {
+        d.filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.extension().is_some_and(|x| x == "toml"))
+            .collect()
+    });
     files.sort();
     for f in files {
-        let file = f
-            .file_stem()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_default();
+        let file = f.file_stem().map_or_default(|s| s.to_string_lossy().into_owned());
         let entry = match std::fs::read_to_string(&f)
             .map_err(|e| e.to_string())
             .and_then(|t| Scenario::parse(&t))
@@ -397,13 +392,11 @@ fn read_json(p: &Path) -> Value {
 }
 
 fn list_results(app: &App) -> Resp {
-    let mut dirs: Vec<PathBuf> = std::fs::read_dir(results_dir(app))
-        .map(|d| {
-            d.filter_map(|e| e.ok().map(|e| e.path()))
-                .filter(|p| p.is_dir())
-                .collect()
-        })
-        .unwrap_or_default();
+    let mut dirs: Vec<PathBuf> = std::fs::read_dir(results_dir(app)).map_or_default(|d| {
+        d.filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.is_dir())
+            .collect()
+    });
     dirs.sort();
     dirs.reverse();
     let out: Vec<Value> = dirs
@@ -503,7 +496,7 @@ fn export(app: &App, dir: &str, csv: bool) -> Resp {
                 let _ = write!(line, ",{}", v.unwrap_or_default());
             }
         }
-        let _ = writeln!(line, ",{}", r.shaper_drops.map(|d| d.to_string()).unwrap_or_default());
+        let _ = writeln!(line, ",{}", r.shaper_drops.map_or_default(|d| d.to_string()));
         out.push_str(&line);
     }
     reply(StatusCode::OK, "text/csv", out)
@@ -523,15 +516,13 @@ async fn host(app: &App) -> Resp {
         .output()
         .await
         .ok();
-    let host_netem: Vec<String> = qdiscs
-        .map(|o| {
-            String::from_utf8_lossy(&o.stdout)
-                .lines()
-                .filter(|l| l.contains("netem"))
-                .map(str::to_owned)
-                .collect()
-        })
-        .unwrap_or_default();
+    let host_netem: Vec<String> = qdiscs.map_or_default(|o| {
+        String::from_utf8_lossy(&o.stdout)
+            .lines()
+            .filter(|l| l.contains("netem"))
+            .map(str::to_owned)
+            .collect()
+    });
     let status = app.runs.status().await;
     json_ok(&json!({
         "host": info,

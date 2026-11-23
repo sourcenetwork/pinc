@@ -283,17 +283,13 @@ where
 
     /// Save every partial bundle that has grown since its last record.
     pub(crate) fn dtn_save_grown(&mut self) {
-        let grown: Vec<BundleId> = self
-            .dtn
-            .as_deref()
-            .map(|d| {
-                d.partials
-                    .iter()
-                    .filter(|(_, p)| !p.unsaved.is_empty())
-                    .map(|(id, _)| *id)
-                    .collect()
-            })
-            .unwrap_or_default();
+        let grown: Vec<BundleId> = self.dtn.as_deref().map_or_default(|d| {
+            d.partials
+                .iter()
+                .filter(|(_, p)| !p.unsaved.is_empty())
+                .map(|(id, _)| *id)
+                .collect()
+        });
         for id in grown {
             self.dtn_save_partial(&id);
         }

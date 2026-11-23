@@ -73,16 +73,16 @@ pub(super) fn mixed(w: &mut World, b: &mut Builder) -> Result<(), WorldError> {
     let (clouds, homes, mobiles) = (w.clouds.clone(), w.homes.clone(), w.mobiles.clone());
     let (t0, t1, t0s, t1s) = window(b)?;
     let topics: Vec<Vec<u8>> = (0..4).map(|i| format!("/col/{i}").into_bytes()).collect();
-    for i in 0..n {
-        if w.nodes[i].kind == "cloud" {
-            w.nodes[i].topics.clone_from(&topics);
+    for node in &mut w.nodes {
+        if node.kind == "cloud" {
+            node.topics.clone_from(&topics);
         } else {
             let k = 1 + usize::from(b.rng.random() < 0.4);
             let mut picked = sample(&mut b.rng, &topics, k, "topics")?
                 .into_iter()
                 .collect::<Vec<_>>();
             picked.sort();
-            w.nodes[i].topics = picked;
+            node.topics = picked;
         }
     }
     let mut starts = vec![0u64; n];

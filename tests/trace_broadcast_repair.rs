@@ -261,9 +261,9 @@ fn publish_reaches_both_hubs() {
     net.run_until(0);
     let mid = net.publish(3, T, &[1u8; 16]);
     net.run_until(SEC);
-    for hub in 0..2 {
+    for (hub, node) in net.nodes.iter().enumerate().take(2) {
         assert!(
-            net.nodes[hub].t.log_holds(T, &mid),
+            node.t.log_holds(T, &mid),
             "hub {} did not get the publish from the publisher",
             hub + 1
         );

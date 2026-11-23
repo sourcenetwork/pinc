@@ -807,8 +807,7 @@ impl Handshake {
             .as_ref()
             .and_then(|c| pool.bytes(c).get(MAX_MESSAGE_LEN..))
             .and_then(|b| b.get(..n))
-            .map(<[u8]>::to_vec)
-            .unwrap_or_default();
+            .map_or_default(<[u8]>::to_vec);
         super::reasm::trace::FragmentView {
             before,
             after,

@@ -635,7 +635,7 @@ impl<N: Node, R: Random, C: CostModel> Sim<N, R, C> {
 
     /// Takes the trace out, leaving an empty one in place.
     pub fn take_trace(&mut self) -> String {
-        self.trace.as_mut().map(std::mem::take).unwrap_or_default()
+        self.trace.as_mut().map_or_default(std::mem::take)
     }
 }
 

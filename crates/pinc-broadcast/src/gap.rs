@@ -119,7 +119,7 @@ impl Topics {
         }
         let since = since_ms.to_be_bytes();
         let flag = [(u8::from(replay) * SUB_REPLAY) | (u8::from(held.is_some()) * SUB_VER)];
-        let ver = held.map(ver_bytes).unwrap_or_default();
+        let ver = held.map_or_default(ver_bytes);
         let parts: &[&[u8]] = match (flag[0], held) {
             (0, _) => &[&since],
             (_, None) => &[&since, &flag],

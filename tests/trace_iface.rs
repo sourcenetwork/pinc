@@ -502,9 +502,9 @@ fn trace_iface() {
         net.nodes[3].extra.push(a33);
         let local: HashMap<SocketAddr, u64> = (1..=6u8).map(|k| (l(k), u64::from(k))).collect();
         let mut remote = HashMap::new();
-        for n in 1..=4usize {
-            remote.insert(net.nodes[n].addr, 10 * n as u64);
-            for (j, a) in net.nodes[n].extra.iter().enumerate() {
+        for (n, node) in net.nodes.iter().enumerate().take(5).skip(1) {
+            remote.insert(node.addr, 10 * n as u64);
+            for (j, a) in node.extra.iter().enumerate() {
                 remote.insert(*a, 10 * n as u64 + 1 + j as u64);
             }
         }
