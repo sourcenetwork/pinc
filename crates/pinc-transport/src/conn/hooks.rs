@@ -255,8 +255,8 @@ conn_impl! {
         place.ok_or(Failure::InvalidParameter)
     }
 
-    /// [`sub_session`](Self::sub_session), with the connection built in `place` and not returned by value. `place`
-    /// is untouched when the call fails.
+    /// [`sub_session`](Self::sub_session), with the connection built in `place`. `place` is untouched when the
+    /// call fails.
     ///
     /// # Errors
     /// As [`sub_session`](Self::sub_session).
@@ -289,8 +289,8 @@ conn_impl! {
         place.ok_or(Failure::InvalidParameter)
     }
 
-    /// [`sub_pending`](Self::sub_pending), with the connection built in `place` and not returned by value. `place`
-    /// is untouched when the call fails.
+    /// [`sub_pending`](Self::sub_pending), with the connection built in `place`. `place` is untouched when the
+    /// call fails.
     ///
     /// # Errors
     /// As [`sub_pending`](Self::sub_pending).

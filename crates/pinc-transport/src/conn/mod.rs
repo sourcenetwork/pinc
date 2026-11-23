@@ -247,8 +247,8 @@ where
     P: Provider,
     S: StreamSource,
 {
-    /// Build the connection in `place`, where it stays: a connection is tens of kilobytes, and one returned by value
-    /// is copied once for every caller it passes through. `place` is untouched when the call fails.
+    /// Build the connection in `place`, where it stays, so that no frame but this one holds a connection (tens of
+    /// kilobytes). `place` is untouched when the call fails.
     ///
     /// The handshake has no state machine yet (`dialing` says which kind it will get): the caller installs it once
     /// this frame, which holds the whole connection while it is put together, is gone.
@@ -397,8 +397,8 @@ where
         place.ok_or(Failure::InvalidParameter)
     }
 
-    /// [`client`](Self::client), with the connection built in `place` (a slot of the host's table) and not returned
-    /// by value. `place` is untouched when the call fails.
+    /// [`client`](Self::client), with the connection built in `place` (a slot of the host's table). `place` is
+    /// untouched when the call fails.
     ///
     /// # Errors
     /// As [`client`](Self::client).
@@ -452,8 +452,8 @@ where
         place.ok_or(Failure::InvalidParameter)
     }
 
-    /// [`server`](Self::server), with the connection built in `place` (a slot of the host's table) and not returned
-    /// by value. `place` is untouched when the call fails.
+    /// [`server`](Self::server), with the connection built in `place` (a slot of the host's table). `place` is
+    /// untouched when the call fails.
     ///
     /// # Errors
     /// As [`server`](Self::server).

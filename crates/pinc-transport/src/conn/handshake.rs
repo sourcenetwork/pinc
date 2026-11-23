@@ -400,8 +400,8 @@ impl Handshake {
     /// # Errors
     /// [`Failure::OutOfMemory`] if the pool has no free chunk.
     /// The handshake of a connection whose state machine is the initiator's (`client`) or the responder's. The
-    /// machine itself is given next, with [`Handshake::install`]: it is tens of kilobytes, and given here it would lie
-    /// on the stack beside the connection being built around this value.
+    /// machine itself is given next, with [`Handshake::install`], so that its tens of kilobytes are never on the stack
+    /// while the connection is put together.
     pub(crate) fn new(
         client: bool,
         machines: Machines,

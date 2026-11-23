@@ -452,7 +452,7 @@ ep_impl! {
             ticket_lifetime_s: self.cfg.ticket_lifetime_s,
         };
         let mut env: Env<'_, P> = env!(self, now);
-        // The connection is built in its slot: by value it would be copied through every frame on the way there.
+        // Built in its slot: a connection is tens of kilobytes, and the stack of a small device has no room for a copy.
         let built = match self.slots.get_mut(i) {
             Some(slot) => Connection::server_in(&mut slot.conn, cfg, &params, mem, &mut env).is_ok(),
             None => false,
