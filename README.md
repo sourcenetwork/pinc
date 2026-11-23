@@ -111,6 +111,7 @@ and close run on 1 MiB of stack and fail on 512 KiB. `Limits::wasm()` is the pre
 | `tests/` | every test (integration, property, scenario, trace), run with [cargo-nextest](https://nexte.st) |
 | `benches/` | micro benchmarks (per packet, allocations, copies) and the loopback comparison with two other libraries; a workspace of its own |
 | `distributed/` | the distributed test harness: one binary that builds an emulated network of containers, runs PINC and two other libraries' nodes on it with faults, measures them and serves a dashboard; a workspace of its own |
+| `examples/mcu/` | the `no_std` core on a microcontroller: the programs for an STM32H7S3 board and for the laptop at the other end of its serial line, and what they measured ([README](examples/mcu/README.md)); a workspace of its own |
 | `docs/` | [PROOFS.md](docs/PROOFS.md): what is proven, how it is checked, the assumptions |
 | `scripts/` | the gate and the proof runner |
 
@@ -162,6 +163,8 @@ just distributed serve                                # the dashboard, on http:/
 just distributed clean                                # remove whatever a run left
 just distributed summarize distributed/results/<run>  # rebuild a run's summary from its raw rows, running nothing
 just e2e          # the harness end to end: a two-node scenario, every stack (Docker and sudo)
+just mcu          # the microcontroller example without a board: lints, the images linked, both ends in one process
+just board session examples/mcu/results/<date>        # the measurement on the board (a NUCLEO-H7S3L8 on USB, probe-rs)
 ```
 
 `just distributed` gives every node its own container and network stack on one machine (with `--hosts`, a real

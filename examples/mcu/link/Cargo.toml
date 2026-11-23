@@ -1,0 +1,25 @@
+[package]
+name = "pinc-mcu-link"
+description = "The PINC endpoint a small device holds: table sizes, memory without a heap, the host duties and a serial framing"
+keywords = ["no_std", "embedded", "endpoint"]
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[features]
+default = []
+# The board's core at 320 MHz from its PLL, where it runs at 64 MHz from the internal oscillator without (see `clock`).
+fast-clock = []
+
+[dependencies]
+pinc-crypto = { workspace = true }
+pinc-security = { workspace = true }
+pinc-transport = { workspace = true }
+pinc-core = { workspace = true }
+ed25519-dalek = { workspace = true }
+
+[lints]
+workspace = true

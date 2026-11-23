@@ -2,8 +2,9 @@
 resolver = "3"
 members = ["crates/*", "tests", "tests/noalloc"]
 # The benchmarks and the distributed harness are workspaces of their own: the libraries they measure PINC against, their
-# runtimes and their C code stay out of the library's graph and lockfile.
-exclude = ["benches", "distributed"]
+# runtimes and their C code stay out of the library's graph and lockfile. So is the microcontroller example, for the
+# board's runtime crates and the laptop's serial port.
+exclude = ["benches", "distributed", "examples/mcu"]
 
 [workspace.package]
 version = "0.1.0"

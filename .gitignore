@@ -10,3 +10,4 @@ states/
 /target-harness
 /distributed/target
 /benches/target
+/examples/mcu/target

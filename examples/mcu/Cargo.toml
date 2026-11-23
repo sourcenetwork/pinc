@@ -1,0 +1,55 @@
+# PINC on a microcontroller (#540): a workspace of its own, outside the library's, so the board's runtime crates and
+# the laptop peer's serial port never enter the library's dependency graph or lockfile. The PINC crates come in by path.
+#
+#   link/      the endpoint a small device holds (table sizes, memory, host duties, serial framing); `no_std`, no heap
+#   boot/      the board's boot stage and flash loader, loaded into RAM by the probe
+#   firmware/  the program for the board (STM32H7S3L8 on a NUCLEO-H7S3L8), built for `thumbv7em-none-eabihf`
+#   peer/      the laptop's end of the serial line: the other endpoint, and the measurements written as result files
+[workspace]
+resolver = "3"
+members = ["link", "boot", "firmware", "peer"]
+# The boot stage and the firmware build for the board only; `board.sh` names their target.
+default-members = ["link", "peer"]
+
+[workspace.package]
+version = "0.1.0"
+authors = ["Theo M. Bulut <theo@source.network>"]
+edition = "2024"
+rust-version = "1.99"
+repository = "https://github.com/sourcenetwork/pinc"
+publish = false
+
+[workspace.dependencies]
+pinc-crypto = { path = "../../crates/pinc-crypto", version = "0.1.0" }
+pinc-security = { path = "../../crates/pinc-security", version = "0.1.0" }
+pinc-transport = { path = "../../crates/pinc-transport", version = "0.1.0" }
+pinc-core = { path = "../../crates/pinc-core", version = "0.1.0" }
+ed25519-dalek = { version = "3.0.0", default-features = false }
+pinc-mcu-link = { path = "link", version = "0.1.0" }
+
+cortex-m = { version = "0.7.7", features = ["critical-section-single-core"] }
+cortex-m-rt = "0.7.5"
+stm32-metapac = { version = "21.0.0", features = ["stm32h7s3l8", "rt"] }
+serialport = { version = "4.10.1", default-features = false }
+
+[workspace.lints.rust]
+missing_docs = "warn"
+unreachable_pub = "warn"
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+
+# The board's image: small first, since the internal flash holds 64 KiB and the image is measured.
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+debug = true
+
+[profile.dev.package."*"]
+opt-level = 3
