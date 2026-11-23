@@ -318,7 +318,7 @@ fn a_clock_that_went_back_across_a_restart_is_lifted_above_the_hub_roster() {
         "a restart is a rejoin"
     );
     // The roster at a hub never went below the old record.
-    for hub in w.nodes.iter().take(2) {
+    for hub in &w.nodes[..2] {
         assert!(hub.m.members().all(|(_, r)| r.inc >= 1 << 16));
     }
 }

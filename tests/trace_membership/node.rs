@@ -469,7 +469,7 @@ fn revoke_full(c: &mut Ctx) {
 /// higher incarnation tells the node, which moves above it.
 fn restarts(c: &mut Ctx) {
     let mut w = c.world(2, 2, START);
-    for (i, node) in w.nodes.iter_mut().enumerate().take(4) {
+    for (i, node) in w.nodes[..4].iter_mut().enumerate() {
         node.h.persistent = i % 2 == 0;
     }
     w.attach_all();

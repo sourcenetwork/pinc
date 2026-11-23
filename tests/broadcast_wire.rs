@@ -191,7 +191,7 @@ proptest! {
         let stranger = [9u8; 32];
         let from = if from_hub { hub } else { stranger };
         let now = net.now;
-        for n in net.nodes.iter_mut().take(3) {
+        for n in &mut net.nodes[..3] {
             n.t.frame(&mut n.h, now, &from, ty_byte, &topic, &rest);
             n.t.on_timer(&mut n.h, now + SEC);
         }

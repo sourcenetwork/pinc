@@ -272,7 +272,7 @@ fn run<H: Hosted + 'static>(
             assert_eq!(after[k], want, "{}: the wakes of open {}", what(), k + 1);
         }
         let st = step.state.get("st").unwrap();
-        for (k, slot) in t.slots.iter().enumerate().take(OPENS) {
+        for (k, slot) in t.slots[..OPENS].iter().enumerate() {
             assert_eq!(
                 at(st, k + 1).str().unwrap(),
                 slot.name(),

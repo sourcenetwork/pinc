@@ -159,9 +159,9 @@ no-std:
 pure:
     dir=$(cargo metadata --format-version 1 --no-deps | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])'); \
     [ -d "$dir" ] || { echo "pure: no build output in $dir; build first" >&2; exit 1; }; \
-    runs=$(find "$dir" -path '*/build/*' -type d -name run -printf '%h/out\n'); \
+    runs=$(find "$dir" -path '*/build/*' -type d -name run | sed 's|/run$|/out|'); \
     [ -n "$runs" ] || { echo "pure: no build script has run in $dir; build first" >&2; exit 1; }; \
-    ! find $runs \( -name '*.o' -o -name '*.a' -o -name '*.so' -o -name '*.obj' \) 2>/dev/null | grep . \
+    ! find $runs \( -name '*.o' -o -name '*.a' -o -name '*.so' -o -name '*.obj' \) | grep . \
         || { echo "a build script compiled C (listed above); PINC is pure Rust" >&2; exit 1; }
 
 # Measure PINC against iroh and rust-libp2p on this machine (loopback, then netem-shaped); writes benches/results/.

@@ -18,7 +18,7 @@ fn gates_of(world_edit: impl FnOnce(&mut World), edit: impl FnOnce(&mut Rec, &mu
     let world = Rc::new(w);
     let mut rec = Rec::new(world.clone());
     let mut facts = RunFacts::new(&world);
-    for (i, node) in facts.nodes.iter_mut().enumerate().take(3) {
+    for (i, node) in facts.nodes[..3].iter_mut().enumerate() {
         rec.node_started(i, 0);
         node.view = Some((1, (0..3).filter(|&j| j != i).collect()));
     }

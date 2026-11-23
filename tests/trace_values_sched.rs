@@ -183,7 +183,7 @@ impl Rec2 {
                     tr.striped = striped;
                     tr.q = if striped { w } else { 0 };
                     tr.a[0] = if striped { 0 } else { w };
-                    for assigned in tr.in_assign.iter_mut().take(usize::from(providers)) {
+                    for assigned in &mut tr.in_assign[..usize::from(providers)] {
                         *assigned = true;
                     }
                     assert!(tr.conserved() || !striped, "run {r}: start");
