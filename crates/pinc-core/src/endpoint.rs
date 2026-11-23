@@ -68,18 +68,19 @@ use crate::trace::{TraceLog, TraceRecord};
 pub const CID_LEN: usize = 4;
 // The Initial padding covers a Reply cut into minimum-size datagrams only with ids this short.
 const _: () = assert!(CID_LEN <= pinc_security::message::SPLIT_CID_MAX);
-/// The largest datagram the endpoint takes in; a longer one is dropped.
-pub const MAX_DATAGRAM: usize = 9216;
+/// The largest datagram the endpoint takes in; a longer one is dropped. The build may set it (`PINC_MAX_DATAGRAM`, at
+/// least the smallest datagram every path must carry).
+pub const MAX_DATAGRAM: usize = crate::sizes::size!("PINC_MAX_DATAGRAM", 9216, pinc_transport::conn::MIN_MTU as usize);
 /// The most interfaces.
 pub const MAX_IFACES: usize = 8;
-/// Sub-session ids remembered so a repeated open is not accepted twice.
-pub const SUBS_SEEN: usize = 1024;
+/// Sub-session ids remembered so a repeated open is not accepted twice; the build may set it (`PINC_SUBS_SEEN`).
+pub const SUBS_SEEN: usize = crate::sizes::size!("PINC_SUBS_SEEN", 1024, 1);
 /// The most protocols the registry holds.
 pub const MAX_ALPNS: usize = pinc_security::ids::MAX_ALPNS;
-/// The peers whose prekey cache knowledge is remembered.
-pub const PREKEY_PEERS: usize = 256;
-/// The addresses whose last re-join challenge is remembered.
-pub(crate) const REJOIN_ADDRS: usize = 200;
+/// The peers whose prekey cache knowledge is remembered; the build may set it (`PINC_PREKEY_PEERS`).
+pub const PREKEY_PEERS: usize = crate::sizes::size!("PINC_PREKEY_PEERS", 256, 1);
+/// The addresses whose last re-join challenge is remembered; the build may set it (`PINC_REJOIN_ADDRS`).
+pub(crate) const REJOIN_ADDRS: usize = crate::sizes::size!("PINC_REJOIN_ADDRS", 200, 1);
 /// How long a closing session may wait for its CLOSE to leave before it is dropped.
 pub(crate) const CLOSE_GRACE: u64 = 1_000_000_000;
 

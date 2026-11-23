@@ -18,8 +18,8 @@ use pinc_crypto::NodeId;
 
 use crate::table::Table;
 
-/// The most peers whose handshake round trip is remembered.
-pub const PEER_RTTS: usize = 256;
+/// The most peers whose handshake round trip is remembered; the build may set it (`PINC_PEER_RTTS`).
+pub const PEER_RTTS: usize = crate::sizes::size!("PINC_PEER_RTTS", 256, 1);
 /// The round trip from which a node or a session is thin (250 ms).
 pub const SLOW_RTT: u64 = 250_000_000;
 /// The shortest first resend of a dial (500 ms).

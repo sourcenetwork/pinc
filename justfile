@@ -179,6 +179,12 @@ test *args:
 unoptimised *args:
     cargo nextest run --cargo-profile unoptimised -p pinc-tests --test relay_stack {{args}}
 
+# The core's own tests with its tables at the sizes of a small device (`pinc-core`, `sizes`), in a build directory of
+# their own: the sizes are the compiler's environment, and a build with them is another build.
+sizes *args:
+    PINC_EVENT_BASE=128 PINC_LEDGER_ENTRIES=32 PINC_SUBS_SEEN=32 PINC_PEER_RTTS=16 PINC_PREKEY_PEERS=16 \
+    PINC_REJOIN_ADDRS=16 PINC_MAX_DATAGRAM=1500 cargo nextest run -p pinc-core --target-dir target/sizes {{args}}
+
 # The distributed harness's own tests (the orchestration logic; no root, no Docker).
 test-distributed *args:
     cargo nextest run {{dist}} {{args}}
