@@ -15,8 +15,8 @@ use core::net::SocketAddr;
 
 use crate::table::Table;
 
-/// The most addresses the ledger tracks.
-pub const LEDGER_ENTRIES: usize = 1024;
+/// The most addresses the ledger tracks; the build may set it (`PINC_LEDGER_ENTRIES`).
+pub const LEDGER_ENTRIES: usize = crate::sizes::size!("PINC_LEDGER_ENTRIES", 1024, 1);
 /// Header bytes added to every sent datagram.
 pub const DATAGRAM_OVERHEAD: u64 = 28;
 /// Bytes that may be sent to an unvalidated address per byte it sent.

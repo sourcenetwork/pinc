@@ -15,8 +15,9 @@
 use crate::api::{Event, SessionId};
 use crate::store::{Store, filled, store_fn};
 
-/// The places of the event queue besides the four rows of `K`.
-pub const EVENT_BASE: usize = 1024;
+/// The places of the event queue besides the four rows of `K`; the build may set it (`PINC_EVENT_BASE`, at least 128,
+/// which is twice the headroom's part that does not grow with `K`).
+pub const EVENT_BASE: usize = crate::sizes::size!("PINC_EVENT_BASE", 1024, 128);
 
 /// How many events an endpoint with a table of `sessions` sessions can leave unread.
 pub const fn event_queue(sessions: usize) -> usize {

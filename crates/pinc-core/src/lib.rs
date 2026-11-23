@@ -23,6 +23,9 @@
 //! are allocated once, when it is built, and [`Endpoint::new_owned`] also allocates the slot table then and the memory
 //! of a slot when the slot is first taken, all freed when the endpoint is dropped. With the `trace` feature every decision is also recorded as an
 //! ndjson-ready [`TraceRecord`] for model checking and proof of the same rules.
+//!
+//! The tables that do not grow with the session table are sized for a node with hundreds of peers. An application for
+//! a smaller or a larger machine sets each of them in its build: see [`sizes`].
 #![no_std]
 #![forbid(unsafe_code)]
 #![allow(clippy::struct_excessive_bools, reason = "independent flags of one session")]
@@ -67,6 +70,7 @@ mod reach;
 mod relay_net;
 mod rtt;
 mod rx;
+pub mod sizes;
 mod slot;
 mod state;
 mod stateless;
