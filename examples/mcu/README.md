@@ -1,170 +1,18 @@
 # PINC on a microcontroller
 
-The `no_std` core (`pinc-core`, the SANS-IO endpoint, with no allocator) runs on a board: an STM32H7S3L8 (Cortex-M7)
-on a NUCLEO-H7S3L8. It completes the hybrid post-quantum handshake with a laptop, resumes it from a ticket, and
-carries streams both ways, as the acceptor and as the dialer. This directory holds the programs that do it and what
-they measured ([#540](https://github.com/sourcenetwork/pinc/issues/540)).
-
-The link is the board's serial line (the ST-LINK's virtual COM port, 1 Mbaud), with each datagram byte-stuffed into a
-frame. It is not a network: there is no loss, no reordering and one peer.
-
-## What was measured
-
-Session of 24 November 2026, commit `6fdc7aa6`, ten sessions of each kind; the files are in
-[`results/2026-11-24/`](results/2026-11-24). Times are medians; over the ten sessions the smallest and the largest are
-within 1% of them at 64 MHz and within 4% at 320 and 600 MHz, but for the board's CPU time of a full dial there (within
-13%). The board's clock is its internal oscillator (64 MHz), or a PLL fed by it: 320 MHz at the voltage scale the chip
-resets to, or 600 MHz, the chip's limit, at the high one. "Board CPU" is the time the
-board spent inside the endpoint, counted with the core's cycle counter around every call; the rest of a handshake's
-time is its bytes on the line (2,900 bytes at 1 Mbaud take 29 ms).
-
-The image built for speed (`opt-level = 3`):
-
-| | 64 MHz | 320 MHz | 600 MHz |
-|---|---|---|---|
-| Full handshake, the board accepts: board CPU | 124 ms | 37 ms | 24 ms |
-| the same, as the laptop sees it, dial to session | 119 ms | 50 ms | 41 ms |
-| the same, dial to the first 32 bytes back | 159 ms | 68 ms | 55 ms |
-| Resumed handshake, the board accepts: board CPU | 42 ms | 11 ms | 7 ms |
-| the same, as the laptop sees it, dial to the first 32 bytes back | 53 ms | 20 ms | 15 ms |
-| Full handshake, the board dials: board CPU | 134 ms | 45 ms | 29 ms |
-| the same, by the board's clock, dial to session | 151 ms | 61 ms | 48 ms |
-| Resumed handshake, the board dials: board CPU | 46 ms | 15 ms | 10 ms |
-| the same, by the board's clock, dial to the peer's answer | 50 ms | 19 ms | 14 ms |
-| Round trip of 32 bytes on a stream (200, timed by the laptop) | 4.7 ms | 4.2 ms | 3.7 ms |
-| the same, timed by the board | 4.7 ms | 4.2 ms | 3.7 ms |
-| 256 KiB there and back on a stream | 52 KiB/s | 58 KiB/s | 59 KiB/s |
-| Image in the flash | 714 KiB | 716 KiB | 716 KiB |
-| Statics | 200 KiB | 200 KiB | 200 KiB |
-| Stack, deepest | 151 KiB | 151 KiB | 151 KiB |
-
-The round trip and the transfer are the line's, not the board's: the line carries 100 kB/s. No byte of the line was
-lost in any run. From 320 to 600 MHz the board's CPU time of a handshake falls by a factor of 1.5 to 1.6 for 1.9 times
-the clock; why it is not more was not looked into.
-
-Built for size, the image is half as large, and its stack is deeper; at `s` it is little slower from 320 MHz up:
-
-| | `opt-level` 3 | `s` | `z` |
-|---|---|---|---|
-| Image in the flash | 716 KiB | 376 KiB | 358 KiB |
-| Full handshake, the board accepts: board CPU at 64 MHz | 124 ms | 153 ms | 228 ms |
-| the same at 320 MHz | 37 ms | 39 ms | 59 ms |
-| the same at 600 MHz | 24 ms | 24 ms | 37 ms |
-| Full handshake, the board dials: board CPU at 64 MHz | 134 ms | 162 ms | 242 ms |
-| the same at 320 MHz | 45 ms | 45 ms | 66 ms |
-| the same at 600 MHz | 29 ms | 28 ms | 43 ms |
-| Resumed, the board accepts: board CPU at 64 MHz | 42 ms | 55 ms | 70 ms |
-| the same at 320 MHz | 11 ms | 13 ms | 18 ms |
-| the same at 600 MHz | 7 ms | 8 ms | 11 ms |
-| Stack, deepest | 151 KiB | 229 KiB | 238 KiB |
-
-The session of 23 November, of the 64 and 320 MHz images, is in [`results/2026-11-23/`](results/2026-11-23); its times
-are within 3 ms of these, and its stack at `z` was 249 KiB.
-
-Since the chip's fault below was mended the session has run three more times on this library: twice with every image
-to its end, and once with every image but one (64 MHz at `opt-level = 3` closed with the path dead in both its runs,
-at the start of the session; rebuilt alone straight after, it ran three times of three, and the board gave no fault).
-Why that image closed is not known.
-
-The same session on the library without the connection built in its slot is in
-[`results/2026-11-23-without-conn-in-place/`](results/2026-11-23-without-conn-in-place); it was run before these
-programs were in this repository, and its files name commits that are not in it. At `opt-level = 3` both roles run and
-the stack reaches 351 KiB of its 368. Built for size the board accepts (298 and 300 KiB) and its dial overruns the
-stack at both clocks: the board reports the fault, a write 70 KiB below the stack's lower end at `s` and 15 KiB below
-at `z` (the two `-dial-fault.log` files).
-
-## The chip stops on a read it only guessed at
-
-Before the ranges below were closed some images stopped the board partway through a session: no fault report, no panic, and the debug
-port no longer answered. A tick every millisecond that noted where the program was showed the tick dying with the
-program, somewhere different in ordinary code each time. Whether an image did it depended on its bytes, not its
-source: built in another directory (the paths are in the image) the same source stopped in every run or in none.
-
-The cause is the chip's, and ST names it for an erratum
-([community thread](https://community.st.com/stm32-mcus-embedded-software-32/stm32h7rs-h7s3l8-core-freeze-xspi-dcache-in-bootloader-159810),
-22 December 2025): with the data cache on, the core fills cache lines ahead of loads it has not decided to make, and a
-fill that lands in the graphics unit's range (`0x2500_0000` to `0x25FF_FFFF`) stops the chip. `firmware/src/board.rs`
-closes the ranges no memory answers with the memory protection unit before it turns the cache on.
-
-| The image built for size, at 64 MHz | runs that ended |
-|---|---|
-| before the change | none of 8 |
-| with the data cache off | 6 of 6, a handshake taking 2.4 times as long |
-| with the ranges closed | 6 of 6, and then the sessions above |
-
-Two sessions before the change ended for three images of six and for six of six, from the same source in two
-directories. What was tried and did not help: the flash clocked at half the speed, sampled later, released when idle,
-and the external memories' range closed alone. The boot stage read the mapped image 3 million bytes in order and
-2.4 million words out of order and every read agreed, so the flash was never at fault.
-
-Two more things kept the board from saying what was wrong, and are mended with it. A probe that was ever told to stop
-the core at a fault leaves that order in the core until its power goes, so the core halted at a fault and the image's
-handler never ran; the image clears the order, and `board.sh` no longer gives it. And the range below the stack is
-closed like the rest, so a stack that outgrows its room is a fault and not one more read that nothing answers.
-
-Of the runs that did not end before these changes, the dials of the images built for size on the library without
-the connection built in its slot were the stack, as the session above shows. The others (a run at `opt-level = 3`
-closed as unanswered, and runs that closed with the path dead) may have been the chip stopping.
-
-## What it takes
-
-**Flash.** 716 KiB at `opt-level = 3`, 358 KiB at `z`, with every algorithm the library accepts from a peer linked in
-(ML-DSA and P-256 verification besides Ed25519, both ciphers). The chip has 64 KiB of flash of its own; the image runs
-in place from the board's external flash.
-
-**RAM.** 351 KiB of the chip's 620 KiB at `opt-level = 3`, for one session:
-
-| | bytes |
-|---|---|
-| The endpoint (a table of one session, tables sized for a device) | 57,616 |
-| The session's slot (the connection, its handshake machine, its tables) | 69,040 |
-| The session's memory: a pool of three 16 KiB chunks and the stream table | 61,936 |
-| The node's keys, the receive ring of the serial line, the rest | 16,416 |
-| Stack, deepest | 154,848 |
-
-Three things about the library decide these numbers:
-
-1. **The endpoint's fixed tables.** As the library ships, the tables that do not grow with the session table are
-   sized for a node with hundreds of peers, and an endpoint for one session was 326,592 bytes on this target on
-   16 November (not measured again). An application's build sets each size (`pinc-core`, `sizes`); `board.sh` gives the
-   board's builds the sizes of a handful of peers, and the endpoint is 57,616 bytes. The laptop's end keeps the tables
-   of a host, so every session here is between the two.
-2. **The stack.** What is left of it after the connection is built in its slot was read from the frame sizes of the
-   image of 16 November and not again: the frame that frees a slot takes the connection by value (80 KiB), the one that
-   builds the dialing side's handshake machine holds two copies of it (52 KiB), and the frame that verifies an ML-DSA
-   signature (a peer with such an identity; not exercised here) is 142 KiB. Built for size the stack is 78 to 87 KiB
-   deeper, and the cause is not found; part of it is this firmware's own main loop.
-3. **The key pair.** Without an allocator `pinc_crypto::Keypair` holds room for an ML-DSA key whatever the algorithm
-   (65,928 bytes, [#706](https://github.com/sourcenetwork/pinc/issues/706)). The board keeps its Ed25519 key as itself
-   and answers the endpoint's signature requests with it.
-
-## What was not measured
-
-- A network: the line loses nothing and has one peer. Ethernet is on the board and not used.
-- More than one session, more than one stream at a time (the pool of three chunks holds one stream's buffers both
-  ways), a peer with an ML-DSA or P-256 identity, a key roll, a path change.
-- The flash interface above 64 MHz.
-- A board that starts with no probe. The probe loads the boot stage into RAM after every reset, and the board stops
-  when the probe lets go of it; the chip's own flash is as it was found.
-- The facade (`pinc`). It builds without `std` now, with an allocator; the host here is still the few hundred lines
-  of `link/`, with none.
-- The board's time is by the chip's internal oscillator, not a crystal; its time of a handshake and the laptop's
-  agree within a millisecond in 51.
-
-## The programs
+The `no_std` core (`pinc-core`, the SANS-IO endpoint, with no allocator) on an STM32H7S3L8 (Cortex-M7, NUCLEO-H7S3L8).
+The board completes the hybrid post-quantum handshake with a laptop, resumes it from a ticket, and carries streams both
+ways, as the acceptor and as the dialer. This directory holds the programs that do it and what they measured
+([#540](https://github.com/sourcenetwork/pinc/issues/540)). It is a workspace of its own.
 
 | Path | What |
 |---|---|
-| `link/` | the endpoint a small device holds: table sizes, memory lent from statics, the host duties, an echo, the serial framing; `no_std`, no heap, no `unsafe`; both ends build on it |
-| `boot/` | the board's boot stage, which the probe loads into RAM: sets the clock, maps the external flash (octal mode) at `0x7000_0000` and starts the image; it is also the loader, which erases, programs and checks the flash as the laptop asks over the serial line |
-| `firmware/` | the image: accepts and echoes, or dials when asked and times its own round trips; reports the cost of every handshake and session, its statics and its stack's high-water mark |
+| `link/` | the endpoint a small device holds: memory lent from statics, the host duties, an echo, the serial framing; `no_std`, no heap, no `unsafe`; both ends build on it |
+| `boot/` | the board's boot stage, loaded into RAM by the probe: sets the clock, maps the external flash at `0x7000_0000`, starts the image; also the loader that programs the flash over the serial line |
+| `firmware/` | the image: accepts and echoes, or dials when asked; reports the cost of every handshake and session, its statics and its stack's high-water mark |
 | `peer/` | the laptop's end: loads an image, runs the sessions, writes the measured lines |
-| `board.sh` | builds, loads and measures; `session` runs every optimisation level at each of the three clocks |
+| `board.sh` | builds, loads and measures |
 | `results/` | the result files, one directory a session |
-
-The memory map of the image is in `firmware/memory.x`: the stack has the lower 368 KiB of the AXI SRAM, so one that
-outgrows its room faults instead of writing over the statics above it; the session's memory is in the DTCM RAM and
-the endpoint in the ITCM RAM.
 
 ## Running it
 
@@ -174,10 +22,10 @@ USB vendor `0483`).
 
 ```sh
 just mcu                                           # no board: lints, the images linked, both ends of the line in one process
-just board build 3 fast                            # the boot stage and the image: opt-level 3, 320 MHz (`full` for 600 MHz, neither for 64 MHz)
+just board build 3 fast                            # opt-level 3 (or s, z) at 320 MHz (`full`: 600 MHz, neither: 64 MHz)
 just board flash                                   # load the image into the external flash and start it
 just board run out.txt 10                          # ten sessions of each kind; the lines measured go to out.txt
-just board session examples/mcu/results/2026-11-24 # every optimisation level at each clock
+just board session examples/mcu/results/<date>     # every optimisation level at every clock, one file each
 ```
 
 `PROBE_RS` names the probe-rs command when it is not on the `PATH` (with Nix:
@@ -185,3 +33,125 @@ just board session examples/mcu/results/2026-11-24 # every optimisation level at
 
 A result file holds the lines of the run in order (`board ...` is what the board reported, `laptop ...` what the
 laptop measured), a `summary` of each kind of handshake, and the `conditions` it ran under.
+
+## Measurement protocol
+
+- Board: NUCLEO-H7S3L8, STM32H7S3L8, 620 KiB of RAM, 64 KiB of flash of its own (not written) and 32 MiB outside it,
+  which the image runs from in place. Data and instruction caches on.
+- Link: the board's serial line (the ST-LINK's virtual COM port) at 1 Mbaud, each datagram byte-stuffed into a frame.
+  It is not a network: nothing is lost or reordered, and there is one peer.
+- Clock: the internal oscillator at 64 MHz, or a PLL fed by it at 320 MHz, or at 600 MHz (the chip's limit) with the
+  voltage scale raised. The buses run at half the PLL's clock and the flash interface at 53 to 64 MHz.
+- Build: rustc 1.100.0, `opt-level` 3, `s` and `z`. The board's endpoint has the table sizes `board.sh` sets
+  (`PINC_EVENT_BASE=128`, `PINC_LEDGER_ENTRIES=32`, `PINC_SUBS_SEEN=32`, `PINC_PEER_RTTS=16`, `PINC_PREKEY_PEERS=16`,
+  `PINC_REJOIN_ADDRS=16`, `PINC_MAX_DATAGRAM=1500`); the laptop's has the library's defaults.
+- Identities: Ed25519 on both ends. Every algorithm the library accepts from a peer is linked into the image.
+- Workload, for each image: ten full and ten resumed handshakes with the laptop dialing, the same with the board
+  dialing, 20 round trips of 32 bytes on a stream after each, and 200 round trips and 256 KiB there and back in the
+  first session.
+- "Board CPU" is the time the board spent inside the endpoint, counted with the core's cycle counter around every
+  call. The rest of a handshake's time is its bytes on the line: 2,900 bytes at 1 Mbaud take 29 ms.
+
+## Results
+
+Session of 24 November 2026, commit `6fdc7aa6`, in [`results/2026-11-24/`](results/2026-11-24). All nine images ran
+every session to its end, and no byte of the line was lost. Times are medians of ten. The smallest and the largest are
+within 1% of the median at 64 MHz and within 4% at 320 and 600 MHz, except the board CPU of a full dial there, which
+is within 13%.
+
+Built for speed (`opt-level = 3`):
+
+| | 64 MHz | 320 MHz | 600 MHz |
+|---|---:|---:|---:|
+| Full handshake, the board accepts: board CPU | 124 ms | 37 ms | 24 ms |
+| the same, as the laptop sees it, dial to session | 119 ms | 50 ms | 41 ms |
+| the same, dial to the first 32 bytes back | 159 ms | 68 ms | 55 ms |
+| Resumed handshake, the board accepts: board CPU | 42 ms | 11 ms | 7 ms |
+| the same, as the laptop sees it, dial to the first 32 bytes back | 53 ms | 20 ms | 15 ms |
+| Full handshake, the board dials: board CPU | 134 ms | 45 ms | 29 ms |
+| the same, by the board's clock, dial to session | 151 ms | 61 ms | 48 ms |
+| Resumed handshake, the board dials: board CPU | 46 ms | 15 ms | 10 ms |
+| the same, by the board's clock, dial to the peer's answer | 50 ms | 19 ms | 14 ms |
+| Round trip of 32 bytes on a stream, timed by the laptop | 4.7 ms | 4.2 ms | 3.7 ms |
+| the same, timed by the board | 4.7 ms | 4.2 ms | 3.7 ms |
+| 256 KiB there and back on a stream | 52 KiB/s | 58 KiB/s | 59 KiB/s |
+
+The round trip and the transfer are the line's, not the board's: the line carries 100 kB/s.
+
+By optimisation level:
+
+| | `3` | `s` | `z` |
+|---|---:|---:|---:|
+| Image in the flash | 716 KiB | 376 KiB | 358 KiB |
+| Statics | 200 KiB | 200 KiB | 200 KiB |
+| Stack, deepest | 151 KiB | 229 KiB | 238 KiB |
+| Full handshake, the board accepts: board CPU at 64 MHz | 124 ms | 153 ms | 228 ms |
+| the same at 320 MHz | 37 ms | 39 ms | 59 ms |
+| the same at 600 MHz | 24 ms | 24 ms | 37 ms |
+| Full handshake, the board dials: board CPU at 64 MHz | 134 ms | 162 ms | 242 ms |
+| the same at 320 MHz | 45 ms | 45 ms | 66 ms |
+| the same at 600 MHz | 29 ms | 28 ms | 43 ms |
+| Resumed handshake, the board accepts: board CPU at 64 MHz | 42 ms | 55 ms | 70 ms |
+| the same at 320 MHz | 11 ms | 13 ms | 18 ms |
+| the same at 600 MHz | 7 ms | 8 ms | 11 ms |
+
+## Memory
+
+One session takes 351 KiB of the chip's 620 KiB at `opt-level = 3`:
+
+| | bytes |
+|---|---:|
+| The endpoint (a table of one session, tables sized for a device) | 57,616 |
+| The session's slot (the connection, its handshake machine, its tables) | 69,040 |
+| The session's memory: a pool of three 16 KiB chunks and the stream table | 61,936 |
+| The node's keys, the receive ring of the serial line, the rest | 16,416 |
+| Stack, deepest | 154,848 |
+
+- **Table sizes.** With the library's default sizes the endpoint is 326,592 bytes on this target, more than half of
+  the chip's RAM, so the board's builds set the sizes above (`pinc-core`, `sizes`).
+- **Stack.** The image's stack is the lower 368 KiB of the AXI SRAM (`firmware/memory.x`), below the statics: a stack
+  that outgrows its room leaves the RAM and the board reports the fault, where one above the statics would write over
+  them. The deepest path is a dial.
+- **Key pair.** Without an allocator `pinc_crypto::Keypair` holds room for an ML-DSA key whatever the algorithm
+  (65,928 bytes, [#706](https://github.com/sourcenetwork/pinc/issues/706)). The board keeps its Ed25519 key as itself
+  and answers the endpoint's signature requests with it.
+
+## The chip's fault with the data cache on
+
+With the data cache on, the core fills cache lines ahead of loads it has not decided to make, and a fill that lands in
+an address range nothing answers stops the chip: no fault, no panic, and the debug port stops answering. Whether an
+image meets it depends on its bytes, not its source. ST names the range `0x2500_0000` to `0x25FF_FFFF` for an erratum
+([community thread](https://community.st.com/stm32-mcus-embedded-software-32/stm32h7rs-h7s3l8-core-freeze-xspi-dcache-in-bootloader-159810)).
+
+`firmware/src/board.rs` closes every range no memory answers with the memory protection unit before it turns the
+cache on. An image that stopped in eight runs of eight without the closed ranges ran six of six with them.
+
+A probe that was once told to stop the core at a fault leaves that order in the core until its power goes, and the
+image's fault handler then never runs. The image clears the order when it starts, and `board.sh` does not give it.
+
+## Limits
+
+- No network: the line loses nothing and has one peer. Ethernet is on the board and not used.
+- One session and one stream at a time (the pool of three chunks holds one stream's buffers both ways), Ed25519
+  identities only, no key roll, no path change.
+- One board, one session of measurements for these figures.
+- From 320 to 600 MHz the board CPU of a handshake falls by a factor of 1.5 to 1.6 for 1.9 times the clock; the cause
+  is not known.
+- Built for size the stack is 78 to 87 KiB deeper than at `opt-level = 3`; the cause is not known.
+- In one session of 23 November the 64 MHz image at `opt-level = 3` closed with the path dead in both its runs, with
+  no fault reported; it ran in every other session. The cause is not known.
+- The board does not start alone: the probe loads the boot stage into RAM after every reset, and the board stops when
+  the probe lets go of it.
+- The board's time is by the chip's internal oscillator, not a crystal; its time of a handshake and the laptop's agree
+  within a millisecond in 51.
+- The facade (`pinc`) is not used: the host here is `link/`, with no allocator.
+
+## Result directories
+
+- [`results/2026-11-24/`](results/2026-11-24): the session above, nine files.
+- [`results/2026-11-23/`](results/2026-11-23): the 64 and 320 MHz images, commit `b3e6d630`. Its times are within 3 ms
+  of the session above; its stack at `z` is 249 KiB.
+- [`results/2026-11-23-without-conn-in-place/`](results/2026-11-23-without-conn-in-place): the same images on the
+  library without the connection built in its slot (#763); its files name commits that are not in this repository.
+  At `opt-level = 3` the stack reaches 351 KiB of its 368. Built for size the board accepts (298 and 300 KiB) and its
+  dial overruns the stack; the two `-dial-fault.log` files hold the board's fault reports.
