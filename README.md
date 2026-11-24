@@ -111,39 +111,39 @@ and close run on 1 MiB of stack and fail on 512 KiB. `Limits::wasm()` is the pre
 | `tests/` | every test (integration, property, scenario, trace), run with [cargo-nextest](https://nexte.st) |
 | `benches/` | micro benchmarks (per packet, allocations, copies) and the loopback comparison with two other libraries; a workspace of its own |
 | `distributed/` | the distributed test harness: one binary that builds an emulated network of containers, runs PINC and two other libraries' nodes on it with faults, measures them and serves a dashboard; a workspace of its own |
-| `docs/` | [PROOFS.md](docs/PROOFS.md): what is proven, how it is checked, the assumptions |
+| `docs/` | [PROOFS.md](https://github.com/sourcenetwork/pinc/blob/master/docs/PROOFS.md): what is proven, how it is checked, the assumptions |
 | `scripts/` | the gate and the proof runner |
 
 ## Crates
 
 | Crate | What it does | `no_std` | Status |
 |---|---|---|---|
-| `pinc` | the facade: builder, connections, streams, datagrams, topics, lookup by id, the hub and relay roles, over the host's three closures | yes, with an allocator and a `Platform` (the `std` feature is on by default) | built; proven in part, the rest is [being closed](docs/proofs/closing.md) ([#748](https://github.com/sourcenetwork/pinc/issues/748)) |
+| `pinc` | the facade: builder, connections, streams, datagrams, topics, lookup by id, the hub and relay roles, over the host's three closures | yes, with an allocator and a `Platform` (the `std` feature is on by default) | built; proven in part, the rest is [being closed](https://github.com/sourcenetwork/pinc/blob/master/docs/proofs/closing.md) ([#748](https://github.com/sourcenetwork/pinc/issues/748)) |
 | `pinc-wire` | varints and a strict canonical DAG-CBOR codec, parsed in place | yes | built, proven |
 | `pinc-dag` | content-addressed blocks and CIDs, value roots, range proofs | yes, heap-free | built, proven |
-| `pinc-crypto` | RustCrypto primitives behind one `Provider`: AEADs, X25519, ML-KEM-768, four identity algorithms, BLAKE3 | yes | built; proven except the items [being closed](docs/proofs/closing.md) |
-| `pinc-keystore` | long-term keys behind a `KeyStore` trait; a software store and a pure-Rust TPM 2.0 store (`hwenc`) | yes, with an allocator (the TPM store needs `std`) | built; proven except the TPM store under pressure and the items [being closed](docs/proofs/closing.md) |
+| `pinc-crypto` | RustCrypto primitives behind one `Provider`: AEADs, X25519, ML-KEM-768, four identity algorithms, BLAKE3 | yes | built; proven except the items [being closed](https://github.com/sourcenetwork/pinc/blob/master/docs/proofs/closing.md) |
+| `pinc-keystore` | long-term keys behind a `KeyStore` trait; a software store and a pure-Rust TPM 2.0 store (`hwenc`) | yes, with an allocator (the TPM store needs `std`) | built; proven except the TPM store under pressure and the items [being closed](https://github.com/sourcenetwork/pinc/blob/master/docs/proofs/closing.md) |
 | `pinc-security` | hybrid post-quantum handshake, resumption with 0-RTT, key schedule, packet protection, key roll | yes | built, proven |
-| `pinc-transport` | PINCER: streams, datagrams, flow and congestion control, loss recovery, pacing, path MTU, migration | yes | built; proven except the items [being closed](docs/proofs/closing.md) |
-| `pinc-core` | the SANS-IO endpoint: host interface, protocol dispatch, commands, events, queries | yes | built; proven except the items [being closed](docs/proofs/closing.md) |
-| `pinc-node` | the endpoint, the connectivity client and every layer composed over real sessions | yes | built; proven except the items [being closed](docs/proofs/closing.md) |
-| `pinc-connect` | carriers, relays, signed records and lookup, hole punching, the hub tunnel, the mailbox | yes | built; proven except the thin kind of a running dial ([#748](https://github.com/sourcenetwork/pinc/issues/748)) and the items [being closed](docs/proofs/closing.md) |
+| `pinc-transport` | PINCER: streams, datagrams, flow and congestion control, loss recovery, pacing, path MTU, migration | yes | built; proven except the items [being closed](https://github.com/sourcenetwork/pinc/blob/master/docs/proofs/closing.md) |
+| `pinc-core` | the SANS-IO endpoint: host interface, protocol dispatch, commands, events, queries | yes | built; proven except the items [being closed](https://github.com/sourcenetwork/pinc/blob/master/docs/proofs/closing.md) |
+| `pinc-node` | the endpoint, the connectivity client and every layer composed over real sessions | yes | built; proven except the items [being closed](https://github.com/sourcenetwork/pinc/blob/master/docs/proofs/closing.md) |
+| `pinc-connect` | carriers, relays, signed records and lookup, hole punching, the hub tunnel, the mailbox | yes | built; proven except the thin kind of a running dial ([#748](https://github.com/sourcenetwork/pinc/issues/748)) and the items [being closed](https://github.com/sourcenetwork/pinc/blob/master/docs/proofs/closing.md) |
 | `pinc-portmap` | a UDP port mapping from the home gateway (PCP, NAT-PMP, UPnP-IGD), off unless turned on | yes, heap-free | built, proven |
 | `pinc-table` | fixed tables over one block of bytes made once: sorted slab, array, ring, slot pool; no allocation after setup | yes, heap-free | built, proven |
-| `pinc-membership` | hub roster and member view: leases, probes, incarnations, leave, revocation | yes | built; proven except the items [being closed](docs/proofs/closing.md) |
-| `pinc-values` | verified streaming of values of any size from up to four providers, with resume | yes | built; proven except the items [being closed](docs/proofs/closing.md) |
-| `pinc-broadcast` | topic broadcast through hubs with origin authentication, replay floors and a bounded log | yes | built; proven except the items [being closed](docs/proofs/closing.md) |
+| `pinc-membership` | hub roster and member view: leases, probes, incarnations, leave, revocation | yes | built; proven except the items [being closed](https://github.com/sourcenetwork/pinc/blob/master/docs/proofs/closing.md) |
+| `pinc-values` | verified streaming of values of any size from up to four providers, with resume | yes | built; proven except the items [being closed](https://github.com/sourcenetwork/pinc/blob/master/docs/proofs/closing.md) |
+| `pinc-broadcast` | topic broadcast through hubs with origin authentication, replay floors and a bounded log | yes | built; proven except the items [being closed](https://github.com/sourcenetwork/pinc/blob/master/docs/proofs/closing.md) |
 | `pinc-reconcile` | range-based set reconciliation whose cost scales with the difference | yes | built, proven |
 | `pinc-dtn` | bundles sealed to a recipient, erasure coding, custody, copy-limited forwarding | yes | built, proven |
 | `pinc-sim` | deterministic network simulator and scenario suite | no | built |
 
 **proven**: every property has a model (a TLA+ model checked by TLC over stated bounds, or a Lean theorem) and a
 check of the real code against it (trace validation or a model-based test); the others are being closed
-([docs/PROOFS.md](docs/PROOFS.md), [#105](https://github.com/sourcenetwork/pinc/issues/105)).
+([docs/PROOFS.md](https://github.com/sourcenetwork/pinc/blob/master/docs/PROOFS.md), [#105](https://github.com/sourcenetwork/pinc/issues/105)).
 
 ## Build and test
 
-The [justfile](justfile) holds every task; CI runs the same recipes.
+The [justfile](https://github.com/sourcenetwork/pinc/blob/master/justfile) holds every task; CI runs the same recipes.
 
 ```sh
 just setup        # install everything: system packages, the Rust toolchain, cargo-nextest, Lean, the TLA+ tools
@@ -177,7 +177,7 @@ bounds, and both are validated against traces recorded from the real Rust code. 
 the endpoint's table of held first-flight fragments is driven along every edge of TLC's bounded state graph of its
 model (model-based tests). Only the dependencies are taken on trust: the cryptographic primitives and Rust `core` and
 `std` semantics. The crates marked proven above are covered in full; the others land crate by crate.
-[docs/PROOFS.md](docs/PROOFS.md) has the property table, how each property is checked, the assumptions and what is
+[docs/PROOFS.md](https://github.com/sourcenetwork/pinc/blob/master/docs/PROOFS.md) has the property table, how each property is checked, the assumptions and what is
 still being closed.
 
 ## Performance
