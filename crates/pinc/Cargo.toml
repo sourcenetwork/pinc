@@ -1,6 +1,6 @@
 [package]
 name = "pinc"
-description = "PINC for applications: one entry point with a builder, connections, streams, datagrams, access hooks and a typed protocol registration, all async, with the host passing its I/O as three async closures"
+description = "PINC: Next-gen peer-to-peer networking stack"
 keywords = ["p2p", "transport", "facade", "no_std"]
 version.workspace = true
 authors.workspace = true
