@@ -140,6 +140,111 @@ fn a_quiet_hub_session_on_its_own_carrier_is_kept_alive_by_the_carrier_ping_and_
     });
 }
 
+/// A dial to a peer whose pulse session has been quiet for `PARENT_RX` probes it through the carrier and rides it.
+/// The carrier is the real one here: the connect client sends the PING and credits the relay's PONG, so the probe
+/// reaches the hub as a carrier PING and the dial becomes a sub-session of the live session, never a second root.
+#[test]
+fn a_dial_to_a_quiet_pulse_hub_session_probes_through_the_carrier_and_rides_it() {
+    use pinc_connect::relay::Trace;
+    use pinc_core::Event;
+    use pinc_sim::LanConfig;
+    use pinc_tests::Ev;
+    big(|| {
+        let mut w = World::new(84);
+        let (r, rs) = w.relay(1, relay_ip(10));
+        let lan = w.sim.add_lan(LanConfig {
+            udp_block: true,
+            ..LanConfig::default()
+        });
+        let a = w.client_in(&client_spec(0xa1, priv_addr(1), &[rs]), lan);
+        w.run(secs(10));
+        let hub = w.relay_node(r).id();
+        w.sim.command(
+            secs(10),
+            a,
+            Cmd::Dial {
+                node: hub,
+                hints: vec![],
+                role: pinc_core::Role::Hub,
+            },
+        );
+        w.run(secs(20));
+        let s = w.connected(a).expect("the hub session is up through the carrier");
+        let a_id = w.client(a).host.me;
+        let pulses = |w: &World| {
+            w.relay_node(r)
+                .traces
+                .iter()
+                .filter(|(_, t)| matches!(t, Trace::Pulse { node } if *node == a_id))
+                .map(|(at, _)| *at)
+                .collect::<Vec<_>>()
+        };
+        // Step to a moment between two carrier pulses, with the session quiet for longer than the parent window.
+        let mut now = secs(20);
+        let st = loop {
+            now += SEC;
+            assert!(now < secs(320), "no quiet moment between two carrier pulses in 300 s");
+            w.run(now);
+            let st = w.client(a).session_stats(s).expect("the hub session is there");
+            let last = pulses(&w).last().copied();
+            if st.established
+                && !st.pulse_due
+                && now - st.heard_any >= 21 * SEC
+                && last.is_some_and(|p| now - p >= 25 * SEC)
+            {
+                break st;
+            }
+        };
+        assert!(st.established, "the hub session is established");
+        assert!(
+            now - st.heard_any >= 20 * SEC,
+            "the hub session has been quiet for the parent window"
+        );
+        assert!(!st.pulse_due, "no carrier PING is due before the probe asks");
+        let (pulses_before, dialed_before, t0) = (pulses(&w).len(), w.client(a).dialed.len(), now);
+
+        w.sim.command(
+            t0,
+            a,
+            Cmd::Dial {
+                node: hub,
+                hints: vec![],
+                role: pinc_core::Role::Other,
+            },
+        );
+        w.run(t0 + secs(2));
+        assert_eq!(
+            w.client(a).dialed.len(),
+            dialed_before + 1,
+            "the second dial returned a session"
+        );
+        let child = *w.client(a).dialed.last().unwrap();
+        assert_ne!(child, s, "the dial got its own session id");
+        let rode = w.when(
+            a,
+            |e| matches!(e, Ev::Ep(Event::Connected { session, .. }) if *session == child),
+        );
+        assert!(
+            rode.is_some_and(|t| t > t0),
+            "the dial rode the quiet session: {rode:?}\n{}",
+            w.dump(a)
+        );
+        let cs = w.client(a).session_stats(child).expect("the dial's session is there");
+        assert!(
+            cs.sub && cs.established,
+            "the dial is an established sub-session: {cs:?}"
+        );
+        let ps = w.client(a).session_stats(s).expect("the hub session is still there");
+        assert!(ps.established, "the probe did not close the live pulse session");
+        assert!(
+            pulses(&w).len() > pulses_before,
+            "the probe went out as a carrier PING: {pulses_before} pulses before, {} after",
+            pulses(&w).len()
+        );
+        assert_eq!(w.client(a).host.ep.sessions().count(), 2, "no second root was made");
+    });
+}
+
 #[test]
 fn frames_queued_back_to_back_share_one_carrier_record_and_a_handshake_packet_never_does() {
     big(|| {

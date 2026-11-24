@@ -26,7 +26,7 @@ PINC_TRACE_DIR="$dir" cargo test -q -p pinc-tests --features hwenc \
     --test trace_node_event_queue --test trace_node_portmap --test trace_node_silence --test trace_node_timer_bound \
     --test trace_node_values --test trace_node_values_net --test trace_packet_kind --test trace_path_held \
     --test trace_path_move --test trace_platform_time --test trace_portmap_addr --test trace_portmap_codec \
-    --test trace_portmap_lease --test trace_portmap_text --test trace_portmap_upnp --test trace_recovery_math \
+    --test trace_portmap_lease --test trace_portmap_text --test trace_portmap_upnp --test trace_quiet_probe --test trace_recovery_math \
     --test trace_responder_limit --test trace_sec_ids --test trace_settle --test trace_stream_send \
     --test trace_table_array --test trace_table_bytes --test trace_table_pool --test trace_table_ring \
     --test trace_table_slab --test trace_tx --test trace_wire_cbor --test trace_wire_cursor
@@ -133,6 +133,7 @@ par trace_tlc TraceDgramQueue "datagram queues"
 par trace_tlc TraceEvQueue "event queue"
 par trace_tlc TraceIface "interface and suspension"
 par trace_tlc TraceSettle "keepalive plan applied"
+par trace_tlc TraceQuietProbe "quiet-parent probe"
 par trace_tlc TraceTx "datagrams out"
 par trace_tlc TraceDagBlock "pinc-dag block"
 par trace_tlc TraceDagCar "pinc-dag CAR"

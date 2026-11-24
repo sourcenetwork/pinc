@@ -133,7 +133,7 @@ impl Error {
     /// The error for a dial that did not produce a session.
     pub const fn dial(reason: ConnectFailure) -> Self {
         match reason {
-            ConnectFailure::Refused => Self::new(ErrorKind::Config, "a node cannot dial itself"),
+            ConnectFailure::Refused => Self::new(ErrorKind::Unreachable, "no address can be reached"),
             ConnectFailure::Denied => Self::new(ErrorKind::Refused, "the access check refused the peer"),
             ConnectFailure::Timeout => Self::new(ErrorKind::TimedOut, "the peer did not answer in time"),
             ConnectFailure::Handshake(_) => Self::new(ErrorKind::Unreachable, "the handshake failed"),
@@ -237,3 +237,16 @@ impl From<Error> for io::Error {
 
 /// The result of an operation of the driver or the facade.
 pub type Result<T, E = Error> = core::result::Result<T, E>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A dial whose addresses could not be used is unreachable: the facade only sees this reason from a dial that
+    /// had a session id, never from a node dialing itself (that is a refused command, [`ErrorKind::Config`]).
+    #[test]
+    fn a_dial_with_no_usable_address_is_unreachable() {
+        assert_eq!(Error::dial(ConnectFailure::Refused).kind(), ErrorKind::Unreachable);
+        assert_eq!(Error::command(CommandError::Refused).kind(), ErrorKind::Config);
+    }
+}

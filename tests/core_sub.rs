@@ -14,48 +14,8 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use pinc_core::{Answer, Command, EndReason, Event, Query, Role, SessionId, Value};
+use pinc_core::{Answer, Command, EndReason, Event, Query, Role};
 use pinc_tests::*;
-
-fn is_connected(e: &Event) -> bool {
-    matches!(e, Event::Connected { .. })
-}
-
-fn dial(net: &mut CoreNet, a: usize, b: usize, alpn: &[u8]) -> (SessionId, pinc_core::Reply) {
-    let (peer, to, now) = (net.nodes[b].node, net.nodes[b].addr, net.now);
-    let rep = net.nodes[a].connect(now, peer, alpn, to, Role::Other).unwrap();
-    (net.nodes[a].session(&rep), rep)
-}
-
-fn write_new(net: &mut CoreNet, n: usize, s: SessionId, data: &[u8]) {
-    let now = net.now;
-    let Value::Stream(id) = net.nodes[n]
-        .cmd(
-            now,
-            Command::OpenStream {
-                session: s,
-                bidi: false,
-            },
-        )
-        .unwrap()
-        .value
-    else {
-        panic!()
-    };
-    net.nodes[n]
-        .cmd(
-            now,
-            Command::Write {
-                session: s,
-                stream: id,
-                data,
-            },
-        )
-        .unwrap();
-    net.nodes[n]
-        .cmd(now, Command::Finish { session: s, stream: id })
-        .unwrap();
-}
 
 #[test]
 fn a_second_protocol_connects_at_once_and_its_data_arrives_one_way_later() {
@@ -136,18 +96,23 @@ fn a_second_protocol_connects_at_once_and_its_data_arrives_one_way_later() {
     });
 }
 
+/// A parent heard from within twenty seconds carries a dial with no round trip; a silent one does not: the dial
+/// probes it first (the ride and the lapse are covered by the probe tests above and below).
 #[test]
-fn a_parent_silent_for_over_twenty_seconds_does_not_carry_a_dial_and_a_heard_one_does() {
+fn a_parent_heard_within_twenty_seconds_carries_a_dial_and_a_silent_one_probes_first() {
     big_stack(|| {
         let (mut net, a, b) = silent_parent();
         let marker = net.captured.len();
-        let (child, _) = dial(&mut net, a, b, ALPN_B);
+        let (_, rep) = dial(&mut net, a, b, ALPN_B);
+        assert!(
+            !rep.events.any(is_connected),
+            "the dial connected before its probe resolved"
+        );
         net.run_for(SEC_NS);
-        write_new(&mut net, a, child, b"own-handshake");
-        assert!(net.run(net.now + 5 * SEC_NS, |n| {
-            n.nodes[b].read.values().any(|v| v == b"own-handshake")
-        }));
-        assert!(handshake_since(&net, marker), "no handshake datagram was sent");
+        assert!(
+            !handshake_since(&net, marker),
+            "a handshake was sent while the dial's probe still ran"
+        );
         // A parent heard from a moment ago carries the next dial.
         net.run_for(SEC_NS);
         let marker = net.captured.len();
@@ -164,29 +129,12 @@ fn a_parent_silent_for_over_twenty_seconds_does_not_carry_a_dial_and_a_heard_one
     });
 }
 
-/// Two connected nodes whose parent session has not heard its peer for 25 seconds, with the session still up.
-fn silent_parent() -> (CoreNet, usize, usize) {
-    let mut net = CoreNet::new(10 * MS_NS);
-    net.capture = true;
-    let (a, b) = (net.add(1), net.add(2));
-    net.connect_pair(a, b, ALPN_A, Role::Other);
-    net.run_for(SEC_NS);
-    let silent = net.nodes[b].addr;
-    net.loss = Some(Box::new(move |f, _, _| f == silent));
-    net.run_for(25 * SEC_NS);
-    net.loss = None;
-    assert_eq!(net.nodes[a].ep.sessions().count(), 1);
-    (net, a, b)
-}
-
-/// Whether a datagram with a long header left since `marker`: a handshake started.
-fn handshake_since(net: &CoreNet, marker: usize) -> bool {
-    net.captured[marker..].iter().any(|(_, _, d)| d[0] & 0x80 != 0)
-}
-
 #[test]
 fn a_carrier_ping_sent_does_not_count_as_hearing_the_parent_but_a_pong_does() {
     big_stack(|| {
+        // A carrier ping the node sent is not the peer answering: the dial does not ride at once, it probes the
+        // parent first. (The window is two of the session's probe timeouts now, so the lapse it guards against
+        // comes fast; what the rule guards is the ride, and that waits for an answer.)
         let (mut net, a, b) = silent_parent();
         let parent = net.nodes[a].ep.sessions().next().unwrap();
         let t = net.now;
@@ -199,14 +147,13 @@ fn a_carrier_ping_sent_does_not_count_as_hearing_the_parent_but_a_pong_does() {
                 },
             )
             .unwrap();
-        let marker = net.captured.len();
-        dial(&mut net, a, b, ALPN_B);
-        net.run_for(SEC_NS);
+        let (_, rep) = dial(&mut net, a, b, ALPN_B);
         assert!(
-            handshake_since(&net, marker),
+            !rep.events.any(is_connected),
             "a ping that went out made the parent look heard"
         );
-        // The dial above started its own session; a pong that came back makes the parent heard again.
+        // A pong that came back is the peer alive: the dial rides the parent at once, with no probe and no
+        // handshake.
         let (mut net, a, b) = silent_parent();
         let parent = net.nodes[a].ep.sessions().next().unwrap();
         let t = net.now;
@@ -220,12 +167,17 @@ fn a_carrier_ping_sent_does_not_count_as_hearing_the_parent_but_a_pong_does() {
             )
             .unwrap();
         let marker = net.captured.len();
-        dial(&mut net, a, b, ALPN_B);
+        let (child, rep) = dial(&mut net, a, b, ALPN_B);
+        assert!(
+            rep.events.any(is_connected),
+            "a heard parent did not carry the dial at once"
+        );
         net.run_for(SEC_NS);
         assert!(
             !handshake_since(&net, marker),
             "a pong that came back did not make the parent heard"
         );
+        assert!(net.nodes[a].saw(|e| matches!(e, Event::Connected { session, .. } if *session == child)));
     });
 }
 
@@ -390,22 +342,6 @@ fn a_child_waits_with_its_parent_for_the_access_check() {
     });
 }
 
-/// Two connected nodes whose peer restarted (same identity and address, none of the session state) and then stayed
-/// quiet: the net, the nodes, and the instant the dialer last heard a datagram from it.
-fn restarted_peer() -> (CoreNet, usize, usize, u64) {
-    let mut net = CoreNet::new(10 * MS_NS);
-    net.capture = true;
-    let (a, b) = (net.add(1), net.add(2));
-    let (parent, _) = net.connect_pair(a, b, ALPN_A, Role::Other);
-    net.run_for(SEC_NS);
-    let (addr, now) = (net.nodes[b].addr, net.now);
-    net.nodes[b] = TNode::new(2, addr, now);
-    let Answer::Stats(st) = net.nodes[a].ep.query(Query::Stats(parent)) else {
-        panic!()
-    };
-    (net, a, b, st.heard)
-}
-
 #[test]
 fn a_dial_within_twenty_seconds_of_hearing_a_peer_that_restarted_rides_the_dead_session() {
     big_stack(|| {
@@ -426,6 +362,8 @@ fn a_dial_within_twenty_seconds_of_hearing_a_peer_that_restarted_rides_the_dead_
     });
 }
 
+/// A dial to a peer that restarted and stayed silent past twenty seconds probes the dead session first; the peer
+/// never answers, so the probe lapses into the dial's own handshake and the data flows on it.
 #[test]
 fn a_dial_after_twenty_seconds_without_hearing_a_peer_that_restarted_makes_a_handshake_and_connects() {
     big_stack(|| {
@@ -433,8 +371,20 @@ fn a_dial_after_twenty_seconds_without_hearing_a_peer_that_restarted_makes_a_han
         net.run_for((heard + 21 * SEC_NS).saturating_sub(net.now));
         assert_eq!(net.nodes[a].ep.sessions().count(), 1, "the dead session closed early");
         let marker = net.captured.len();
+        let parent = net.nodes[a].ep.sessions().next().unwrap();
+        let Answer::Stats(st) = net.nodes[a].ep.query(Query::Stats(parent)) else {
+            panic!()
+        };
+        // The bound of the issue: the probe's wait (two probe timeouts of the session), then one handshake.
+        let window = 2 * st.pto;
+        let dial_now = net.now;
         let (child, _) = dial(&mut net, a, b, ALPN_B);
-        net.run_for(SEC_NS);
+        assert!(
+            net.run(dial_now + window + SEC_NS, |n| {
+                n.nodes[a].saw(|e| matches!(e, Event::Connected { session, .. } if *session == child))
+            }),
+            "the dial did not connect within the probe's wait and one handshake"
+        );
         assert!(
             handshake_since(&net, marker),
             "no handshake started for a silent parent"
@@ -446,10 +396,13 @@ fn a_dial_after_twenty_seconds_without_hearing_a_peer_that_restarted_makes_a_han
     });
 }
 
+// The two optimistic dials below started from `silent_parent` until the quiet-parent probe (#693): a dial to a quiet
+// parent now probes it first. They start from a closed parent, so they still test the optimistic handshake itself;
+// the probe's lapse into one is tested in `core_sub_probe`.
 #[test]
 fn an_optimistic_handshake_dial_opens_a_stream_and_writes_before_the_handshake_ends() {
     big_stack(|| {
-        let (mut net, a, b) = silent_parent();
+        let (mut net, a, b) = closed_parent();
         let t0 = net.now;
         let (child, rep) = dial(&mut net, a, b, ALPN_B);
         assert!(rep.events.any(is_connected));
@@ -467,7 +420,7 @@ fn an_optimistic_handshake_dial_opens_a_stream_and_writes_before_the_handshake_e
 #[test]
 fn an_optimistic_dial_that_is_never_answered_ends_with_its_early_stream_and_is_told_once() {
     big_stack(|| {
-        let (mut net, a, b) = silent_parent();
+        let (mut net, a, b) = closed_parent();
         let addr_b = net.nodes[b].addr;
         net.loss = Some(Box::new(move |_, to, _| to == addr_b));
         let (child, rep) = dial(&mut net, a, b, ALPN_B);

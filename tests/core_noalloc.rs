@@ -10,7 +10,7 @@
     clippy::cast_possible_truncation
 )]
 
-use pinc_core::{Command, Role, Value};
+use pinc_core::{Command, Event, Role, Value};
 use pinc_tests::*;
 
 pinc_tests::install_counting_allocator!();
@@ -108,6 +108,107 @@ fn a_sub_session_and_a_dial_after_warm_up_allocate_nothing_either() {
         meter_endpoint_calls(false);
         let allocs = take_metered_allocs();
         assert_eq!(allocs, 0, "opening a sub-session allocated {allocs} times");
+    });
+}
+
+/// A dial to a quiet parent probes it (`QUIET_PROBE`): the probe, its ride, its end by a close and its lapse into a
+/// handshake allocate nothing.
+#[test]
+fn a_quiet_parent_probe_rides_lapses_and_ends_without_allocating() {
+    big_stack(|| {
+        // A pair whose session has not heard its peer for 21 s, the peer alive.
+        let quiet = || {
+            let mut net = CoreNet::new(5 * MS_NS);
+            let (a, b) = (net.add(1), net.add(2));
+            net.connect_pair(a, b, ALPN_A, Role::Other);
+            net.run_for(SEC_NS);
+            let to = net.nodes[b].addr;
+            net.loss = Some(Box::new(move |f, _, _| f == to));
+            net.run_for(21 * SEC_NS);
+            net.loss = None;
+            net
+        };
+        let connected =
+            |net: &CoreNet, s| net.nodes[0].saw(|e| matches!(e, Event::Connected { session, .. } if *session == s));
+        // A dial that probes: its own command reports no connection.
+        let probe = |net: &mut CoreNet| {
+            let (peer, to) = (net.nodes[1].node, net.nodes[1].addr);
+            let rep = net.nodes[0].connect(net.now, peer, ALPN_B, to, Role::Other).unwrap();
+            assert!(
+                !rep.events.any(|e| matches!(e, Event::Connected { .. })),
+                "the dial did not probe"
+            );
+            net.nodes[0].session(&rep)
+        };
+        let _ = take_metered_allocs();
+        // The ride: the peer answers the probe's challenge.
+        let mut net = quiet();
+        meter_endpoint_calls(true);
+        let rode = probe(&mut net);
+        assert!(net.run(net.now + 2 * SEC_NS, |n| connected(n, rode)));
+        meter_endpoint_calls(false);
+        // The end: the application closes the dial while it probes.
+        let mut net = quiet();
+        meter_endpoint_calls(true);
+        let closed = probe(&mut net);
+        let now = net.now;
+        net.nodes[0]
+            .cmd(
+                now,
+                Command::Close {
+                    session: closed,
+                    error: 0,
+                },
+            )
+            .unwrap();
+        net.run_for(SEC_NS);
+        meter_endpoint_calls(false);
+        assert!(net.nodes[0].saw(|e| matches!(e, Event::ConnectFailed { session: Some(s), .. } if *s == closed)));
+        // The lapse: the peer stays silent past the window, and the dial makes its own handshake.
+        let mut net = quiet();
+        let to = net.nodes[1].addr;
+        net.loss = Some(Box::new(move |f, _, _| f == to));
+        meter_endpoint_calls(true);
+        let lapsed = probe(&mut net);
+        // The connectivity client's flight commands on the probing id are kept for the lapse.
+        let now = net.now;
+        let x: std::net::SocketAddr = ([192, 0, 2, 77], 4433).into();
+        net.nodes[0]
+            .cmd(
+                now,
+                Command::FlightPaths {
+                    session: lapsed,
+                    addrs: &[x],
+                    skip_primary: false,
+                },
+            )
+            .unwrap();
+        net.nodes[0]
+            .cmd(
+                now,
+                Command::FirstResend {
+                    session: lapsed,
+                    delay: 0,
+                },
+            )
+            .unwrap();
+        net.nodes[0]
+            .cmd(
+                now,
+                Command::HoldFlight {
+                    session: lapsed,
+                    hold: false,
+                },
+            )
+            .unwrap();
+        net.run_for(3 * SEC_NS);
+        meter_endpoint_calls(false);
+        net.loss = None;
+        meter_endpoint_calls(true);
+        assert!(net.run(net.now + 5 * SEC_NS, |n| connected(n, lapsed)));
+        meter_endpoint_calls(false);
+        let allocs = take_metered_allocs();
+        assert_eq!(allocs, 0, "the probe allocated {allocs} times");
     });
 }
 

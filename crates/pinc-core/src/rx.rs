@@ -275,6 +275,12 @@ ep_impl! {
         let mut env = env!(self, now);
         let r = conn.handle_datagram_with(&mut env, &mut lent!(self), &mut self.stores, pid, buf);
         self.counters.stalled_in += u64::from(r == Err(Drop::Gated));
+        // The gate refuses a packet only after it opened, so it is the peer's: nothing of it was applied, but it is the
+        // answer a probe of this session waits for. Without it the dial makes its own handshake and the lapse closes a
+        // live session as dead.
+        if r == Err(Drop::Gated) && slot.m.probed_until > now {
+            slot.m.last_rx = now;
+        }
         let returned = conn.take_rejoined();
         if r.is_ok() {
             // An established session's packets are authenticated: a sub-session reported at once hears its peer here.

@@ -93,7 +93,9 @@ pub enum TraceEvent {
         /// The rule.
         rule: u64,
     },
-    /// A sub-session: 0 opened here, 1 accepted from the peer, 2 closed as an orphan.
+    /// A sub-session: 0 opened here, 1 accepted from the peer, 2 closed as an orphan, 3 a quiet-parent probe
+    /// started, 4 a probe rode its parent, 5 a probe lapsed into its own handshake, 6 a probe ended by the
+    /// application, 7 a lapsed probe waits on another dial's handshake.
     Sub {
         /// The step.
         step: u64,
@@ -198,6 +200,26 @@ pub enum TraceEvent {
         /// The call.
         call: u64,
     },
+    /// A step of a quiet-parent probe (`QUIET_PROBE`): 0 started, 1 the settle gate saw the probed session heard,
+    /// 2 a probe rode, 3 a probe lapsed, 4 a ride failed, 5 a command kept while probing, 6 a kept command applied,
+    /// 7 a probe ended by the application, 8 a dial read the session it would ride or probe. `gen` is the
+    /// generation of the probed slot now, `of_gen` the one the probe names. `bits`: 1 pulse, 2 heard within
+    /// `PARENT_RX`, 4 packets in flight, 8 closed by the lapse, 16 and 32 the first address of a lapse (0 none, 1
+    /// the caller's, 2 the session's own, 3 a wait on another handshake, in bits 4 and 5), 64 the slot holds the
+    /// generation the probe names, 256 to 1024 the command (1 paths, 2 resend, 3 hold, 4 unhold, in bits 8 to 10).
+    #[cfg(feature = "trace")]
+    Probe {
+        /// The step.
+        step: u64,
+        /// The dial's slot, or `u64::MAX`.
+        child: u64,
+        /// The generation of the probed slot now.
+        r#gen: u64,
+        /// The generation the probe names.
+        of_gen: u64,
+        /// The facts and outcome.
+        bits: u64,
+    },
 }
 
 impl TraceEvent {
@@ -231,6 +253,8 @@ impl TraceEvent {
             Self::TxReject { .. } => "tx_reject",
             #[cfg(feature = "trace")]
             Self::Iface { .. } => "iface",
+            #[cfg(feature = "trace")]
+            Self::Probe { .. } => "probe",
         }
     }
 
@@ -331,6 +355,23 @@ impl TraceEvent {
             Self::TxReject { dest, len, seg } => ([("dest", dest), ("len", len), ("seg", seg), NONE, NONE], 3),
             #[cfg(feature = "trace")]
             Self::Iface { slot, call } => ([("slot", slot), ("call", call), NONE, NONE, NONE], 2),
+            #[cfg(feature = "trace")]
+            Self::Probe {
+                step,
+                child,
+                r#gen,
+                of_gen,
+                bits,
+            } => (
+                [
+                    ("step", step),
+                    ("child", child),
+                    ("gen", r#gen),
+                    ("of_gen", of_gen),
+                    ("bits", bits),
+                ],
+                5,
+            ),
         }
     }
 }

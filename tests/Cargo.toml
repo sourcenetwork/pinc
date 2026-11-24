@@ -555,6 +555,14 @@ name = "core_sub"
 path = "core_sub.rs"
 
 [[test]]
+name = "core_sub_probe"
+path = "core_sub_probe.rs"
+
+[[test]]
+name = "core_sub_probe_edges"
+path = "core_sub_probe_edges.rs"
+
+[[test]]
 name = "core_sendq"
 path = "core_sendq.rs"
 
@@ -1157,6 +1165,10 @@ path = "node_partition.rs"
 [[test]]
 name = "node_revoke"
 path = "node_revoke.rs"
+
+[[test]]
+name = "node_revoke_probe"
+path = "node_revoke_probe.rs"
 
 [[test]]
 name = "node_newest_session"
@@ -1803,6 +1815,10 @@ path = "trace_dgram_size.rs"
 [[test]]
 name = "trace_finish_resend"
 path = "trace_finish_resend.rs"
+
+[[test]]
+name = "trace_quiet_probe"
+path = "trace_quiet_probe.rs"
 
 [[test]]
 name = "trace_responder_limit"

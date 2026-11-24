@@ -16,7 +16,7 @@ use std::net::SocketAddr;
 
 use connect_sim_common::*;
 use pinc_core::{is_relay_addr, relay_parts};
-use pinc_sim::{LanConfig, LinkConfig, MS, SEC, StreamPolicy, Time};
+use pinc_sim::{LanConfig, LinkChange, LinkConfig, MS, SEC, StreamPolicy, Time};
 use pinc_tests::{Cmd, Ev};
 
 /// A reach-out message a node received.
@@ -472,5 +472,68 @@ fn a_dial_that_waits_for_a_lookup_with_no_home_yet_flies_when_the_answer_arrives
             (first - secs(5) - MS) / 1000
         );
         assert!(w.connected(a).is_some(), "{}", w.dump(a));
+    });
+}
+
+/// A dial to a peer that went quiet while the direct path between the two died (pinc#743): the dial probes its
+/// session first, and the probe's lapse still flies the connectivity client's relay candidates, so the dial connects
+/// over the relay. The probing id answers the client's `Stats` and keeps its `FlightPaths`.
+#[test]
+fn a_dial_to_a_quiet_peer_whose_direct_path_died_connects_over_its_relay() {
+    big(|| {
+        let mut w = World::new(743);
+        let (r, rs) = w.relay(1, relay_ip(10));
+        let (sa, sb) = (priv_addr(1), priv_addr(2));
+        let a = w.client_public(&client_spec(0xa1, sa, &[rs]));
+        let b = w.client_public(&client_spec(0xb1, sb, &[rs]));
+        w.dial(secs(2), a, b, vec![sb]);
+        w.run(secs(8));
+        let root = w.connected(a).expect("the first dial connected");
+        // The direct path between a and b dies, both ways, and never comes back. Nothing of b reaches a for 24 s (b
+        // would otherwise move its session to the relay path and be heard there), then the relay path of a is open
+        // again.
+        w.sim.link_change(secs(8), b, a, LinkChange::Blocked(true));
+        w.sim.link_change(secs(8), a, b, LinkChange::Blocked(true));
+        w.sim.link_change(secs(8), r, a, LinkChange::Blocked(true));
+        w.sim.link_change(secs(32), r, a, LinkChange::Blocked(false));
+        w.run(secs(33));
+        let st = w.client(a).session_stats(root).expect("the root session ended");
+        assert!(st.established, "the root session ended before the dial");
+        assert!(
+            secs(33).saturating_sub(st.heard_any) >= secs(20),
+            "the root was heard {} ns ago: the dial would ride it, not probe it",
+            secs(33).saturating_sub(st.heard_any)
+        );
+        let connected = |w: &World| -> Vec<pinc_core::SessionId> {
+            w.sim
+                .events(a)
+                .iter()
+                .filter_map(|(_, e)| match e {
+                    Ev::Ep(pinc_core::Event::Connected { session, .. }) => Some(*session),
+                    _ => None,
+                })
+                .collect()
+        };
+        let before = connected(&w).len();
+        w.dial(secs(33), a, b, vec![sb]);
+        w.run(secs(43));
+        // The dial reports connected at once (its access answer is cached): it must still be up ten seconds later,
+        // which only a handshake the peer answered is.
+        let second = *connected(&w)
+            .get(before)
+            .unwrap_or_else(|| panic!("the second dial never connected: {}", w.dump(a)));
+        let up = w.client(a).session_stats(second).is_some_and(|st| st.established);
+        let sent: Vec<_> = w
+            .client(a)
+            .tx_log
+            .iter()
+            .filter(|(t, _, _)| *t >= secs(33))
+            .map(|(t, to, n)| (t / MS, *to, *n))
+            .collect();
+        assert!(
+            up,
+            "the second dial's handshake was never answered, sent {sent:?}: {}",
+            w.dump(a)
+        );
     });
 }

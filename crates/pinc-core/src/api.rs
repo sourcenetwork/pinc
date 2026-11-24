@@ -45,7 +45,8 @@ impl SessionId {
 /// Why a dial did not produce a session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConnectFailure {
-    /// The node is this one, or no address could be used.
+    /// The node is this one, or no address could be used (a dial whose quiet-parent probe lapsed with no address to
+    /// dial reports this too).
     Refused,
     /// The access check denied the peer.
     Denied,
@@ -602,7 +603,8 @@ pub enum Command<'c, S = pinc_transport::stream::NoSource> {
 pub enum Query {
     /// The counters of a session.
     Stats(SessionId),
-    /// The session at position `i` of the table, counting live sessions only.
+    /// The session at position `i` of the table, counting live sessions only. A dial that probes a quiet parent
+    /// (it has no connection yet) is listed, answering as a dial that has not connected.
     SessionAt(usize),
     /// The session of `node` made next after `after` (the oldest when `after` is `None`), a dial that has not
     /// finished included; nothing after the newest, or when `after` is not a session of `node`. One lookup a step.

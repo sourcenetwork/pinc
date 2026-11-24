@@ -44,6 +44,16 @@ const CTRL_SMALL: usize = 72;
 /// A session this node dialed to a hub acknowledges every this many ack-eliciting packets.
 const HUB_ACK_EVERY: u32 = 4;
 
+/// `addrs` with the relay addresses first, the rest in the order given. The table holds NP paths, a relay path
+/// reaches any peer that has a carrier and a direct address only a peer that can be reached there, so a list longer
+/// than the table keeps the relay paths.
+pub(crate) fn relay_first(addrs: &[SocketAddr]) -> impl Iterator<Item = &SocketAddr> {
+    addrs
+        .iter()
+        .filter(|a| is_relay_addr(a))
+        .chain(addrs.iter().filter(|a| !is_relay_addr(a)))
+}
+
 /// What the endpoint knows about the path to `remote`: through a relay, and the address family.
 pub(crate) fn path_info(remote: &SocketAddr, interface_mtu: u16) -> PathInfo {
     PathInfo {
@@ -189,6 +199,11 @@ ep_impl! {
                 Ok(Value::None)
             }
             Command::Close { session, error } => {
+                // A dial still probing its quiet parent holds no connection: closing it ends the dial (QUIET_PROBE).
+                if let Some(i) = self.probe_slot(session) {
+                    self.end_probe(i, now);
+                    return Ok(Value::None);
+                }
                 let i = self.live(session)?;
                 let conn = self.slots.get_mut(i).and_then(|s| s.conn.as_mut()).ok_or(CommandError::NoSession)?;
                 let mut env = env!(self, now);
@@ -200,6 +215,10 @@ ep_impl! {
                 for i in 0..K {
                     let Some(slot) = self.slots.get_mut(i) else { break };
                     if !slot.m.in_use {
+                        continue;
+                    }
+                    if slot.conn.is_none() && slot.m.probing {
+                        self.end_probe(i, now);
                         continue;
                     }
                     if let Some(conn) = slot.conn.as_mut() {
@@ -235,45 +254,26 @@ ep_impl! {
                 Ok(Value::None)
             }
             Command::FlightPaths { session, addrs, skip_primary } => {
+                // A dial probing its quiet parent keeps the flight for its own handshake (QUIET_PROBE).
+                if let Some(i) = self.probe_slot(session) {
+                    self.keep_flight_paths(i, addrs, skip_primary);
+                    let of = self.probe_of(i);
+                    self.trace_probe(now, 5, i, of, 1 << 8);
+                    return Ok(Value::None);
+                }
                 let i = self.live(session)?;
-                let mut ids: [Option<(pinc_transport::conn::PathId, PathInfo)>; NP] = [None; NP];
-                // The table holds NP paths, the dial's own among them. A relay path reaches any peer that has a
-                // carrier, a direct address only a peer that can be reached there, so when the list is longer than the
-                // table the relay paths go first and the direct ones follow in the order given.
-                let relay_first = addrs
-                    .iter()
-                    .filter(|a| is_relay_addr(a))
-                    .chain(addrs.iter().filter(|a| !is_relay_addr(a)));
-                for (d, a) in ids.iter_mut().zip(relay_first) {
-                    *d = self.route_for(a).map(|l| (self.path_id(l, *a), path_info(a, self.cfg.conn.interface_mtu)));
-                }
-                let conn = self.slots.get_mut(i).and_then(|s| s.conn.as_mut()).ok_or(CommandError::NoSession)?;
-                let mut env = env!(self, now);
-                // A full table makes room by dropping its oldest unvalidated path, so the paths are added from the
-                // least wanted to the most wanted, and the fan-out names the ones that are still tracked.
-                for (id, info) in ids.iter().flatten().rev() {
-                    let _ = conn.add_path(&mut env, *id, *info);
-                }
-                let mut list: [pinc_transport::conn::PathId; NP] = [pinc_transport::conn::PathId(0); NP];
-                let mut n = 0;
-                for (id, _) in ids.iter().flatten() {
-                    if conn.path_last_rx(*id).is_some()
-                        && let Some(s) = list.get_mut(n)
-                    {
-                        *s = *id;
-                        n += 1;
-                    }
-                }
-                conn.set_flight_fanout(list.get(..n).unwrap_or_default());
-                conn.set_flight_skip_primary(skip_primary);
-                self.settle(i, now);
-                Ok(Value::None)
+                self.flight_paths(i, addrs, skip_primary, now).map(|()| Value::None)
             }
             Command::Pulse { session, sent } => {
                 let i = self.live(session)?;
                 if let Some(s) = self.slots.get_mut(i) {
                     if sent {
                         s.m.last_tx = now;
+                        // A probe waited for this ping (QUIET_PROBE): it is out with the carrier, and one goes
+                        // per probe.
+                        if s.m.probed_until > now {
+                            s.m.probed_ping_for = s.m.probed_until;
+                        }
                     } else {
                         s.m.last_rx = now;
                     }
@@ -294,18 +294,28 @@ ep_impl! {
                 Ok(Value::None)
             }
             Command::FirstResend { session, delay } => {
+                if let Some(i) = self.probe_slot(session) {
+                    if let Some(s) = self.slots.get_mut(i) {
+                        s.m.probe_resend = Some(delay);
+                    }
+                    let of = self.probe_of(i);
+                    self.trace_probe(now, 5, i, of, 2 << 8);
+                    return Ok(Value::None);
+                }
                 let i = self.live(session)?;
-                let conn = self.slots.get_mut(i).and_then(|s| s.conn.as_mut()).ok_or(CommandError::NoSession)?;
-                conn.set_first_retransmit(now.saturating_add(delay));
-                self.settle(i, now);
-                Ok(Value::None)
+                self.first_resend(i, delay, now).map(|()| Value::None)
             }
             Command::HoldFlight { session, hold } => {
+                if let Some(i) = self.probe_slot(session) {
+                    if let Some(s) = self.slots.get_mut(i) {
+                        s.m.probe_hold = hold;
+                    }
+                    let of = self.probe_of(i);
+                    self.trace_probe(now, 5, i, of, if hold { 3 << 8 } else { 4 << 8 });
+                    return Ok(Value::None);
+                }
                 let i = self.live(session)?;
-                let conn = self.slots.get_mut(i).and_then(|s| s.conn.as_mut()).ok_or(CommandError::NoSession)?;
-                conn.hold_first_flight(hold);
-                self.settle(i, now);
-                Ok(Value::None)
+                self.hold_flight(i, hold, now).map(|()| Value::None)
             }
             Command::ReachOut { session, body } => {
                 if body.is_empty() || body.len() > crate::reach::REACH_BODY_MAX {
@@ -362,6 +372,59 @@ ep_impl! {
         }
     }
 
+    /// Copy the flight of session `i` to `addrs` (the table holds NP paths, the dial's own among them) and set
+    /// whether its first address is left out of it.
+    pub(crate) fn flight_paths(
+        &mut self,
+        i: usize,
+        addrs: &[SocketAddr],
+        skip_primary: bool,
+        now: u64,
+    ) -> Result<(), CommandError> {
+        let mut ids: [Option<(pinc_transport::conn::PathId, PathInfo)>; NP] = [None; NP];
+        let (set, n) = self.dial_set([], relay_first(addrs).copied());
+        for (d, a) in ids.iter_mut().zip(set.iter().take(n)) {
+            *d = self.route_for(a).map(|l| (self.path_id(l, *a), path_info(a, self.cfg.conn.interface_mtu)));
+        }
+        let conn = self.slots.get_mut(i).and_then(|s| s.conn.as_mut()).ok_or(CommandError::NoSession)?;
+        let mut env = env!(self, now);
+        // A full table makes room by dropping its oldest unvalidated path, so the paths are added from the
+        // least wanted to the most wanted, and the fan-out names the ones that are still tracked.
+        for (id, info) in ids.iter().flatten().rev() {
+            let _ = conn.add_path(&mut env, *id, *info);
+        }
+        let mut list: [pinc_transport::conn::PathId; NP] = [pinc_transport::conn::PathId(0); NP];
+        let mut n = 0;
+        for (id, _) in ids.iter().flatten() {
+            if conn.path_last_rx(*id).is_some()
+                && let Some(s) = list.get_mut(n)
+            {
+                *s = *id;
+                n += 1;
+            }
+        }
+        conn.set_flight_fanout(list.get(..n).unwrap_or_default());
+        conn.set_flight_skip_primary(skip_primary);
+        self.settle(i, now);
+        Ok(())
+    }
+
+    /// Resend the first flight of session `i` after `delay`.
+    pub(crate) fn first_resend(&mut self, i: usize, delay: u64, now: u64) -> Result<(), CommandError> {
+        let conn = self.slots.get_mut(i).and_then(|s| s.conn.as_mut()).ok_or(CommandError::NoSession)?;
+        conn.set_first_retransmit(now.saturating_add(delay));
+        self.settle(i, now);
+        Ok(())
+    }
+
+    /// Hold the resends of the first flight of session `i`, or let them go on.
+    pub(crate) fn hold_flight(&mut self, i: usize, hold: bool, now: u64) -> Result<(), CommandError> {
+        let conn = self.slots.get_mut(i).and_then(|s| s.conn.as_mut()).ok_or(CommandError::NoSession)?;
+        conn.hold_first_flight(hold);
+        self.settle(i, now);
+        Ok(())
+    }
+
     /// Run `f` on session `session`'s connection, then settle it.
     fn with_conn(
         &mut self,
@@ -405,8 +468,30 @@ ep_impl! {
     }
 
     /// The local address of the first interface that can reach `remote`.
-    fn route_for(&self, remote: &SocketAddr) -> Option<SocketAddr> {
+    pub(crate) fn route_for(&self, remote: &SocketAddr) -> Option<SocketAddr> {
         self.ifaces.iter().flatten().find(|l| l.is_ipv4() == remote.is_ipv4()).copied()
+    }
+
+    /// The addresses a dial reaches, in order: those of `lead` first, then those of `rest`; only the routable ones,
+    /// none twice, at most NP (a connection holds that many paths). A fresh dial, a quiet-parent dial and its
+    /// lapse, and the flight paths a dial is sent all choose their addresses here, so each reaches the same set.
+    pub(crate) fn dial_set(
+        &self,
+        lead: impl IntoIterator<Item = SocketAddr>,
+        rest: impl IntoIterator<Item = SocketAddr>,
+    ) -> ([SocketAddr; NP], usize) {
+        let mut set = [SocketAddr::from(([0, 0, 0, 0], 0)); NP];
+        let mut n = 0;
+        for a in lead.into_iter().chain(rest) {
+            if self.route_for(&a).is_some()
+                && !set.get(..n).unwrap_or_default().contains(&a)
+                && let Some(d) = set.get_mut(n)
+            {
+                *d = a;
+                n += 1;
+            }
+        }
+        (set, n)
     }
 
     // Out of line, as `free_slot`: a whole connection moves here.
@@ -432,6 +517,12 @@ ep_impl! {
             });
             return Err(CommandError::Refused);
         }
+        // The model reads the session the dial would ride or probe before the dial chooses.
+        #[cfg(feature = "trace")]
+        if let Some(p) = self.find_parent(&node, now).or_else(|| self.find_quiet_parent(&node, now)) {
+            let of = (p, self.slots.get(p).map_or(0, |s| s.m.generation));
+            self.trace_probe(now, 8, usize::MAX, of, 0);
+        }
         if let Some(parent) = self.find_parent(&node, now) {
             return self.open_sub(parent, node, alpn, role, now);
         }
@@ -440,11 +531,48 @@ ep_impl! {
             return self.open_sub_wait(parent, node, alpn, role, now);
         }
         let prekey = self.prekey.clone().ok_or(CommandError::NoPrekey)?;
-        let first = addrs.iter().copied().find(|a| self.route_for(a).is_some()).ok_or(CommandError::NoRoute)?;
+        // A parent that has gone quiet (not heard from for [`PARENT_RX`]) may be gone: have its session ask
+        // before committing to a handshake, so a dial to a peer that only stopped talking does not make a second
+        // root beside the session it already has (QUIET_PROBE). The dial's routable addresses go with it, as many
+        // as a connection has paths: the probe's lapse makes the dial's own handshake to them.
+        if let Some(parent) = self.find_quiet_parent(&node, now) {
+            let (set, n) = self.dial_set([], addrs.iter().copied());
+            let mut list: [Option<SocketAddr>; NP] = [None; NP];
+            for (d, a) in list.iter_mut().zip(set.iter().take(n)) {
+                *d = Some(*a);
+            }
+            return self.open_probe(parent, node, alpn, list, role, now);
+        }
+        let (set, n) = self.dial_set([], addrs.iter().copied());
+        let set = set.get(..n).unwrap_or_default();
+        let first = *set.first().ok_or(CommandError::NoRoute)?;
         let local = self.route_for(&first).ok_or(CommandError::NoRoute)?;
         let (i, mem) = self.alloc_slot(true, now).ok_or(CommandError::Full)?;
+        self.dial_fresh(i, mem, now, node, alpn_t, &prekey, set, role, first, local)?;
+        Ok(self.session_id(i))
+    }
+
+    /// Build the client connection of a fresh dial in slot `i` over `mem`: everything a dial does once its slot is
+    /// taken and its prekey and first address are known. A failed construction retires the slot (its memory went
+    /// with the call) and returns the error.
+    #[inline(never)]
+    #[allow(clippy::too_many_arguments, reason = "the dial's slot, memory, peer, prekey and first address, named once")]
+    pub(crate) fn dial_fresh(
+        &mut self,
+        i: usize,
+        mem: pinc_transport::conn::Resources<'a, S, N, C, F>,
+        now: u64,
+        node: NodeId,
+        alpn: Alpn,
+        prekey: &pinc_security::PrekeyInfo,
+        addrs: &[SocketAddr],
+        role: Role,
+        first: SocketAddr,
+        local: SocketAddr,
+    ) -> Result<(), CommandError> {
+        let alpn_bytes = alpn.as_bytes();
         let pid = self.path_id(local, first);
-        let ticket = self.tickets.take(&node, alpn, now);
+        let ticket = self.tickets.take(&node, alpn_bytes, now);
         let resume = ticket.is_some();
         let short_until = self.short_until();
         let peer_has_prekey = now < short_until && self.ekk.get(&node) == Some(prekey.hash());
@@ -456,9 +584,9 @@ ep_impl! {
         let cfg = self.conn_config(Some(&node));
         let params = ClientParams {
             peer: node,
-            alpn,
+            alpn: alpn_bytes,
             identity: &self.identity,
-            prekey: &prekey,
+            prekey,
             peer_has_prekey,
             ticket,
             path: pid,
@@ -502,9 +630,12 @@ ep_impl! {
         let Some(slot) = self.slots.get_mut(i) else { return Err(CommandError::Full) };
         slot.conn = Some(conn);
         slot.m.peer = Some(node);
-        slot.m.alpn = Some(alpn_t);
+        slot.m.alpn = Some(alpn);
         slot.m.role = role;
         slot.m.optimistic = optimistic;
+        // The slot may be a lapsed quiet-parent probe: its probe, and the parent it named, end here.
+        slot.m.probing = false;
+        slot.m.parent = None;
         trace!(self, now, Session { slot: i as u64, step: 0, dialer: 1 });
         self.link_peer(node, u32::try_from(i).unwrap_or(0));
         self.sync_cids(i, true);
@@ -515,18 +646,18 @@ ep_impl! {
             self.announce(i);
         }
         self.settle(i, now);
-        Ok(self.session_id(i))
+        Ok(())
     }
 
     /// Read state.
     pub fn query(&self, q: Query) -> Answer<'_> {
         match q {
-            Query::Stats(id) => self.slot_of(id).map_or(Answer::None, |i| self.stats_of(i)),
+            Query::Stats(id) => self.slot_of(id).or_else(|| self.probe_slot(id)).map_or(Answer::None, |i| self.stats_of(i)),
             Query::SessionAt(n) => self
                 .slots
                 .iter()
                 .enumerate()
-                .filter(|(_, s)| s.m.in_use && s.conn.is_some())
+                .filter(|(_, s)| s.m.in_use && (s.conn.is_some() || s.m.probing))
                 .nth(n)
                 .map_or(Answer::None, |(i, _)| self.stats_of(i)),
             Query::PeerSession { node, after } => self.peer_session(&node, after),
@@ -614,7 +745,38 @@ ep_impl! {
 
     fn stats_of(&self, i: usize) -> Answer<'_> {
         let Some(slot) = self.slots.get(i) else { return Answer::None };
-        let Some(conn) = slot.conn.as_ref() else { return Answer::None };
+        let Some(conn) = slot.conn.as_ref() else {
+            // A probing dial is a dial whose handshake has not started (QUIET_PROBE): the application, and the
+            // connectivity client above it, read it as a dial that has not connected yet.
+            if !slot.m.probing {
+                return Answer::None;
+            }
+            return Answer::Stats(SessionStats {
+                session: self.session_id(i),
+                node: slot.m.peer,
+                alpn: slot.m.alpn,
+                role: slot.m.role,
+                gossip: slot.m.gossip,
+                dialer: slot.m.client,
+                established: false,
+                allowed: false,
+                path: None,
+                route: None,
+                thin: self.rtt.thin(0, 0),
+                held: 0,
+                held_dropped: 0,
+                pto: 0,
+                pto_count: 0,
+                path_validated: false,
+                heard: 0,
+                heard_any: 0,
+                pulse_due: false,
+                last_app: slot.m.last_app,
+                sub: false,
+                answered: false,
+                transport: pinc_transport::conn::Stats::default(),
+            });
+        };
         let transport = conn.stats();
         let path = conn.active_path();
         let min_rtt = conn.recovery().rtt().min_rtt().unwrap_or(0);

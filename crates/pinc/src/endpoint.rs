@@ -641,6 +641,14 @@ impl<H: Hosted, D: Discovery> Endpoint<H, D> {
     /// A sub-session, and a dial towards a peer whose access was allowed in the last 25 s, return before the peer
     /// answers; [`Connection::answered`] waits for it. Such a connection to a peer that stopped ends as
     /// [`Connection::answered`] says; the connect timeout bounds only the wait for this call.
+    ///
+    /// A peer whose session has gone quiet (not heard from for over 20 s) is probed first: the session checks its
+    /// path at once, and this call returns a sub-session of it when the peer answers. When it does not within two of
+    /// the session's probe timeouts, this call makes its own handshake, or waits for another protocol's handshake to
+    /// the peer that is already running instead of making a second. The dial closes the quiet session only when
+    /// nothing of the application's is in flight on it and it is not kept alive through a relay carrier; otherwise
+    /// the quiet session ends by its own timeout.
+    ///
     /// Dropping the future closes a session that was about to open.
     ///
     /// # Errors
