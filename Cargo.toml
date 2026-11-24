@@ -11,7 +11,8 @@ authors = ["Theo M. Bulut <theo@source.network>"]
 edition = "2024"
 rust-version = "1.99"
 repository = "https://github.com/sourcenetwork/pinc"
-publish = false
+license = "Apache-2.0"
+readme = "README.md"
 
 # Every dependency of every member is declared here, once; members only say `{ workspace = true }` and add features.
 # Every PINC crate has the workspace version, and the entries below pin that same version.

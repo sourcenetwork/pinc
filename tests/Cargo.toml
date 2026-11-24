@@ -1,6 +1,6 @@
 [package]
 name = "pinc-tests"
-description = "Every test of the PINC workspace: integration, property, scenario and trace tests"
+description = "PINC workspace tests: integration, property, scenario and trace tests"
 version.workspace = true
 authors.workspace = true
 edition.workspace = true

@@ -1,11 +1,11 @@
 [package]
 name = "pinc-noalloc"
-description = "A program that links for the bare-metal targets with no allocator: two endpoints set up from static storage, a handshake and one stream between them"
+description = "PINC with no allocator: a program that links for the bare-metal targets, with two endpoints set up from static storage, a handshake and one stream between them"
 version.workspace = true
 authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-publish.workspace = true
+publish = false
 
 [dependencies]
 pinc-core = { workspace = true }
