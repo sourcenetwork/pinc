@@ -19,6 +19,8 @@ bench = false
 default = []
 # The core at 320 MHz (`pinc_mcu_link::clock`). The boot stage and the image must be built alike.
 fast-clock = ["pinc-mcu-link/fast-clock"]
+# The core at 600 MHz. The boot stage and the image must be built alike.
+full-clock = ["pinc-mcu-link/full-clock"]
 
 [dependencies]
 pinc-mcu-link = { workspace = true }

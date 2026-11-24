@@ -5,11 +5,11 @@
 //! must be done before that: it powers and clocks the interface, puts the flash in a known state, maps it for reading
 //! at `0x7000_0000` and starts the image whose vector table is at that address.
 //!
-//! The flash is mapped in its octal mode (eight data lines, one transfer per clock, the `0xEC13` read) at 53 or
-//! 64 MHz, so code is fetched at 53 or 64 MB/s. It is erased and programmed in its power-up mode, on one data line.
+//! The flash is mapped in its octal mode (eight data lines, one transfer per clock, the `0xEC13` read) at 53, 60 or
+//! 64 MHz, so code is fetched at 53 to 64 MB/s. It is erased and programmed in its power-up mode, on one data line.
 //!
 //! The core's clock is this stage's to set, because the flash interface runs from it and the image runs from the
-//! flash: as the chip leaves reset (64 MHz), or 320 MHz from the PLL with the `fast-clock` feature
+//! flash: as the chip leaves reset (64 MHz), or from the PLL at 320 MHz (`fast-clock`) or 600 MHz (`full-clock`)
 //! (`pinc_mcu_link::clock`).
 //!
 //! It is also the loader. For half a second after it starts it listens on the serial line for a request to load
@@ -383,19 +383,28 @@ fn map_flash() -> u32 {
     id
 }
 
-/// Run the core from the first PLL at 320 MHz: the internal oscillator (64 MHz) divided by 16, multiplied by 160 and
-/// divided by 2, with the buses at half the core's clock and the peripherals at half the buses'.
-#[cfg(feature = "fast-clock")]
-fn fast_clock() {
+/// Run the core from the first PLL: the internal oscillator (64 MHz) divided by 16 and multiplied by 160 and divided
+/// by 2 for 320 MHz, or multiplied by 150 for 600 MHz, with the buses at half the core's clock and the peripherals at
+/// half the buses'.
+#[cfg(any(feature = "fast-clock", feature = "full-clock"))]
+fn pll_clock() {
     use pac::rcc::regs;
+    // The multiplier, and the divisor of the P output.
+    let (mul, div_p): (u32, u32) = if cfg!(feature = "full-clock") {
+        (150, 1)
+    } else {
+        (160, 2)
+    };
+    #[cfg(feature = "full-clock")]
+    high_voltage_scale();
     // The source is the internal oscillator (0) and the PLL's input is 4 MHz (the divisor, at bit 4).
     pac::RCC.pllckselr().write_value(regs::Pllckselr(16 << 4));
     // The input is in the 2 to 4 MHz range (1, at bit 3), the oscillator is the wide one, and the P output is on (bit 5).
     pac::RCC.pllcfgr().write_value(regs::Pllcfgr((1 << 3) | (1 << 5)));
-    // Multiply by 160 and divide by 2 for P; each field holds its value less one. Q and R are not used.
+    // Each field holds its value less one. Q and R are not used.
     pac::RCC
         .plldivr(0)
-        .write_value(regs::Plldivr((160 - 1) + (1 << 9) + (1 << 16) + (1 << 24)));
+        .write_value(regs::Plldivr((mul - 1) + ((div_p - 1) << 9) + (1 << 16) + (1 << 24)));
     pac::RCC.cr().modify(|w| w.set_pllon(0, true));
     while !pac::RCC.cr().read().pllrdy(0) {}
     // The dividers first, so that no bus is ever above its clock: the buses at half (8), the peripherals at half
@@ -406,10 +415,24 @@ fn fast_clock() {
     while pac::RCC.cfgr().read().sws() != pac::rcc::vals::Sw::PLL1_P {}
 }
 
+/// Raise the core's supply to the high voltage scale, which the chip needs above 400 MHz. The board feeds the core
+/// from the chip's linear regulator, and the chip accepts a voltage scale only once its supply is declared.
+#[cfg(feature = "full-clock")]
+fn high_voltage_scale() {
+    pac::PWR.csr2().modify(|w| {
+        w.set_sden(false);
+        w.set_ldoen(true);
+        w.set_bypass(false);
+    });
+    while !pac::PWR.sr1().read().actvosrdy() {}
+    pac::PWR.csr4().modify(|w| w.set_vos(pac::pwr::vals::Vos::HIGH));
+    while !pac::PWR.csr4().read().vosrdy() {}
+}
+
 #[entry]
 fn main() -> ! {
-    #[cfg(feature = "fast-clock")]
-    fast_clock();
+    #[cfg(any(feature = "fast-clock", feature = "full-clock"))]
+    pll_clock();
     serial();
     let id = map_flash();
     // The pin's first edge reads as a byte on the laptop: close that frame before the first real one.

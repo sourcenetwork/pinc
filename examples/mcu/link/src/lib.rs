@@ -63,29 +63,26 @@ pub mod kind {
 
 /// The board's clocks, which its boot stage sets and its image counts on.
 ///
-/// Without the `fast-clock` feature the chip is left as it leaves reset: the internal oscillator (HSI) at 64 MHz
-/// drives everything. With it the boot stage starts the first PLL from that oscillator (64 MHz / 16 x 160 / 2) and
-/// the core runs at 320 MHz, with the buses at half and the peripherals at a quarter of that. The supply and the
-/// voltage scale are not touched, so the clock stays inside what the chip allows at the scale it resets to.
+/// Without a clock feature the chip is left as it leaves reset: the internal oscillator (HSI) at 64 MHz drives
+/// everything. With `fast-clock` the boot stage starts the first PLL from that oscillator (64 MHz / 16 x 160 / 2) and
+/// the core runs at 320 MHz, inside what the chip allows at the voltage scale it resets to. With `full-clock` the boot
+/// stage raises the voltage scale first and the core runs at 600 MHz (64 MHz / 16 x 150), the chip's limit. In both
+/// the buses run at half the core's clock and the peripherals at a quarter of it.
 pub mod clock {
     /// The core's clock.
-    pub const CORE_HZ: u32 = if cfg!(feature = "fast-clock") {
+    pub const CORE_HZ: u32 = if cfg!(feature = "full-clock") {
+        600_000_000
+    } else if cfg!(feature = "fast-clock") {
         320_000_000
     } else {
         64_000_000
     };
+    /// Whether the core runs from the PLL, with the buses divided down from it.
+    const FROM_PLL: bool = cfg!(any(feature = "fast-clock", feature = "full-clock"));
     /// The clock of the buses, which is the flash interface's.
-    pub const BUS_HZ: u32 = if cfg!(feature = "fast-clock") {
-        CORE_HZ / 2
-    } else {
-        CORE_HZ
-    };
+    pub const BUS_HZ: u32 = if FROM_PLL { CORE_HZ / 2 } else { CORE_HZ };
     /// The clock of the peripherals, which is the serial port's.
-    pub const PERIPHERAL_HZ: u32 = if cfg!(feature = "fast-clock") {
-        CORE_HZ / 4
-    } else {
-        CORE_HZ
-    };
+    pub const PERIPHERAL_HZ: u32 = if FROM_PLL { CORE_HZ / 4 } else { CORE_HZ };
     /// The serial line's speed.
     pub const BAUD: u32 = 1_000_000;
 }

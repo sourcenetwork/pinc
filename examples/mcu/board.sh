@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # The NUCLEO-H7S3L8 from the laptop: build the board's programs, load the image, run the measurement.
 #
-#   examples/mcu/board.sh build [3|s|z] [fast]     the boot stage and the image, at an optimisation level and a clock
+#   examples/mcu/board.sh build [3|s|z] [fast|full]  the boot stage and the image, at an optimisation level and a clock
 #   examples/mcu/board.sh flash                    load the image into the board's external flash and start it
 #   examples/mcu/board.sh run <file> [rounds]      start the image and measure; the lines measured go to <file>
-#   examples/mcu/board.sh session <dir> [rounds]   every optimisation level at both clocks, one file each in <dir>
+#   examples/mcu/board.sh session <dir> [rounds]   every optimisation level at each clock, one file each in <dir>
 #   examples/mcu/board.sh check                    what needs no board: lints, the images linked, both ends in one process
 #
 # It needs the board on USB (its ST-LINK is the debug probe and the serial line) and probe-rs. PROBE_RS names the
@@ -52,9 +52,10 @@ start_boot() {
 
 build() {
     local level="${1:-3}" features=()
-    if [ "${2:-}" = fast ]; then
-        features=(--features pinc-mcu-boot/fast-clock,pinc-mcu-firmware/fast-clock)
-    fi
+    case "${2:-}" in
+    fast) features=(--features pinc-mcu-boot/fast-clock,pinc-mcu-firmware/fast-clock) ;;
+    full) features=(--features pinc-mcu-boot/full-clock,pinc-mcu-firmware/full-clock) ;;
+    esac
     env "${device_sizes[@]}" CARGO_PROFILE_RELEASE_OPT_LEVEL="$level" cargo build -q --release --target "$target" \
         -p pinc-mcu-boot -p pinc-mcu-firmware "${features[@]}"
     cargo build -q --release -p pinc-mcu-peer
@@ -82,10 +83,11 @@ run() {
 session() {
     local dir="$1" rounds="${2:-10}" failed=0
     mkdir -p "$dir"
-    for clock in slow fast; do
+    for clock in slow fast full; do
         for level in 3 s z; do
             local name="64mhz"
             [ "$clock" = fast ] && name="320mhz"
+            [ "$clock" = full ] && name="600mhz"
             echo "== $name, opt-level $level"
             build "$level" "$clock"
             flash

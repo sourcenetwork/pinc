@@ -13,6 +13,8 @@ publish.workspace = true
 default = []
 # The board's core at 320 MHz from its PLL, where it runs at 64 MHz from the internal oscillator without (see `clock`).
 fast-clock = []
+# The board's core at 600 MHz, the most the chip allows, at the high voltage scale. It takes precedence over `fast-clock`.
+full-clock = []
 
 [dependencies]
 pinc-crypto = { workspace = true }
