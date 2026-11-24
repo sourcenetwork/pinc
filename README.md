@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="art/pinc-banner.png" alt="PINC: next-gen peer-to-peer networking stack" width="100%">
+  <img src="https://raw.githubusercontent.com/sourcenetwork/pinc/master/art/pinc-banner.png" alt="PINC: next-gen peer-to-peer networking stack" width="100%">
 </p>
 
 **PINC** (read "pins") stands for **P**rovable **I**dentity-**N**ative **C**onnectivity:
