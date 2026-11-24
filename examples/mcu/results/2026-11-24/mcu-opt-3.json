@@ -1,0 +1,499 @@
+{
+  "name": "mcu-opt-3",
+  "source": "2026-11-24",
+  "kind": "board",
+  "meta": {
+    "board": "NUCLEO-H7S3L8 (STM32H7S3L8, Cortex-M7)",
+    "link": "serial line, 1000000 baud, one datagram a frame",
+    "peer": {
+      "cpu": "AMD RYZEN AI MAX+ 395 w/ Radeon 8060S",
+      "os": "Linux 7.2.9 x86_64"
+    },
+    "commit": "6fdc7aa6",
+    "commit_source": "the result files' conditions lines",
+    "rustc": "rustc 1.100.0 (0ef1bc386 2026-11-09)",
+    "opt_level": "3",
+    "crypto": "software",
+    "probe": "probe-rs 0.31.0 (git commit: crates.io)",
+    "date": "2026-11-24",
+    "repetitions": 10,
+    "status": "ok"
+  },
+  "stacks": [
+    "64mhz",
+    "320mhz",
+    "600mhz"
+  ],
+  "tests": {
+    "round_trip_32b": {
+      "laptop>board": {
+        "laptop_ms": {
+          "64mhz": {
+            "median": 4.745,
+            "min": 4.376,
+            "max": 4.874,
+            "n": 200
+          },
+          "320mhz": {
+            "median": 4.244,
+            "min": 3.99,
+            "max": 4.382,
+            "n": 200
+          },
+          "600mhz": {
+            "median": 3.748,
+            "min": 3.499,
+            "max": 3.881,
+            "n": 200
+          }
+        }
+      },
+      "board>laptop": {
+        "board_ms": {
+          "64mhz": {
+            "median": 4.725,
+            "min": 4.715,
+            "max": 4.731,
+            "n": 20
+          },
+          "320mhz": {
+            "median": 4.227,
+            "min": 4.129,
+            "max": 4.234,
+            "n": 20
+          },
+          "600mhz": {
+            "median": 3.737,
+            "min": 3.712,
+            "max": 3.742,
+            "n": 20
+          }
+        }
+      }
+    },
+    "echo_256kib": {
+      "laptop>board": {
+        "kib_per_s": {
+          "64mhz": {
+            "median": 51.6,
+            "min": 51.6,
+            "max": 51.6,
+            "n": 1
+          },
+          "320mhz": {
+            "median": 57.7,
+            "min": 57.7,
+            "max": 57.7,
+            "n": 1
+          },
+          "600mhz": {
+            "median": 58.8,
+            "min": 58.8,
+            "max": 58.8,
+            "n": 1
+          }
+        },
+        "board_session_cpu_ms": {
+          "64mhz": {
+            "median": 2562.18,
+            "min": 2562.18,
+            "max": 2562.18,
+            "n": 1
+          },
+          "320mhz": {
+            "median": 1974.09,
+            "min": 1974.09,
+            "max": 1974.09,
+            "n": 1
+          },
+          "600mhz": {
+            "median": 1542.78,
+            "min": 1542.78,
+            "max": 1542.78,
+            "n": 1
+          }
+        }
+      }
+    },
+    "handshake_full_accept": {
+      "laptop>board": {
+        "laptop_handshake_ms": {
+          "64mhz": {
+            "median": 118.668,
+            "min": 118.339,
+            "max": 119.149,
+            "n": 10
+          },
+          "320mhz": {
+            "median": 50.46,
+            "min": 50.293,
+            "max": 50.836,
+            "n": 10
+          },
+          "600mhz": {
+            "median": 41.185,
+            "min": 41.061,
+            "max": 41.336,
+            "n": 10
+          }
+        },
+        "laptop_first_byte_ms": {
+          "64mhz": {
+            "median": 159.477,
+            "min": 158.935,
+            "max": 160.822,
+            "n": 10
+          },
+          "320mhz": {
+            "median": 68.153,
+            "min": 68.004,
+            "max": 68.642,
+            "n": 10
+          },
+          "600mhz": {
+            "median": 54.891,
+            "min": 54.642,
+            "max": 55.083,
+            "n": 10
+          }
+        },
+        "board_cpu_ms": {
+          "64mhz": {
+            "median": 124.391,
+            "min": 123.917,
+            "max": 124.811,
+            "n": 10
+          },
+          "320mhz": {
+            "median": 37.181,
+            "min": 35.988,
+            "max": 37.432,
+            "n": 10
+          },
+          "600mhz": {
+            "median": 23.681,
+            "min": 23.383,
+            "max": 24.416,
+            "n": 10
+          }
+        },
+        "board_wall_ms": {
+          "64mhz": {
+            "median": 139.005,
+            "min": 138.462,
+            "max": 139.4,
+            "n": 10
+          },
+          "320mhz": {
+            "median": 50.775,
+            "min": 50.572,
+            "max": 51.065,
+            "n": 10
+          },
+          "600mhz": {
+            "median": 38.116,
+            "min": 38.049,
+            "max": 38.371,
+            "n": 10
+          }
+        }
+      }
+    },
+    "handshake_resumed_accept": {
+      "laptop>board": {
+        "laptop_handshake_ms": {
+          "64mhz": {
+            "median": 53.153,
+            "min": 53.129,
+            "max": 53.288,
+            "n": 10
+          },
+          "320mhz": {
+            "median": 19.749,
+            "min": 19.746,
+            "max": 19.811,
+            "n": 10
+          },
+          "600mhz": {
+            "median": 15.008,
+            "min": 14.876,
+            "max": 15.102,
+            "n": 10
+          }
+        },
+        "laptop_first_byte_ms": {
+          "64mhz": {
+            "median": 53.155,
+            "min": 53.13,
+            "max": 53.29,
+            "n": 10
+          },
+          "320mhz": {
+            "median": 19.75,
+            "min": 19.747,
+            "max": 19.813,
+            "n": 10
+          },
+          "600mhz": {
+            "median": 15.009,
+            "min": 14.876,
+            "max": 15.102,
+            "n": 10
+          }
+        },
+        "board_cpu_ms": {
+          "64mhz": {
+            "median": 41.734,
+            "min": 41.653,
+            "max": 41.812,
+            "n": 10
+          },
+          "320mhz": {
+            "median": 11.409,
+            "min": 11.353,
+            "max": 11.443,
+            "n": 10
+          },
+          "600mhz": {
+            "median": 7.369,
+            "min": 7.322,
+            "max": 7.397,
+            "n": 10
+          }
+        },
+        "board_wall_ms": {
+          "64mhz": {
+            "median": 41.792,
+            "min": 41.709,
+            "max": 41.867,
+            "n": 10
+          },
+          "320mhz": {
+            "median": 11.458,
+            "min": 11.398,
+            "max": 11.489,
+            "n": 10
+          },
+          "600mhz": {
+            "median": 7.414,
+            "min": 7.364,
+            "max": 7.442,
+            "n": 10
+          }
+        }
+      }
+    },
+    "handshake_full_dial": {
+      "board>laptop": {
+        "board_cpu_ms": {
+          "64mhz": {
+            "median": 133.72,
+            "min": 133.141,
+            "max": 134.317,
+            "n": 10
+          },
+          "320mhz": {
+            "median": 44.597,
+            "min": 39.485,
+            "max": 45.223,
+            "n": 10
+          },
+          "600mhz": {
+            "median": 28.897,
+            "min": 25.386,
+            "max": 31.72,
+            "n": 10
+          }
+        },
+        "board_wall_ms": {
+          "64mhz": {
+            "median": 151.497,
+            "min": 151.155,
+            "max": 151.815,
+            "n": 10
+          },
+          "320mhz": {
+            "median": 61.056,
+            "min": 60.94,
+            "max": 61.271,
+            "n": 10
+          },
+          "600mhz": {
+            "median": 48.472,
+            "min": 48.273,
+            "max": 48.643,
+            "n": 10
+          }
+        }
+      }
+    },
+    "handshake_resumed_dial": {
+      "board>laptop": {
+        "board_cpu_ms": {
+          "64mhz": {
+            "median": 46.142,
+            "min": 46,
+            "max": 46.361,
+            "n": 10
+          },
+          "320mhz": {
+            "median": 15.303,
+            "min": 15.014,
+            "max": 15.567,
+            "n": 10
+          },
+          "600mhz": {
+            "median": 10.331,
+            "min": 10.017,
+            "max": 10.492,
+            "n": 10
+          }
+        },
+        "board_wall_ms": {
+          "64mhz": {
+            "median": 49.668,
+            "min": 49.58,
+            "max": 49.899,
+            "n": 10
+          },
+          "320mhz": {
+            "median": 18.593,
+            "min": 18.506,
+            "max": 18.973,
+            "n": 10
+          },
+          "600mhz": {
+            "median": 13.988,
+            "min": 13.822,
+            "max": 14.113,
+            "n": 10
+          }
+        }
+      }
+    },
+    "memory": {
+      "board": {
+        "stack_peak_bytes": {
+          "64mhz": {
+            "median": 154848,
+            "min": 154848,
+            "max": 154848,
+            "n": 1
+          },
+          "320mhz": {
+            "median": 154848,
+            "min": 154848,
+            "max": 154848,
+            "n": 1
+          },
+          "600mhz": {
+            "median": 154848,
+            "min": 154848,
+            "max": 154848,
+            "n": 1
+          }
+        },
+        "flash_bytes": {
+          "64mhz": {
+            "median": 730992,
+            "min": 730992,
+            "max": 730992,
+            "n": 1
+          },
+          "320mhz": {
+            "median": 732768,
+            "min": 732768,
+            "max": 732768,
+            "n": 1
+          },
+          "600mhz": {
+            "median": 732752,
+            "min": 732752,
+            "max": 732752,
+            "n": 1
+          }
+        },
+        "statics_bytes": {
+          "64mhz": {
+            "median": 205008,
+            "min": 205008,
+            "max": 205008,
+            "n": 1
+          },
+          "320mhz": {
+            "median": 205008,
+            "min": 205008,
+            "max": 205008,
+            "n": 1
+          },
+          "600mhz": {
+            "median": 205008,
+            "min": 205008,
+            "max": 205008,
+            "n": 1
+          }
+        },
+        "endpoint_bytes": {
+          "64mhz": {
+            "median": 57616,
+            "min": 57616,
+            "max": 57616,
+            "n": 1
+          },
+          "320mhz": {
+            "median": 57616,
+            "min": 57616,
+            "max": 57616,
+            "n": 1
+          },
+          "600mhz": {
+            "median": 57616,
+            "min": 57616,
+            "max": 57616,
+            "n": 1
+          }
+        },
+        "slot_bytes": {
+          "64mhz": {
+            "median": 69040,
+            "min": 69040,
+            "max": 69040,
+            "n": 1
+          },
+          "320mhz": {
+            "median": 69040,
+            "min": 69040,
+            "max": 69040,
+            "n": 1
+          },
+          "600mhz": {
+            "median": 69040,
+            "min": 69040,
+            "max": 69040,
+            "n": 1
+          }
+        },
+        "session_memory_bytes": {
+          "64mhz": {
+            "median": 61936,
+            "min": 61936,
+            "max": 61936,
+            "n": 1
+          },
+          "320mhz": {
+            "median": 61936,
+            "min": 61936,
+            "max": 61936,
+            "n": 1
+          },
+          "600mhz": {
+            "median": 61936,
+            "min": 61936,
+            "max": 61936,
+            "n": 1
+          }
+        }
+      }
+    }
+  }
+}

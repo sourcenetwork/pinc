@@ -17,7 +17,7 @@ use core::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 
 use ed25519_dalek::{Signer as _, SigningKey};
 use pinc_core::{Answer, Command, CommandError, Endpoint, EndpointConfig, Event, Query, SessionId, Slot, Value};
-use pinc_crypto::{Drbg, IdentityAlg, NodeId, Software};
+use pinc_crypto::{Drbg, IdentityAlg, NodeId, Provider, Software};
 use pinc_security::{Env, KeyHandle, KeyRequest, KeyResponse, LocalIdentity, PrekeyPolicy, SoftKeys, SoftPrekeys};
 use pinc_transport::conn::{Resources, Tables};
 use pinc_transport::recovery::LossEstimate;
@@ -113,16 +113,17 @@ pub const BOARD_ADDR: SocketAddr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::ne
 /// The address the laptop's end of the line goes by.
 pub const PEER_ADDR: SocketAddr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 1), 4433));
 
-/// The endpoint of a small device.
-pub type Ep<'s, 'a> = Endpoint<'s, 'a, Software, NoSource, N, C, F, NP, K, D, PK, TK, CT>;
+/// The endpoint of a small device, over the primitives of `P`: the library's software ones unless the device brings
+/// its own.
+pub type Ep<'s, 'a, P = Software> = Endpoint<'s, 'a, P, NoSource, N, C, F, NP, K, D, PK, TK, CT>;
 /// One slot of its session table.
-pub type EpSlot<'a> = Slot<'a, Software, NoSource, N, C, F, NP>;
+pub type EpSlot<'a, P = Software> = Slot<'a, P, NoSource, N, C, F, NP>;
 /// The stream table of one session.
 pub type EpStreams = Streams<NoSource, N, C>;
 /// The session table, before the endpoint is built.
-pub type SlotTable<'a> = MaybeUninit<[EpSlot<'a>; K]>;
+pub type SlotTable<'a, P = Software> = MaybeUninit<[EpSlot<'a, P>; K]>;
 /// Where the endpoint is built.
-pub type EpPlace<'s, 'a> = MaybeUninit<Ep<'s, 'a>>;
+pub type EpPlace<'s, 'a, P = Software> = MaybeUninit<Ep<'s, 'a, P>>;
 
 /// The memory of the one session: the pool's chunks, the stream table and the loss average. A host keeps it in a
 /// static (it is all zeroes or unwritten until [`Node::new`] runs, so it costs no image bytes).
@@ -157,14 +158,14 @@ impl Default for Memory {
 const PENDING: usize = 16;
 
 /// An endpoint with its keys and the duties a host performs for it.
-pub struct Node<'n, 's, 'a> {
+pub struct Node<'n, 's, 'a, P: Provider = Software> {
     /// The endpoint: the host feeds it datagrams and timeouts and sends what it writes.
-    pub ep: &'n mut Ep<'s, 'a>,
+    pub ep: &'n mut Ep<'s, 'a, P>,
     drbg: Drbg,
     /// The Ed25519 identity key. The library's own `Keypair` holds room for an ML-DSA key whatever the algorithm
     /// (64 KiB), so a device that signs with Ed25519 keeps the key itself.
     signing: SigningKey,
-    prekeys: SoftPrekeys<Software>,
+    prekeys: SoftPrekeys<P>,
     pending: [Option<Event>; PENDING],
     head: usize,
     len: usize,
@@ -212,7 +213,7 @@ fn identity(signing: &SigningKey) -> Result<LocalIdentity, BuildError> {
 /// holds one slot (67 KiB on a 32-bit target); it is a function of its own so that nothing else is on the stack then.
 #[inline(never)]
 #[allow(clippy::large_stack_arrays, reason = "see above")]
-fn lend<'s, 'a>(memory: &'a mut Memory, slots: &'s mut SlotTable<'a>) -> &'s mut [EpSlot<'a>; K] {
+fn lend<'s, 'a, P: Provider>(memory: &'a mut Memory, slots: &'s mut SlotTable<'a, P>) -> &'s mut [EpSlot<'a, P>; K] {
     let Memory { slab, streams, loss } = memory;
     let pool = BufferPool::from_slab(slab);
     let streams = streams.write(Streams::new(&stream::Config::new(false), &pool));
@@ -231,13 +232,13 @@ fn lend<'s, 'a>(memory: &'a mut Memory, slots: &'s mut SlotTable<'a>) -> &'s mut
     clippy::large_types_passed_by_value,
     reason = "the endpoint takes the identity by value"
 )]
-fn place<'n, 's, 'a>(
+fn place<'n, 's, 'a, P: Provider + Default>(
     now: u64,
     seed: &[u8; 32],
     identity: LocalIdentity,
-    slots: &'s mut [EpSlot<'a>; K],
-    ep: &'n mut EpPlace<'s, 'a>,
-) -> &'n mut Ep<'s, 'a> {
+    slots: &'s mut [EpSlot<'a, P>; K],
+    ep: &'n mut EpPlace<'s, 'a, P>,
+) -> &'n mut Ep<'s, 'a, P> {
     let mut cfg = EndpointConfig::new(u64::from_le_bytes([
         seed[0], seed[1], seed[2], seed[3], seed[4], seed[5], seed[6], seed[7],
     ]));
@@ -245,7 +246,7 @@ fn place<'n, 's, 'a>(
     cfg.conn.max_gso = 1;
     ep.write(Endpoint::new(
         now,
-        Software,
+        P::default(),
         Drbg::new(&derive(seed, 1)),
         identity,
         cfg,
@@ -253,7 +254,7 @@ fn place<'n, 's, 'a>(
     ))
 }
 
-impl<'n, 's, 'a> Node<'n, 's, 'a> {
+impl<'n, 's, 'a, P: Provider + Default> Node<'n, 's, 'a, P> {
     /// A node at time `now` (nanoseconds on the host's clock) that answers on `local`, with every secret drawn from
     /// `seed`: the host takes the seed from its random generator. The session's memory, the session table and the
     /// endpoint are written into the three places the host lends, which a device keeps in statics: the node itself
@@ -269,16 +270,17 @@ impl<'n, 's, 'a> Node<'n, 's, 'a> {
         seed: &[u8; 32],
         local: SocketAddr,
         memory: &'a mut Memory,
-        slots: &'s mut SlotTable<'a>,
-        ep: &'n mut EpPlace<'s, 'a>,
+        slots: &'s mut SlotTable<'a, P>,
+        ep: &'n mut EpPlace<'s, 'a, P>,
     ) -> Result<Self, BuildError> {
         let signing = SigningKey::from_bytes(seed);
         let identity = identity(&signing)?;
         let ep = place(now, seed, identity, lend(memory, slots), ep);
 
         let mut drbg = Drbg::new(&derive(seed, 2));
+        let provider = P::default();
         let mut env = Env {
-            provider: &Software,
+            provider: &provider,
             now,
             drbg: &mut drbg,
         };
@@ -352,8 +354,9 @@ impl<'n, 's, 'a> Node<'n, 's, 'a> {
             signer: None,
             prekeys: Some(&self.prekeys),
         };
+        let provider = P::default();
         let mut env = Env {
-            provider: &Software,
+            provider: &provider,
             now,
             drbg: &mut self.drbg,
         };
