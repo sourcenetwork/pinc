@@ -247,17 +247,24 @@ where
     P: Provider,
     S: StreamSource,
 {
+    /// Build the connection in `place`, where it stays, so that no frame but this one holds a connection (tens of
+    /// kilobytes). `place` is untouched when the call fails.
+    ///
+    /// The handshake has no state machine yet (`dialing` says which kind it will get): the caller installs it once
+    /// this frame, which holds the whole connection while it is put together, is gone.
+    #[inline(never)]
     #[allow(clippy::too_many_arguments, reason = "the fields both constructors fix, passed once")]
-    fn base(
+    fn base<'p>(
+        place: &'p mut Option<Self>,
         client: bool,
+        dialing: bool,
         cfg: Config,
         res: Resources<'a, S, N, C, F>,
-        machine: Machine,
         first_cid: ConnId,
         odcid: ConnId,
         now: u64,
         local_credit: CreditRecord,
-    ) -> Result<Self, Failure> {
+    ) -> Result<&'p mut Self, Failure> {
         const {
             assert!(
                 event::queue_fits(N, NP),
@@ -279,7 +286,7 @@ where
             hold: false,
         };
         let Tables { sent, events, machines } = tables;
-        let hs = Handshake::new(machine, machines, &mut pool, now, timing)?;
+        let hs = Handshake::new(dialing, machines, &mut pool, now, timing)?;
         let mut life = Life::new(now);
         life.keepalive = cfg.keepalive;
         let mut rec = Recovery::with_ring(u64::from(MIN_MTU), sent);
@@ -292,7 +299,7 @@ where
         if let Some(b) = cfg.gate_slack {
             rec.set_gate_slack(b);
         }
-        Ok(Self {
+        Ok(place.insert(Self {
             client,
             cfg,
             phase: Phase::Handshaking,
@@ -343,7 +350,7 @@ where
             pack: send::trace::PackLog::new(),
             #[cfg(feature = "trace")]
             dgram: send::trace::DgramLog::new(),
-        })
+        }))
     }
 
     /// What this endpoint advertises, which its stream table then runs with: the configured credit record with the
@@ -382,34 +389,44 @@ where
     pub fn client(
         cfg: Config,
         params: ClientParams<'_>,
-        mut res: Resources<'a, S, N, C, F>,
+        res: Resources<'a, S, N, C, F>,
         env: &mut Env<'_, P>,
     ) -> Result<Self, Failure> {
+        let mut place = None;
+        Self::client_in(&mut place, cfg, params, res, env)?;
+        place.ok_or(Failure::InvalidParameter)
+    }
+
+    /// [`client`](Self::client), with the connection built in `place` (a slot of the host's table). `place` is
+    /// untouched when the call fails.
+    ///
+    /// # Errors
+    /// As [`client`](Self::client).
+    pub fn client_in<'p>(
+        place: &'p mut Option<Self>,
+        cfg: Config,
+        params: ClientParams<'_>,
+        mut res: Resources<'a, S, N, C, F>,
+        env: &mut Env<'_, P>,
+    ) -> Result<&'p mut Self, Failure> {
         let cid = Self::random_cid(env, cfg.cid_len)?;
         let odcid = Self::random_cid(env, 8)?;
         let local = Self::advertise(&cfg, &mut res.streams, &res.pool);
         let remembered = params.ticket.as_ref().map(|t| *t.peer_credit());
-        let init = Initiator::new(
-            env,
-            InitiatorParams {
-                peer: params.peer,
-                alpn: params.alpn,
-                scid: cid,
-                identity: params.identity,
-                prekey: params.prekey,
-                peer_has_prekey: params.peer_has_prekey,
-                ticket: params.ticket,
-                credit: local,
-            },
-        )?;
-        let mut c = Self::base(true, cfg, res, Machine::Client(init), cid, odcid, env.now, local)?;
+        let (path, path_info) = (params.path, params.path_info);
+        Self::base(place, true, true, cfg, res, cid, odcid, env.now, local)?;
+        if let Err(e) = Self::install_initiator(place, env, params, cid, local) {
+            *place = None;
+            return Err(e);
+        }
+        let c = place.as_mut().ok_or(Failure::InvalidParameter)?;
         // Until the server's parameters arrive, the minimum holds; with a ticket, 0-RTT data may rely on what the
         // server advertised in the session that issued it.
         if let Some(p) = remembered {
             c.streams.set_peer_limits(&peer_limits(&p));
             c.peer_credit = p;
         }
-        c.new_path_slot(params.path, params.path_info, env.now);
+        c.new_path_slot(path, path_info, env.now);
         if let Some(p) = c.paths.active_mut() {
             p.validated = true;
             p.amp.validate();
@@ -427,9 +444,26 @@ where
     pub fn server(
         cfg: Config,
         params: &ServerParams,
-        mut res: Resources<'a, S, N, C, F>,
+        res: Resources<'a, S, N, C, F>,
         env: &mut Env<'_, P>,
     ) -> Result<Self, Failure> {
+        let mut place = None;
+        Self::server_in(&mut place, cfg, params, res, env)?;
+        place.ok_or(Failure::InvalidParameter)
+    }
+
+    /// [`server`](Self::server), with the connection built in `place` (a slot of the host's table). `place` is
+    /// untouched when the call fails.
+    ///
+    /// # Errors
+    /// As [`server`](Self::server).
+    pub fn server_in<'p>(
+        place: &'p mut Option<Self>,
+        cfg: Config,
+        params: &ServerParams,
+        mut res: Resources<'a, S, N, C, F>,
+        env: &mut Env<'_, P>,
+    ) -> Result<&'p mut Self, Failure> {
         let cid = Self::random_cid(env, cfg.cid_len)?;
         let odcid = ConnId::default();
         let local = Self::advertise(&cfg, &mut res.streams, &res.pool);
@@ -437,17 +471,47 @@ where
         rc.tickets_per_session = params.tickets_per_session;
         rc.ticket_lifetime_s = params.ticket_lifetime_s;
         rc.credit = local;
-        let c = Self::base(
-            false,
-            cfg,
-            res,
-            Machine::Server(Responder::new(rc)),
-            cid,
-            odcid,
-            env.now,
-            local,
-        )?;
+        let c = Self::base(place, false, false, cfg, res, cid, odcid, env.now, local)?;
+        c.install_responder(rc);
         Ok(c)
+    }
+
+    /// Build the initiator's machine and give it to the handshake of the connection in `place`. A frame of its own:
+    /// the machine is tens of kilobytes, and here it is on the stack while nothing else large is.
+    #[inline(never)]
+    fn install_initiator(
+        place: &mut Option<Self>,
+        env: &mut Env<'_, P>,
+        params: ClientParams<'_>,
+        scid: ConnId,
+        credit: CreditRecord,
+    ) -> Result<(), Failure> {
+        let init = Initiator::new(
+            env,
+            InitiatorParams {
+                peer: params.peer,
+                alpn: params.alpn,
+                scid,
+                identity: params.identity,
+                prekey: params.prekey,
+                peer_has_prekey: params.peer_has_prekey,
+                ticket: params.ticket,
+                credit,
+            },
+        )?;
+        place
+            .as_mut()
+            .ok_or(Failure::InvalidParameter)?
+            .hs
+            .install(Machine::Client(init));
+        Ok(())
+    }
+
+    /// Build the responder's machine and give it to the handshake; a frame of its own, as
+    /// [`install_initiator`](Self::install_initiator).
+    #[inline(never)]
+    pub(crate) fn install_responder(&mut self, rc: ResponderConfig) {
+        self.hs.install(Machine::Server(Responder::new(rc)));
     }
 
     /// Whether the handshake completed and the connection is open.

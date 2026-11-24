@@ -452,20 +452,21 @@ ep_impl! {
             ticket_lifetime_s: self.cfg.ticket_lifetime_s,
         };
         let mut env: Env<'_, P> = env!(self, now);
-        let Ok(conn) = Connection::server(cfg, &params, mem, &mut env) else {
+        // Built in its slot: a connection is tens of kilobytes, and the stack of a small device has no room for a copy.
+        let built = match self.slots.get_mut(i) {
+            Some(slot) => Connection::server_in(&mut slot.conn, cfg, &params, mem, &mut env).is_ok(),
+            None => false,
+        };
+        if !built {
             self.retire_slot(i);
             return None;
-        };
+        }
         if !self.register_cid(i, odcid) {
             // The table is full: there is no room to route this session, so it is not created.
-            if let Some(slot) = self.slots.get_mut(i) {
-                slot.conn = Some(conn);
-            }
             self.free_slot(i, now);
             return None;
         }
         let slot = self.slots.get_mut(i)?;
-        slot.conn = Some(conn);
         slot.m.odcid = Some(odcid);
         slot.m.unauth = true;
         slot.m.owed = true;

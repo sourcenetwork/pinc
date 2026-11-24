@@ -15,12 +15,11 @@
 
 use pinc_crypto::Provider;
 use pinc_security::{
-    Alpn, AlpnList, ConnId, CreditRecord, Env, Established, Failure, KeyRequest, LocalIdentity, Responder,
-    ResponderConfig, TicketBatch, sub_session_secret,
+    Alpn, AlpnList, ConnId, CreditRecord, Env, Established, Failure, KeyRequest, LocalIdentity, ResponderConfig,
+    TicketBatch, sub_session_secret,
 };
 
 use super::config::{Config, PathId, PathInfo};
-use super::handshake::Machine;
 use super::params::peer_limits;
 use super::{Connection, Phase, Resources, Tables};
 use crate::recovery::RttEstimator;
@@ -251,8 +250,25 @@ conn_impl! {
         res: Resources<'a, S, N, C, F>,
         env: &mut Env<'_, P>,
     ) -> Result<Self, Failure> {
+        let mut place = None;
+        Self::sub_session_in(&mut place, cfg, open, res, env)?;
+        place.ok_or(Failure::InvalidParameter)
+    }
+
+    /// [`sub_session`](Self::sub_session), with the connection built in `place`. `place` is untouched when the
+    /// call fails.
+    ///
+    /// # Errors
+    /// As [`sub_session`](Self::sub_session).
+    pub fn sub_session_in<'p>(
+        place: &'p mut Option<Self>,
+        cfg: Config,
+        open: SubOpen<'_>,
+        res: Resources<'a, S, N, C, F>,
+        env: &mut Env<'_, P>,
+    ) -> Result<&'p mut Self, Failure> {
         let SubOpen { client, parent, alpn, cc, cs, identity, path, path_info } = open;
-        let mut c = Self::sub_shell(client, cfg, alpn, cc, cs, &identity, path, path_info, res, env)?;
+        let c = Self::sub_shell(place, client, cfg, alpn, cc, cs, &identity, path, path_info, res, env)?;
         c.establish_sub(env, parent, alpn);
         Ok(c)
     }
@@ -268,8 +284,25 @@ conn_impl! {
         res: Resources<'a, S, N, C, F>,
         env: &mut Env<'_, P>,
     ) -> Result<Self, Failure> {
+        let mut place = None;
+        Self::sub_pending_in(&mut place, cfg, open, res, env)?;
+        place.ok_or(Failure::InvalidParameter)
+    }
+
+    /// [`sub_pending`](Self::sub_pending), with the connection built in `place`. `place` is untouched when the
+    /// call fails.
+    ///
+    /// # Errors
+    /// As [`sub_pending`](Self::sub_pending).
+    pub fn sub_pending_in<'p>(
+        place: &'p mut Option<Self>,
+        cfg: Config,
+        open: SubWait,
+        res: Resources<'a, S, N, C, F>,
+        env: &mut Env<'_, P>,
+    ) -> Result<&'p mut Self, Failure> {
         let SubWait { alpn, cc, cs, identity, path, path_info } = open;
-        let mut c = Self::sub_shell(true, cfg, alpn, cc, cs, &identity, path, path_info, res, env)?;
+        let c = Self::sub_shell(place, true, cfg, alpn, cc, cs, &identity, path, path_info, res, env)?;
         // The peer's record is not known yet; the application may still open a stream and queue its first bytes, which
         // wait for the keys. The parent's record replaces this when the sub-session opens.
         c.peer_credit = CreditRecord::new(PENDING_WINDOW, PENDING_STREAMS, 0);
@@ -332,7 +365,8 @@ conn_impl! {
     }
 
     #[allow(clippy::too_many_arguments, reason = "the parts of a sub-session shell")]
-    fn sub_shell(
+    fn sub_shell<'p>(
+        place: &'p mut Option<Self>,
         client: bool,
         cfg: Config,
         alpn: Alpn,
@@ -343,12 +377,12 @@ conn_impl! {
         path_info: PathInfo,
         mut res: Resources<'a, S, N, C, F>,
         env: &mut Env<'_, P>,
-    ) -> Result<Self, Failure> {
+    ) -> Result<&'p mut Self, Failure> {
         let (first_local, first_remote) = if client { (cc, cs) } else { (cs, cc) };
         let local = Self::advertise(&cfg, &mut res.streams, &res.pool);
         let alpns = AlpnList::new(&[alpn.as_bytes()]).ok_or(Failure::InvalidParameter)?;
-        let shell = Machine::Server(Responder::new(ResponderConfig::new(*identity, first_local, alpns)));
-        let mut c = Self::base(client, cfg, res, shell, first_local, ConnId::default(), env.now, local)?;
+        let c = Self::base(place, client, false, cfg, res, first_local, ConnId::default(), env.now, local)?;
+        c.install_responder(ResponderConfig::new(*identity, first_local, alpns));
         c.cids.set_first_remote(first_remote);
         c.new_path_slot(path, path_info, env.now);
         if let Some(p) = c.paths.active_mut() {
