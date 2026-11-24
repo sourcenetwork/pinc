@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Dependency rules, checked by the gate, over the three workspaces of the repository: the library (the root
-manifest), the benchmarks (`benches/`) and the distributed harness (`distributed/`).
+"""Dependency rules, checked by the gate, over the four workspaces of the repository: the library (the root
+manifest), the benchmarks (`benches/`), the distributed harness (`distributed/`) and the microcontroller example (`examples/mcu/`).
 
 1. Every dependency of every member is declared once, in its workspace's root `[workspace.dependencies]`; a member
    manifest may only say `{ workspace = true }` (plus features or `optional`).
@@ -18,7 +18,8 @@ manifest), the benchmarks (`benches/`) and the distributed harness (`distributed
 
 The benchmarks and the distributed harness measure PINC against iroh and rust-libp2p, so rules 4 to 6 do not apply to
 them: those libraries, their runtimes and their C code live there and nowhere else, which is why each is a workspace of
-its own with its own lockfile.
+its own with its own lockfile. The microcontroller example is a workspace of its own for the board's runtime crates and the
+laptop's serial port; its programs for the board need `unsafe` (statics, registers), so rule 3 is not asked of it.
 """
 import json
 import os
@@ -28,7 +29,7 @@ import tomllib
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # The library's workspace first: the version every other workspace must carry is read from it.
-WORKSPACES = [".", "benches", "distributed"]
+WORKSPACES = [".", "benches", "distributed", "examples/mcu"]
 
 RUNTIMES = {"tokio", "async-std", "smol", "async-executor", "glommio", "monoio", "embassy-executor", "nuclei"}
 # The runtimes each member of the library's workspace may depend on directly; the facade only as a dev-dependency.

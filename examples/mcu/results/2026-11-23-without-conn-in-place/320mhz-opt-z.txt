@@ -1,0 +1,142 @@
+board image clock_hz=320000000 baud=1000000 flash=368936 statics=205008 stack_room=376832
+board node id=4070c20be08224d0940b4967c07f14e766538fd857d4ee13571c9b95a2d8491a
+board built us=23100 endpoint=57616 slot=69040 memory=61936 node=6392 stack_peak=232152
+board handshake role=acceptor wall_us=72450 cpu_us=57755 rx=3/46471us/max31142us events=401/10115us/max9234us tx=402/1168us/max313us timer=0/0us/max0us
+board stack peak=307128 after=handshake
+laptop handshake role=dialer resumed=false reported_us=69011 handshake_us=69011 first_byte_us=89876 datagrams_out=3 bytes_out=1517 datagrams_in=3 bytes_in=1372
+laptop round_trip role=dialer bytes=32 n=200 min_us=4367 p10_us=4494 median_us=4592 p90_us=4631 max_us=4739
+laptop echo bytes=262144 wall_us=4795205 kib_per_s=53.4
+board session wall_us=5719697 cpu_us=2554803 rx=663/984107us/max2788us events=44272/439206us/max1294us tx=43991/1128305us/max2194us timer=12/3183us/max289us
+board closed reason=Transport(Peer { error: 0 }) echoed=268576 stack_peak=307128 rx_lost=0
+board handshake role=acceptor wall_us=72454 cpu_us=57408 rx=3/46383us/max31157us events=274/10057us/max9268us tx=275/966us/max330us timer=0/0us/max0us
+board stack peak=307128 after=handshake
+laptop handshake role=dialer resumed=false reported_us=68959 handshake_us=68959 first_byte_us=89825 datagrams_out=3 bytes_out=1517 datagrams_in=3 bytes_in=1372
+laptop round_trip role=dialer bytes=32 n=20 min_us=4373 p10_us=4378 median_us=4499 p90_us=4576 max_us=4606
+board session wall_us=96420 cpu_us=74286 rx=21/27407us/max1439us events=1588/15200us/max634us tx=1561/31678us/max1253us timer=0/0us/max0us
+board closed reason=Transport(Peer { error: 0 }) echoed=269248 stack_peak=307128 rx_lost=0
+board handshake role=acceptor wall_us=72637 cpu_us=57735 rx=3/46505us/max31206us events=337/10189us/max9354us tx=338/1041us/max324us timer=0/0us/max0us
+board stack peak=307128 after=handshake
+laptop handshake role=dialer resumed=false reported_us=69090 handshake_us=69090 first_byte_us=89958 datagrams_out=3 bytes_out=1517 datagrams_in=3 bytes_in=1372
+laptop round_trip role=dialer bytes=32 n=20 min_us=4368 p10_us=4375 median_us=4493 p90_us=4579 max_us=4608
+board session wall_us=95753 cpu_us=73386 rx=21/27421us/max1431us events=1692/15612us/max677us tx=1665/30351us/max1265us timer=0/0us/max0us
+board closed reason=Transport(Peer { error: 0 }) echoed=269920 stack_peak=307128 rx_lost=0
+board handshake role=acceptor wall_us=72557 cpu_us=57918 rx=3/46658us/max31232us events=231/10370us/max9208us tx=232/889us/max315us timer=0/0us/max0us
+board stack peak=307128 after=handshake
+laptop handshake role=dialer resumed=false reported_us=68834 handshake_us=68834 first_byte_us=89828 datagrams_out=3 bytes_out=1517 datagrams_in=3 bytes_in=1372
+laptop round_trip role=dialer bytes=32 n=20 min_us=4360 p10_us=4373 median_us=4497 p90_us=4538 max_us=4604
+board session wall_us=96191 cpu_us=74135 rx=21/27326us/max1409us events=1702/15361us/max661us tx=1675/31447us/max1236us timer=0/0us/max0us
+board closed reason=Transport(Peer { error: 0 }) echoed=270592 stack_peak=307128 rx_lost=0
+board handshake role=acceptor wall_us=72627 cpu_us=58003 rx=3/46581us/max31311us events=463/10243us/max9292us tx=464/1178us/max319us timer=0/0us/max0us
+board stack peak=307128 after=handshake
+laptop handshake role=dialer resumed=false reported_us=69128 handshake_us=69128 first_byte_us=90001 datagrams_out=3 bytes_out=1517 datagrams_in=3 bytes_in=1372
+laptop round_trip role=dialer bytes=32 n=20 min_us=4383 p10_us=4492 median_us=4504 p90_us=4574 max_us=4594
+board session wall_us=96766 cpu_us=73870 rx=21/27513us/max1415us events=1667/15093us/max638us tx=1640/31263us/max1254us timer=0/0us/max0us
+board closed reason=Transport(Peer { error: 0 }) echoed=271264 stack_peak=307128 rx_lost=0
+board handshake role=acceptor wall_us=72259 cpu_us=57896 rx=3/46383us/max31152us events=384/10230us/max9137us tx=385/1282us/max314us timer=0/0us/max0us
+board stack peak=307128 after=handshake
+laptop handshake role=dialer resumed=false reported_us=68707 handshake_us=68707 first_byte_us=89589 datagrams_out=3 bytes_out=1517 datagrams_in=3 bytes_in=1372
+laptop round_trip role=dialer bytes=32 n=20 min_us=4366 p10_us=4376 median_us=4496 p90_us=4503 max_us=4610
+board session wall_us=95844 cpu_us=73590 rx=21/27396us/max1430us events=1579/15403us/max641us tx=1552/30790us/max1253us timer=0/0us/max0us
+board closed reason=Transport(Peer { error: 0 }) echoed=271936 stack_peak=307128 rx_lost=0
+board handshake role=acceptor wall_us=72409 cpu_us=57225 rx=3/46347us/max31109us events=226/9991us/max9312us tx=227/886us/max304us timer=0/0us/max0us
+board stack peak=307128 after=handshake
+laptop handshake role=dialer resumed=false reported_us=68882 handshake_us=68882 first_byte_us=89706 datagrams_out=3 bytes_out=1517 datagrams_in=3 bytes_in=1372
+laptop round_trip role=dialer bytes=32 n=20 min_us=4366 p10_us=4377 median_us=4497 p90_us=4592 max_us=4605
+board session wall_us=96160 cpu_us=73594 rx=21/27328us/max1430us events=1774/15646us/max678us tx=1747/30620us/max1228us timer=0/0us/max0us
+board closed reason=Transport(Peer { error: 0 }) echoed=272608 stack_peak=307128 rx_lost=0
+board handshake role=acceptor wall_us=72352 cpu_us=57372 rx=3/46518us/max31197us events=274/9907us/max9175us tx=275/946us/max311us timer=0/0us/max0us
+board stack peak=307128 after=handshake
+laptop handshake role=dialer resumed=false reported_us=68754 handshake_us=68754 first_byte_us=89635 datagrams_out=3 bytes_out=1517 datagrams_in=3 bytes_in=1372
+laptop round_trip role=dialer bytes=32 n=20 min_us=4366 p10_us=4409 median_us=4501 p90_us=4626 max_us=4645
+board session wall_us=96528 cpu_us=73736 rx=21/27461us/max1418us events=1647/15479us/max690us tx=1620/30795us/max1239us timer=0/0us/max0us
+board closed reason=Transport(Peer { error: 0 }) echoed=273280 stack_peak=307128 rx_lost=0
+board handshake role=acceptor wall_us=72480 cpu_us=57732 rx=3/46388us/max31179us events=444/10155us/max9212us tx=445/1188us/max330us timer=0/0us/max0us
+board stack peak=307168 after=handshake
+laptop handshake role=dialer resumed=false reported_us=68854 handshake_us=68854 first_byte_us=89874 datagrams_out=3 bytes_out=1517 datagrams_in=3 bytes_in=1372
+laptop round_trip role=dialer bytes=32 n=20 min_us=4368 p10_us=4381 median_us=4499 p90_us=4570 max_us=4601
+board session wall_us=96349 cpu_us=73926 rx=21/27471us/max1441us events=1646/15076us/max691us tx=1619/31378us/max1249us timer=0/0us/max0us
+board closed reason=Transport(Peer { error: 0 }) echoed=273952 stack_peak=307168 rx_lost=0
+board handshake role=acceptor wall_us=72355 cpu_us=57671 rx=3/46357us/max31141us events=406/10192us/max9300us tx=407/1120us/max313us timer=0/0us/max0us
+board stack peak=307168 after=handshake
+laptop handshake role=dialer resumed=false reported_us=68842 handshake_us=68842 first_byte_us=89700 datagrams_out=3 bytes_out=1517 datagrams_in=3 bytes_in=1372
+laptop round_trip role=dialer bytes=32 n=20 min_us=4359 p10_us=4371 median_us=4494 p90_us=4605 max_us=4612
+board session wall_us=96061 cpu_us=73424 rx=21/27492us/max1446us events=1537/15085us/max674us tx=1510/30846us/max1263us timer=0/0us/max0us
+board closed reason=Transport(Peer { error: 0 }) echoed=274624 stack_peak=307168 rx_lost=0
+board handshake role=acceptor wall_us=18422 cpu_us=18366 rx=1/18333us/max18333us events=1/32us/max32us tx=0/0us/max0us timer=0/0us/max0us
+board stack peak=307168 after=handshake
+laptop handshake role=dialer resumed=true reported_us=82 handshake_us=26623 first_byte_us=26625 datagrams_out=2 bytes_out=262 datagrams_in=1 bytes_in=176
+laptop round_trip role=dialer bytes=32 n=20 min_us=4379 p10_us=4390 median_us=4498 p90_us=4579 max_us=7017
+board session wall_us=99657 cpu_us=76010 rx=22/29363us/max2103us events=1546/15391us/max694us tx=1519/30992us/max1248us timer=1/262us/max262us
+board closed reason=Transport(Peer { error: 0 }) echoed=275296 stack_peak=307168 rx_lost=0
+board handshake role=acceptor wall_us=18397 cpu_us=18342 rx=1/18312us/max18312us events=1/29us/max29us tx=0/0us/max0us timer=0/0us/max0us
+board stack peak=307168 after=handshake
+laptop handshake role=dialer resumed=true reported_us=80 handshake_us=26530 first_byte_us=26531 datagrams_out=2 bytes_out=262 datagrams_in=1 bytes_in=176
+laptop round_trip role=dialer bytes=32 n=20 min_us=4359 p10_us=4421 median_us=4500 p90_us=4579 max_us=6918
+board session wall_us=99649 cpu_us=76325 rx=22/29166us/max2071us events=1671/15289us/max685us tx=1644/31609us/max1238us timer=1/261us/max261us
+board closed reason=Transport(Peer { error: 0 }) echoed=275968 stack_peak=307168 rx_lost=0
+board handshake role=acceptor wall_us=18365 cpu_us=18308 rx=1/18278us/max18278us events=1/29us/max29us tx=0/0us/max0us timer=0/0us/max0us
+board stack peak=307168 after=handshake
+laptop handshake role=dialer resumed=true reported_us=77 handshake_us=26549 first_byte_us=26549 datagrams_out=2 bytes_out=262 datagrams_in=1 bytes_in=176
+laptop round_trip role=dialer bytes=32 n=20 min_us=4372 p10_us=4375 median_us=4499 p90_us=4577 max_us=7021
+board session wall_us=99494 cpu_us=76106 rx=22/29130us/max2110us events=1669/15324us/max634us tx=1642/31399us/max1254us timer=1/252us/max252us
+board closed reason=Transport(Peer { error: 0 }) echoed=276640 stack_peak=307168 rx_lost=0
+board handshake role=acceptor wall_us=18473 cpu_us=18421 rx=1/18387us/max18387us events=1/33us/max33us tx=0/0us/max0us timer=0/0us/max0us
+board stack peak=307168 after=handshake
+laptop handshake role=dialer resumed=true reported_us=83 handshake_us=26730 first_byte_us=26733 datagrams_out=2 bytes_out=262 datagrams_in=1 bytes_in=176
+laptop round_trip role=dialer bytes=32 n=20 min_us=4369 p10_us=4376 median_us=4502 p90_us=4587 max_us=6949
+board session wall_us=99791 cpu_us=75971 rx=22/29224us/max2026us events=1762/15883us/max663us tx=1735/30600us/max1291us timer=1/262us/max262us
+board closed reason=Transport(Peer { error: 0 }) echoed=277312 stack_peak=307168 rx_lost=0
+board handshake role=acceptor wall_us=18391 cpu_us=18336 rx=1/18306us/max18306us events=1/30us/max30us tx=0/0us/max0us timer=0/0us/max0us
+board stack peak=307168 after=handshake
+laptop handshake role=dialer resumed=true reported_us=78 handshake_us=26625 first_byte_us=26629 datagrams_out=2 bytes_out=262 datagrams_in=1 bytes_in=176
+laptop round_trip role=dialer bytes=32 n=20 min_us=4372 p10_us=4428 median_us=4500 p90_us=4598 max_us=6947
+board session wall_us=99856 cpu_us=75944 rx=22/29237us/max2087us events=1591/15721us/max689us tx=1564/30712us/max1264us timer=1/273us/max273us
+board closed reason=Transport(Peer { error: 0 }) echoed=277984 stack_peak=307168 rx_lost=0
+board handshake role=acceptor wall_us=18422 cpu_us=18369 rx=1/18341us/max18341us events=1/28us/max28us tx=0/0us/max0us timer=0/0us/max0us
+board stack peak=307168 after=handshake
+laptop handshake role=dialer resumed=true reported_us=84 handshake_us=26801 first_byte_us=26803 datagrams_out=2 bytes_out=262 datagrams_in=1 bytes_in=176
+laptop round_trip role=dialer bytes=32 n=20 min_us=4368 p10_us=4381 median_us=4497 p90_us=4518 max_us=7008
+board session wall_us=99721 cpu_us=75196 rx=22/29159us/max2087us events=1787/15322us/max683us tx=1760/30459us/max1249us timer=1/255us/max255us
+board closed reason=Transport(Peer { error: 0 }) echoed=278656 stack_peak=307168 rx_lost=0
+board handshake role=acceptor wall_us=18366 cpu_us=18308 rx=1/18278us/max18278us events=1/29us/max29us tx=0/0us/max0us timer=0/0us/max0us
+board stack peak=307168 after=handshake
+laptop handshake role=dialer resumed=true reported_us=87 handshake_us=26557 first_byte_us=26559 datagrams_out=2 bytes_out=262 datagrams_in=1 bytes_in=176
+laptop round_trip role=dialer bytes=32 n=20 min_us=4373 p10_us=4380 median_us=4500 p90_us=4512 max_us=7030
+board session wall_us=99646 cpu_us=76412 rx=22/29165us/max2031us events=1561/15668us/max666us tx=1534/31316us/max1222us timer=1/261us/max261us
+board closed reason=Transport(Peer { error: 0 }) echoed=279328 stack_peak=307168 rx_lost=0
+board handshake role=acceptor wall_us=18316 cpu_us=18253 rx=1/18220us/max18220us events=1/32us/max32us tx=0/0us/max0us timer=0/0us/max0us
+board stack peak=307168 after=handshake
+laptop handshake role=dialer resumed=true reported_us=87 handshake_us=26557 first_byte_us=26558 datagrams_out=2 bytes_out=262 datagrams_in=1 bytes_in=176
+laptop round_trip role=dialer bytes=32 n=20 min_us=4370 p10_us=4382 median_us=4499 p90_us=4567 max_us=7013
+board session wall_us=99666 cpu_us=75257 rx=22/29033us/max2091us events=1542/15383us/max678us tx=1515/30587us/max1281us timer=1/252us/max252us
+board closed reason=Transport(Peer { error: 0 }) echoed=280000 stack_peak=307168 rx_lost=0
+board handshake role=acceptor wall_us=18358 cpu_us=18313 rx=1/18279us/max18279us events=1/33us/max33us tx=0/0us/max0us timer=0/0us/max0us
+board stack peak=307168 after=handshake
+laptop handshake role=dialer resumed=true reported_us=88 handshake_us=26559 first_byte_us=26561 datagrams_out=2 bytes_out=262 datagrams_in=1 bytes_in=176
+laptop round_trip role=dialer bytes=32 n=20 min_us=4371 p10_us=4376 median_us=4499 p90_us=4569 max_us=7009
+board session wall_us=99606 cpu_us=76044 rx=22/29256us/max2080us events=1634/15480us/max681us tx=1607/31041us/max1252us timer=1/266us/max266us
+board closed reason=Transport(Peer { error: 0 }) echoed=280672 stack_peak=307168 rx_lost=0
+board handshake role=acceptor wall_us=18468 cpu_us=18414 rx=1/18383us/max18383us events=1/30us/max30us tx=0/0us/max0us timer=0/0us/max0us
+board stack peak=307168 after=handshake
+laptop handshake role=dialer resumed=true reported_us=83 handshake_us=26685 first_byte_us=26687 datagrams_out=2 bytes_out=262 datagrams_in=1 bytes_in=176
+laptop round_trip role=dialer bytes=32 n=20 min_us=4372 p10_us=4423 median_us=4501 p90_us=4594 max_us=7132
+board session wall_us=100131 cpu_us=76392 rx=22/29226us/max2113us events=1657/15308us/max651us tx=1630/31600us/max1251us timer=1/256us/max256us
+board closed reason=Transport(Peer { error: 0 }) echoed=281344 stack_peak=307168 rx_lost=0
+summary handshake board=acceptor resumed=false laptop_handshake n=10 min_us=68707 p10_us=68754 median_us=68882 p90_us=69128 max_us=69128
+summary handshake board=acceptor resumed=false laptop_first_byte n=10 min_us=89589 p10_us=89635 median_us=89828 p90_us=90001 max_us=90001
+summary handshake board=acceptor resumed=false board_cpu n=10 min_us=57225 p10_us=57372 median_us=57735 p90_us=58003 max_us=58003
+summary handshake board=acceptor resumed=false board_wall n=10 min_us=72259 p10_us=72352 median_us=72454 p90_us=72637 max_us=72637
+summary handshake board=acceptor resumed=true laptop_handshake n=10 min_us=26530 p10_us=26549 median_us=26623 p90_us=26801 max_us=26801
+summary handshake board=acceptor resumed=true laptop_first_byte n=10 min_us=26531 p10_us=26549 median_us=26625 p90_us=26803 max_us=26803
+summary handshake board=acceptor resumed=true board_cpu n=10 min_us=18253 p10_us=18308 median_us=18342 p90_us=18421 max_us=18421
+summary handshake board=acceptor resumed=true board_wall n=10 min_us=18316 p10_us=18358 median_us=18397 p90_us=18473 max_us=18473
+summary handshake board=dialer resumed=false board_cpu n=0
+summary handshake board=dialer resumed=false board_wall n=0
+summary handshake board=dialer resumed=true board_cpu n=0
+summary handshake board=dialer resumed=true board_wall n=0
+summary round_trip bytes=32 timed_by=board median_of_medians n=0
+summary stack board_peak_bytes=307168
+summary line baud=1000000 datagrams_out=1112 bytes_out=331220 datagrams_in=1063 bytes_in=328145
+conditions date=2026-11-23T14:08Z commit=f7c6866+changes pinc=c6b13771 opt_level=z note="a first run did not end; this is a second run, of the sessions the laptop dials only"
+conditions rustc="rustc 1.99.0 (b940084d7 2026-09-28)" probe="probe-rs 0.31.0 (git commit: crates.io)"
+conditions laptop="Linux 7.2.9 x86_64" cpu="AMD RYZEN AI MAX+ 395 w/ Radeon 8060S"

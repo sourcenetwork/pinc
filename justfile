@@ -89,7 +89,7 @@ gate: checks test unoptimised test-distributed doctest proofs
     @echo "gate: ok"
 
 # Every static check: dependency rules, format, lints, docs, no_std builds, pure Rust.
-checks: deps hygiene fmt-check clippy build doc no-std pure
+checks: deps hygiene fmt-check clippy build doc no-std pure mcu
 
 # Dependency rules: declared only at the root, one version, unsafe forbidden, no async runtime, no C.
 deps:
@@ -108,12 +108,14 @@ fmt:
     cargo fmt --all
     cargo fmt --all --manifest-path benches/Cargo.toml
     cargo fmt --all --manifest-path distributed/Cargo.toml
+    cargo fmt --all --manifest-path examples/mcu/Cargo.toml
 
 # Fail if any file is not formatted.
 fmt-check:
     cargo fmt --all --check
     cargo fmt --all --check --manifest-path benches/Cargo.toml
     cargo fmt --all --check --manifest-path distributed/Cargo.toml
+    cargo fmt --all --check --manifest-path examples/mcu/Cargo.toml
 
 # Lints on every target and feature, warnings as errors.
 clippy:
@@ -151,6 +153,17 @@ no-std:
     done
     for t in {{cas_less_targets}}; do cargo build -q -p pinc-table --no-default-features --target "$t"; done
     for t in {{no_std_targets}} {{cas_less_targets}}; do cargo build -q -p pinc-noalloc --target "$t"; done
+
+# The microcontroller example (examples/mcu/) without a board: lints for the laptop's programs and for the board's at
+# every clock, the board's images linked, and the two ends of the serial line in one process with the tables of a host
+# and with those of a device.
+mcu:
+    examples/mcu/board.sh check
+
+# The board (a NUCLEO-H7S3L8 on USB, and probe-rs): `just board flash`, `just board run out.txt`, `just board session
+# examples/mcu/results/<date>`; `just board` says the rest.
+board *args:
+    examples/mcu/board.sh {{args}}
 
 # Fail if any build script of the library's workspace compiled C (run after a build; checks cargo's real target
 # directory). The comparators' C code builds in the benchmarks' own workspace and directory, never here. A build
