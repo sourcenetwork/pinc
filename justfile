@@ -155,7 +155,7 @@ no-std:
     for t in {{no_std_targets}} {{cas_less_targets}}; do cargo build -q -p pinc-noalloc --target "$t"; done
 
 # The microcontroller example (examples/mcu/) without a board: lints for the laptop's programs and for the board's at
-# both clocks, the board's images linked, and the two ends of the serial line in one process with the tables of a host
+# every clock, the board's images linked, and the two ends of the serial line in one process with the tables of a host
 # and with those of a device.
 mcu:
     examples/mcu/board.sh check

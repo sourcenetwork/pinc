@@ -10,48 +10,56 @@ frame. It is not a network: there is no loss, no reordering and one peer.
 
 ## What was measured
 
-Session of 23 November 2026, commit `b3e6d630`, ten sessions of each kind; the files are in
-[`results/2026-11-23/`](results/2026-11-23). Times are medians; over the ten sessions the smallest and the largest are
-within 3% of them at 64 MHz and within 6% at 320 MHz. The board's clock is its internal oscillator (64 MHz), or a PLL fed by it
-(320 MHz); the chip allows 600 MHz, which needs its voltage scale raised and was not tried. "Board CPU" is the time the
+Session of 24 November 2026, commit `6fdc7aa6`, ten sessions of each kind; the files are in
+[`results/2026-11-24/`](results/2026-11-24). Times are medians; over the ten sessions the smallest and the largest are
+within 1% of them at 64 MHz and within 4% at 320 and 600 MHz, but for the board's CPU time of a full dial there (within
+13%). The board's clock is its internal oscillator (64 MHz), or a PLL fed by it: 320 MHz at the voltage scale the chip
+resets to, or 600 MHz, the chip's limit, at the high one. "Board CPU" is the time the
 board spent inside the endpoint, counted with the core's cycle counter around every call; the rest of a handshake's
 time is its bytes on the line (2,900 bytes at 1 Mbaud take 29 ms).
 
 The image built for speed (`opt-level = 3`):
 
-| | 64 MHz | 320 MHz |
-|---|---|---|
-| Full handshake, the board accepts: board CPU | 125 ms | 37 ms |
-| the same, as the laptop sees it, dial to session | 119 ms | 50 ms |
-| the same, dial to the first 32 bytes back | 160 ms | 69 ms |
-| Resumed handshake, the board accepts: board CPU | 42 ms | 12 ms |
-| the same, as the laptop sees it, dial to the first 32 bytes back | 54 ms | 21 ms |
-| Full handshake, the board dials: board CPU | 134 ms | 42 ms |
-| the same, by the board's clock, dial to session | 152 ms | 62 ms |
-| Resumed handshake, the board dials: board CPU | 47 ms | 16 ms |
-| the same, by the board's clock, dial to the peer's answer | 50 ms | 19 ms |
-| Round trip of 32 bytes on a stream (200, timed by the laptop) | 4.6 ms | 4.1 ms |
-| the same, timed by the board | 4.6 ms | 4.1 ms |
-| 256 KiB there and back on a stream | 52 KiB/s | 57 KiB/s |
-| Image in the flash | 713 KiB | 715 KiB |
-| Statics | 200 KiB | 200 KiB |
-| Stack, deepest | 151 KiB | 151 KiB |
+| | 64 MHz | 320 MHz | 600 MHz |
+|---|---|---|---|
+| Full handshake, the board accepts: board CPU | 124 ms | 37 ms | 24 ms |
+| the same, as the laptop sees it, dial to session | 119 ms | 50 ms | 41 ms |
+| the same, dial to the first 32 bytes back | 159 ms | 68 ms | 55 ms |
+| Resumed handshake, the board accepts: board CPU | 42 ms | 11 ms | 7 ms |
+| the same, as the laptop sees it, dial to the first 32 bytes back | 53 ms | 20 ms | 15 ms |
+| Full handshake, the board dials: board CPU | 134 ms | 45 ms | 29 ms |
+| the same, by the board's clock, dial to session | 151 ms | 61 ms | 48 ms |
+| Resumed handshake, the board dials: board CPU | 46 ms | 15 ms | 10 ms |
+| the same, by the board's clock, dial to the peer's answer | 50 ms | 19 ms | 14 ms |
+| Round trip of 32 bytes on a stream (200, timed by the laptop) | 4.7 ms | 4.2 ms | 3.7 ms |
+| the same, timed by the board | 4.7 ms | 4.2 ms | 3.7 ms |
+| 256 KiB there and back on a stream | 52 KiB/s | 58 KiB/s | 59 KiB/s |
+| Image in the flash | 714 KiB | 716 KiB | 716 KiB |
+| Statics | 200 KiB | 200 KiB | 200 KiB |
+| Stack, deepest | 151 KiB | 151 KiB | 151 KiB |
 
 The round trip and the transfer are the line's, not the board's: the line carries 100 kB/s. No byte of the line was
-lost in any run.
+lost in any run. From 320 to 600 MHz the board's CPU time of a handshake falls by a factor of 1.5 to 1.6 for 1.9 times
+the clock; why it is not more was not looked into.
 
-Built for size, the image is half as large and slower, and its stack is deeper:
+Built for size, the image is half as large, and its stack is deeper; at `s` it is little slower from 320 MHz up:
 
 | | `opt-level` 3 | `s` | `z` |
 |---|---|---|---|
-| Image in the flash | 713 KiB | 375 KiB | 358 KiB |
-| Full handshake, the board accepts: board CPU at 64 MHz | 125 ms | 153 ms | 226 ms |
-| the same at 320 MHz | 37 ms | 39 ms | 57 ms |
-| Full handshake, the board dials: board CPU at 64 MHz | 134 ms | 163 ms | 240 ms |
-| the same at 320 MHz | 42 ms | 45 ms | 64 ms |
-| Resumed, the board accepts: board CPU at 64 MHz | 42 ms | 56 ms | 70 ms |
-| the same at 320 MHz | 12 ms | 14 ms | 18 ms |
-| Stack, deepest | 151 KiB | 229 KiB | 249 KiB |
+| Image in the flash | 716 KiB | 376 KiB | 358 KiB |
+| Full handshake, the board accepts: board CPU at 64 MHz | 124 ms | 153 ms | 228 ms |
+| the same at 320 MHz | 37 ms | 39 ms | 59 ms |
+| the same at 600 MHz | 24 ms | 24 ms | 37 ms |
+| Full handshake, the board dials: board CPU at 64 MHz | 134 ms | 162 ms | 242 ms |
+| the same at 320 MHz | 45 ms | 45 ms | 66 ms |
+| the same at 600 MHz | 29 ms | 28 ms | 43 ms |
+| Resumed, the board accepts: board CPU at 64 MHz | 42 ms | 55 ms | 70 ms |
+| the same at 320 MHz | 11 ms | 13 ms | 18 ms |
+| the same at 600 MHz | 7 ms | 8 ms | 11 ms |
+| Stack, deepest | 151 KiB | 229 KiB | 238 KiB |
+
+The session of 23 November, of the 64 and 320 MHz images, is in [`results/2026-11-23/`](results/2026-11-23); its times
+are within 3 ms of these, and its stack at `z` was 249 KiB.
 
 Since the chip's fault below was mended the session has run three more times on this library: twice with every image
 to its end, and once with every image but one (64 MHz at `opt-level = 3` closed with the path dead in both its runs,
@@ -100,7 +108,7 @@ closed as unanswered, and runs that closed with the path dead) may have been the
 
 ## What it takes
 
-**Flash.** 713 KiB at `opt-level = 3`, 358 KiB at `z`, with every algorithm the library accepts from a peer linked in
+**Flash.** 716 KiB at `opt-level = 3`, 358 KiB at `z`, with every algorithm the library accepts from a peer linked in
 (ML-DSA and P-256 verification besides Ed25519, both ciphers). The chip has 64 KiB of flash of its own; the image runs
 in place from the board's external flash.
 
@@ -124,7 +132,7 @@ Three things about the library decide these numbers:
 2. **The stack.** What is left of it after the connection is built in its slot was read from the frame sizes of the
    image of 16 November and not again: the frame that frees a slot takes the connection by value (80 KiB), the one that
    builds the dialing side's handshake machine holds two copies of it (52 KiB), and the frame that verifies an ML-DSA
-   signature (a peer with such an identity; not exercised here) is 142 KiB. Built for size the stack is 78 to 98 KiB
+   signature (a peer with such an identity; not exercised here) is 142 KiB. Built for size the stack is 78 to 87 KiB
    deeper, and the cause is not found; part of it is this firmware's own main loop.
 3. **The key pair.** Without an allocator `pinc_crypto::Keypair` holds room for an ML-DSA key whatever the algorithm
    (65,928 bytes, [#706](https://github.com/sourcenetwork/pinc/issues/706)). The board keeps its Ed25519 key as itself
@@ -135,7 +143,7 @@ Three things about the library decide these numbers:
 - A network: the line loses nothing and has one peer. Ethernet is on the board and not used.
 - More than one session, more than one stream at a time (the pool of three chunks holds one stream's buffers both
   ways), a peer with an ML-DSA or P-256 identity, a key roll, a path change.
-- The chip at 600 MHz, and the flash interface above 64 MHz.
+- The flash interface above 64 MHz.
 - A board that starts with no probe. The probe loads the boot stage into RAM after every reset, and the board stops
   when the probe lets go of it; the chip's own flash is as it was found.
 - The facade (`pinc`). It builds without `std` now, with an allocator; the host here is still the few hundred lines
@@ -151,7 +159,7 @@ Three things about the library decide these numbers:
 | `boot/` | the board's boot stage, which the probe loads into RAM: sets the clock, maps the external flash (octal mode) at `0x7000_0000` and starts the image; it is also the loader, which erases, programs and checks the flash as the laptop asks over the serial line |
 | `firmware/` | the image: accepts and echoes, or dials when asked and times its own round trips; reports the cost of every handshake and session, its statics and its stack's high-water mark |
 | `peer/` | the laptop's end: loads an image, runs the sessions, writes the measured lines |
-| `board.sh` | builds, loads and measures; `session` runs every optimisation level at both clocks |
+| `board.sh` | builds, loads and measures; `session` runs every optimisation level at each of the three clocks |
 | `results/` | the result files, one directory a session |
 
 The memory map of the image is in `firmware/memory.x`: the stack has the lower 368 KiB of the AXI SRAM, so one that
@@ -166,10 +174,10 @@ USB vendor `0483`).
 
 ```sh
 just mcu                                           # no board: lints, the images linked, both ends of the line in one process
-just board build 3 fast                            # the boot stage and the image: opt-level 3, 320 MHz (leave `fast` out for 64 MHz)
+just board build 3 fast                            # the boot stage and the image: opt-level 3, 320 MHz (`full` for 600 MHz, neither for 64 MHz)
 just board flash                                   # load the image into the external flash and start it
 just board run out.txt 10                          # ten sessions of each kind; the lines measured go to out.txt
-just board session examples/mcu/results/2026-11-23 # every optimisation level at both clocks
+just board session examples/mcu/results/2026-11-24 # every optimisation level at each clock
 ```
 
 `PROBE_RS` names the probe-rs command when it is not on the `PATH` (with Nix:
