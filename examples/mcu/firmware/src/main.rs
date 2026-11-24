@@ -9,6 +9,7 @@
 #![no_main]
 
 mod board;
+mod crypto;
 
 use core::fmt::Write as _;
 use core::mem::MaybeUninit;
@@ -18,7 +19,19 @@ use cortex_m_rt::entry;
 use pinc_core::{Command, Event, Role, SessionId, Value};
 use pinc_mcu_link::app::Echo;
 use pinc_mcu_link::frame::{Deframer, encode, encoded_max};
-use pinc_mcu_link::{ALPN, BOARD_ADDR, Ep, EpPlace, EpSlot, MTU, Memory, Node, PEER_ADDR, SlotTable, kind};
+use pinc_mcu_link::{ALPN, BOARD_ADDR, MTU, Memory, PEER_ADDR, kind};
+
+/// The primitives the endpoint runs on: the chip's units where it has them, or the library's software alone.
+#[cfg(feature = "chip-crypto")]
+type Primitives = crypto::Chip;
+#[cfg(not(feature = "chip-crypto"))]
+type Primitives = pinc_crypto::Software;
+
+type Ep<'s, 'a> = pinc_mcu_link::Ep<'s, 'a, Primitives>;
+type EpSlot<'a> = pinc_mcu_link::EpSlot<'a, Primitives>;
+type EpPlace<'s, 'a> = pinc_mcu_link::EpPlace<'s, 'a, Primitives>;
+type SlotTable<'a> = pinc_mcu_link::SlotTable<'a, Primitives>;
+type Node<'n, 's, 'a> = pinc_mcu_link::Node<'n, 's, 'a, Primitives>;
 
 /// The longest frame body: a kind byte and a datagram.
 const BODY: usize = 1 + MTU as usize;
@@ -240,6 +253,7 @@ fn main() -> ! {
         halt()
     };
     board::init(core);
+    crypto::init();
 
     let Some(seed) = board::random_seed() else {
         report!("failed random_generator");
@@ -263,6 +277,7 @@ fn main() -> ! {
     };
     let built = board::now() - t;
     let built_stack = board::stack_peak();
+    let timings = crypto::measure(board::now);
     // What the board is, in three lines; the last one closes the description.
     let describe = |node: &Node| {
         report!(
@@ -279,6 +294,22 @@ fn main() -> ! {
             let _ = write!(id, "{b:02x}");
         }
         id.send();
+        report!(
+            "crypto provider={}",
+            if cfg!(feature = "chip-crypto") {
+                "chip"
+            } else {
+                "software"
+            }
+        );
+        for t in &timings {
+            let mut line = Line::new();
+            let _ = write!(line, "crypto name={} software_ns={}", t.name, t.software_ns);
+            if let Some(chip) = t.chip_ns {
+                let _ = write!(line, " chip_ns={chip} agree={}", t.agree);
+            }
+            line.send();
+        }
         report!(
             "built us={} endpoint={} slot={} memory={} node={} stack_peak={}",
             built / 1000,
@@ -400,6 +431,11 @@ fn main() -> ! {
                         echo.bytes,
                         board::stack_peak(),
                         board::RX_LOST.load(Ordering::Relaxed)
+                    );
+                    report!(
+                        "crypto packets aes_on_chip={} chacha_in_software={}",
+                        crypto::AES_PACKETS.load(Ordering::Relaxed),
+                        crypto::CHACHA_PACKETS.load(Ordering::Relaxed)
                     );
                     started = None;
                     if dial.as_ref().is_some_and(|d| d.session == session) {

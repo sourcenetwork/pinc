@@ -1,6 +1,7 @@
 //! The acceptor's side of the echo protocol: every byte read on a stream is written back on it.
 
 use pinc_core::{Command, Event, SessionId, Value};
+use pinc_crypto::Provider;
 use pinc_transport::stream::StreamId;
 
 use crate::Node;
@@ -33,7 +34,7 @@ impl Echo {
     }
 
     /// Act on an event of the node.
-    pub fn on_event(&mut self, node: &mut Node<'_, '_, '_>, now: u64, ev: &Event) {
+    pub fn on_event<P: Provider + Default>(&mut self, node: &mut Node<'_, '_, '_, P>, now: u64, ev: &Event) {
         match *ev {
             Event::StreamReadable { session, stream } => {
                 if self.stream != Some((session, stream)) {
@@ -51,7 +52,7 @@ impl Echo {
         }
     }
 
-    fn run(&mut self, node: &mut Node<'_, '_, '_>, now: u64) {
+    fn run<P: Provider + Default>(&mut self, node: &mut Node<'_, '_, '_, P>, now: u64) {
         let Some((session, stream)) = self.stream else { return };
         loop {
             if self.at == self.len {
