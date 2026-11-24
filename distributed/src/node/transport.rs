@@ -2,7 +2,7 @@
 //! this binary unchanged, so a test between two nodes of a network is the same code as the loopback comparison.
 
 #[path = "../../../benches/benches/compare/mod.rs"]
-mod compare;
+pub(crate) mod compare;
 
 // Counts allocations only when a transport test asks for it (`--count-allocs`); otherwise one relaxed load per call.
 #[global_allocator]

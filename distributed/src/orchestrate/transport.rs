@@ -21,13 +21,24 @@ use crate::scenario::{PincEndpoints, Stack, Transport, TransportTest};
 
 /// The environment of a node program: the address it binds and the interface size PINC states.
 pub(crate) fn node_env(ip: std::net::Ipv4Addr, mtu: u32) -> Vec<(String, String)> {
-    vec![
+    let mut env = vec![
         ("PINC_BENCH_BIND".into(), ip.to_string()),
         ("PINC_BENCH_MTU".into(), mtu.to_string()),
         // A remote login environment must not turn a row per-core; the per-core argument still wins.
         ("PINC_BENCH_ENDPOINTS".into(), "1".into()),
-    ]
+    ];
+    // The opt-in settings of a comparison library, passed on from the orchestrator's environment when set there; every
+    // row of a run with one names it (`knobs`). Unset, each library runs its defaults.
+    for k in KNOBS {
+        if let Ok(v) = std::env::var(k) {
+            env.push(((*k).to_owned(), v));
+        }
+    }
+    env
 }
+
+/// The comparison libraries' opt-in settings (see `benches/benches/compare/{libp2p,iroh}.rs`).
+const KNOBS: &[&str] = &["PINC_BENCH_LIBP2P_UPGRADE", "PINC_BENCH_IROH_STREAM_WINDOW"];
 
 /// The options of a node program for `test`: per-core only for PINC's many test (every other test and stack runs on one
 /// endpoint), and the reading of every many test.
@@ -231,6 +242,7 @@ mod tests {
         let throughput = TransportTest::Throughput {
             bytes: 1 << 20,
             streams: 1,
+            trace_ms: 0,
         };
         let per_core = PincEndpoints::PerCore;
         assert_eq!(

@@ -4,6 +4,9 @@
 //! socket on the bench's address (`PINC_BENCH_BIND`, loopback by default), so no run touches a network it was not given; iroh's own transport configuration and its tokio
 //! multi-thread runtime with one worker per core. The resumed scenario uses iroh's 0-RTT path
 //! (`connect_with_opts` then `into_0rtt` on the dialer, `into_0rtt` on the acceptor).
+//!
+//! Opt-in knob, off by default and recorded in the row's `knobs` when set: `PINC_BENCH_IROH_STREAM_WINDOW=<bytes>` sets
+//! noq's `stream_receive_window` (fixed at 1,250,000 bytes by default) on both ends.
 #![allow(
     missing_docs,
     unsafe_code,
@@ -33,7 +36,7 @@ use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 use std::time::Duration;
 
 use super::{Lib, Rx, Tx, read_exact, say_hello};
-use iroh::endpoint::{Connection, RecvStream, SendStream, ZeroRttStatus, presets};
+use iroh::endpoint::{Connection, QuicTransportConfig, RecvStream, SendStream, VarInt, ZeroRttStatus, presets};
 use iroh::{Endpoint, EndpointAddr, EndpointId, RelayMode};
 
 const ALPN: &[u8] = b"bench/1";
@@ -46,8 +49,21 @@ fn io_err(e: impl std::fmt::Display) -> io::Error {
     io::Error::other(e.to_string())
 }
 
+/// The opt-in per-stream receive window, in bytes, from `PINC_BENCH_IROH_STREAM_WINDOW` (unset: iroh's default, noq's
+/// 1,250,000 bytes, sized for 100 Mbit/s at 100 ms).
+fn stream_window() -> io::Result<Option<u64>> {
+    super::knob("PINC_BENCH_IROH_STREAM_WINDOW")
+        .map(|v| v.parse::<u64>().map_err(io_err))
+        .transpose()
+}
+
 async fn bind(alpns: Vec<Vec<u8>>) -> io::Result<Endpoint> {
-    Endpoint::builder(presets::Minimal)
+    let mut builder = Endpoint::builder(presets::Minimal);
+    if let Some(w) = stream_window()? {
+        let w = VarInt::from_u64(w).map_err(io_err)?;
+        builder = builder.transport_config(QuicTransportConfig::builder().stream_receive_window(w).build());
+    }
+    builder
         .relay_mode(RelayMode::Disabled)
         .alpns(alpns)
         .clear_ip_transports()
@@ -179,6 +195,39 @@ impl Lib for Iroh {
                 say_hello::<Self>(&c).await?;
                 Ok(c)
             }
+        }
+    }
+
+    async fn wire(conn: &Connection) -> super::Wire {
+        // iroh owns its sockets, so the harness cannot see each datagram: the largest is read as the datagram size
+        // the paths' MTU discovery reached (the cap on every datagram, which bulk data fills), the mean from the
+        // connection's UDP counters.
+        let paths = conn.paths();
+        let stats: Vec<_> = paths.iter().map(|p| (p.is_selected(), p.stats())).collect();
+        let max = stats.iter().map(|(_, s)| u64::from(s.current_mtu)).max();
+        let cwnd = stats
+            .iter()
+            .find(|(sel, _)| *sel)
+            .or(stats.first())
+            .map(|(_, s)| s.cwnd);
+        let udp = conn.stats().udp_tx;
+        let kx = conn
+            .handshake_data()
+            .and_then(|d| d.downcast::<noq::crypto::rustls::HandshakeData>().ok())
+            .and_then(|d| d.negotiated_key_exchange_group);
+        super::Wire {
+            max_udp_payload: max,
+            mean_udp_payload: (udp.datagrams > 0).then(|| udp.bytes as f64 / udp.datagrams as f64),
+            udp_source: "path current_mtu (the datagram size MTU discovery reached; iroh owns its sockets) and \
+                         the connection's udp_tx counters"
+                .into(),
+            kx_group: kx.map_or_else(String::new, |g| format!("{g:?}")),
+            kx_source: "rustls negotiated_key_exchange_group of the connection's handshake data".into(),
+            cwnd,
+            knobs: stream_window()
+                .ok()
+                .flatten()
+                .map_or_else(String::new, |w| format!("stream_receive_window={w}")),
         }
     }
 
