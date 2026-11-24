@@ -12,6 +12,7 @@ ways, as the acceptor and as the dialer. This directory holds the programs that 
 | `firmware/` | the image: accepts and echoes, or dials when asked; reports the cost of every handshake and session, its statics and its stack's high-water mark |
 | `peer/` | the laptop's end: loads an image, runs the sessions, writes the measured lines |
 | `board.sh` | builds, loads and measures |
+| `data.py` | writes a session's result files as JSON data sets beside them, in the shape of the PINC paper's `data/` |
 | `results/` | the result files, one directory a session |
 
 ## Running it
@@ -26,7 +27,11 @@ just board build 3 fast                            # opt-level 3 (or s, z) at 32
 just board flash                                   # load the image into the external flash and start it
 just board run out.txt 10                          # ten sessions of each kind; the lines measured go to out.txt
 just board session examples/mcu/results/<date>     # every optimisation level at every clock, one file each
+examples/mcu/data.py examples/mcu/results/<date>   # the session as JSON: mcu-opt-3.json, mcu-opt-s.json, mcu-opt-z.json
 ```
+
+A last argument `chip` to `build` (after the clock; `slow` names 64 MHz) or to `session` (after the rounds) runs
+AES-128-GCM and SHA-256 on the chip's units, as below.
 
 `PROBE_RS` names the probe-rs command when it is not on the `PATH` (with Nix:
 `PROBE_RS="nix shell nixpkgs#probe-rs-tools -c probe-rs"`), and `PORT` the serial line when it is not `/dev/ttyACM0`.
@@ -129,6 +134,61 @@ cache on. An image that stopped in eight runs of eight without the closed ranges
 A probe that was once told to stop the core at a fault leaves that order in the core until its power goes, and the
 image's fault handler then never runs. The image clears the order when it starts, and `board.sh` does not give it.
 
+## The chip's cryptographic units
+
+The STM32H7S3 has a cryptographic processor (AES), a hash processor (SHA-1 and SHA-2), a public-key accelerator and a
+random generator. Built with the `chip-crypto` feature, the image gives the endpoint a `Provider`
+(`firmware/src/crypto.rs`) that runs AES-128-GCM, the AES header mask and SHA-256 on the first two and everything
+else in the library's software. The board then offers AES-128-GCM, and a peer with hardware AES chooses it; without
+the feature the board offers ChaCha20-Poly1305 only. The seed of the node's keys comes from the random generator in
+both builds.
+
+Every image times each primitive when it starts, in software and on the chip, and checks the chip's AES-128-GCM
+(seven lengths, and a wrong tag refused with the ciphertext left as it was), its header mask and its SHA-256 (eight
+lengths) against the software; all agree in every file. At `opt-level = 3`, the least of four runs:
+
+| | 64 MHz | 320 MHz | 600 MHz |
+|---|---:|---:|---:|
+| AES-128-GCM, 1,200 bytes sealed: software | 2,466 µs | 503 µs | 271 µs |
+| the same on the chip | 255 µs | 66 µs | 37 µs |
+| ChaCha20-Poly1305, 1,200 bytes sealed: software | 679 µs | 144 µs | 87 µs |
+| AES header mask: software | 52 µs | 13 µs | 7.9 µs |
+| the same on the chip | 5.7 µs | 6.2 µs | 5.1 µs |
+| SHA-256 of 1,024 bytes: software | 432 µs | 90 µs | 47 µs |
+| the same on the chip | 233 µs | 46 µs | 25 µs |
+| X25519, one operation: software | 17.1 ms | 3.5 ms | 1.8 ms |
+| ML-KEM-768 key generation: software | 24.5 ms | 5.0 ms | 2.7 ms |
+| ML-KEM-768 encapsulation: software | 23.6 ms | 4.9 ms | 2.7 ms |
+| ML-KEM-768 decapsulation: software | 30.9 ms | 6.3 ms | 3.4 ms |
+
+Two sessions of 24 November at commit `cd4b3de6`, one with each build, are in
+[`results/2026-11-24-crypto-software/`](results/2026-11-24-crypto-software) and
+[`results/2026-11-24-crypto-chip/`](results/2026-11-24-crypto-chip). All eighteen images ran every session to its end.
+With the feature every packet of every session was sealed and opened on the chip (10,148 in a file; the 25 the other
+build counts are the check at its start).
+
+| | 64 MHz | 320 MHz | 600 MHz |
+|---|---:|---:|---:|
+| Full handshake, the board accepts: board CPU, software | 125 ms | 37 ms | 25 ms |
+| the same with the chip's units | 125 ms | 38 ms | 25 ms |
+| Round trip of 32 bytes, timed by the laptop: software | 4.5 ms | 3.9 ms | 3.5 ms |
+| the same with the chip's units | 4.2 ms | 3.8 ms | 3.5 ms |
+| Board CPU of the first session (200 round trips, 256 KiB there and back): software | 2,479 ms | 1,770 ms | 1,598 ms |
+| the same with the chip's units | 2,047 ms | 1,904 ms | 1,685 ms |
+| the same built with `opt-level = z`: software | 4,714 ms | 2,498 ms | 1,922 ms |
+| the same with the chip's units | 2,795 ms | 1,907 ms | 1,613 ms |
+| 256 KiB there and back at `opt-level = z`: software | 38 KiB/s | 53 KiB/s | 56 KiB/s |
+| the same with the chip's units | 50 KiB/s | 57 KiB/s | 59 KiB/s |
+
+- The handshake does not change: its cost is the public-key work, which the chip's units used here do not do.
+- The chip seals a packet 2.2 to 2.7 times faster than the software's ChaCha20-Poly1305. A session shows it where the
+  processor is the limit: at 64 MHz, and in the image built for size. At 320 and 600 MHz and `opt-level = 3` the
+  difference is inside what one session varies by; the board CPU of a session is one sample, and most of it is the
+  main loop asking the endpoint for work.
+- In both of these builds the stack reaches 112 KiB at `opt-level = 3`, where the session above reached 151 KiB, and
+  the image is 634 to 645 KiB against 714 to 716 KiB; built for size the stack is 235 and 248 KiB, against 229 and
+  238 KiB. The cause is not known.
+
 ## Limits
 
 - No network: the line loses nothing and has one peer. Ethernet is on the board and not used.
@@ -144,11 +204,19 @@ image's fault handler then never runs. The image clears the order when it starts
   the probe lets go of it.
 - The board's time is by the chip's internal oscillator, not a crystal; its time of a handshake and the laptop's agree
   within a millisecond in 51.
+- The chip's public-key accelerator is not used. It has no Curve25519 or ML-KEM operation of its own, and the chip
+  crate has no registers for it. The chip's protected AES unit (SAES) is not used either.
+- The chip's units are driven by polling, one operation at a time, and the AES key is loaded for every packet.
 - The facade (`pinc`) is not used: the host here is `link/`, with no allocator.
 
 ## Result directories
 
+Each directory of 24 November also holds its JSON data sets (`data.py`).
+
 - [`results/2026-11-24/`](results/2026-11-24): the session above, nine files.
+- [`results/2026-11-24-crypto-software/`](results/2026-11-24-crypto-software) and
+  [`results/2026-11-24-crypto-chip/`](results/2026-11-24-crypto-chip): the two sessions of the chip's units, nine files
+  each.
 - [`results/2026-11-23/`](results/2026-11-23): the 64 and 320 MHz images, commit `b3e6d630`. Its times are within 3 ms
   of the session above; its stack at `z` is 249 KiB.
 - [`results/2026-11-23-without-conn-in-place/`](results/2026-11-23-without-conn-in-place): the same images on the

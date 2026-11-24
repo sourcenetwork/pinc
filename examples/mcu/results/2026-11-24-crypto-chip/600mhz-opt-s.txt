@@ -1,0 +1,302 @@
+board image clock_hz=600000000 baud=1000000 flash=388760 statics=205012 stack_room=376832
+board node id=42894c02f2e8b89b78a1ff31cf93536afbfc8d910b3968ac9f657fa0cca507e0
+board crypto provider=chip
+board crypto name=aes128gcm_seal_1200 software_ns=367555 chip_ns=34242 agree=true
+board crypto name=chacha20poly1305_seal_1200 software_ns=82587
+board crypto name=aes_header_mask software_ns=5251 chip_ns=2351 agree=true
+board crypto name=sha256_1024 software_ns=47956 chip_ns=23199 agree=true
+board crypto name=x25519_public software_ns=2523123
+board crypto name=x25519_dh software_ns=2527318
+board crypto name=mlkem768_keygen software_ns=3588460
+board crypto name=mlkem768_encapsulate software_ns=3379552
+board crypto name=mlkem768_decapsulate software_ns=4425207
+board built us=8020 endpoint=57616 slot=69040 memory=61936 node=6392 stack_peak=237208
+board handshake role=acceptor wall_us=39302 cpu_us=25351 rx=3/18318us/max10718us events=486/6249us/max4727us tx=487/784us/max213us timer=0/0us/max0us
+board stack peak=237208 after=handshake
+laptop handshake role=dialer resumed=false reported_us=42543 handshake_us=42543 first_byte_us=55623 datagrams_out=3 bytes_out=1517 datagrams_in=3 bytes_in=1372
+laptop round_trip role=dialer bytes=32 n=200 min_us=3230 p10_us=3250 median_us=3374 p90_us=3387 max_us=3501
+laptop echo bytes=262144 wall_us=4251254 kib_per_s=60.2
+board session wall_us=4926307 cpu_us=1345389 rx=591/449193us/max1492us events=132911/275590us/max1113us tx=132544/608124us/max796us timer=73/12480us/max224us
+board closed reason=Transport(Peer { error: 0 }) echoed=268576 stack_peak=237208 rx_lost=0
+board crypto packets aes_on_chip=1230 chacha_in_software=0
+board handshake role=acceptor wall_us=39457 cpu_us=25882 rx=3/18225us/max10767us events=409/6323us/max4908us tx=410/1332us/max209us timer=0/0us/max0us
+board stack peak=237208 after=handshake
+laptop handshake role=dialer resumed=false reported_us=42668 handshake_us=42668 first_byte_us=55823 datagrams_out=3 bytes_out=1517 datagrams_in=3 bytes_in=1372
+laptop round_trip role=dialer bytes=32 n=20 min_us=3223 p10_us=3241 median_us=3253 p90_us=3407 max_us=3411
+board session wall_us=70871 cpu_us=48347 rx=21/17943us/max912us events=3443/8493us/max320us tx=3416/21910us/max731us timer=0/0us/max0us
+board closed reason=Transport(Peer { error: 0 }) echoed=269248 stack_peak=237208 rx_lost=0
+board crypto packets aes_on_chip=1275 chacha_in_software=0
+board handshake role=acceptor wall_us=39425 cpu_us=25166 rx=3/18212us/max10731us events=699/6274us/max4959us tx=700/679us/max210us timer=0/0us/max0us
+board stack peak=237208 after=handshake
+laptop handshake role=dialer resumed=false reported_us=42658 handshake_us=42658 first_byte_us=55747 datagrams_out=3 bytes_out=1517 datagrams_in=3 bytes_in=1372
+laptop round_trip role=dialer bytes=32 n=20 min_us=3214 p10_us=3238 median_us=3252 p90_us=3374 max_us=3382
+board session wall_us=70587 cpu_us=47760 rx=21/18017us/max914us events=3556/8317us/max337us tx=3529/21424us/max725us timer=0/0us/max0us
+board closed reason=Transport(Peer { error: 0 }) echoed=269920 stack_peak=237208 rx_lost=0
+board crypto packets aes_on_chip=1320 chacha_in_software=0
+board handshake role=acceptor wall_us=39072 cpu_us=25111 rx=3/18135us/max10788us events=287/5481us/max4702us tx=288/1494us/max214us timer=0/0us/max0us
+board stack peak=237208 after=handshake
+laptop handshake role=dialer resumed=false reported_us=42422 handshake_us=42422 first_byte_us=55417 datagrams_out=3 bytes_out=1517 datagrams_in=3 bytes_in=1372
+laptop round_trip role=dialer bytes=32 n=20 min_us=3133 p10_us=3231 median_us=3252 p90_us=3336 max_us=3338
+board session wall_us=70144 cpu_us=47268 rx=21/17429us/max924us events=3666/8324us/max306us tx=3639/21514us/max730us timer=0/0us/max0us
+board closed reason=Transport(Peer { error: 0 }) echoed=270592 stack_peak=237208 rx_lost=0
+board crypto packets aes_on_chip=1365 chacha_in_software=0
+board handshake role=acceptor wall_us=39295 cpu_us=25335 rx=3/18235us/max10760us events=590/5280us/max4757us tx=591/1819us/max212us timer=0/0us/max0us
+board stack peak=237208 after=handshake
+laptop handshake role=dialer resumed=false reported_us=42543 handshake_us=42543 first_byte_us=55608 datagrams_out=3 bytes_out=1517 datagrams_in=3 bytes_in=1372
+laptop round_trip role=dialer bytes=32 n=20 min_us=3238 p10_us=3241 median_us=3285 p90_us=3378 max_us=3382
+board session wall_us=70885 cpu_us=48833 rx=21/18011us/max911us events=3201/8203us/max316us tx=3174/22618us/max749us timer=0/0us/max0us
+board closed reason=Transport(Peer { error: 0 }) echoed=271264 stack_peak=237208 rx_lost=0
+board crypto packets aes_on_chip=1410 chacha_in_software=0
+board handshake role=acceptor wall_us=39255 cpu_us=24772 rx=3/18204us/max10777us events=879/5399us/max4760us tx=880/1168us/max211us timer=0/0us/max0us
+board stack peak=237208 after=handshake
+laptop handshake role=dialer resumed=false reported_us=42556 handshake_us=42556 first_byte_us=55628 datagrams_out=3 bytes_out=1517 datagrams_in=3 bytes_in=1372
+laptop round_trip role=dialer bytes=32 n=20 min_us=3132 p10_us=3237 median_us=3253 p90_us=3371 max_us=3380
+board session wall_us=70460 cpu_us=48259 rx=21/18042us/max927us events=3277/8192us/max324us tx=3250/22024us/max753us timer=0/0us/max0us
+board closed reason=Transport(Peer { error: 0 }) echoed=271936 stack_peak=237208 rx_lost=0
+board crypto packets aes_on_chip=1455 chacha_in_software=0
+board handshake role=acceptor wall_us=39008 cpu_us=24401 rx=3/18148us/max10769us events=317/5089us/max4644us tx=318/1164us/max221us timer=0/0us/max0us
+board stack peak=237208 after=handshake
+laptop handshake role=dialer resumed=false reported_us=42344 handshake_us=42344 first_byte_us=55298 datagrams_out=3 bytes_out=1517 datagrams_in=3 bytes_in=1372
+laptop round_trip role=dialer bytes=32 n=20 min_us=3132 p10_us=3241 median_us=3292 p90_us=3379 max_us=3380
+board session wall_us=70869 cpu_us=47942 rx=21/18036us/max908us events=3402/8279us/max322us tx=3375/21626us/max736us timer=0/0us/max0us
+board closed reason=Transport(Peer { error: 0 }) echoed=272608 stack_peak=237208 rx_lost=0
+board crypto packets aes_on_chip=1500 chacha_in_software=0
+board handshake role=acceptor wall_us=39424 cpu_us=25582 rx=3/18203us/max10731us events=384/5991us/max4953us tx=385/1387us/max225us timer=0/0us/max0us
+board stack peak=237208 after=handshake
+laptop handshake role=dialer resumed=false reported_us=42706 handshake_us=42706 first_byte_us=55772 datagrams_out=3 bytes_out=1517 datagrams_in=3 bytes_in=1372
+laptop round_trip role=dialer bytes=32 n=20 min_us=3240 p10_us=3246 median_us=3296 p90_us=3372 max_us=3380
+board session wall_us=71117 cpu_us=49327 rx=21/17954us/max904us events=3159/8111us/max320us tx=3132/23260us/max737us timer=0/0us/max0us
+board closed reason=Transport(Peer { error: 0 }) echoed=273280 stack_peak=237208 rx_lost=0
+board crypto packets aes_on_chip=1545 chacha_in_software=0
+board handshake role=acceptor wall_us=39275 cpu_us=25595 rx=3/18317us/max10747us events=368/5774us/max4698us tx=369/1503us/max208us timer=0/0us/max0us
+board stack peak=237208 after=handshake
+laptop handshake role=dialer resumed=false reported_us=42438 handshake_us=42438 first_byte_us=55632 datagrams_out=3 bytes_out=1517 datagrams_in=3 bytes_in=1372
+laptop round_trip role=dialer bytes=32 n=20 min_us=3226 p10_us=3241 median_us=3250 p90_us=3380 max_us=3396
+board session wall_us=70724 cpu_us=48538 rx=21/18011us/max901us events=3385/8220us/max344us tx=3358/22306us/max749us timer=0/0us/max0us
+board closed reason=Transport(Peer { error: 0 }) echoed=273952 stack_peak=237208 rx_lost=0
+board crypto packets aes_on_chip=1590 chacha_in_software=0
+board handshake role=acceptor wall_us=39153 cpu_us=25064 rx=3/18217us/max10750us events=682/6189us/max4678us tx=683/657us/max214us timer=0/0us/max0us
+board stack peak=237208 after=handshake
+laptop handshake role=dialer resumed=false reported_us=42415 handshake_us=42415 first_byte_us=55478 datagrams_out=3 bytes_out=1517 datagrams_in=3 bytes_in=1372
+laptop round_trip role=dialer bytes=32 n=20 min_us=3229 p10_us=3248 median_us=3253 p90_us=3376 max_us=3387
+board session wall_us=70689 cpu_us=47513 rx=21/18002us/max910us events=3487/8354us/max329us tx=3460/21156us/max733us timer=0/0us/max0us
+board closed reason=Transport(Peer { error: 0 }) echoed=274624 stack_peak=237208 rx_lost=0
+board crypto packets aes_on_chip=1635 chacha_in_software=0
+board handshake role=acceptor wall_us=8547 cpu_us=8515 rx=1/8493us/max8493us events=1/21us/max21us tx=0/0us/max0us timer=0/0us/max0us
+board stack peak=237208 after=handshake
+laptop handshake role=dialer resumed=true reported_us=54 handshake_us=15695 first_byte_us=15696 datagrams_out=2 bytes_out=262 datagrams_in=1 bytes_in=176
+laptop round_trip role=dialer bytes=32 n=20 min_us=3222 p10_us=3240 median_us=3251 p90_us=3324 max_us=4613
+board session wall_us=72322 cpu_us=48627 rx=22/18186us/max1193us events=3421/8249us/max359us tx=3394/22033us/max746us timer=1/158us/max158us
+board closed reason=Transport(Peer { error: 0 }) echoed=275296 stack_peak=237208 rx_lost=0
+board crypto packets aes_on_chip=1679 chacha_in_software=0
+board handshake role=acceptor wall_us=8612 cpu_us=8579 rx=1/8557us/max8557us events=1/21us/max21us tx=0/0us/max0us timer=0/0us/max0us
+board stack peak=237208 after=handshake
+laptop handshake role=dialer resumed=true reported_us=48 handshake_us=15755 first_byte_us=15756 datagrams_out=2 bytes_out=262 datagrams_in=1 bytes_in=176
+laptop round_trip role=dialer bytes=32 n=20 min_us=3236 p10_us=3245 median_us=3254 p90_us=3380 max_us=4687
+board session wall_us=73196 cpu_us=49871 rx=22/19157us/max1198us events=3481/8329us/max368us tx=3454/22224us/max755us timer=1/160us/max160us
+board closed reason=Transport(Peer { error: 0 }) echoed=275968 stack_peak=237208 rx_lost=0
+board crypto packets aes_on_chip=1723 chacha_in_software=0
+board handshake role=acceptor wall_us=8610 cpu_us=8575 rx=1/8554us/max8554us events=1/21us/max21us tx=0/0us/max0us timer=0/0us/max0us
+board stack peak=237208 after=handshake
+laptop handshake role=dialer resumed=true reported_us=51 handshake_us=15765 first_byte_us=15766 datagrams_out=2 bytes_out=262 datagrams_in=1 bytes_in=176
+laptop round_trip role=dialer bytes=32 n=20 min_us=3239 p10_us=3241 median_us=3258 p90_us=3378 max_us=4671
+board session wall_us=72784 cpu_us=50393 rx=22/19019us/max1176us events=3018/8030us/max365us tx=2991/23181us/max750us timer=1/161us/max161us
+board closed reason=Transport(Peer { error: 0 }) echoed=276640 stack_peak=237208 rx_lost=0
+board crypto packets aes_on_chip=1767 chacha_in_software=0
+board handshake role=acceptor wall_us=8565 cpu_us=8531 rx=1/8513us/max8513us events=1/17us/max17us tx=0/0us/max0us timer=0/0us/max0us
+board stack peak=237208 after=handshake
+laptop handshake role=dialer resumed=true reported_us=45 handshake_us=15677 first_byte_us=15678 datagrams_out=2 bytes_out=262 datagrams_in=1 bytes_in=176
+laptop round_trip role=dialer bytes=32 n=20 min_us=3234 p10_us=3245 median_us=3253 p90_us=3380 max_us=4685
+board session wall_us=73000 cpu_us=50044 rx=22/19029us/max1207us events=3278/8183us/max377us tx=3251/22661us/max752us timer=1/169us/max169us
+board closed reason=Transport(Peer { error: 0 }) echoed=277312 stack_peak=237208 rx_lost=0
+board crypto packets aes_on_chip=1811 chacha_in_software=0
+board handshake role=acceptor wall_us=8613 cpu_us=8576 rx=1/8555us/max8555us events=1/20us/max20us tx=0/0us/max0us timer=0/0us/max0us
+board stack peak=237208 after=handshake
+laptop handshake role=dialer resumed=true reported_us=48 handshake_us=15914 first_byte_us=15915 datagrams_out=2 bytes_out=262 datagrams_in=1 bytes_in=176
+laptop round_trip role=dialer bytes=32 n=20 min_us=3240 p10_us=3241 median_us=3255 p90_us=3471 max_us=4672
+board session wall_us=73304 cpu_us=49780 rx=22/19093us/max1195us events=3380/8305us/max369us tx=3353/22214us/max745us timer=1/166us/max166us
+board closed reason=Transport(Peer { error: 0 }) echoed=277984 stack_peak=237208 rx_lost=0
+board crypto packets aes_on_chip=1855 chacha_in_software=0
+board handshake role=acceptor wall_us=8593 cpu_us=8561 rx=1/8543us/max8543us events=1/18us/max18us tx=0/0us/max0us timer=0/0us/max0us
+board stack peak=237208 after=handshake
+laptop handshake role=dialer resumed=true reported_us=52 handshake_us=15767 first_byte_us=15768 datagrams_out=2 bytes_out=262 datagrams_in=1 bytes_in=176
+laptop round_trip role=dialer bytes=32 n=20 min_us=3246 p10_us=3248 median_us=3288 p90_us=3376 max_us=4679
+board session wall_us=73304 cpu_us=49733 rx=22/19072us/max1207us events=3486/8629us/max365us tx=3459/21864us/max752us timer=1/166us/max166us
+board closed reason=Transport(Peer { error: 0 }) echoed=278656 stack_peak=237208 rx_lost=0
+board crypto packets aes_on_chip=1899 chacha_in_software=0
+board handshake role=acceptor wall_us=8563 cpu_us=8529 rx=1/8509us/max8509us events=1/20us/max20us tx=0/0us/max0us timer=0/0us/max0us
+board stack peak=237208 after=handshake
+laptop handshake role=dialer resumed=true reported_us=53 handshake_us=15760 first_byte_us=15760 datagrams_out=2 bytes_out=262 datagrams_in=1 bytes_in=176
+laptop round_trip role=dialer bytes=32 n=20 min_us=3246 p10_us=3247 median_us=3253 p90_us=3493 max_us=4694
+board session wall_us=73096 cpu_us=49778 rx=22/19071us/max1203us events=2833/8442us/max362us tx=2806/22105us/max766us timer=1/159us/max159us
+board closed reason=Transport(Peer { error: 0 }) echoed=279328 stack_peak=237208 rx_lost=0
+board crypto packets aes_on_chip=1943 chacha_in_software=0
+board handshake role=acceptor wall_us=8589 cpu_us=8548 rx=1/8529us/max8529us events=1/19us/max19us tx=0/0us/max0us timer=0/0us/max0us
+board stack peak=237208 after=handshake
+laptop handshake role=dialer resumed=true reported_us=45 handshake_us=15759 first_byte_us=15759 datagrams_out=2 bytes_out=262 datagrams_in=1 bytes_in=176
+laptop round_trip role=dialer bytes=32 n=20 min_us=3240 p10_us=3243 median_us=3250 p90_us=3256 max_us=4579
+board session wall_us=72218 cpu_us=49377 rx=22/18112us/max1177us events=2930/8151us/max361us tx=2903/22948us/max755us timer=1/164us/max164us
+board closed reason=Transport(Peer { error: 0 }) echoed=280000 stack_peak=237208 rx_lost=0
+board crypto packets aes_on_chip=1987 chacha_in_software=0
+board handshake role=acceptor wall_us=8606 cpu_us=8570 rx=1/8553us/max8553us events=1/17us/max17us tx=0/0us/max0us timer=0/0us/max0us
+board stack peak=237208 after=handshake
+laptop handshake role=dialer resumed=true reported_us=49 handshake_us=15634 first_byte_us=15634 datagrams_out=2 bytes_out=262 datagrams_in=1 bytes_in=176
+laptop round_trip role=dialer bytes=32 n=20 min_us=3237 p10_us=3243 median_us=3249 p90_us=3366 max_us=4698
+board session wall_us=72296 cpu_us=49726 rx=22/18780us/max1205us events=3389/8168us/max361us tx=3362/22626us/max745us timer=1/151us/max151us
+board closed reason=Transport(Peer { error: 0 }) echoed=280672 stack_peak=237208 rx_lost=0
+board crypto packets aes_on_chip=2031 chacha_in_software=0
+board handshake role=acceptor wall_us=8609 cpu_us=8577 rx=1/8557us/max8557us events=1/20us/max20us tx=0/0us/max0us timer=0/0us/max0us
+board stack peak=237208 after=handshake
+laptop handshake role=dialer resumed=true reported_us=53 handshake_us=15772 first_byte_us=15773 datagrams_out=2 bytes_out=262 datagrams_in=1 bytes_in=176
+laptop round_trip role=dialer bytes=32 n=20 min_us=3222 p10_us=3236 median_us=3268 p90_us=3378 max_us=4681
+board session wall_us=73180 cpu_us=49685 rx=22/18988us/max1178us events=3290/8322us/max382us tx=3263/22208us/max733us timer=1/166us/max166us
+board closed reason=Transport(Peer { error: 0 }) echoed=281344 stack_peak=237208 rx_lost=0
+board crypto packets aes_on_chip=2075 chacha_in_software=0
+board handshake role=dialer resumed=false wall_us=49410 cpu_us=32612 rx=2/3438us/max3140us events=3364/25966us/max15305us tx=1683/3207us/max193us timer=0/0us/max0us
+board stack peak=240140 after=handshake
+board round_trip role=dialer bytes=32 n=200 min_us=3102 p10_us=3225 median_us=3255 p90_us=3373 max_us=6313
+board session wall_us=661108 cpu_us=463841 rx=201/168409us/max1225us events=29859/76404us/max300us tx=29654/218861us/max703us timer=1/166us/max166us
+board closed reason=Transport(Local { error: 0 }) echoed=281344 stack_peak=240140 rx_lost=0
+board crypto packets aes_on_chip=2478 chacha_in_software=0
+board handshake role=dialer resumed=false wall_us=49412 cpu_us=33399 rx=2/3500us/max3173us events=2882/25462us/max15377us tx=1442/4436us/max188us timer=0/0us/max0us
+board stack peak=240140 after=handshake
+board round_trip role=dialer bytes=32 n=200 min_us=3196 p10_us=3244 median_us=3359 p90_us=3413 max_us=6395
+board session wall_us=675230 cpu_us=471286 rx=201/178168us/max1204us events=32102/78550us/max307us tx=31897/214399us/max713us timer=1/169us/max169us
+board closed reason=Transport(Local { error: 0 }) echoed=281344 stack_peak=240140 rx_lost=0
+board crypto packets aes_on_chip=2882 chacha_in_software=0
+board handshake role=dialer resumed=false wall_us=49477 cpu_us=30587 rx=2/3415us/max3126us events=3218/26097us/max15355us tx=1610/1074us/max200us timer=0/0us/max0us
+board stack peak=240140 after=handshake
+board round_trip role=dialer bytes=32 n=200 min_us=3205 p10_us=3243 median_us=3357 p90_us=3402 max_us=6431
+board session wall_us=674110 cpu_us=469013 rx=201/177886us/max1223us events=31796/78086us/max306us tx=31591/212868us/max714us timer=1/172us/max172us
+board closed reason=Transport(Local { error: 0 }) echoed=281344 stack_peak=240140 rx_lost=0
+board crypto packets aes_on_chip=3286 chacha_in_software=0
+board handshake role=dialer resumed=false wall_us=49521 cpu_us=33379 rx=2/3464us/max3161us events=2806/25785us/max15476us tx=1404/4130us/max205us timer=0/0us/max0us
+board stack peak=240140 after=handshake
+board round_trip role=dialer bytes=32 n=200 min_us=3202 p10_us=3245 median_us=3354 p90_us=3404 max_us=6408
+board session wall_us=673944 cpu_us=473351 rx=201/178137us/max1223us events=31362/78094us/max311us tx=31157/216948us/max731us timer=1/171us/max171us
+board closed reason=Transport(Local { error: 0 }) echoed=281344 stack_peak=240140 rx_lost=0
+board crypto packets aes_on_chip=3690 chacha_in_software=0
+board handshake role=dialer resumed=false wall_us=49341 cpu_us=32992 rx=2/3462us/max3155us events=3024/24222us/max15308us tx=1513/5307us/max196us timer=0/0us/max0us
+board stack peak=240140 after=handshake
+board round_trip role=dialer bytes=32 n=200 min_us=3097 p10_us=3214 median_us=3260 p90_us=3378 max_us=6430
+board session wall_us=662055 cpu_us=462532 rx=201/168052us/max1201us events=30621/77350us/max301us tx=30416/216958us/max722us timer=1/171us/max171us
+board closed reason=Transport(Local { error: 0 }) echoed=281344 stack_peak=240140 rx_lost=0
+board crypto packets aes_on_chip=4094 chacha_in_software=0
+board handshake role=dialer resumed=false wall_us=49462 cpu_us=31326 rx=2/3452us/max3166us events=3226/22468us/max15343us tx=1614/5405us/max206us timer=0/0us/max0us
+board stack peak=240140 after=handshake
+board round_trip role=dialer bytes=32 n=200 min_us=3192 p10_us=3247 median_us=3362 p90_us=3414 max_us=6500
+board session wall_us=675491 cpu_us=470242 rx=201/178233us/max1271us events=31374/77843us/max319us tx=31169/214000us/max719us timer=1/164us/max164us
+board closed reason=Transport(Local { error: 0 }) echoed=281344 stack_peak=240140 rx_lost=0
+board crypto packets aes_on_chip=4498 chacha_in_software=0
+board handshake role=dialer resumed=false wall_us=49652 cpu_us=32942 rx=2/3513us/max3165us events=3154/24180us/max15565us tx=1578/5248us/max193us timer=0/0us/max0us
+board stack peak=240140 after=handshake
+board round_trip role=dialer bytes=32 n=200 min_us=3095 p10_us=3220 median_us=3265 p90_us=3368 max_us=6384
+board session wall_us=662153 cpu_us=460732 rx=201/168243us/max1248us events=31665/77485us/max311us tx=31460/214845us/max701us timer=1/158us/max158us
+board closed reason=Transport(Local { error: 0 }) echoed=281344 stack_peak=240140 rx_lost=0
+board crypto packets aes_on_chip=4902 chacha_in_software=0
+board handshake role=dialer resumed=false wall_us=49325 cpu_us=33248 rx=2/3451us/max3145us events=2814/25569us/max15312us tx=1408/4227us/max186us timer=0/0us/max0us
+board stack peak=240140 after=handshake
+board round_trip role=dialer bytes=32 n=200 min_us=3193 p10_us=3246 median_us=3357 p90_us=3442 max_us=6373
+board session wall_us=675252 cpu_us=470013 rx=201/177525us/max1216us events=32825/78495us/max321us tx=32620/213828us/max698us timer=1/164us/max164us
+board closed reason=Transport(Local { error: 0 }) echoed=281344 stack_peak=240140 rx_lost=0
+board crypto packets aes_on_chip=5306 chacha_in_software=0
+board handshake role=dialer resumed=false wall_us=49587 cpu_us=32776 rx=2/3482us/max3158us events=3614/24869us/max15330us tx=1808/4424us/max193us timer=0/0us/max0us
+board stack peak=240140 after=handshake
+board round_trip role=dialer bytes=32 n=200 min_us=3199 p10_us=3244 median_us=3359 p90_us=3400 max_us=6394
+board session wall_us=673765 cpu_us=468794 rx=201/178250us/max1199us events=30907/76782us/max302us tx=30702/213601us/max717us timer=1/160us/max160us
+board closed reason=Transport(Local { error: 0 }) echoed=281344 stack_peak=240140 rx_lost=0
+board crypto packets aes_on_chip=5710 chacha_in_software=0
+board handshake role=dialer resumed=false wall_us=49501 cpu_us=30302 rx=2/3451us/max3144us events=3526/25610us/max15490us tx=1764/1239us/max211us timer=0/0us/max0us
+board stack peak=240140 after=handshake
+board round_trip role=dialer bytes=32 n=200 min_us=3195 p10_us=3248 median_us=3358 p90_us=3400 max_us=6426
+board session wall_us=674518 cpu_us=467594 rx=201/178419us/max1262us events=31705/78337us/max310us tx=31500/210673us/max711us timer=1/163us/max163us
+board closed reason=Transport(Local { error: 0 }) echoed=281344 stack_peak=240140 rx_lost=0
+board crypto packets aes_on_chip=6114 chacha_in_software=0
+board reported early=true wall_us=4517 cpu_us=4477
+board handshake role=dialer resumed=true wall_us=14978 cpu_us=11907 rx=1/5208us/max5208us events=286/4862us/max4460us tx=282/1837us/max586us timer=0/0us/max0us
+board stack peak=240172 after=handshake
+board round_trip role=dialer bytes=32 n=200 min_us=3103 p10_us=3227 median_us=3257 p90_us=3369 max_us=14225
+board session wall_us=657055 cpu_us=461010 rx=201/167708us/max874us events=33943/78197us/max311us tx=33741/215104us/max615us timer=0/0us/max0us
+board closed reason=Transport(Local { error: 0 }) echoed=281344 stack_peak=240172 rx_lost=0
+board crypto packets aes_on_chip=6518 chacha_in_software=0
+board reported early=true wall_us=4496 cpu_us=4449
+board handshake role=dialer resumed=true wall_us=14887 cpu_us=11187 rx=1/5242us/max5242us events=218/4789us/max4432us tx=214/1155us/max580us timer=0/0us/max0us
+board stack peak=240172 after=handshake
+board round_trip role=dialer bytes=32 n=200 min_us=3111 p10_us=3222 median_us=3265 p90_us=3370 max_us=14162
+board session wall_us=658548 cpu_us=461849 rx=201/167272us/max878us events=28405/77005us/max308us tx=28203/217572us/max617us timer=0/0us/max0us
+board closed reason=Transport(Local { error: 0 }) echoed=281344 stack_peak=240172 rx_lost=0
+board crypto packets aes_on_chip=6922 chacha_in_software=0
+board reported early=true wall_us=4473 cpu_us=4421
+board handshake role=dialer resumed=true wall_us=14919 cpu_us=11821 rx=1/5266us/max5266us events=262/4807us/max4404us tx=258/1747us/max599us timer=0/0us/max0us
+board stack peak=240172 after=handshake
+board round_trip role=dialer bytes=32 n=200 min_us=3114 p10_us=3225 median_us=3264 p90_us=3369 max_us=14223
+board session wall_us=658495 cpu_us=456813 rx=201/167788us/max878us events=31888/77429us/max315us tx=31686/211595us/max626us timer=0/0us/max0us
+board closed reason=Transport(Local { error: 0 }) echoed=281344 stack_peak=240172 rx_lost=0
+board crypto packets aes_on_chip=7326 chacha_in_software=0
+board reported early=true wall_us=4483 cpu_us=4435
+board handshake role=dialer resumed=true wall_us=14869 cpu_us=11466 rx=1/5239us/max5239us events=249/4777us/max4416us tx=245/1448us/max590us timer=0/0us/max0us
+board stack peak=240172 after=handshake
+board round_trip role=dialer bytes=32 n=200 min_us=3135 p10_us=3224 median_us=3257 p90_us=3369 max_us=14197
+board session wall_us=657315 cpu_us=458588 rx=201/167834us/max882us events=30744/77169us/max305us tx=30542/213585us/max622us timer=0/0us/max0us
+board closed reason=Transport(Local { error: 0 }) echoed=281344 stack_peak=240172 rx_lost=0
+board crypto packets aes_on_chip=7730 chacha_in_software=0
+board reported early=true wall_us=4508 cpu_us=4468
+board handshake role=dialer resumed=true wall_us=14819 cpu_us=11557 rx=1/5178us/max5178us events=401/4874us/max4452us tx=397/1504us/max584us timer=0/0us/max0us
+board stack peak=240172 after=handshake
+board round_trip role=dialer bytes=32 n=200 min_us=3107 p10_us=3221 median_us=3260 p90_us=3380 max_us=14065
+board session wall_us=657918 cpu_us=459302 rx=201/167426us/max877us events=33606/76513us/max309us tx=33404/215361us/max623us timer=0/0us/max0us
+board closed reason=Transport(Local { error: 0 }) echoed=281344 stack_peak=240172 rx_lost=0
+board crypto packets aes_on_chip=8134 chacha_in_software=0
+board reported early=true wall_us=4497 cpu_us=4453
+board handshake role=dialer resumed=true wall_us=14841 cpu_us=11701 rx=1/5219us/max5219us events=361/4859us/max4434us tx=357/1622us/max566us timer=0/0us/max0us
+board stack peak=240172 after=handshake
+board round_trip role=dialer bytes=32 n=200 min_us=3150 p10_us=3222 median_us=3258 p90_us=3371 max_us=14133
+board session wall_us=656969 cpu_us=455072 rx=201/167437us/max870us events=30405/77546us/max316us tx=30203/210088us/max619us timer=0/0us/max0us
+board closed reason=Transport(Local { error: 0 }) echoed=281344 stack_peak=240172 rx_lost=0
+board crypto packets aes_on_chip=8538 chacha_in_software=0
+board reported early=true wall_us=4501 cpu_us=4451
+board handshake role=dialer resumed=true wall_us=14889 cpu_us=11611 rx=1/5208us/max5208us events=409/4850us/max4435us tx=405/1552us/max571us timer=0/0us/max0us
+board stack peak=240172 after=handshake
+board round_trip role=dialer bytes=32 n=200 min_us=3173 p10_us=3229 median_us=3258 p90_us=3370 max_us=14213
+board session wall_us=658360 cpu_us=456825 rx=201/167850us/max873us events=34015/76700us/max309us tx=33813/212273us/max628us timer=0/0us/max0us
+board closed reason=Transport(Local { error: 0 }) echoed=281344 stack_peak=240172 rx_lost=0
+board crypto packets aes_on_chip=8942 chacha_in_software=0
+board reported early=true wall_us=4472 cpu_us=4421
+board handshake role=dialer resumed=true wall_us=14916 cpu_us=11423 rx=1/5230us/max5230us events=244/4784us/max4405us tx=240/1409us/max567us timer=0/0us/max0us
+board stack peak=240172 after=handshake
+board round_trip role=dialer bytes=32 n=200 min_us=3111 p10_us=3228 median_us=3260 p90_us=3365 max_us=14244
+board session wall_us=657562 cpu_us=457836 rx=201/167913us/max887us events=31121/77045us/max311us tx=30919/212877us/max612us timer=0/0us/max0us
+board closed reason=Transport(Local { error: 0 }) echoed=281344 stack_peak=240172 rx_lost=0
+board crypto packets aes_on_chip=9346 chacha_in_software=0
+board reported early=true wall_us=4465 cpu_us=4420
+board handshake role=dialer resumed=true wall_us=14790 cpu_us=11811 rx=1/5139us/max5139us events=255/4786us/max4404us tx=251/1884us/max579us timer=0/0us/max0us
+board stack peak=240172 after=handshake
+board round_trip role=dialer bytes=32 n=200 min_us=3112 p10_us=3218 median_us=3261 p90_us=3378 max_us=14099
+board session wall_us=657981 cpu_us=456194 rx=201/167374us/max880us events=29218/77803us/max312us tx=29016/211017us/max622us timer=0/0us/max0us
+board closed reason=Transport(Local { error: 0 }) echoed=281344 stack_peak=240172 rx_lost=0
+board crypto packets aes_on_chip=9750 chacha_in_software=0
+board reported early=true wall_us=4486 cpu_us=4439
+board handshake role=dialer resumed=true wall_us=14848 cpu_us=11688 rx=1/5211us/max5211us events=382/4836us/max4422us tx=378/1640us/max573us timer=0/0us/max0us
+board stack peak=240172 after=handshake
+board round_trip role=dialer bytes=32 n=200 min_us=3124 p10_us=3218 median_us=3256 p90_us=3375 max_us=14146
+board session wall_us=657068 cpu_us=458114 rx=201/167299us/max877us events=32849/76560us/max308us tx=32647/214254us/max624us timer=0/0us/max0us
+board closed reason=Transport(Local { error: 0 }) echoed=281344 stack_peak=240172 rx_lost=0
+board crypto packets aes_on_chip=10154 chacha_in_software=0
+summary handshake board=acceptor resumed=false laptop_handshake n=10 min_us=42344 p10_us=42415 median_us=42543 p90_us=42706 max_us=42706
+summary handshake board=acceptor resumed=false laptop_first_byte n=10 min_us=55298 p10_us=55417 median_us=55628 p90_us=55823 max_us=55823
+summary handshake board=acceptor resumed=false board_cpu n=10 min_us=24401 p10_us=24772 median_us=25335 p90_us=25882 max_us=25882
+summary handshake board=acceptor resumed=false board_wall n=10 min_us=39008 p10_us=39072 median_us=39295 p90_us=39457 max_us=39457
+summary handshake board=acceptor resumed=true laptop_handshake n=10 min_us=15634 p10_us=15677 median_us=15760 p90_us=15914 max_us=15914
+summary handshake board=acceptor resumed=true laptop_first_byte n=10 min_us=15634 p10_us=15678 median_us=15760 p90_us=15915 max_us=15915
+summary handshake board=acceptor resumed=true board_cpu n=10 min_us=8515 p10_us=8529 median_us=8570 p90_us=8579 max_us=8579
+summary handshake board=acceptor resumed=true board_wall n=10 min_us=8547 p10_us=8563 median_us=8606 p90_us=8613 max_us=8613
+summary handshake board=dialer resumed=false board_cpu n=10 min_us=30302 p10_us=30587 median_us=32942 p90_us=33399 max_us=33399
+summary handshake board=dialer resumed=false board_wall n=10 min_us=49325 p10_us=49341 median_us=49477 p90_us=49652 max_us=49652
+summary handshake board=dialer resumed=true board_cpu n=10 min_us=11187 p10_us=11423 median_us=11688 p90_us=11907 max_us=11907
+summary handshake board=dialer resumed=true board_wall n=10 min_us=14790 p10_us=14819 median_us=14887 p90_us=14978 max_us=14978
+summary round_trip bytes=32 timed_by=board median_of_medians n=20 min_us=3255 p10_us=3257 median_us=3264 p90_us=3359 max_us=3362
+summary stack board_peak_bytes=240172
+summary line baud=1000000 datagrams_out=5090 bytes_out=599890 datagrams_in=5027 bytes_in=597135
+conditions date=2026-11-24T11:34Z commit=cd4b3de6 opt_level=s
+conditions rustc="rustc 1.100.0 (0ef1bc386 2026-11-09)" probe="probe-rs 0.31.0 (git commit: crates.io)"
+conditions laptop="Linux 7.2.9 x86_64" cpu="AMD RYZEN AI MAX+ 395 w/ Radeon 8060S"
