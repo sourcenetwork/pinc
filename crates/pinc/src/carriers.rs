@@ -99,12 +99,7 @@ impl Relay {
 
     /// The relay as a URL for a [`NodeAddr`](crate::NodeAddr): `relay://<id>@<address>`, the first address it has.
     pub fn url(&self) -> String {
-        let at = self
-            .udp
-            .or(self.tcp)
-            .or(self.ws)
-            .map(|a| a.to_string())
-            .unwrap_or_default();
+        let at = self.udp.or(self.tcp).or(self.ws).map_or_default(|a| a.to_string());
         format!("relay://{}@{at}", node_to_string(&self.id))
     }
 

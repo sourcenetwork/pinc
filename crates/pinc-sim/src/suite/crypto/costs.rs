@@ -196,6 +196,6 @@ impl Registry {
 
     /// The counters of `node` without resetting them.
     pub fn peek_work(&self, node: usize) -> Work {
-        self.st.borrow().work.get(node).map(|s| s.work).unwrap_or_default()
+        self.st.borrow().work.get(node).map_or_default(|s| s.work)
     }
 }

@@ -220,17 +220,13 @@ where
 
     /// Try again the rounds whose stream could not be opened, once their time comes.
     pub(crate) fn sets_timeout(&mut self, now: Nanos) {
-        let due: Vec<u32> = self
-            .recs
-            .as_deref()
-            .map(|r| {
-                r.rounds
-                    .iter()
-                    .filter(|x| x.open_at.is_some_and(|t| now >= t))
-                    .map(|x| x.id)
-                    .collect()
-            })
-            .unwrap_or_default();
+        let due: Vec<u32> = self.recs.as_deref().map_or_default(|r| {
+            r.rounds
+                .iter()
+                .filter(|x| x.open_at.is_some_and(|t| now >= t))
+                .map(|x| x.id)
+                .collect()
+        });
         for id in due {
             self.round_begin(now, id);
         }
@@ -240,17 +236,13 @@ where
 
     /// A session of the reconcile protocol came up: the rounds waiting for this peer begin.
     pub(crate) fn sets_up(&mut self, now: Nanos, _session: SessionId, peer: &NodeId, _incoming: bool) {
-        let waiting: Vec<u32> = self
-            .recs
-            .as_deref()
-            .map(|r| {
-                r.rounds
-                    .iter()
-                    .filter(|x| x.peer == *peer && x.active.is_none())
-                    .map(|x| x.id)
-                    .collect()
-            })
-            .unwrap_or_default();
+        let waiting: Vec<u32> = self.recs.as_deref().map_or_default(|r| {
+            r.rounds
+                .iter()
+                .filter(|x| x.peer == *peer && x.active.is_none())
+                .map(|x| x.id)
+                .collect()
+        });
         for id in waiting {
             self.round_begin(now, id);
         }
@@ -259,17 +251,13 @@ where
     /// A dial for the reconcile protocol failed: the rounds waiting for the peer count it as an attempt. With `wait`
     /// (a table was full) the next attempt comes after the retry period, not in this call.
     pub(crate) fn sets_failed(&mut self, now: Nanos, peer: &NodeId, wait: bool) {
-        let waiting: Vec<u32> = self
-            .recs
-            .as_deref()
-            .map(|r| {
-                r.rounds
-                    .iter()
-                    .filter(|x| x.peer == *peer && x.active.is_none())
-                    .map(|x| x.id)
-                    .collect()
-            })
-            .unwrap_or_default();
+        let waiting: Vec<u32> = self.recs.as_deref().map_or_default(|r| {
+            r.rounds
+                .iter()
+                .filter(|x| x.peer == *peer && x.active.is_none())
+                .map(|x| x.id)
+                .collect()
+        });
         for id in waiting {
             if let Some(r) = self
                 .recs

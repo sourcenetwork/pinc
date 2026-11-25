@@ -463,7 +463,7 @@ where
             .map(|(sid, _)| *sid)
             .collect();
         for sid in old {
-            let lids = self.vals.as_deref().map(|v| v.net.of_session(sid)).unwrap_or_default();
+            let lids = self.vals.as_deref().map_or_default(|v| v.net.of_session(sid));
             for lid in lids {
                 // The old session's close gives these back too (values_down); dropping them here keeps the table in
                 // step with the server just told.
@@ -837,8 +837,7 @@ where
         let ids: Vec<u32> = self
             .vals
             .as_deref()
-            .map(|v| v.fetches.iter().map(|(id, _)| *id).collect())
-            .unwrap_or_default();
+            .map_or_default(|v| v.fetches.iter().map(|(id, _)| *id).collect());
         for fid in ids {
             self.fetch_in(now, fid, ev);
         }

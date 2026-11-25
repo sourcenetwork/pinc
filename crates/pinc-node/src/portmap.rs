@@ -244,7 +244,7 @@ where
     /// What the port-mapping client dropped, and the draws of its nonce that failed; zero before it is turned on.
     pub fn port_mapping_stats(&self) -> PortMapStats {
         self.pm.as_ref().map_or_else(PortMapStats::default, |pm| PortMapStats {
-            client: pm.client.as_ref().map(PortMap::stats).unwrap_or_default(),
+            client: pm.client.as_ref().map_or_default(PortMap::stats),
             nonce_failures: pm.nonce_failures,
             release_overflows: pm.overflows,
         })

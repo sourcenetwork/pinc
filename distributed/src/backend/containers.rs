@@ -67,8 +67,7 @@ pub fn image_for(os_release: &str) -> Option<String> {
 pub fn refusal(image: &str, theirs: (u32, u32), host: (u32, u32), own: Option<&str>) -> String {
     let own = own
         .filter(|o| *o != image)
-        .map(|o| format!("{o} (this host's distribution) or "))
-        .unwrap_or_default();
+        .map_or_default(|o| format!("{o} (this host's distribution) or "));
     format!(
         "the image {image} has glibc {}.{}, older than this host's {}.{}, which the node binary links; \
          pass --image {own}an image with glibc {}.{} or newer",

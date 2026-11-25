@@ -139,8 +139,7 @@ impl Stack {
             .borrow()
             .pl_out
             .get(&peer)
-            .map(|o| o.unacked.iter().copied().collect())
-            .unwrap_or_default();
+            .map_or_default(|o| o.unacked.iter().copied().collect());
         for u in unacked {
             let f = push_frame(host, &u);
             self.send(host, key, &f, false);

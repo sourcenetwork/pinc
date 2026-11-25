@@ -65,11 +65,7 @@ impl<H: Hosted, D: Discovery> Endpoint<H, D> {
 
     /// The members of `topic` this endpoint has a session with now, sorted by id.
     pub fn neighbors(&self, topic: &[u8]) -> Vec<NodeId> {
-        self.0
-            .shared
-            .lock()
-            .map(|core| core.neighbors(topic))
-            .unwrap_or_default()
+        self.0.shared.lock().map_or_default(|core| core.neighbors(topic))
     }
 
     /// The adjacency table of [`Builder::connected_topics`](crate::Builder::connected_topics). On a hub: the records it

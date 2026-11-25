@@ -79,12 +79,8 @@ pub fn push(m: Mark) {
 /// Drain this thread's log.
 #[doc(hidden)]
 pub fn take() -> Vec<Mark> {
-    LOG.try_with(|l| {
-        l.try_borrow_mut()
-            .map(|mut l| core::mem::take(&mut *l))
-            .unwrap_or_default()
-    })
-    .unwrap_or_default()
+    LOG.try_with(|l| l.try_borrow_mut().map_or_default(|mut l| core::mem::take(&mut *l)))
+        .unwrap_or_default()
 }
 
 /// One datagram of the host was handed to the core in the burst now running.

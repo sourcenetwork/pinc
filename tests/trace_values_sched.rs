@@ -183,8 +183,8 @@ impl Rec2 {
                     tr.striped = striped;
                     tr.q = if striped { w } else { 0 };
                     tr.a[0] = if striped { 0 } else { w };
-                    for i in 0..usize::from(providers) {
-                        tr.in_assign[i] = true;
+                    for assigned in &mut tr.in_assign[..usize::from(providers)] {
+                        *assigned = true;
                     }
                     assert!(tr.conserved() || !striped, "run {r}: start");
                     self.runs_with.resumes += u32::from(!ver0.is_empty());

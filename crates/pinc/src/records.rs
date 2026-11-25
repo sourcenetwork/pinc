@@ -172,7 +172,7 @@ impl<R: Rendezvous> Discovery for Records<R> {
     }
 
     async fn lookup(&self, node: &NodeId) -> Vec<SocketAddr> {
-        self.find(node).await.map(|r| r.addrs).unwrap_or_default()
+        self.find(node).await.map_or_default(|r| r.addrs)
     }
 }
 

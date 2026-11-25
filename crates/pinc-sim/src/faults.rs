@@ -213,7 +213,7 @@ impl<N: Node, R: Random, C: CostModel> Sim<N, R, C> {
 
     /// What the inbound adversary has done so far.
     pub fn tap_stats(&self) -> TapStats {
-        self.tap.as_ref().map(|t| t.stats).unwrap_or_default()
+        self.tap.as_ref().map_or_default(|t| t.stats)
     }
 
     /// Hands `data` to `node` at time `at` as if it had arrived from `src` at `dst`, bypassing every link, NAT and

@@ -310,8 +310,7 @@ impl<'a> AppSet<'a> {
         let mut all = self
             .archived
             .lock()
-            .map(|a| a.get(i).cloned().unwrap_or_default())
-            .unwrap_or_default();
+            .map_or_default(|a| a.get(i).cloned().unwrap_or_default());
         if let Ok(v) = self.call(i, Cmd::Report, QUICK).await {
             all.push(v);
         }

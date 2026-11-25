@@ -42,12 +42,7 @@ fn must_arg(m: &Must) -> MustArg {
 
 impl Stack {
     pub(super) fn app_boot(&mut self, now: u64, host: &mut dyn Host) {
-        let topics = self
-            .world
-            .nodes
-            .get(self.idx)
-            .map(|n| n.topics.clone())
-            .unwrap_or_default();
+        let topics = self.world.nodes.get(self.idx).map_or_default(|n| n.topics.clone());
         for topic in topics {
             self.ontop_cmd(now, host, Slot::Broadcast, Command::Subscribe { topic });
         }
@@ -468,8 +463,7 @@ impl Stack {
             self.world
                 .sets
                 .get(&(n, set_ref.to_vec()))
-                .map(|v| v.iter().copied().collect())
-                .unwrap_or_default()
+                .map_or_default(|v| v.iter().copied().collect())
         };
         let (mine, theirs) = (set(self.idx), set(z));
         let here_set: std::collections::BTreeSet<[u8; 40]> = here.iter().copied().collect();

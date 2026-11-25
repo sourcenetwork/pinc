@@ -153,7 +153,7 @@ impl Streams {
             loop {
                 match reader.recv(&mut buf).await {
                     Ok(n) if n > 0 => {
-                        let data = buf.get(..n).map(<[u8]>::to_vec).unwrap_or_default();
+                        let data = buf.get(..n).map_or_default(<[u8]>::to_vec);
                         if events.send(Wire::Ev(StreamEv::Data(id, data))).is_err() {
                             break;
                         }
