@@ -15,6 +15,9 @@ use pinc_sim::suite::rec::Rec;
 use pinc_sim::suite::world::model::{Addr, IfaceSpec, Intent};
 use pinc_sim::{LinkConfig, Loss, NatConfig, NatKind, Node, NodeId, PortPolicy, Sim, SimConfig, StreamKind};
 use pinc_transport::stream::StreamId;
+use world_harness::{AppNode, AppOp, Shape, Spec, Step};
+
+mod world_harness;
 
 const NS: u64 = 1_000_000_000;
 const ALPN: &[u8] = b"pbt/world";
@@ -253,28 +256,58 @@ fn a_finished_stream_is_reported_finished_once() {
     assert!(twice.is_empty(), "streams whose end was reported more than once: {twice:?}");
 }
 
-/// Probe: late timers of relay-role nodes with no application work at all (two and three public nodes, every node a
-/// relay-role node), during the first 10 s.
-#[test]
-fn probe_relay_role_nodes_alone_have_no_late_timer() {
-    let fins = Fins::default();
-    let mut seen = Vec::new();
-    for (n, sub) in [(2usize, false), (3, false), (2, true), (3, true)] {
-        let public = vec![true; n];
-        let hubs: Vec<usize> = (0..n).collect();
-        let (mut sim, ids) = build(&public, &hubs, false, sub, &fins);
-        let mut at = Vec::new();
-        while at.len() < 4 {
-            let v = sim.metrics().timer_violations;
-            if !sim.run_until_pred(10 * NS, |s| s.metrics().timer_violations != v) {
-                break;
-            }
-            let t = sim.now();
-            let who: Vec<usize> =
-                (0..n).filter(|&i| Node::poll_timeout(sim.node_mut(ids[i])).is_some_and(|d| d <= t)).collect();
-            at.push((t, who));
-        }
-        seen.push((n, sub, sim.metrics().timer_violations, at));
+fn spec_stuck() -> Spec {
+    let app = |public, nat| AppNode { public, nat };
+    let step = |t_ms, node, op| Step { t_ms, node, op };
+    Spec {
+        shape: Shape::Ordinary,
+        apps: vec![app(false, 0), app(false, 4), app(false, 0), app(false, 4)],
+        dedicated: 1,
+        loss_pm: 0,
+        reorder: true,
+        partition: None,
+        restart: None,
+        script: vec![
+            step(19_850, 10, AppOp::Publish(605)),
+            step(5_516, 242, AppOp::Dial(255)),
+            step(6_259, 255, AppOp::Dial(253)),
+            step(18_468, 250, AppOp::Dial(175)),
+            step(17_687, 145, AppOp::Close(255)),
+        ],
+        seed: 1_334_464_112_475_711_700,
     }
-    assert!(seen.iter().all(|(_, _, v, _)| *v == 0), "late timers (nodes, subscribed, count, [(time, due nodes)]): {seen:?}");
+}
+
+fn on_big_stack(f: impl FnOnce() + Send + 'static) {
+    if let Err(e) = std::thread::Builder::new().stack_size(256 << 20).spawn(f).unwrap().join() {
+        std::panic::resume_unwind(e);
+    }
+}
+
+/// A session whose peer stopped answering stays open with no path, takes the application's writes, and delivers
+/// none of them: the final message from node 3 to node 2 never arrives within 40 s, and there is no fault at all.
+///
+/// Expected: every pair reaches each other (the application dials by node id alone, "the connectivity layer finds
+/// the way", pinc-sim suite/node/events.rs `connect`), and a connection whose path is dead ends: "`Dead` needs 10
+/// probe timeouts and silence of at least `max(20 s if the minimum round trip is 250 ms or more or the node is thin,
+/// 8 x smoothed round trip)`" (pinc-transport recovery/engine.rs `health`), after which it closes silently
+/// (conn/timer.rs:137) and the application dials again.
+///
+/// Actual (`EPHYRA_REPLAY=11:1689` of `every_shape_of_network_reaches_every_pair_and_keeps_every_byte`; Ordinary shape,
+/// four private nodes behind full-cone and endpoint-dependent NATs, node 0 forced public and carrying the relay and
+/// hub roles, one dedicated relay-role node added, 2 % reordering, no loss, no fault): at 72 s node 3 still holds its
+/// session with node 2 as established, with no route (`route None`), `pto_count` 20, last heard at about 10.6 s.
+/// Node 3 wrote the final message (3003 bytes, finished) on it at 32 s; node 2 never got it and no `Closed` came.
+///
+/// Suspected fault, not located: with no route nothing is sent, so the recovery timer that judges `health` may not
+/// run, which leaves the idle timeout (75 s after the last activity, conn/life.rs `idle_deadline`) as the only end;
+/// the application's writes may count as activity too (conn/life.rs: "Fold the application's writes since the last
+/// clock reading into the activity times"). Why the session lost every path while the relay-role nodes were up is
+/// open. The failing run is the one with the dedicated node added, which the property runs second in its thread; this
+/// test runs it first, on a fresh thread.
+///
+/// Who: no adversary: ordinary traversal between private nodes.
+#[test]
+fn a_session_with_no_path_ends_and_the_pair_reaches_each_other() {
+    on_big_stack(|| world_harness::run_and_check(&spec_stuck(), 1));
 }

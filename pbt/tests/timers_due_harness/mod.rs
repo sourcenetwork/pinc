@@ -120,6 +120,7 @@ pub struct World {
     pub sa: SessionId,
     pub sb: Option<SessionId>,
     pub done: Vec<Op>,
+    pub known: bool,
 }
 
 fn fail(v: Option<Violation>) {
@@ -129,9 +130,24 @@ fn fail(v: Option<Violation>) {
     }
 }
 
+/// Whether host `i` last heard that a peer sleeps (a `PeerAsleep` with no `PeerAwake` after it).
+fn peer_asleep(n: &Net, i: usize) -> bool {
+    n.hosts[i]
+        .events
+        .iter()
+        .rev()
+        .find_map(|(_, e)| match e {
+            Event::PeerAsleep { .. } => Some(true),
+            Event::PeerAwake { .. } => Some(false),
+            _ => None,
+        })
+        .unwrap_or(false)
+}
+
 /// The rule, on every host at the net's instant: a host that is due gets its `handle_timeout`, `service` and
-/// `poll_transmit` until `None`, and must then be due later.
-fn check(n: &mut Net, done: &[Op]) {
+/// `poll_transmit` until `None`, and must then be due later. With `known`, a host whose peer sleeps is let through
+/// (the keepalive that cannot leave while the ring is full, `repro_transport2.rs`).
+fn check(n: &mut Net, done: &[Op], known: bool) {
     let now = n.now;
     for i in 0..n.hosts.len() {
         if n.hosts[i].ep.poll_timeout().is_none_or(|d| d > now) {
@@ -141,13 +157,21 @@ fn check(n: &mut Net, done: &[Op]) {
         n.hosts[i].service(now);
         n.pump(i);
         let after = n.hosts[i].ep.poll_timeout();
-        if after.is_some_and(|d| d <= now) {
+        if after.is_some_and(|d| d <= now) && !(known && peer_asleep(n, i)) {
             let s = n.hosts[i].ep.node_stats();
-            let last: Vec<_> = n.hosts[i].events.iter().rev().take(4).collect();
+            let last: Vec<_> = n.hosts[i].events.iter().rev().take(4).map(|(t, e)| (t.saturating_sub(10 * SEC) / MS, format!("{e:?}").chars().take(40).collect::<String>())).collect();
+            let h = &n.hosts[i];
+            let ss: Vec<_> = h
+                .opened
+                .iter()
+                .chain(&h.dialed)
+                .filter_map(|s| h.stats(*s))
+                .map(|st| (st.established, st.pto_count, st.pto, st.pulse_due, st.held, st.heard.saturating_sub(10 * SEC) / MS))
+                .collect();
             let sig = kind(done.last());
             ephyra::signature(sig);
             panic!(
-                "{sig}: host {i} at {now} (t0 + {} ms): poll_timeout {after:?} after handle_timeout; sessions {} half_open {}; last events {last:?}; steps {done:?}",
+                "{sig}: host {i} at {now} (t0 + {} ms): poll_timeout {after:?} after handle_timeout; sessions {} half_open {}; sessions (established, pto_count, pto, pulse_due, held, heard ms) {ss:?}; last events {last:?}; steps {done:?}",
                 now.saturating_sub(10 * SEC) / MS,
                 s.sessions,
                 s.half_open,
@@ -159,11 +183,11 @@ fn check(n: &mut Net, done: &[Op]) {
 impl World {
     /// Run the net to `deadline` with the rule checked at every step.
     pub fn run_to(&mut self, deadline: u64) {
-        let done = self.done.clone();
+        let (done, known) = (self.done.clone(), self.known);
         let mut first = true;
         self.net.run(deadline, |n| {
             if !first {
-                check(n, &done);
+                check(n, &done, known);
             }
             first = false;
             false
@@ -331,13 +355,14 @@ pub fn world(c: &Case, start: u64) -> World {
         sa,
         sb: None,
         done: Vec::new(),
+        known: false,
     };
     let deadline = w.net.now.saturating_add(31 * SEC);
     let done = Vec::new();
     let mut first = true;
     w.net.run(deadline, |n| {
         if !first {
-            check(n, &done);
+            check(n, &done, false);
         }
         first = false;
         n.hosts[a].opened.contains(&sa) && n.hosts[b].count(|e| matches!(e, Event::Incoming { .. })) > 0
@@ -353,7 +378,13 @@ pub fn run(c: &Case) {
 }
 
 pub fn run_at(c: &Case, start: u64) {
+    run_with(c, start, false);
+}
+
+/// [`run_at`], letting the known cause pass when `known`.
+pub fn run_with(c: &Case, start: u64, known: bool) {
     let mut w = world(c, start);
+    w.known = known;
     for op in &c.ops {
         w.apply(op);
     }

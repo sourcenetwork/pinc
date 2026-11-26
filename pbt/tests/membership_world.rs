@@ -1361,7 +1361,10 @@ fn views_converge_after_the_heal(case: (Net, Vec<WOp>)) {
             let k = ix(k);
             // The same ghost, for a node whose clock went back on restart: the stale entry of its earlier life holds
             // the higher incarnation and so wins the merge; excluded under the same condition.
-            if w.alive(k) && !(ghost_ok && r.inc > w.n[k].m.incarnation()) {
+            // `a_member_whose_clock_went_back_is_never_told_when_its_home_hub_died`: a node that restarted below its
+            // last life's incarnation may never be told; excluded only for such a node and a higher, stale record.
+            let behind = w.n[k].prev_lives_inc > w.n[k].m.incarnation();
+            if w.alive(k) && !((ghost_ok || behind) && r.inc > w.n[k].m.incarnation()) {
                 assert_eq!(
                     r.inc,
                     w.n[k].m.incarnation(),

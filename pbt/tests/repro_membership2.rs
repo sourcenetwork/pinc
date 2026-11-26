@@ -5,10 +5,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use pinc_membership::codec::{Alive, Snap, entry_bytes};
 use pinc_membership::consts::{AWARENESS_BOUND, LEASE};
 use pinc_membership::session::StoreError;
 use pinc_membership::{
-    Broadcast, Carrier, CloseReason, Config, Event, Evidence, Local, Membership, NodeId, Route, Session,
+    Broadcast, Carrier, CloseReason, Config, Event, Evidence, Frame, Local, Membership, NodeId, Record, Route, Session,
 };
 
 const MS: u64 = 1_000_000;
@@ -79,31 +80,46 @@ impl Local for Host {
     }
 }
 
-/// A tiny network with zero latency: node 0 is the one hub, the others members. Frames cross at once; the
-/// transport hears every session at every step, as its keepalives would.
+/// A tiny network with zero latency: nodes below `nh` are hubs (with a persistent store), the others members.
+/// Frames cross at once; the transport hears every session at every step, as its keepalives would.
 struct Net {
     m: Vec<Membership>,
     h: Vec<Host>,
     alive: Vec<bool>,
+    nh: usize,
     now: u64,
 }
 
 impl Net {
+    /// Start node `i` with its wall clock `back_ms` behind the true time.
+    fn start_with(i: usize, nh: usize, h: &mut Host, now: u64, back_ms: u64) -> Membership {
+        let hubs: Vec<NodeId> = (0..nh).map(id).collect();
+        let cfg = Config { me: id(i), is_hub: i < nh, hubs: &hubs, trace: true };
+        Membership::start(&cfg, h, now, 1_700_000_000_000 + now / MS - back_ms, 0).unwrap()
+    }
+
     fn start(i: usize, h: &mut Host, now: u64) -> Membership {
-        let hubs = [id(0)];
-        let cfg = Config { me: id(i), is_hub: i == 0, hubs: &hubs, trace: true };
-        Membership::start(&cfg, h, now, 1_700_000_000_000 + now / MS, 0).unwrap()
+        Self::start_with(i, 1, h, now, 0)
+    }
+
+    fn with_hubs(nodes: usize, nh: usize) -> Self {
+        let mut h: Vec<Host> = (0..nodes).map(|i| Host { persistent: i < nh, ..Host::default() }).collect();
+        let m = (0..nodes).map(|i| Self::start_with(i, nh, &mut h[i], T0, 0)).collect();
+        Self { m, h, alive: vec![true; nodes], nh, now: T0 }
     }
 
     fn new(nodes: usize) -> Self {
-        let mut h: Vec<Host> = (0..nodes).map(|i| Host { persistent: i == 0, ..Host::default() }).collect();
-        let m = (0..nodes).map(|i| Self::start(i, &mut h[i], T0)).collect();
-        Self { m, h, alive: vec![true; nodes], now: T0 }
+        Self::with_hubs(nodes, 1)
     }
 
-    /// A session between member `a` (the dialer) and the hub.
+    /// A session between member `a` (the dialer) and hub 0.
     fn connect(&mut self, a: usize) {
-        for (x, y, incoming) in [(0, a, true), (a, 0, false)] {
+        self.connect_to(a, 0);
+    }
+
+    /// A session between `a` (the dialer) and hub `hub`.
+    fn connect_to(&mut self, a: usize, hub: usize) {
+        for (x, y, incoming) in [(hub, a, true), (a, hub, false)] {
             self.h[x].sessions.insert(id(y));
             self.h[x].ev.insert(id(y), Evidence { last_rx: self.now, srtt: 2 * MS, pto: 0, inflight: 0, direct: true });
             let (m, h) = (&mut self.m[x], &mut self.h[x]);
@@ -185,6 +201,7 @@ fn a_member_that_crashed_while_its_only_hub_restarted_stays_in_views_for_good() 
     // The members start now, against a hub a lease old.
     for i in [x, b] {
         n.m[i] = Net::start(i, &mut n.h[i], n.now);
+        assert_eq!(n.nh, 1);
         n.connect(i);
     }
     n.run(10 * SEC);
@@ -258,4 +275,143 @@ fn a_leave_missed_while_the_hub_is_young_is_never_learned() {
         "X left {} s ago and B still lists it; B's events: {events:?}",
         (n.now - left) / SEC
     );
+}
+
+/// Hubs H0 and H1, member X homed at H0 and member W homed at H1. X restarts with its wall clock `back_ms` behind
+/// (its new incarnation is then below the last life's) at the moment H0 crashes, and X attaches to H1. Returns
+/// whether, 300 s later, H1's and W's records of X carry X's incarnation, and whether W then hears of an address
+/// change of X.
+fn clock_back_while_the_home_dies(back_ms: u64) -> (bool, bool, String) {
+    let (h0, h1, x, w) = (0, 1, 2, 3);
+    let mut n = Net::with_hubs(4, 2);
+    n.connect_to(h1, h0);
+    n.connect_to(x, h0);
+    n.connect_to(w, h1);
+    n.run(10 * SEC);
+    assert!(n.m[w].in_view(&id(x)), "W lists X");
+    // X restarts (a new process: its sessions are gone) with its clock behind; H0 crashes at the same time.
+    n.alive[h0] = false;
+    n.h[x] = Host::default();
+    n.m[x] = Net::start_with(x, 2, &mut n.h[x], n.now, back_ms);
+    n.h[h1].sessions.remove(&id(h0));
+    let (m, h) = (&mut n.m[h1], &mut n.h[h1]);
+    m.session_down(h, n.now, &id(h0), 0);
+    n.connect_to(x, h1);
+    n.run(300 * SEC);
+    let inc = n.m[x].incarnation();
+    let rec_of = |m: &Membership| m.members().find(|(k, _)| **k == id(x)).map(|(_, r)| r.inc);
+    let (at_h1, at_w) = (rec_of(&n.m[h1]), rec_of(&n.m[w]));
+    let records_ok = at_h1 == Some(inc) && at_w == Some(inc);
+    let _ = std::iter::from_fn(|| n.m[w].poll_event()).count();
+    n.m[x].address_changed(n.now);
+    n.run(30 * SEC);
+    let heard = std::iter::from_fn(|| n.m[w].poll_event()).any(|e| e == Event::AddressChanged { member: id(x) });
+    (records_ok, heard, format!("X runs at {inc:#x}; H1 holds {at_h1:x?}, W holds {at_w:x?}"))
+}
+
+/// properties.md, membership: incarnations "only go up through records and observed words", and convergence: "views
+/// merge to the union of fresh hubs with the highest incarnation". hub.rs:195-196, for a node that announces an older
+/// incarnation than the hub holds: "(a clock that went back, a lost store). Keep ours so the roster never regresses,
+/// and tell the node, which moves above it"; view.rs:214: "Reincarnated behind our back (a clock that went back, a
+/// lost store): move above it."
+///
+/// Actual: hubs H0 and H1, member X homed at H0, member W homed at H1. X restarts with its wall clock 10 s behind,
+/// so its new incarnation is below its last life's, and H0 crashes at the same moment (one power cut at a site that
+/// holds both); X attaches to H1. H1's view, and W's, keep X's last-life record for good (300 s later, after H0's copy
+/// was dropped as stale), and X is never told, so it never moves above it. The visible effect: X's later records are
+/// all ignored by those views, so W never hears `Event::AddressChanged` when X's address changes (nor
+/// `StackChanged` on a version change), and a DOWN or delta for X's real incarnation does not match the record they
+/// hold. The control run with no clock jump gets both right. Found by `views_converge_after_the_heal` (shrunk input
+/// `[Restart(122, 10001), Crash(0)]`, two hubs, two members, EPHYRA_REPLAY=13:487).
+///
+/// Suspected fault: `recompute_one` (view.rs:505) keeps the view's record whenever the best fresh copy's epoch is not
+/// above it, so a record that only a dropped copy held stays; and the hub tells a node to move above an older
+/// incarnation only when its own roster holds the newer one (hub.rs:192-201, `self.roster.get(peer)`), never when
+/// only its view does. Who can trigger it: no one in particular; a member whose clock went back across a restart (or
+/// whose store was lost) while the only hub that held its last life went away.
+#[test]
+fn a_member_whose_clock_went_back_is_never_told_when_its_home_hub_died() {
+    let (ok, heard, state) = clock_back_while_the_home_dies(0);
+    assert!(ok && heard, "control run with no clock jump: records ok {ok}, address change heard {heard}; {state}");
+    let (ok, heard, state) = clock_back_while_the_home_dies(10_001);
+    assert!(ok, "after a clock jump back, the views keep X's last-life record: {state}; address change heard: {heard}");
+    assert!(heard, "W never heard of X's address change; {state}");
+}
+
+/// A complete snapshot from `hub` listing `members`, all alive.
+fn hub_snap(m: &mut Membership, h: &mut Host, now: u64, hub: NodeId, members: &[NodeId]) {
+    let rec = Record { inc: 5 << 16, ver: 7, thash: [1; 8] };
+    let entries: Vec<u8> = members.iter().flat_map(|x| entry_bytes(x, &rec, Alive::Alive)).collect();
+    let mut out = vec![0u8; 4096];
+    let f = Frame::Snap(Snap::new(false, false, &entries).unwrap());
+    let b = f.encode(&mut out).unwrap().to_vec();
+    assert_eq!(m.on_bytes(h, now, &hub, &b), Ok(b.len()));
+}
+
+/// One delta from `hub` about `x`.
+fn hub_delta(m: &mut Membership, h: &mut Host, now: u64, hub: NodeId, x: &NodeId, alive: Alive) {
+    let rec = Record { inc: 5 << 16, ver: 7, thash: [1; 8] };
+    let mut out = vec![0u8; 256];
+    let b = Frame::Delta(pinc_membership::codec::Entry { member: x, rec, alive }).encode(&mut out).unwrap().to_vec();
+    assert_eq!(m.on_bytes(h, now, &hub, &b), Ok(b.len()));
+}
+
+/// A member with hub A starts at T0 and reads A's complete snapshot listing X. The host serves the first tick on
+/// time when `first_tick_on_time`; then the node is suspended for 30 s (more than WAKE_GAP, less than the 60 s after
+/// which a hub's silence counts as a partition). While it slept A sent two deltas: X down, then X alive again (X came
+/// back at the same incarnation). At the wake the late tick runs first, then the two deltas are read. Returns
+/// whether the application was told X is down, and whether X is in the view 30 s after the wake.
+fn suspended_right_after_start(first_tick_on_time: bool) -> (bool, bool) {
+    let (a, x) = (id(1), id(2));
+    let hubs = [a];
+    let cfg = Config { me: id(0), is_hub: false, hubs: &hubs, trace: true };
+    let mut h = Host::default();
+    let mut m = Membership::start(&cfg, &mut h, T0, 0, 0).unwrap();
+    h.sessions.insert(a);
+    m.session_up(&mut h, T0, &a, false);
+    h.ev.insert(a, Evidence { last_rx: T0, srtt: 20 * MS, pto: 0, inflight: 0, direct: true });
+    hub_snap(&mut m, &mut h, T0, a, &[x]);
+    assert!(m.in_view(&x), "A's snapshot adds X");
+    if first_tick_on_time {
+        m.on_timeout(&mut h, T0);
+    }
+    let wake = T0 + 30 * SEC;
+    h.ev.insert(a, Evidence { last_rx: wake, srtt: 20 * MS, pto: 0, inflight: 0, direct: true });
+    m.on_timeout(&mut h, wake);
+    hub_delta(&mut m, &mut h, wake + MS, a, &x, Alive::Down);
+    hub_delta(&mut m, &mut h, wake + MS, a, &x, Alive::Alive);
+    let mut now = wake + MS;
+    for _ in 0..1_000 {
+        now = m.poll_timeout().max(now + MS);
+        if now > wake + 30 * SEC {
+            break;
+        }
+        h.ev.insert(a, Evidence { last_rx: now, srtt: 20 * MS, pto: 0, inflight: 0, direct: true });
+        m.on_timeout(&mut h, now);
+    }
+    let down = std::iter::from_fn(|| m.poll_event()).any(|e| e == Event::MemberConfirmedDown { member: x });
+    (down, m.in_view(&x))
+}
+
+/// timers.rs, module invariant: "a tick that arrives later than WAKE_GAP after it was due is a suspension: the node
+/// renews every hub at once with a snapshot request and opens a quiet window, so removals queued while it slept are
+/// re-checked, not believed". The first tick is due at the start (`poll_timeout` returns `self.born` before any tick).
+///
+/// Actual: the same member, the same frames and the same 30 s suspension. When the host served the first tick on time,
+/// the late tick opens a quiet window, the DOWN that A sent while the node slept is deferred, A's next delta lists X
+/// again, and the application hears nothing. When the suspension came before the first tick, the late first tick
+/// opens no window, X is removed at once and the application gets `Event::MemberConfirmedDown` for X, which is alive
+/// and listed again a moment later. Found by `a_late_tick_opens_a_quiet_window` in `membership_timers.rs` (shrunk
+/// input `(0, 2001)`: no tick before, a first tick 2001 ms late).
+///
+/// Suspected fault: `on_timeout` treats a tick as late only `if let Some(t) = self.next_tick` (timers.rs:46-48), so
+/// the first tick, with `next_tick` still `None`, is never late, though `poll_timeout` gave `self.born` as its due
+/// time. Who can trigger it: no one in particular; a node suspended (a laptop lid, a phone sent to the background)
+/// after it read its hubs' first frames and before its host served the first timer.
+#[test]
+fn a_suspension_before_the_first_tick_reports_a_live_member_down() {
+    let (down, kept) = suspended_right_after_start(true);
+    assert!(!down && kept, "control: a late tick after an on-time one: reported down {down}, kept {kept}");
+    let (down, kept) = suspended_right_after_start(false);
+    assert!(!down, "a late first tick let a DOWN read at the wake remove X at once (in the view 30 s later: {kept})");
 }

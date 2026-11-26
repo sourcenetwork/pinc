@@ -1,7 +1,8 @@
-//! Reproducing tests of bugs the `core_parts` property found in `pinc-core`: an honest handshake that one datagram
-//! from a third party (or one bit error on the path) blocks until the dialer gives up. Each fails on the unmodified
-//! code. The driver is `core_parts_harness`: an honest client (host 1) and server (host 2) on `core_harness`, and a
-//! third party that taps their datagrams before the link's loss and sends what its rules derive from them.
+//! Reproducing tests of bugs the `core_parts` property found in `pinc-core`: an honest handshake that one datagram from
+//! a third party (or one bit error on the path) blocks until the dialer gives up. Each fails on the unmodified code,
+//! apart from the tests marked as controls. The driver is `core_parts_harness`: an honest client (host 1) and server
+//! (host 2) on `core_harness`, and a third party that taps their datagrams before the link's loss and sends what its
+//! rules derive from them.
 
 mod core_harness;
 mod core_parts_harness;
@@ -154,10 +155,10 @@ fn a_damaged_second_part_is_recovered_from_the_repeat_on_a_jittery_link() {
     }
 }
 
-/// The same bit error on the endpoint's default configuration (the first flight leaves whole, only the resends are
-/// cut): the repeat's first part and its held second part are 1000 ms apart at the second resend, exactly
-/// `ORPHAN_LIFE`, so the session is only started again on a link whose delay never varies; with a few ms of jitter
-/// it is past the life and the dial times out (`ConnectFailed { reason: Timeout }`).
+/// A control (it passes): the same bit error on the endpoint's default configuration (the first flight leaves whole,
+/// only the resends are cut), on a link of 10 ms with up to 5 ms of jitter, seeds 0 to 7. The dial completes, so
+/// bug B needs a first flight that leaves in parts; with a whole first flight, the jitter of this case does not
+/// push the repeat's parts past `ORPHAN_LIFE`.
 #[test]
 fn a_damaged_whole_first_flight_is_recovered_from_the_repeat_on_a_jittery_link() {
     for seed in 0..8 {
