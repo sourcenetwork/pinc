@@ -1,0 +1,57 @@
+# PINC property tests on ephyra (https://github.com/datadog-labs/ephyra). A workspace of its own, outside the
+# library's, so ephyra and what it depends on never enter the library's dependency graph or lockfile. The PINC crates
+# come in by path, with the features an application turns on (no `trace`, no `inject`): the code tested is the code
+# that ships.
+[workspace]
+resolver = "3"
+
+[package]
+name = "pinc-pbt"
+description = "PINC property-based tests on ephyra"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.99"
+license = "Apache-2.0"
+publish = false
+
+[features]
+# In-process coverage of the crate named by EPHYRA_COVERAGE_FILTER. The build also needs
+# RUSTFLAGS="-C instrument-coverage" and the run one test thread (RUST_TEST_THREADS=1).
+coverage = ["ephyra/coverage"]
+
+[dependencies]
+ephyra = "0.0.1"
+
+pinc-wire = { path = "../crates/pinc-wire" }
+pinc-dag = { path = "../crates/pinc-dag", features = ["alloc"] }
+pinc-crypto = { path = "../crates/pinc-crypto", features = ["alloc"] }
+pinc-security = { path = "../crates/pinc-security" }
+pinc-keystore = { path = "../crates/pinc-keystore", features = ["std"] }
+pinc-transport = { path = "../crates/pinc-transport", features = ["alloc"] }
+pinc-membership = { path = "../crates/pinc-membership", features = ["alloc"] }
+pinc-sim = { path = "../crates/pinc-sim", features = ["reference", "suite"] }
+pinc-connect = { path = "../crates/pinc-connect", features = ["alloc"] }
+pinc-portmap = { path = "../crates/pinc-portmap" }
+pinc-reconcile = { path = "../crates/pinc-reconcile", features = ["alloc"] }
+pinc-dtn = { path = "../crates/pinc-dtn" }
+pinc-values = { path = "../crates/pinc-values" }
+pinc-core = { path = "../crates/pinc-core", features = ["alloc"] }
+pinc-broadcast = { path = "../crates/pinc-broadcast", features = ["alloc"] }
+pinc-node = { path = "../crates/pinc-node" }
+pinc-table = { path = "../crates/pinc-table", features = ["alloc"] }
+pinc = { path = "../crates/pinc" }
+
+# Reference implementations for differential oracles: the versions the library itself pins.
+blake3 = { version = "1.8.7", default-features = false, features = ["pure", "std"] }
+sha2 = { version = "0.11.1", default-features = false }
+
+# Many bugs show first as a failed debug assertion or an overflow: both stay on in the optimised build the
+# properties run in.
+[profile.release]
+debug-assertions = true
+overflow-checks = true
+debug = "line-tables-only"
+
+[profile.dev]
+opt-level = 2
+debug = "line-tables-only"
