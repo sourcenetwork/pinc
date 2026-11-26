@@ -423,3 +423,100 @@ fn pool_matches_a_free_stack_model(case: ((usize, usize, usize), Vec<PoolOp>)) {
         assert_eq!(p.slot_size(), size);
     }
 }
+
+// ---------------------------------------------------------------------------------------------------------------
+// Construction, and empty records with capacities no block could hold for real records.
+
+/// Which table, its two size arguments, and how far the block's length is from what it needs.
+fn construction_cases() -> impl Gen<Value = (u8, usize, usize, i8)> {
+    let n = gens::frequency(vec![(4, gens::int(0usize..=70).boxed()), (1, gens::int(65_530usize..=65_540).boxed())]).boxed();
+    (gens::int(0u8..=3), n.clone(), gens::int(0usize..=5), gens::int(-3i8..=3))
+}
+
+/// Every constructor: "Refuses a block smaller than [`Self::bytes`]" with `Error::Storage { need }` and the block
+/// handed back "untouched" (the same length); takes any block at least that long; a slab's index entry widens from 2
+/// to 4 bytes above 65,535 records; an array refuses more places than a u16 numbers.
+#[ephyra::test(gen = construction_cases(), tests = 4_000)]
+fn constructors_take_exactly_the_blocks_they_need(case: (u8, usize, usize, i8)) {
+    let (kind, n, size, d) = case;
+    let need = match kind {
+        0 => SortedSlab::bytes(n, size, 1),
+        1 => Array::bytes(n, size),
+        2 => Ring::bytes(n, size),
+        _ => Pool::<()>::bytes(n, size),
+    };
+    let len = need.saturating_add_signed(isize::from(d));
+    let mem = Storage::zeroed(len).expect("allocates");
+    let got = match kind {
+        0 => SortedSlab::new(mem, n, size, 1).map(|s| s.capacity()),
+        1 => Array::new(mem, n, size).map(|a| a.places()),
+        2 => Ring::new(mem, n, size).map(|r| r.capacity()),
+        _ => Pool::<()>::new(mem, n, size).map(|p| p.capacity()),
+    };
+    if kind == 0 {
+        let width = if n <= 65_535 { 2 } else { 4 };
+        assert_eq!(need, n * (size + 1 + width), "the slab's size formula");
+    }
+    match got {
+        Ok(cap) => {
+            assert!(len >= need, "took a block of {len} bytes for a need of {need}");
+            assert!(kind != 1 || n <= usize::from(u16::MAX), "an array of {n} places");
+            assert_eq!(cap, n);
+        },
+        Err(r) => {
+            assert_eq!(r.storage.len(), len, "the block was not handed back whole");
+            if kind == 1 && n > usize::from(u16::MAX) {
+                assert_eq!(r.error, Error::Capacity);
+            } else {
+                assert!(len < need, "refused a block of {len} bytes for a need of {need}: {:?}", r.error);
+                assert_eq!(r.error, Error::Storage { need });
+            }
+        },
+    }
+}
+
+fn empty_ring_cases() -> impl Gen<Value = (usize, Vec<RingOp>)> {
+    let cap = gens::frequency(vec![
+        (1, gens::int(usize::MAX - 2..=usize::MAX).boxed()),
+        (1, gens::int((usize::MAX >> 1) - 1..=(usize::MAX >> 1) + 1).boxed()),
+        (1, gens::int(0usize..=3).boxed()),
+    ]);
+    (cap, gens::vec(ephyra::any::<RingOp>()).len(0..=60))
+}
+
+/// A ring of 0-byte records needs no block at any capacity (`bytes` is 0), so the documented behaviour must hold at
+/// capacities near `usize::MAX` too: no overflow, records pop in push order, `len <= capacity`.
+#[ephyra::test(gen = empty_ring_cases(), tests = 5_000)]
+fn ring_of_empty_records_at_any_capacity(case: (usize, Vec<RingOp>)) {
+    let (cap, ops) = case;
+    let mut r = Ring::new(Storage::zeroed(0).expect("allocates"), cap, 0).expect("needs no bytes");
+    let mut len = 0usize;
+    for (i, op) in ops.iter().enumerate() {
+        match op {
+            RingOp::Pop => {
+                let got = r.pop().map(<[u8]>::len);
+                assert_eq!(got, (len > 0).then_some(0), "step {i}: pop");
+                len = len.saturating_sub(1);
+            },
+            RingOp::Push(_) => {
+                let got = r.push(&[]);
+                if len == cap {
+                    assert_eq!(got, Err(Error::Full), "step {i}");
+                } else {
+                    assert_eq!(got, Ok(()), "step {i}");
+                    len += 1;
+                }
+            },
+            RingOp::PushBad(b) => assert_eq!(r.push(&[*b]), Err(Error::Length), "step {i}"),
+            RingOp::Clear => {
+                r.clear();
+                len = 0;
+            },
+        }
+        assert_eq!(r.len(), len, "step {i}: {op:?}");
+        assert_eq!(r.is_full(), len == cap, "step {i}");
+        assert_eq!(r.iter().count(), len, "step {i}");
+        assert_eq!(r.get(len), None, "step {i}");
+        assert_eq!(r.get(len.saturating_sub(1)).map(<[u8]>::len), (len > 0).then_some(0), "step {i}");
+    }
+}

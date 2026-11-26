@@ -21,7 +21,7 @@ use ephyra::prelude::*;
 use pinc_membership::codec::{Alive, Entry, Hello, MAX_BODY, Other, Path, Probe, Proof, Snap, entry_bytes, ty};
 use pinc_membership::consts::{MAX_TABLE, QUEUE_CAP};
 use pinc_membership::incarnation::{Incarnation, IncarnationError};
-use pinc_membership::session::{LEAVE_CODE, StoreError};
+use pinc_membership::session::{DENIED_CODE, LEAVE_CODE, StoreError};
 use pinc_membership::{
     Broadcast, Carrier, CloseReason, Config, Event, Evidence, Frame, Local, Membership, NodeId, Record, Route, Session,
 };
@@ -49,6 +49,8 @@ struct Host {
     /// Everything the machine did, in order, for the determinism check and the sent-frame checks.
     log: Vec<String>,
     sent: Vec<(NodeId, Route, Vec<u8>)>,
+    /// Sessions the machine asked to close; the driver reports each back with `session_down`.
+    closed: Vec<(NodeId, CloseReason)>,
 }
 
 impl Session for Host {
@@ -65,6 +67,7 @@ impl Session for Host {
     }
     fn close(&mut self, peer: &NodeId, reason: CloseReason) {
         self.log.push(format!("close {:?} {reason:?}", peer[0]));
+        self.closed.push((*peer, reason));
     }
 }
 
@@ -400,7 +403,8 @@ enum Op {
     Raw(#[ephyra(gen = peer())] u8, #[ephyra(gen = pinc_pbt::bytes(24))] Vec<u8>),
     Advance(#[ephyra(gen = gens::frequency(vec![(6, gens::int(0u64..=3 * SEC).boxed()), (2, gens::int(3 * SEC..=100 * SEC).boxed()), (1, gens::constant(0u64).boxed())]))] u64),
     Timeout,
-    Evidence(#[ephyra(gen = peer())] u8, #[ephyra(gen = gens::int(0u64..=90 * SEC))] u64, #[ephyra(gen = gens::int(0u32..=3))] u32, bool),
+    /// The transport receives a packet from the peer now.
+    Evidence(#[ephyra(gen = peer())] u8, #[ephyra(gen = gens::int(0u32..=3))] u32, bool),
     NoEvidence(#[ephyra(gen = peer())] u8),
     Carrier(#[ephyra(gen = peer())] u8, #[ephyra(gen = gens::int(0u8..=3))] u8),
     CarrierGone(#[ephyra(gen = peer())] u8),
@@ -466,6 +470,14 @@ fn run_machine(setup: (bool, u8, bool, u64, usize), ops: &[Op]) -> Vec<String> {
         let step = format!("step {i}: {op:?}");
         let mine = m.incarnation();
         let before: BTreeSet<NodeId> = m.members().map(|(k, _)| *k).collect();
+        // Bytes arrive on a session: a host delivers none from a peer whose session is not up.
+        let from = match op {
+            Op::Frame(p, _) | Op::Frames(p, ..) | Op::Raw(p, _) => Some(id(*p)),
+            _ => None,
+        };
+        if from.is_some_and(|p| !h.sessions.contains(&p)) {
+            continue;
+        }
         match op {
             Op::Up(p, incoming) => {
                 if !revoked.contains(&id(*p)) {
@@ -501,8 +513,10 @@ fn run_machine(setup: (bool, u8, bool, u64, usize), ops: &[Op]) -> Vec<String> {
                 now = now.max(m.poll_timeout());
                 m.on_timeout(&mut h, now);
             },
-            Op::Evidence(p, ago, pto, direct) => {
-                let e = Evidence { last_rx: now.saturating_sub(*ago), srtt: 30 * MS, pto: *pto, inflight: 0, direct: *direct };
+            Op::Evidence(p, pto, direct) => {
+                // A packet arrives now. The machine was last called at `now` too, so an earlier packet it was not
+                // told of would be an impossible transport (one that reports a receive time after the fact).
+                let e = Evidence { last_rx: now, srtt: 30 * MS, pto: *pto, inflight: 0, direct: *direct };
                 h.ev.insert(id(*p), e);
             },
             Op::NoEvidence(p) => {
@@ -567,6 +581,22 @@ fn run_machine(setup: (bool, u8, bool, u64, usize), ops: &[Op]) -> Vec<String> {
             let gone: Vec<u8> = before.iter().filter(|k| !m.in_view(k)).map(|k| k[0] - 1).collect();
             assert!(gone.is_empty(), "{step}: a snapshot removed members {gone:?}");
         }
+        // The host closes what the machine asked it to close and reports it back, as `Session::close` says.
+        for _ in 0..4 {
+            let closed = std::mem::take(&mut h.closed);
+            if closed.is_empty() {
+                break;
+            }
+            for (p, reason) in closed {
+                h.sessions.remove(&p);
+                let code = match reason {
+                    CloseReason::Leave => LEAVE_CODE,
+                    CloseReason::Revoked => DENIED_CODE,
+                    _ => 0,
+                };
+                m.session_down(&mut h, now, &p, code);
+            }
+        }
         // What the machine sent in this step: a well-formed frame, to someone else, never to a revoked peer.
         for (peer, route, bytes) in h.sent.drain(..) {
             assert_ne!(peer, me, "{step}: the node sent to itself");
@@ -612,6 +642,7 @@ fn run_machine(setup: (bool, u8, bool, u64, usize), ops: &[Op]) -> Vec<String> {
             assert!(traces <= QUEUE_CAP + 1, "{step}: more traces than the queue holds");
             log.push(format!("{t:?}"));
         }
+        log.push(format!("== end of {step}"));
         log.append(&mut h.log);
         log.push(format!("t{} e{} i{} p{:?}", m.poll_timeout(), m.view_epoch(), m.incarnation(), m.primary().map(|p| p[0])));
     }

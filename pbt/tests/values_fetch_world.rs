@@ -241,6 +241,27 @@ fn world_size(w: &World) -> u64 {
             .sum::<u64>()
 }
 
+/// Every stored byte is the truth, and every verified byte was stored. The harness store keeps a write as one piece
+/// keyed by its offset, so a later, shorter write at the start of a seeded piece (bytes the fetch receives again in a
+/// group it fetches for a hole) drops the rest of that piece from the harness although a real store keeps it: a
+/// verified byte without a piece is excused inside a seeded range only.
+fn check_store(sim: &Sim, truth: &PStore, seeded: &[Range<u64>]) {
+    sim.store.assert_matches(truth.content());
+    for r in sim.store.verified.iter() {
+        let mut at = r.start;
+        while at < r.end {
+            let piece = sim.store.pieces.range(..=at).map(|(k, v)| k + v.len() as u64).max().filter(|e| *e > at);
+            match piece {
+                Some(end) => at = end,
+                None => {
+                    assert!(seeded.iter().any(|s| s.contains(&at)), "verified byte {at} was never written");
+                    at += 1;
+                },
+            }
+        }
+    }
+}
+
 /// The virtual time a world is given: far more than its slowest honest provider needs.
 const LIMIT_S: u64 = 900;
 
@@ -283,7 +304,8 @@ fn run(w: &World) -> Ran {
         .iter()
         .flat_map(|&(i, at, down)| [(at * MS, true, i % w.provs.len()), ((at + down) * MS, false, i % w.provs.len())])
         .collect();
-    steps.sort_unstable();
+    // A cut and a revival at the same moment: the cut first, so the provider ends up again.
+    steps.sort_unstable_by_key(|&(t, cut, i)| (t, !cut, i));
     for (t, cut, i) in steps {
         if sim.run_until(t, |s| s.fetch.is_done()) {
             break;
@@ -304,7 +326,7 @@ fn run(w: &World) -> Ran {
 #[ephyra::test(gen = worlds(), tests = 120)]
 fn a_fetch_never_stores_a_wrong_byte_and_completes_while_an_honest_provider_answers(w: World) {
     let Ran { sim, truth, done } = run(&w);
-    sim.store.assert_verified_is_true(truth.content());
+    check_store(&sim, &truth, &w.seeded_ranges());
     for (_, off, len) in sim.rec.readable() {
         assert!(sim.store.verified.contains_range(off..off + len), "announced {off}+{len} is not verified");
     }
@@ -351,7 +373,7 @@ fn a_resumed_fetch_from_one_honest_provider_asks_exactly_for_the_missing_groups(
     let Ran { sim, truth, done } = run(&w);
     assert!(done, "the fetch did not finish in {LIMIT_S} s");
     assert!(sim.rec.complete(), "the fetch failed: {:?}", sim.rec.failed());
-    sim.store.assert_verified_is_true(truth.content());
+    check_store(&sim, &truth, &w.seeded_ranges());
     // The wanted ranges are rounded out to whole groups first (`Fetch::start` aligns each with `span::align`), then
     // only the bytes the store has not verified are asked for: a hole inside a group is asked as it is.
     let seeded = w.seeded_ranges();

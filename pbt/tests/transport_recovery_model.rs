@@ -99,7 +99,10 @@ enum RecOp {
         #[ephyra(gen = clock_gap())]
         gap: u64,
     },
-    Mtu(#[ephyra(gen = gens::frequency(vec![(3, gens::int(1200u64..=9000).boxed()), (1, gens::edges(0u64..=u64::MAX).boxed())]))] u64),
+    Mtu(
+        #[ephyra(gen = gens::frequency(vec![(3, gens::int(1200u64..=9000).boxed()), (1, gens::edges(0u64..=u64::MAX).boxed())]))]
+         u64,
+    ),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -141,10 +144,10 @@ fn frames_for(pn: u64, size: u32) -> FrameRefs {
         id: pn % 3 * 4,
         offset: pn.wrapping_mul(1000),
         len: size,
-        fin: pn % 7 == 0,
+        fin: pn.is_multiple_of(7),
     })
     .unwrap();
-    if pn % 2 == 0 {
+    if pn.is_multiple_of(2) {
         f.push(FrameRef::Control { kind: 1, id: pn }).unwrap();
     }
     f
@@ -152,7 +155,11 @@ fn frames_for(pn: u64, size: u32) -> FrameRefs {
 
 /// Check every event of one call against the model and return the summary they add up to. `ranges` is `Some` for
 /// an acknowledgement (the only call that may acknowledge).
-fn apply(model: &mut Model, events: &[(u8, u64, u32, bool, bool, FrameRefs)], ranges: Option<&[RangeInclusive<u64>]>) -> Summary {
+fn apply(
+    model: &mut Model,
+    events: &[(u8, u64, u32, bool, bool, FrameRefs)],
+    ranges: Option<&[RangeInclusive<u64>]>,
+) -> Summary {
     let mut s = Summary::default();
     for &(kind, pn, size, requeue, probe, ref frames) in events {
         let in_ranges = ranges.is_some_and(|r| r.iter().any(|r| r.contains(&pn)));
@@ -170,9 +177,12 @@ fn apply(model: &mut Model, events: &[(u8, u64, u32, bool, bool, FrameRefs)], ra
                 s.acked_packets += 1;
                 s.acked_bytes += u64::from(size);
                 model.acked_bytes += u128::from(size);
-            },
+            }
             1 => {
-                assert!(in_ranges, "packet {pn} late-acknowledged outside the acknowledged ranges");
+                assert!(
+                    in_ranges,
+                    "packet {pn} late-acknowledged outside the acknowledged ranges"
+                );
                 assert_eq!(p.st, St::Lost, "packet {pn} late-acknowledged while not lost");
                 assert!(
                     frames.iter().all(|f| p.frames.as_slice().contains(f)),
@@ -181,7 +191,7 @@ fn apply(model: &mut Model, events: &[(u8, u64, u32, bool, bool, FrameRefs)], ra
                 p.st = St::Done;
                 s.late_acked_packets += 1;
                 model.acked_bytes += u128::from(p.size);
-            },
+            }
             _ => {
                 assert_eq!(p.st, St::InFlight, "packet {pn} declared lost while not in flight");
                 assert_eq!(size, p.size, "lost size of {pn}");
@@ -191,7 +201,7 @@ fn apply(model: &mut Model, events: &[(u8, u64, u32, bool, bool, FrameRefs)], ra
                 p.st = St::Lost;
                 s.lost_packets += 1;
                 s.lost_bytes += u64::from(size);
-            },
+            }
         }
     }
     s
@@ -202,7 +212,11 @@ type Log = Vec<(u8, u64, u32, bool, bool, FrameRefs)>;
 fn logger(log: &mut Log) -> impl FnMut(Event<'_>) + '_ {
     |e| match e {
         Event::Acked {
-            pn, size, frames, mtu_probe, ..
+            pn,
+            size,
+            frames,
+            mtu_probe,
+            ..
         } => log.push((0, pn, size, false, mtu_probe, *frames)),
         Event::LateAcked { pn, frames } => log.push((1, pn, 0, false, false, *frames)),
         Event::Lost {
@@ -218,9 +232,17 @@ fn logger(log: &mut Log) -> impl FnMut(Event<'_>) + '_ {
 /// The documented ceiling of the probe timeout.
 fn pto_ceiling<const N: usize>(rec: &Recovery<N>, node_rtt: u64) -> u64 {
     let rtt = rec.rtt();
-    let srtt = if rtt.has_sample() { rtt.smoothed() } else { INITIAL_RTT.max(node_rtt.saturating_mul(2)) };
+    let srtt = if rtt.has_sample() {
+        rtt.smoothed()
+    } else {
+        INITIAL_RTT.max(node_rtt.saturating_mul(2))
+    };
     let slow = rtt.min_rtt().is_some_and(|m| m >= 250 * MS) || srtt >= SECOND;
-    if slow { (2 * SECOND).max(srtt.saturating_mul(2)) } else { 2 * SECOND }
+    if slow {
+        (2 * SECOND).max(srtt.saturating_mul(2))
+    } else {
+        2 * SECOND
+    }
 }
 
 fn run_recovery(start: u64, node_rtt: u64, ops: &[RecOp]) {
@@ -268,24 +290,30 @@ fn run_recovery(start: u64, node_rtt: u64, ops: &[RecOp]) {
                     match rec.on_packet_sent(p) {
                         Ok(()) => {
                             model.sent_bytes += u128::from(size);
-                            model.pkts.insert(pn, Pkt {
-                                size,
-                                st: St::InFlight,
-                                repair,
-                                probe,
-                                frames,
-                            });
-                        },
+                            model.pkts.insert(
+                                pn,
+                                Pkt {
+                                    size,
+                                    st: St::InFlight,
+                                    repair,
+                                    probe,
+                                    frames,
+                                },
+                            );
+                        }
                         Err(e) => {
                             assert!(!room, "step {step}: a send refused with room in the ring: {e:?}");
-                        },
+                        }
                     }
                 }
-            },
+            }
             RecOp::Untracked { gap } => {
                 now = now.saturating_add(gap);
-                assert!(rec.on_packet_untracked(rec.next_pn()).is_ok(), "step {step}: untracked send refused");
-            },
+                assert!(
+                    rec.on_packet_untracked(rec.next_pn()).is_ok(),
+                    "step {step}: untracked send refused"
+                );
+            }
             RecOp::Ack { ref ranges, gap } => {
                 now = now.saturating_add(gap);
                 let Some(top) = rec.largest_sent() else { continue };
@@ -302,37 +330,40 @@ fn run_recovery(start: u64, node_rtt: u64, ops: &[RecOp]) {
                 assert!(r.is_ok(), "step {step}: a valid acknowledgement refused: {r:?}");
                 summary = r.ok();
                 ack_ranges = Some(out);
-            },
+            }
             RecOp::Fire => {
                 if let Some(t) = rec.next_timeout() {
                     now = now.max(t);
                     summary = Some(rec.on_timeout(now, logger(&mut log)).summary);
                     fired_at = Some(now);
                 }
-            },
+            }
             RecOp::Timeout { gap } => {
                 now = now.saturating_add(gap);
                 summary = Some(rec.on_timeout(now, logger(&mut log)).summary);
-            },
+            }
             RecOp::Flush { gap } => {
                 now = now.saturating_add(gap);
                 summary = Some(rec.flush_in_flight(now, logger(&mut log)));
-            },
+            }
             RecOp::ResendOffPath { path, limit } => {
                 let s = rec.resend_off_path(now, path, limit, logger(&mut log));
-                assert!(s.lost_packets as usize <= limit, "step {step}: resend_off_path lost more than its limit");
+                assert!(
+                    s.lost_packets as usize <= limit,
+                    "step {step}: resend_off_path lost more than its limit"
+                );
                 summary = Some(s);
-            },
+            }
             RecOp::Switch { path } => {
                 rec.switch_path(path).unwrap();
-            },
+            }
             RecOp::Follow { path } => rec.follow_path(path).unwrap(),
             RecOp::Sleep(b) => rec.set_peer_asleep(b),
             RecOp::Dark(b) => rec.set_link_down(b),
             RecOp::Peer { gap } => {
                 now = now.saturating_add(gap);
                 rec.note_peer_activity(now);
-            },
+            }
             RecOp::Mtu(m) => rec.set_max_datagram_size(m),
         }
         let expect = apply(&mut model, &log, ack_ranges.as_deref());
@@ -351,8 +382,16 @@ fn run_recovery(start: u64, node_rtt: u64, ops: &[RecOp]) {
             rec.bytes_acked() + u128::from(rec.bytes_in_flight()) + rec.bytes_lost(),
             "step {step}: conservation"
         );
-        assert!(rec.cwnd() >= MIN_CWND, "step {step}: cwnd {} below the minimum", rec.cwnd());
-        assert!(rec.cwnd() <= MAX_CWND, "step {step}: cwnd {} above the maximum", rec.cwnd());
+        assert!(
+            rec.cwnd() >= MIN_CWND,
+            "step {step}: cwnd {} below the minimum",
+            rec.cwnd()
+        );
+        assert!(
+            rec.cwnd() <= MAX_CWND,
+            "step {step}: cwnd {} above the maximum",
+            rec.cwnd()
+        );
         let pto = rec.pto_duration();
         assert!(pto > 0, "step {step}: a zero probe timeout");
         assert!(
@@ -360,7 +399,10 @@ fn run_recovery(start: u64, node_rtt: u64, ops: &[RecOp]) {
             "step {step}: probe timeout {pto} above its documented ceiling {}",
             pto_ceiling(&rec, model.node_rtt)
         );
-        assert!(rec.pacer().next_release(now) >= now, "step {step}: pacer release before now");
+        assert!(
+            rec.pacer().next_release(now) >= now,
+            "step {step}: pacer release before now"
+        );
         let _ = rec.health(now);
         let _ = rec.can_send();
         // A timer that just ran at its deadline moves on: running it again at the same instant a few times at most
@@ -369,7 +411,10 @@ fn run_recovery(start: u64, node_rtt: u64, ops: &[RecOp]) {
             let mut again = 0;
             while rec.next_timeout().is_some_and(|d| d <= t) {
                 again += 1;
-                assert!(again <= 3, "step {step}: the timer stays due at {t} after firing {again} times");
+                assert!(
+                    again <= 3,
+                    "step {step}: the timer stays due at {t} after firing {again} times"
+                );
                 let mut log = Log::new();
                 let s = rec.on_timeout(t, logger(&mut log)).summary;
                 let expect = apply(&mut model, &log, None);
@@ -443,7 +488,10 @@ enum RxOp {
         #[ephyra(gen = clock_gap())]
         gap: u64,
     },
-    MinRtt(#[ephyra(gen = gens::option(gens::frequency(vec![(2, gens::int(0u64..=400 * MS).boxed()), (1, gens::edges(0u64..=u64::MAX).boxed())])))] Option<u64>),
+    MinRtt(
+        #[ephyra(gen = gens::option(gens::frequency(vec![(2, gens::int(0u64..=400 * MS).boxed()), (1, gens::edges(0u64..=u64::MAX).boxed())])))]
+         Option<u64>,
+    ),
     Every(#[ephyra(gen = gens::option(gens::int(0u32..=6)))] Option<u32>),
 }
 
@@ -467,12 +515,21 @@ fn run_rx<const R: usize>(base: u64, ops: &[RxOp]) {
                     continue;
                 }
                 receive(&mut rx, &mut seen, step, pn, now, eliciting, bytes, min_rtt);
-            },
+            }
             RxOp::Behind { back, eliciting, gap } => {
                 now = now.saturating_add(gap);
                 let Some(l) = rx.largest() else { continue };
-                receive(&mut rx, &mut seen, step, l.saturating_sub(back), now, eliciting, 0, min_rtt);
-            },
+                receive(
+                    &mut rx,
+                    &mut seen,
+                    step,
+                    l.saturating_sub(back),
+                    now,
+                    eliciting,
+                    0,
+                    min_rtt,
+                );
+            }
             RxOp::AckSent { gap } => {
                 now = now.saturating_add(gap);
                 let ranges: Vec<_> = rx.ack_ranges(now).collect();
@@ -481,8 +538,11 @@ fn run_rx<const R: usize>(base: u64, ops: &[RxOp]) {
                 }
                 rx.on_ack_sent(our_pn, now);
                 our_pn += 1;
-                assert!(!rx.ack_pending(), "step {step}: an acknowledgement is still pending after one went out");
-            },
+                assert!(
+                    !rx.ack_pending(),
+                    "step {step}: an acknowledgement is still pending after one went out"
+                );
+            }
             RxOp::PeerAck { ref ranges, gap } => {
                 now = now.saturating_add(gap);
                 let mut out = Vec::new();
@@ -495,17 +555,25 @@ fn run_rx<const R: usize>(base: u64, ops: &[RxOp]) {
                     cursor = start.checked_sub(2);
                 }
                 rx.on_peer_ack(now, &out);
-            },
+            }
             RxOp::MinRtt(m) => {
                 min_rtt = m;
                 rx.set_min_rtt(m);
-            },
+            }
             RxOp::Every(e) => rx.set_every(e),
         }
-        assert!(rx.range_count() <= R, "step {step}: {} ranges tracked in room for {R}", rx.range_count());
+        assert!(
+            rx.range_count() <= R,
+            "step {step}: {} ranges tracked in room for {R}",
+            rx.range_count()
+        );
         assert_eq!(rx.largest(), seen.last().copied(), "step {step}: largest received");
         let ranges: Vec<RangeInclusive<u64>> = rx.ack_ranges(now).collect();
-        assert!(ranges.len() <= MAX_ACK_RANGES, "step {step}: {} ranges reported", ranges.len());
+        assert!(
+            ranges.len() <= MAX_ACK_RANGES,
+            "step {step}: {} ranges reported",
+            ranges.len()
+        );
         for w in ranges.windows(2) {
             assert!(
                 w[1].end().saturating_add(1) < *w[0].start(),
@@ -516,7 +584,10 @@ fn run_rx<const R: usize>(base: u64, ops: &[RxOp]) {
             assert!(r.start() <= r.end(), "step {step}: an empty range {r:?}");
             // Small ranges only: a range is at most as long as what was received.
             let n = r.end() - r.start() + 1;
-            assert!(n <= seen.len() as u64, "step {step}: range {r:?} longer than everything received");
+            assert!(
+                n <= seen.len() as u64,
+                "step {step}: range {r:?} longer than everything received"
+            );
             assert!(
                 seen.range(r.clone()).count() as u64 == n,
                 "step {step}: range {r:?} acknowledges a packet never received"
@@ -555,9 +626,15 @@ fn receive<const R: usize>(
         seen.insert(pn);
         if eliciting {
             let due = rx.ack_deadline();
-            assert!(due.is_some(), "step {step}: no acknowledgement scheduled for eliciting {pn}");
+            assert!(
+                due.is_some(),
+                "step {step}: no acknowledgement scheduled for eliciting {pn}"
+            );
             if pn != expected {
-                assert!(rx.ack_due(now), "step {step}: packet {pn} out of order ({expected} expected) not acknowledged at once");
+                assert!(
+                    rx.ack_due(now),
+                    "step {step}: packet {pn} out of order ({expected} expected) not acknowledged at once"
+                );
             }
             assert!(
                 due.unwrap() <= now.saturating_add(max_ack_delay(min_rtt)),
@@ -566,7 +643,11 @@ fn receive<const R: usize>(
         }
     }
     if above {
-        assert_eq!(out, RxOutcome::New, "step {step}: a packet {pn} above every one received was dropped");
+        assert_eq!(
+            out,
+            RxOutcome::New,
+            "step {step}: a packet {pn} above every one received was dropped"
+        );
     }
 }
 

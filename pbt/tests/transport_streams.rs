@@ -43,6 +43,20 @@ enum Op {
         #[ephyra(gen = gens::frequency(vec![(3, gens::int(1usize..=1400).boxed()), (1, gens::int(0usize..=20).boxed()), (1, gens::int(1usize..=40_000).boxed())]))]
         budget: usize,
     },
+    /// Build many tiny frames: with the `Evens` ops below they leave many holes in the ranges both sides keep.
+    Burst {
+        #[ephyra(gen = gens::int(16u8..=160))]
+        count: u8,
+        #[ephyra(gen = gens::int(1usize..=40))]
+        budget: usize,
+    },
+    /// Deliver, acknowledge or lose every other frame in flight (the even or the odd ones).
+    Evens {
+        #[ephyra(gen = gens::int(0u8..=2))]
+        what: u8,
+        #[ephyra(gen = gens::bool())]
+        odd: bool,
+    },
     /// Hand frame `which` (counted from the oldest unsettled one) to the receiver.
     Deliver(#[ephyra(gen = gens::int(0u8..=15))] u8),
     /// Hand every frame in flight to the receiver, oldest first or newest first.
@@ -77,12 +91,21 @@ struct Case {
 
 fn case() -> impl Gen<Value = Case> {
     (
-        gens::frequency(vec![(1, gens::int(2usize..=12).boxed()), (2, gens::int(12usize..=200).boxed())]),
-        gens::frequency(vec![(1, gens::int(2usize..=12).boxed()), (2, gens::int(12usize..=200).boxed())]),
+        gens::frequency(vec![
+            (1, gens::int(2usize..=12).boxed()),
+            (2, gens::int(12usize..=200).boxed()),
+        ]),
+        gens::frequency(vec![
+            (1, gens::int(2usize..=12).boxed()),
+            (2, gens::int(12usize..=200).boxed()),
+        ]),
         gens::pick_from(vec![CHUNK_SIZE as u64, 20_000, 64 * 1024, 100_001, 1_310_720]),
         gens::int(1u64..=8),
         gens::vec((
-            gens::frequency(vec![(2, gens::int(0usize..=5000).boxed()), (2, gens::int(0usize..=200_000).boxed())]),
+            gens::frequency(vec![
+                (2, gens::int(0usize..=5000).boxed()),
+                (2, gens::int(0usize..=200_000).boxed()),
+            ]),
             gens::bool_with(0.8),
         ))
         .len(1..=5),
@@ -103,7 +126,10 @@ fn shrink_case(c: &Case, visit: &mut dyn FnMut(Case) -> std::ops::ControlFlow<()
     let n = c.ops.len();
     for cut in [n / 2, n * 3 / 4, n.saturating_sub(1)] {
         if cut < n {
-            visit(Case { ops: c.ops[..cut].to_vec(), ..c.clone() })?;
+            visit(Case {
+                ops: c.ops[..cut].to_vec(),
+                ..c.clone()
+            })?;
         }
     }
     for i in 0..n {
@@ -112,7 +138,10 @@ fn shrink_case(c: &Case, visit: &mut dyn FnMut(Case) -> std::ops::ControlFlow<()
         visit(Case { ops, ..c.clone() })?;
     }
     if c.plan.len() > 1 {
-        visit(Case { plan: c.plan[..c.plan.len() - 1].to_vec(), ..c.clone() })?;
+        visit(Case {
+            plan: c.plan[..c.plan.len() - 1].to_vec(),
+            ..c.clone()
+        })?;
     }
     for (i, &(len, fin)) in c.plan.iter().enumerate() {
         if len > 0 {
@@ -123,7 +152,11 @@ fn shrink_case(c: &Case, visit: &mut dyn FnMut(Case) -> std::ops::ControlFlow<()
     }
     for (rchunks, schunks) in [(c.rchunks / 2, c.schunks), (c.rchunks, c.schunks / 2)] {
         if rchunks >= 2 && schunks >= 2 && (rchunks, schunks) != (c.rchunks, c.schunks) {
-            visit(Case { rchunks, schunks, ..c.clone() })?;
+            visit(Case {
+                rchunks,
+                schunks,
+                ..c.clone()
+            })?;
         }
     }
     std::ops::ControlFlow::Continue(())
@@ -174,6 +207,7 @@ struct World {
     window: u64,
     now: u64,
     sent_frames: usize,
+    prog: Option<Progress>,
 }
 
 fn pattern(len: usize, seed: u64) -> Vec<u8> {
@@ -227,19 +261,25 @@ impl World {
             window,
             now: 1_000_000_000,
             sent_frames: 0,
+            prog: None,
         }
     }
 
     fn open(&mut self) {
-        let Some(p) = self.plan.iter_mut().find(|p| p.id.is_none()) else { return };
+        let Some(p) = self.plan.iter_mut().find(|p| p.id.is_none()) else {
+            return;
+        };
         match self.s.open_stream(&self.spool, false) {
             Ok(id) => {
                 assert!(!self.limit.contains_key(&id), "stream id {id} opened twice");
                 self.limit.insert(id, self.window);
                 p.id = Some(id);
-            },
+            }
             Err(e) => assert!(
-                matches!(e, StreamError::StreamLimit | StreamError::TableFull | StreamError::Exhausted),
+                matches!(
+                    e,
+                    StreamError::StreamLimit | StreamError::TableFull | StreamError::Exhausted
+                ),
                 "open refused with {e:?}"
             ),
         }
@@ -278,21 +318,34 @@ impl World {
 
     fn send(&mut self, count: usize, budget: usize) {
         for _ in 0..count {
-            let Some(chunk) = self.s.next_stream_frame(&mut self.spool, budget) else { return };
-            assert!(chunk.len <= budget, "a frame of {} bytes for a budget of {budget}", chunk.len);
+            let Some(chunk) = self.s.next_stream_frame(&mut self.spool, budget) else {
+                return;
+            };
+            assert!(
+                chunk.len <= budget,
+                "a frame of {} bytes for a budget of {budget}",
+                chunk.len
+            );
             let mut buf = vec![0u8; chunk.len];
             let n = self.s.copy_out(&mut self.spool, &chunk, &mut buf);
             assert_eq!(n, Ok(chunk.len), "copy_out of {chunk:?}");
             let p = self.planned(chunk.id);
             let end = chunk.offset + chunk.len as u64;
-            assert!(end <= p.written as u64, "frame {chunk:?} reaches past the {} bytes written", p.written);
+            assert!(
+                end <= p.written as u64,
+                "frame {chunk:?} reaches past the {} bytes written",
+                p.written
+            );
             assert!(
                 buf == p.data[chunk.offset as usize..end as usize],
                 "frame {chunk:?} carries bytes other than those written"
             );
             if chunk.fin {
                 assert!(p.finished, "frame {chunk:?} ends a stream that was not finished");
-                assert_eq!(end, p.written as u64, "frame {chunk:?} ends the stream short of its length");
+                assert_eq!(
+                    end, p.written as u64,
+                    "frame {chunk:?} ends the stream short of its length"
+                );
             } else {
                 assert!(chunk.len > 0, "an empty frame without the end: {chunk:?}");
             }
@@ -324,8 +377,13 @@ impl World {
         let r = self.r.on_stream_frame(&mut self.rpool, f.id, f.offset, &f.data, f.fin);
         match r {
             Ok(()) => f.stored = true,
-            Err(StreamError::Exhausted | StreamError::Fragmented) => {},
-            Err(e) => panic!("the receiver refused an honest frame of {} at {} (+{}): {e:?}", f.id, f.offset, f.data.len()),
+            Err(StreamError::Exhausted | StreamError::Fragmented) => {}
+            Err(e) => panic!(
+                "the receiver refused an honest frame of {} at {} (+{}): {e:?}",
+                f.id,
+                f.offset,
+                f.data.len()
+            ),
         }
     }
 
@@ -343,13 +401,20 @@ impl World {
     }
 
     fn read(&mut self, i: usize, max: usize) {
-        let Some(id) = self.plan.get(i).and_then(|p| p.id) else { return };
+        let Some(id) = self.plan.get(i).and_then(|p| p.id) else {
+            return;
+        };
         let mut left = max;
         let mut turns = 0usize;
         while left > 0 {
             turns += 1;
-            assert!(turns <= 100_000, "stream {id}: reading did not end after 100,000 chunks");
-            let Some(chunk) = self.r.read_chunk(&self.rpool, id) else { break };
+            assert!(
+                turns <= 100_000,
+                "stream {id}: reading did not end after 100,000 chunks"
+            );
+            let Some(chunk) = self.r.read_chunk(&self.rpool, id) else {
+                break;
+            };
             let n = chunk.len().min(left);
             assert!(n > 0, "an empty readable chunk on {id}");
             let got = self.read.entry(id).or_default();
@@ -370,17 +435,33 @@ impl World {
         }
         let p = self.planned(id);
         let got = self.read.get(&id).map_or(&[][..], Vec::as_slice);
-        assert!(got.len() <= p.written, "stream {id}: read {} bytes of {} written", got.len(), p.written);
-        assert!(got == &p.data[..got.len()], "stream {id}: the bytes read differ from those written");
+        assert!(
+            got.len() <= p.written,
+            "stream {id}: read {} bytes of {} written",
+            got.len(),
+            p.written
+        );
+        assert!(
+            got == &p.data[..got.len()],
+            "stream {id}: the bytes read differ from those written"
+        );
     }
 
     fn control(&mut self, carry: bool) {
         // As the connection does before it writes control frames.
         self.r.regrant(&self.rpool);
         self.s.regrant(&self.spool);
+        let mut lost = Vec::new();
+        let mut taken = 0usize;
         while let Some(f) = self.r.pending_control() {
+            taken += 1;
+            assert!(
+                taken <= 10_000,
+                "the receiver queued over 10,000 control frames at once"
+            );
             if !carry {
-                self.r.on_control_lost(&f);
+                // Lost in flight: reported after the whole flight was taken, so a requeued frame is not taken again.
+                lost.push(f);
                 continue;
             }
             match f {
@@ -389,13 +470,19 @@ impl World {
                     *l = (*l).max(max);
                     let r = self.s.on_max_stream_data(&self.spool, id, max);
                     assert!(r.is_ok(), "the sender refused MAX_STREAM_DATA {max} for {id}: {r:?}");
-                },
+                }
                 ControlFrame::MaxStreams { limit } => self.s.on_max_streams(limit),
                 other => panic!("the receiver sent {other:?} with no stop or reset asked"),
             }
             self.r.on_control_acked(&mut self.rpool, &f);
         }
-        assert!(self.s.pending_control().is_none(), "the sender has control frames with no reset asked");
+        for f in &lost {
+            self.r.on_control_lost(f);
+        }
+        assert!(
+            self.s.pending_control().is_none(),
+            "the sender has control frames with no reset asked"
+        );
     }
 
     fn step(&mut self, op: &Op) {
@@ -403,40 +490,58 @@ impl World {
             Op::Open => self.open(),
             Op::Write { stream, len } => self.write(usize::from(stream), len),
             Op::Finish(i) => self.finish(usize::from(i), false),
-            Op::Send { count, budget } => self.send(usize::from(count), budget),
+            Op::Send { count, budget } | Op::Burst { count, budget } => self.send(usize::from(count), budget),
+            Op::Evens { what, odd } => {
+                let idx: Vec<usize> = (0..self.flight.len())
+                    .filter(|&i| self.flight[i].fate == Fate::InFlight)
+                    .enumerate()
+                    .filter(|(k, _)| (k % 2 == 1) == odd)
+                    .map(|(_, i)| i)
+                    .collect();
+                for i in idx {
+                    match what {
+                        0 => self.deliver(i),
+                        1 if self.flight[i].stored => self.settle(i, Fate::Done),
+                        1 => {}
+                        _ => self.settle(i, Fate::Lost),
+                    }
+                }
+            }
             Op::Deliver(w) => {
                 if let Some(i) = self.pick(w, |_| true) {
                     self.deliver(i);
                 }
-            },
+            }
             Op::DeliverAll(newest_first) => {
-                let mut idx: Vec<usize> = (0..self.flight.len()).filter(|&i| self.flight[i].fate == Fate::InFlight).collect();
+                let mut idx: Vec<usize> = (0..self.flight.len())
+                    .filter(|&i| self.flight[i].fate == Fate::InFlight)
+                    .collect();
                 if newest_first {
                     idx.reverse();
                 }
                 for i in idx {
                     self.deliver(i);
                 }
-            },
+            }
             Op::Ack(w) => {
                 if let Some(i) = self.pick(w, |f| f.fate == Fate::InFlight && f.stored) {
                     self.settle(i, Fate::Done);
                 }
-            },
+            }
             Op::Lose(w) => {
                 if let Some(i) = self.pick(w, |f| f.fate == Fate::InFlight) {
                     self.settle(i, Fate::Lost);
                 }
-            },
+            }
             Op::LateAck(w) => {
                 if let Some(i) = self.pick(w, |f| f.fate == Fate::Lost && f.stored) {
                     self.settle(i, Fate::Done);
                 }
-            },
+            }
             Op::Read { stream, len } => self.read(usize::from(stream), len),
             Op::Control(carry) => self.control(carry),
         }
-        if self.flight.len() > 64 {
+        if self.flight.len() > 256 {
             self.flight.retain(|f| f.fate != Fate::Done);
         }
     }
@@ -451,13 +556,23 @@ impl World {
     }
 
     /// One round of a clean link: everything goes, arrives in order, and is acknowledged or found missing.
+    fn sub(&self, n: u64) {
+        if let Some(p) = &self.prog {
+            p[1].store(n, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
     fn clean_round(&mut self) {
+        self.sub(1);
         self.open();
+        self.sub(2);
         for i in 0..self.plan.len() {
             self.write(i, usize::MAX / 2);
             self.finish(i, true);
         }
+        self.sub(3);
         self.send(64, 1200);
+        self.sub(4);
         for i in 0..self.flight.len() {
             if self.flight[i].fate == Fate::InFlight {
                 self.flight[i].stored = false;
@@ -467,18 +582,31 @@ impl World {
             }
         }
         self.flight.retain(|f| f.fate == Fate::InFlight);
+        self.sub(5);
         for i in 0..self.plan.len() {
             self.read(i, usize::MAX);
         }
+        self.sub(6);
         self.control(true);
     }
 }
 
-fn run(c: &Case) {
+/// Where a case is: op index, or 1_000_000 + clean round, and the step within (for the hang report).
+type Progress = std::sync::Arc<[std::sync::atomic::AtomicU64; 2]>;
+
+fn mark(p: &Progress, at: u64, sub: u64) {
+    p[0].store(at, std::sync::atomic::Ordering::Relaxed);
+    p[1].store(sub, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn run(c: &Case, prog: &Progress) {
     let mut w = World::new(c);
+    w.prog = Some(prog.clone());
+    let start = std::time::Instant::now();
     for (step, op) in c.ops.iter().enumerate() {
-        let _ = step;
+        mark(prog, step as u64, 0);
         w.step(op);
+        assert!(start.elapsed().as_secs() < 15, "slow: op {step} {op:?} after 15 s");
     }
     // Every frame still in flight is found lost (a spurious loss for those that arrived), then the link is clean.
     for i in 0..w.flight.len() {
@@ -493,39 +621,118 @@ fn run(c: &Case) {
     while !w.done() {
         rounds += 1;
         assert!(
+            start.elapsed().as_secs() < 15,
+            "slow: clean round {rounds} after 15 s, read {:?}, plan {:?}, sent {}, flight {}, stats {:?}",
+            w.read.iter().map(|(k, v)| (*k, v.len())).collect::<Vec<_>>(),
+            w.plan
+                .iter()
+                .map(|p| (p.id, p.len, p.written, p.finished))
+                .collect::<Vec<_>>(),
+            w.sent_frames,
+            w.flight.len(),
+            (w.s.stats(), w.r.stats())
+        );
+        assert!(
             rounds <= bound,
             "the transfer did not complete within {bound} clean rounds: read {:?} of {:?}, frames sent {}; pools in use {} / {}, buffered {}, views {:?}, limits {:?}",
             w.read.iter().map(|(k, v)| (*k, v.len())).collect::<Vec<_>>(),
-            w.plan.iter().map(|p| (p.id, p.len, p.written, p.finished)).collect::<Vec<_>>(),
+            w.plan
+                .iter()
+                .map(|p| (p.id, p.len, p.written, p.finished))
+                .collect::<Vec<_>>(),
             w.sent_frames,
             w.spool.used_chunks(),
             w.rpool.used_chunks(),
             w.s.buffered(),
-            w.plan.iter().filter_map(|p| p.id).map(|id| (w.s.send_view(id), w.r.recv_status(id))).collect::<Vec<_>>(),
+            w.plan
+                .iter()
+                .filter_map(|p| p.id)
+                .map(|id| (w.s.send_view(id), w.r.recv_status(id)))
+                .collect::<Vec<_>>(),
             w.limit
         );
+        mark(prog, 1_000_000 + rounds as u64, 0);
         w.clean_round();
     }
+    mark(prog, 2_000_000, 0);
     for p in &w.plan {
         let id = p.id.unwrap();
-        assert!(w.read.get(&id).map_or(&[][..], Vec::as_slice) == p.data, "stream {id}: the bytes read differ from those written");
+        assert!(
+            w.read.get(&id).map_or(&[][..], Vec::as_slice) == p.data,
+            "stream {id}: the bytes read differ from those written"
+        );
     }
     // Once every stream ended, was read and acknowledged, every chunk is back in both pools.
     {
         for _ in 0..4 {
             w.clean_round();
         }
-        assert!(!w.s.has_data_to_send(), "the sender still has data after every stream was acknowledged");
-        assert_eq!(w.r.open_streams(), 0, "the receiver keeps streams that ended and were read");
-        assert_eq!(w.s.open_streams(), 0, "the sender keeps streams that ended and were acknowledged");
-        assert_eq!(w.rpool.used_chunks(), 0, "the receiver's pool holds chunks after every stream closed");
-        assert_eq!(w.spool.used_chunks(), 0, "the sender's pool holds chunks after every stream closed");
+        assert!(
+            !w.s.has_data_to_send(),
+            "the sender still has data after every stream was acknowledged"
+        );
+        assert_eq!(
+            w.r.open_streams(),
+            0,
+            "the receiver keeps streams that ended and were read"
+        );
+        assert_eq!(
+            w.s.open_streams(),
+            0,
+            "the sender keeps streams that ended and were acknowledged"
+        );
+        assert_eq!(
+            w.rpool.used_chunks(),
+            0,
+            "the receiver's pool holds chunks after every stream closed"
+        );
+        assert_eq!(
+            w.spool.used_chunks(),
+            0,
+            "the sender's pool holds chunks after every stream closed"
+        );
+    }
+}
+
+/// Run a case on its own thread and fail it after `secs` seconds: ephyra does not catch hangs, and a call into the
+/// table that never returns is a failure too. A hung thread is left behind; the job's time limit ends it.
+fn within(secs: u64, c: Case) {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let prog: Progress = std::sync::Arc::new([
+        std::sync::atomic::AtomicU64::new(0),
+        std::sync::atomic::AtomicU64::new(0),
+    ]);
+    let p2 = prog.clone();
+    let ops = c.ops.clone();
+    let h = std::thread::spawn(move || {
+        run(&c, &p2);
+        let _ = tx.send(());
+    });
+    match rx.recv_timeout(std::time::Duration::from_secs(secs)) {
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            let at = prog[0].load(std::sync::atomic::Ordering::Relaxed);
+            panic!(
+                "the case did not end within {secs} s (at {at}, step {}, op {:?})",
+                prog[1].load(std::sync::atomic::Ordering::Relaxed),
+                ops.get(at as usize)
+            )
+        }
+        _ => {
+            if let Err(e) = h.join() {
+                let msg = e
+                    .downcast_ref::<String>()
+                    .cloned()
+                    .or_else(|| e.downcast_ref::<&str>().map(|s| (*s).to_owned()))
+                    .unwrap_or_default();
+                panic!("{msg}");
+            }
+        }
     }
 }
 
 #[ephyra::test(gen = case(), tests = 600)]
 fn streams_deliver_exactly_the_bytes_written(c: Case) {
-    run(&c);
+    within(20, c);
 }
 
 fn case_size(c: &Case) -> u64 {
@@ -533,7 +740,11 @@ fn case_size(c: &Case) -> u64 {
 }
 
 fn in_support(c: &Case) -> bool {
-    c.rchunks >= 2 && c.schunks >= 2 && (1..=5).contains(&c.plan.len()) && c.ops.len() <= 150 && (1..=8).contains(&c.max_streams)
+    c.rchunks >= 2
+        && c.schunks >= 2
+        && (1..=5).contains(&c.plan.len())
+        && c.ops.len() <= 150
+        && (1..=8).contains(&c.max_streams)
 }
 
 #[test]

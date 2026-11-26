@@ -14,8 +14,8 @@
 //!   (RFC 9000 appendix A.3): every packet number within half a window of the next expected one comes back.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::cast_possible_truncation)]
 
-use ephyra::prelude::*;
 use ephyra::gens;
+use ephyra::prelude::*;
 use pinc_pbt::mostly_valid;
 use pinc_security::{Rekey, TicketBatch, TicketEntry};
 use pinc_transport::frame::{Frame, MAX_STREAM_END, write_ack};
@@ -47,7 +47,9 @@ fn one_frame(g: &mut Source, out: &mut Vec<u8>, last: bool) {
         for _ in 0..g.int(1usize..=34) {
             let len = g.int(0u64..=6).min(top);
             ranges.push(top - len..=top);
-            let Some(next) = (top - len).checked_sub(2 + g.int(0u64..=5)) else { break };
+            let Some(next) = (top - len).checked_sub(2 + g.int(0u64..=5)) else {
+                break;
+            };
             top = next;
         }
         write_ack(&mut w, ranges).unwrap();
@@ -73,8 +75,11 @@ fn one_frame(g: &mut Source, out: &mut Vec<u8>, last: bool) {
                     data: &data,
                     implicit_len: implicit,
                 }
+            }
+            5 => Frame::MaxStreamData {
+                id: value(g),
+                max: value(g),
             },
-            5 => Frame::MaxStreamData { id: value(g), max: value(g) },
             6 => Frame::MaxStreams { limit: value(g) },
             7 => Frame::PathChallenge(g.int(0u64..=u64::MAX).to_be_bytes()),
             8 => Frame::PathResponse(g.int(0u64..=u64::MAX).to_be_bytes()),
@@ -83,7 +88,9 @@ fn one_frame(g: &mut Source, out: &mut Vec<u8>, last: bool) {
                 data: &data,
                 implicit_len: implicit,
             },
-            11 => Frame::MtuProbeEcho { mtu: g.int(0u16..=u16::MAX) },
+            11 => Frame::MtuProbeEcho {
+                mtu: g.int(0u16..=u16::MAX),
+            },
             12 => Frame::Sleep,
             13 => Frame::Wake,
             14 => Frame::Ready,
@@ -94,10 +101,14 @@ fn one_frame(g: &mut Source, out: &mut Vec<u8>, last: bool) {
                 Frame::Rekey(Rekey {
                     answer,
                     share,
-                    echo: if answer { g.int(0u64..=u64::MAX).to_be_bytes() } else { [0; 8] },
+                    echo: if answer {
+                        g.int(0u64..=u64::MAX).to_be_bytes()
+                    } else {
+                        [0; 8]
+                    },
                     switch_pn: if answer { value(g) } else { 0 },
                 })
-            },
+            }
             16 => {
                 let mut batch = TicketBatch::new();
                 for _ in 0..g.int(0usize..=4) {
@@ -109,7 +120,7 @@ fn one_frame(g: &mut Source, out: &mut Vec<u8>, last: bool) {
                     });
                 }
                 Frame::NewTickets(batch)
-            },
+            }
             _ => Frame::Extension {
                 ty: 0x40 + value(g) % ((1u64 << 62) - 0x40),
                 body: &data,
@@ -173,9 +184,17 @@ fn pn_case() -> impl Gen<Value = (u64, u64, bool, bool)> {
             (2, gens::int((MAX_PN - (1 << 25))..=MAX_PN).boxed()),
             (2, gens::int(0u64..=(1 << 25)).boxed()),
             // Just below and above a multiple of 2^16 (the edge of a 2-byte window).
-            (2, (gens::int(0u64..=(1u64 << 38)), gens::int(0u64..=0x2_0000)).map(|(k, d)| ((k << 16) + d).min(MAX_PN)).boxed()),
+            (
+                2,
+                (gens::int(0u64..=(1u64 << 38)), gens::int(0u64..=0x2_0000))
+                    .map(|(k, d)| ((k << 16) + d).min(MAX_PN))
+                    .boxed(),
+            ),
         ]),
-        gens::frequency(vec![(2, gens::int(0u64..=8).boxed()), (3, gens::int(0u64..=(1 << 23)).boxed())]),
+        gens::frequency(vec![
+            (2, gens::int(0u64..=8).boxed()),
+            (3, gens::int(0u64..=(1 << 23)).boxed()),
+        ]),
         gens::bool(),
         gens::bool(),
     )
@@ -189,7 +208,9 @@ fn every_packet_number_within_half_a_window_expands_back(case: (u64, u64, bool, 
     // The next expected number is within half a window: pn is in (expected - half, expected + half).
     let d = dist % half;
     let expected = if behind { pn.checked_add(d) } else { pn.checked_sub(d) };
-    let Some(expected) = expected.filter(|e| *e >= 1 && *e <= MAX_PN + 1) else { return };
+    let Some(expected) = expected.filter(|e| *e >= 1 && *e <= MAX_PN + 1) else {
+        return;
+    };
     let largest = expected - 1;
     let bytes = encode_pn(pn, len).unwrap();
     let truncated = bytes[..len].iter().fold(0u32, |a, b| (a << 8) | u32::from(*b));
