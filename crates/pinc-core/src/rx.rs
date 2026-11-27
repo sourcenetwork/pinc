@@ -277,7 +277,14 @@ ep_impl! {
         remote: SocketAddr,
         buf: &mut [u8],
     ) -> Result<(), Drop> {
-        let pid = self.path_id(local, remote);
+        // The pair is minted only for a session that exists, and goes again after the settle unless a session kept it:
+        // a datagram that did not authenticate leaves nothing in the table.
+        match self.slots.get(i) {
+            None => return Err(Drop::Unroutable),
+            Some(s) if s.conn.is_none() => return Err(Drop::Closed),
+            Some(_) => {}
+        }
+        let (pid, minted) = self.path_id_minted(local, remote);
         let Some(slot) = self.slots.get_mut(i) else { return Err(Drop::Unroutable) };
         let Some(conn) = slot.conn.as_mut() else { return Err(Drop::Closed) };
         // Back-pressure: while the session's held events are all unrecoverable, or the host's queue is near full of
@@ -321,6 +328,9 @@ ep_impl! {
             conn.set_path_held(pid, self.rx_held);
         }
         self.settle(i, now);
+        if minted {
+            self.drop_unheld_pair(pid);
+        }
         if let Some((path, rtt)) = returned {
             self.share_rejoin(i, path, rtt, now);
         }

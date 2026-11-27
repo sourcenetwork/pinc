@@ -7,7 +7,13 @@
 //!
 //! Where the checked invariants come from (quoted in `check_stats`, `on_event` and `cmd`): the `pinc_core` crate and
 //! module documentation (`lib.rs`, `api.rs`, `commands.rs`, `queue.rs`, `rx.rs`, `ledger.rs`, `timers.rs`).
-#![allow(dead_code, clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
+#![allow(
+    dead_code,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing
+)]
 
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
@@ -42,7 +48,11 @@ pub type Ep = Endpoint<'static, 'static, Software, NoSource, CN, CC, CF, CNP, K,
 
 /// Runs `f` on a thread with a large stack: an endpoint is built on the stack before it is boxed.
 pub fn big_stack(f: impl FnOnce() + Send + 'static) {
-    let r = std::thread::Builder::new().stack_size(512 << 20).spawn(f).unwrap().join();
+    let r = std::thread::Builder::new()
+        .stack_size(512 << 20)
+        .spawn(f)
+        .unwrap()
+        .join();
     if let Err(e) = r {
         std::panic::resume_unwind(e);
     }
@@ -220,7 +230,7 @@ impl Host {
                 for e in evs {
                     self.on_event(now, e);
                 }
-            },
+            }
             Err(e) => {
                 let after = self.ep.node_stats();
                 if !dial && after.events_queued > before.events_queued {
@@ -229,7 +239,7 @@ impl Host {
                         format!("{e:?}: queued {} -> {}", before.events_queued, after.events_queued),
                     );
                 }
-            },
+            }
         }
         r.map(|rep| Reply2 { value: rep.value })
     }
@@ -250,30 +260,30 @@ impl Host {
                 if !self.opened.insert(session) {
                     self.violate("a session was reported open twice", format!("{e:?}"));
                 }
-            },
+            }
             Event::Closed { session, .. } => {
                 self.closed.insert(session);
-            },
-            _ => {},
+            }
+            _ => {}
         }
         match e {
             Event::KeyRequest { session } => self.answer_keys(now, session),
             Event::AcpCheck { check, .. } => {
                 let allow = self.allow;
                 let _ = self.cmd(now, Command::AcpAnswer { check, allow });
-            },
+            }
             Event::StreamReadable { session, stream } if self.auto_read => self.read_stream(now, session, stream),
             Event::StreamReset { session, stream, error } => {
                 self.reset.insert((session, stream), error);
-            },
+            }
             Event::DatagramReceived { session } => self.read_datagrams(session),
             Event::Incoming { session, .. } if self.cfg.room => {
                 if self.ep.session_taken(session) == Taken::Gone && !self.closed.contains(&session) {
                     // rx.rs: a session that is Gone "ended before the host read its Incoming ... its Closed follows".
                     self.gone.insert(session);
                 }
-            },
-            _ => {},
+            }
+            _ => {}
         }
     }
 
@@ -312,7 +322,10 @@ impl Host {
                 Answer::Chunk(c) if !c.is_empty() => c.to_vec(),
                 _ => break,
             };
-            self.read.entry((session, stream)).or_default().extend_from_slice(&chunk);
+            self.read
+                .entry((session, stream))
+                .or_default()
+                .extend_from_slice(&chunk);
             match self.cmd(
                 now,
                 Command::Consume {
@@ -325,12 +338,15 @@ impl Host {
                     value: Value::Recv(RecvStatus::Finished),
                 }) => {
                     self.fin.insert((session, stream));
-                },
-                Ok(_) => {},
+                }
+                Ok(_) => {}
                 Err(e) => {
-                    self.violate("a consume of bytes just read failed", format!("{session:?} {stream}: {e:?}"));
+                    self.violate(
+                        "a consume of bytes just read failed",
+                        format!("{session:?} {stream}: {e:?}"),
+                    );
                     break;
-                },
+                }
             }
         }
         if let Ok(Reply2 {
@@ -396,7 +412,7 @@ impl Host {
                             return false;
                         }
                         *done += n;
-                    },
+                    }
                     Ok(_) => return true,
                     Err(_) => return true,
                 }
@@ -427,7 +443,10 @@ impl Host {
             bad.push(("more sessions than the table holds", format!("{}", s.sessions)));
         }
         if s.half_open > s.sessions || s.half_open > MAX_HALF_OPEN {
-            bad.push(("more half-open sessions than sessions", format!("{} of {}", s.half_open, s.sessions)));
+            bad.push((
+                "more half-open sessions than sessions",
+                format!("{} of {}", s.half_open, s.sessions),
+            ));
         }
         if s.events_queued > event_queue(K) {
             bad.push(("the event queue outgrew its bound", format!("{}", s.events_queued)));
@@ -436,7 +455,10 @@ impl Host {
             bad.push(("an unrecoverable event was lost", format!("{}", s.events_lost)));
         }
         if s.fragments_waiting > 4 {
-            bad.push(("more than four held handshake datagrams", format!("{}", s.fragments_waiting)));
+            bad.push((
+                "more than four held handshake datagrams",
+                format!("{}", s.fragments_waiting),
+            ));
         }
         if s.ledger > LEDGER_ENTRIES {
             bad.push(("the ledger outgrew its bound", format!("{}", s.ledger)));
@@ -445,11 +467,17 @@ impl Host {
             bad.push(("more sessions owed than the room", format!("{}", s.owed)));
         }
         if s.datagrams_in != self.fed {
-            bad.push(("datagrams_in is not the datagrams handed in", format!("{} vs {}", s.datagrams_in, self.fed)));
+            bad.push((
+                "datagrams_in is not the datagrams handed in",
+                format!("{} vs {}", s.datagrams_in, self.fed),
+            ));
         }
         let listed = self.ep.sessions().count();
         if listed != s.sessions {
-            bad.push(("sessions() and node_stats disagree", format!("{listed} vs {}", s.sessions)));
+            bad.push((
+                "sessions() and node_stats disagree",
+                format!("{listed} vs {}", s.sessions),
+            ));
         }
         let at_last = s.sessions.checked_sub(1).map(|i| self.ep.query(Query::SessionAt(i)));
         if at_last.is_some_and(|a| !matches!(a, Answer::Stats(_))) {
@@ -629,11 +657,17 @@ impl Net {
                 return;
             };
             if len == 0 || segment_size == 0 || len > buf.len() {
-                self.violate("a transmit of no bytes or past the buffer", format!("{len} {segment_size}"));
+                self.violate(
+                    "a transmit of no bytes or past the buffer",
+                    format!("{len} {segment_size}"),
+                );
                 return;
             }
             if local != self.hosts[n].addr {
-                self.violate("a transmit from an address the host has no interface on", format!("{local}"));
+                self.violate(
+                    "a transmit from an address the host has no interface on",
+                    format!("{local}"),
+                );
             }
             for chunk in buf[..len].chunks(segment_size) {
                 self.hosts[n].emitted += 1;
@@ -656,8 +690,13 @@ impl Net {
                         0
                     };
                     self.seq += 1;
-                    self.wires
-                        .push(Reverse((now + self.delay + extra, self.seq, from, remote, chunk.to_vec())));
+                    self.wires.push(Reverse((
+                        now + self.delay + extra,
+                        self.seq,
+                        from,
+                        remote,
+                        chunk.to_vec(),
+                    )));
                 }
             }
         }
@@ -721,7 +760,9 @@ impl Net {
                 last = t;
             }
             while self.wires.peek().is_some_and(|Reverse(w)| w.0 <= self.now) {
-                let Some(Reverse((_, _, from, to, data))) = self.wires.pop() else { break };
+                let Some(Reverse((_, _, from, to, data))) = self.wires.pop() else {
+                    break;
+                };
                 self.deliver(from, to, data);
             }
             for n in 0..self.hosts.len() {
@@ -795,7 +836,7 @@ pub fn apply_edit(d: &mut Vec<u8>, e: Edit) {
             let end = (at + usize::from(e.2 % 16) + 1).min(d.len());
             let run = d[at..end].to_vec();
             d.splice(at..at, run);
-        },
+        }
         4 => d.insert(at, e.2),
         5 => d[at] = [0x00, 0x01, 0x3f, 0x40, 0x7f, 0x80, 0xbf, 0xc0, 0xff][usize::from(e.2) % 9],
         _ => d.extend(std::iter::repeat_n(e.2, usize::from(e.2 % 32) + 1)),
@@ -828,7 +869,9 @@ pub fn ghost_flights(now: u64, targets: &[(SocketAddr, pinc_crypto::NodeId)], sp
                 g.ep.handle_timeout(at);
                 g.service(at);
                 for _ in 0..64 {
-                    let Some(tx) = g.ep.poll_transmit(at, &mut buf) else { break };
+                    let Some(tx) = g.ep.poll_transmit(at, &mut buf) else {
+                        break;
+                    };
                     for c in buf[..tx.len].chunks(tx.segment_size.max(1)) {
                         out.push((t, c.to_vec()));
                     }
@@ -838,4 +881,3 @@ pub fn ghost_flights(now: u64, targets: &[(SocketAddr, pinc_crypto::NodeId)], sp
     }
     out
 }
-

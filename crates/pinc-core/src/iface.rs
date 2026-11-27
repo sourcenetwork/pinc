@@ -127,10 +127,13 @@ ep_impl! {
         self.quiet_until = now.saturating_add(RESUME_QUIET);
         for i in 0..K {
             let wake = self.leaves_from(i, &old, false);
+            // The pairs this session's rebinds minted, to be dropped after its settle if no session took them.
+            let mut minted = [None; NP];
+            let mut made = 0;
             // Every path of the session that leaves from the old address moves to the new one, not only the active one: a
             // standby path left on it would be chosen again later and carry nothing.
             for j in 0..D {
-                let Some(((l, remote), generation)) = self.paths.at_index(j).map(|(k, g)| (*k, *g)) else { continue };
+                let Some(((l, remote), generation)) = self.paths.at_index(j).map(|(k, p)| (*k, p.generation)) else { continue };
                 if l != old {
                     continue;
                 }
@@ -140,6 +143,10 @@ ep_impl! {
                     continue;
                 }
                 let pid = self.path_id(new, remote);
+                if let Some(m) = minted.get_mut(made) {
+                    *m = Some(pid);
+                    made += 1;
+                }
                 let Some(slot) = self.slots.get_mut(i) else { continue };
                 let Some(conn) = slot.conn.as_mut() else { continue };
                 if conn.rebind_path(lost, pid).is_ok() {
@@ -167,6 +174,9 @@ ep_impl! {
                 conn.set_link_down(&mut env, false);
             }
             self.settle(i, now);
+            for id in minted.iter().flatten() {
+                self.drop_unheld_pair(*id);
+            }
         }
     }
 
@@ -266,9 +276,17 @@ ep_impl! {
         let conn = self.slots.get(i).and_then(|s| s.conn.as_ref());
         (0..D).filter_map(move |j| {
             let (key, generation) = self.paths.at_index(j)?;
-            let id = path_id_at(*generation, j);
+            let id = path_id_at(generation.generation, j);
             conn.is_some_and(|c| c.has_path(id)).then_some(*key)
         })
+    }
+
+    /// Test-only fault injection (cargo feature `trace`): remove one address pair from the table whatever holds it.
+    /// Returns whether it was there.
+    #[cfg(feature = "trace")]
+    #[doc(hidden)]
+    pub fn trace_remove_pair(&mut self, local: SocketAddr, remote: SocketAddr) -> bool {
+        self.paths.remove(&(local, remote)).is_some()
     }
 
     /// How many address pairs the path table holds.

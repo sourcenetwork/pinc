@@ -45,7 +45,7 @@ use pinc_transport::stream::{self, NoSource, Streams};
 /// The client ticket slots of the endpoint in the test.
 const CT: usize = 3;
 
-type Ep = Endpoint<'static, 'static, Caps, NoSource, 1, 2, 16, 1, 1, 1, 4, 4, CT>;
+type Ep = Endpoint<'static, 'static, Caps, NoSource, 1, 2, 16, 1, 1, 2, 4, 4, CT>;
 type TSlot = Slot<'static, Caps, NoSource, 1, 2, 16, 1>;
 
 fn small_memory() -> Resources<'static, NoSource, 1, 2, 16> {

@@ -598,12 +598,14 @@ conn_impl! {
             }
             Frame::Stream { id, offset, fin, data, .. } => {
                 let first = self.first_unopened(id);
-                match self.streams.on_stream_frame(&mut self.pool, id, offset, data, fin) {
-                    Ok(()) => {}
+                let news = match self.streams.on_stream_frame(&mut self.pool, id, offset, data, fin) {
+                    Ok(news) => news,
                     Err(e) => return Err(stream_fault(e)),
-                }
+                };
                 self.push_opened(id, first);
-                self.push(Ev::Readable(id));
+                if news {
+                    self.push(Ev::Readable(id));
+                }
             }
             Frame::MaxStreamData { id, max } => {
                 match self.streams.on_max_stream_data(&self.pool, id, max) {

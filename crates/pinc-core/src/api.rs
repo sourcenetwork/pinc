@@ -127,7 +127,8 @@ pub enum Event {
         /// The stream.
         stream: StreamId,
     },
-    /// A stream has bytes to read.
+    /// A stream has bytes to read or its end: raised when a frame brought bytes or the end; a copy of a frame already
+    /// received raises nothing.
     StreamReadable {
         /// The session.
         session: SessionId,
@@ -791,6 +792,10 @@ pub struct NodeStats {
     /// With today's sizes it stays 0, as a first message of the floor's size pays for its reject three times over; it
     /// guards the bound should a reject ever grow.
     pub stateless_refused: u64,
+    /// Address pairs a full table pushed out. The table holds only the pairs sessions hold, so it stays 0.
+    pub pair_evictions: u64,
+    /// Times a session's count of an address pair would have gone below 0 or past its type: the pair stays. It stays 0.
+    pub pair_refs_unbalanced: u64,
     /// Events waiting for the host now.
     pub events_queued: usize,
     /// Events dropped because the event queue was full.

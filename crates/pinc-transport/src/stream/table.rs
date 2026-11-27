@@ -635,7 +635,8 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
 
     // ---- receive ----------------------------------------------------------------------------------------------
 
-    /// A stream data frame arrived.
+    /// A stream data frame arrived. Whether it brought anything to read: a byte not held before (beyond a hole too),
+    /// the final size for the first time. A copy of a frame already received brings nothing.
     ///
     /// # Errors
     /// A violation by the peer ([`StreamError::StreamLimit`], [`StreamError::StreamState`], [`StreamError::FlowControl`],
@@ -649,11 +650,13 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         offset: u64,
         data: &[u8],
         fin: bool,
-    ) -> Result<(), StreamError> {
+    ) -> Result<bool, StreamError> {
         if is_uni(id) && self.is_local(id) {
             return Err(StreamError::StreamState);
         }
-        let Some(i) = self.locate(pool, id)? else { return Ok(()) };
+        let Some(i) = self.locate(pool, id)? else {
+            return Ok(false);
+        };
         let slot = self.slots.get_mut(i).ok_or(StreamError::UnknownStream)?;
         let result = slot.recv.on_data(pool, offset, data, fin);
         self.stats.range_spills += slot.recv.take_spills();

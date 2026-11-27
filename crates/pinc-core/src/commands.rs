@@ -267,6 +267,10 @@ ep_impl! {
                 conn.set_flight_fanout(list.get(..n).unwrap_or_default());
                 conn.set_flight_skip_primary(skip_primary);
                 self.settle(i, now);
+                // A pair no session took (a path the connection refused) does not stay.
+                for (id, _) in ids.iter().flatten() {
+                    self.drop_unheld_pair(*id);
+                }
                 Ok(Value::None)
             }
             Command::Pulse { session, sent } => {
@@ -326,8 +330,10 @@ ep_impl! {
                 let pid = self.path_id(local, addr);
                 let conn = self.slots.get_mut(i).and_then(|s| s.conn.as_mut()).ok_or(CommandError::NoSession)?;
                 let mut env = env!(self, now);
-                conn.punch(&mut env, pid, path_info(&addr, self.cfg.conn.interface_mtu)).map_err(|_| CommandError::Full)?;
+                let punched = conn.punch(&mut env, pid, path_info(&addr, self.cfg.conn.interface_mtu));
                 self.settle(i, now);
+                self.drop_unheld_pair(pid);
+                punched.map_err(|_| CommandError::Full)?;
                 Ok(Value::None)
             }
             Command::SetRole { session, role } => {
@@ -469,6 +475,10 @@ ep_impl! {
             Ok(c) => c,
             Err(e) => {
                 self.retire_slot(i);
+                self.drop_unheld_pair(pid);
+                for (p, _) in extra.iter().flatten() {
+                    self.drop_unheld_pair(*p);
+                }
                 return Err(CommandError::Failure(e));
             }
         };
@@ -515,6 +525,10 @@ ep_impl! {
             self.announce(i);
         }
         self.settle(i, now);
+        self.drop_unheld_pair(pid);
+        for (p, _) in extra.iter().flatten() {
+            self.drop_unheld_pair(*p);
+        }
         Ok(self.session_id(i))
     }
 

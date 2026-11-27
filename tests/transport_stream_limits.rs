@@ -290,9 +290,8 @@ fn deliver(from: &mut Table, from_pool: &mut BufferPool<'_>, to: &mut Table, to_
     while let Some(c) = from.next_stream_frame(from_pool, 1200) {
         let mut buf = vec![0u8; c.len];
         assert_eq!(from.copy_out(from_pool, &c, &mut buf).unwrap(), c.len);
-        assert_eq!(
-            to.on_stream_frame(to_pool, c.id, c.offset, &buf, c.fin),
-            Ok(()),
+        assert!(
+            to.on_stream_frame(to_pool, c.id, c.offset, &buf, c.fin).is_ok(),
             "a stream inside the credit was held back"
         );
     }

@@ -38,7 +38,7 @@ fn receiver(pool: &BufferPool<'_>) -> T {
 }
 
 /// `holes` received ranges of ten bytes on peer stream `id`, ten bytes apart.
-fn scatter(t: &mut T, pool: &mut BufferPool<'_>, id: StreamId, holes: u64) -> Vec<Result<(), StreamError>> {
+fn scatter(t: &mut T, pool: &mut BufferPool<'_>, id: StreamId, holes: u64) -> Vec<Result<bool, StreamError>> {
     (0..holes)
         .map(|k| t.on_stream_frame(pool, id, 20 * k + 10, &[7; 10], false))
         .collect()
@@ -272,7 +272,7 @@ fn a_frame_that_spills_is_stored_while_the_pool_is_full() {
     let _held = hog(&mut pool);
     assert_eq!(
         t.on_stream_frame(&mut pool, 0, 20 * inline + 10, &[7; 10], false),
-        Ok(())
+        Ok(true)
     );
     assert_eq!(t.stats().held_back, 0);
     assert_eq!((t.stats().range_spills, pool.spill_held()), (1, 1));
@@ -328,7 +328,7 @@ fn an_empty_arena_refuses_the_frame_fragmented_and_counts_it() {
         Err(StreamError::Fragmented)
     );
     assert_eq!((t.stats().range_overflows, pool.spill_refused()), (1, 1));
-    assert_eq!(t.on_stream_frame(&mut pool, 0, 0, &[7; 10], false), Ok(()));
+    assert_eq!(t.on_stream_frame(&mut pool, 0, 0, &[7; 10], false), Ok(true));
     assert_eq!(t.read_chunk(&pool, 0).map(<[u8]>::len), Some(20));
 }
 

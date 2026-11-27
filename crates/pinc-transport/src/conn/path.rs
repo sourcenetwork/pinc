@@ -60,6 +60,8 @@ use crate::stream::StreamSource;
 pub(crate) const PTO_FALLBACK: u32 = 3;
 /// Probes sent to a new path.
 const NAT_PROBES: u32 = 9;
+/// Challenges one end sends back with a response in one punch round (the same nine as the probes it sends).
+const NAT_BACK: u8 = 9;
 /// The first gap between probes to a new path.
 const PROBE_BASE: u64 = 33_300_000;
 /// How many of the oldest packets sent on another path are sent again at once when an abandoned path answers.
@@ -259,6 +261,9 @@ pub(crate) struct Paths<const NP: usize> {
     pub(crate) slots: [Option<Path>; NP],
     pub(crate) active: usize,
     pub(crate) held: usize,
+    /// The challenges this end may still send back with a response; refilled only by this end's own punch round and
+    /// by a path that validates, never by time or by what the peer sends.
+    pub(crate) back_left: u8,
 }
 
 impl<const NP: usize> Paths<NP> {
@@ -268,6 +273,7 @@ impl<const NP: usize> Paths<NP> {
             slots: [None; NP],
             active: 0,
             held: 0,
+            back_left: NAT_BACK,
         }
     }
 
@@ -688,7 +694,10 @@ conn_impl! {
     /// then. Sent on its own after the response, the challenge would be more than an address that has only sent a
     /// challenge may be answered with (three times what arrived from it), and it would wait for the next probe; the
     /// two frames together fit. One challenge, never a second while it is out: the probes of a punch keep their own
-    /// cadence. An end whose active path is direct gains nothing from it and is left alone, and so is an idle one (no
+    /// cadence. A punch round of this end allows nine of them (`back_left`): the answer to a probe that comes from a new
+    /// port is a new path whose own answer is another challenge, and two ends behind translators that map by
+    /// destination would otherwise send each other challenges for ever. An end whose active path is direct gains
+    /// nothing from it and is left alone, and so is an idle one (no
     /// application data for 20 s): the reference model looks for no direct path on an idle session (its punch round
     /// is skipped), so a session that lapsed onto its relay stays there until data moves again.
     pub(super) fn challenge_back(&mut self, env: &mut Env<'_, P>, i: usize) {
@@ -697,12 +706,14 @@ conn_impl! {
         let wanted = self.phase == Phase::Connected
             && !self.cfg.thin
             && env.now < self.life.app_until
+            && self.paths.back_left > 0
             && self.paths.active().is_none_or(|c| c.info.kind == PathKind::Relay)
             && self
                 .paths
                 .get(i)
                 .is_some_and(|p| p.info.kind == PathKind::Direct && !p.validated && p.challenge.is_none());
         if wanted {
+            self.paths.back_left = self.paths.back_left.saturating_sub(1);
             self.challenge_path(env, i);
         }
     }
@@ -711,6 +722,7 @@ conn_impl! {
     fn start_punch(&mut self, env: &mut Env<'_, P>, i: usize) {
         let srtt = if self.rec.rtt().has_sample() { self.rec.rtt().smoothed() } else { 0 };
         self.set_challenge(env, i);
+        self.paths.back_left = NAT_BACK;
         if let Some(p) = self.paths.get_mut(i) {
             p.probes_left = NAT_PROBES;
             p.probe_gap = PROBE_BASE.max(srtt / 8);
@@ -737,6 +749,7 @@ conn_impl! {
         p.rtt = if p.last_tx == 0 { 0 } else { now.saturating_sub(p.last_tx) };
         p.rejoin = false;
         let id = p.id;
+        self.paths.back_left = NAT_BACK;
         if !was {
             self.events.push(Ev::PathValidated(id));
             self.mtu_event(i);

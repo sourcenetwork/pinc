@@ -260,6 +260,9 @@ pub(crate) struct Meta<const NP: usize> {
     pub(crate) last_rx: u64,
     pub(crate) last_app: u64,
     pub(crate) paths: [Option<PathStamp>; NP],
+    /// The path ids the connection held at the last settle: the pairs of the endpoint's table this session counts
+    /// itself a holder of.
+    pub(crate) pair_ids: [Option<PathId>; NP],
     pub(crate) cids: [Option<ConnId>; MAX_CIDS],
     pub(crate) cid_epoch: u64,
     pub(crate) odcid: Option<ConnId>,
@@ -331,6 +334,7 @@ impl<const NP: usize> Meta<NP> {
         last_rx: 0,
         last_app: 0,
         paths: [None; NP],
+        pair_ids: [None; NP],
         cids: [None; MAX_CIDS],
         cid_epoch: u64::MAX,
         odcid: None,

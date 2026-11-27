@@ -95,10 +95,13 @@ ep_impl! {
                 dest,
             });
             let segments = tx.len.div_ceil(tx.segment_size.max(1));
+            // The addresses are read before the settle: it may free the session (the CLOSE just built) and with it
+            // the pair, and a datagram built for an address leaves for it.
+            let dest = self.path_addrs(tx.path);
             self.note_sent(i, now, tx.path);
             self.dirty_rotate(q, now);
             self.settle_core(i, now, false);
-            let Some((local, remote)) = self.path_addrs(tx.path) else {
+            let Some((local, remote)) = dest else {
                 self.counters.dropped_out += 1;
                 trace!(self, now, TxDrop { slot: i as u64 });
                 self.lose_path(i, now, tx.path);
@@ -146,7 +149,7 @@ ep_impl! {
     #[cfg(feature = "trace")]
     pub fn trace_stash(&self) -> Option<(Option<SocketAddr>, usize, usize)> {
         let m = self.stash_meta.as_ref()?;
-        Some((self.path_addrs(m.path).map(|(_, remote)| remote), m.len, m.segment))
+        Some((Some(m.remote), m.len, m.segment))
     }
 
     /// Whether slot `i` is a broadcast session (its `gossip` flag), or None for a slot out of range.
@@ -203,8 +206,9 @@ ep_impl! {
         allowed
     }
 
-    /// A datagram of session `i` on `path` found no address: the table of address pairs evicted the path. The
-    /// connection is told the path is lost, so it leaves it for a usable path at once or as soon as one validates.
+    /// A datagram of session `i` on `path` found no address: no pair is held for the path. The connection is told
+    /// the path is lost, so it leaves it for a usable path at once or as soon as one validates. A slot the settle
+    /// freed meanwhile is left alone.
     fn lose_path(&mut self, i: usize, now: u64, path: PathId) {
         let Some(conn) = self.slots.get_mut(i).filter(|s| s.m.in_use).and_then(|s| s.conn.as_mut()) else {
             return;
@@ -217,12 +221,7 @@ ep_impl! {
 
     /// Send the datagram kept from the last call.
     fn send_stash(&mut self, now: u64, out: &mut [u8], m: &StashMeta) -> Option<Transmit> {
-        let Some((local, remote)) = self.path_addrs(m.path) else {
-            self.counters.dropped_out += 1;
-            trace!(self, now, TxDrop { slot: u64::MAX });
-            self.lose_path(m.slot, now, m.path);
-            return None;
-        };
+        let (local, remote) = (m.local, m.remote);
         let (Some(src), Some(dst)) = (self.stash.get(..m.len), out.get_mut(..m.len)) else {
             self.counters.dropped_out += 1;
             trace!(self, now, TxDrop { slot: u64::MAX });
@@ -284,10 +283,17 @@ ep_impl! {
                 dest,
             });
             let more = tx.len.div_ceil(tx.segment_size.max(1));
+            let resolved = self.path_addrs(tx.path);
             self.note_sent(j, now, tx.path);
             self.dirty_rotate(q, now);
             self.settle_core(j, now, false);
-            let same_dest = self.path_addrs(tx.path) == Some((first.local, first.remote));
+            let Some((local, remote)) = resolved else {
+                self.counters.dropped_out += 1;
+                trace!(self, now, TxDrop { slot: j as u64 });
+                self.lose_path(j, now, tx.path);
+                continue;
+            };
+            let same_dest = (local, remote) == (first.local, first.remote);
             // A run of segments of the first's size, or one shorter datagram that ends the run, may join.
             let full = tx.segment_size == seg && tx.len % seg.max(1) == 0;
             let last = tx.segment_size == tx.len && tx.len < seg;
@@ -296,8 +302,8 @@ ep_impl! {
                 if let (Some(s), Some(w)) = (self.stash.get_mut(..tx.len), out.get(first.len..first.len + tx.len)) {
                     s.copy_from_slice(w);
                     self.stash_meta = Some(StashMeta {
-                        slot: j,
-                        path: tx.path,
+                        local,
+                        remote,
                         len: tx.len,
                         segment: tx.segment_size,
                     });

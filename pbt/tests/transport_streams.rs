@@ -376,7 +376,7 @@ impl World {
         let f = &mut self.flight[i];
         let r = self.r.on_stream_frame(&mut self.rpool, f.id, f.offset, &f.data, f.fin);
         match r {
-            Ok(()) => f.stored = true,
+            Ok(_) => f.stored = true,
             Err(StreamError::Exhausted | StreamError::Fragmented) => {}
             Err(e) => panic!(
                 "the receiver refused an honest frame of {} at {} (+{}): {e:?}",

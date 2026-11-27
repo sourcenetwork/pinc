@@ -122,6 +122,8 @@ impl Port for Stub {
             first_too_short: 0,
             stateless_rejects: 0,
             stateless_refused: 0,
+            pair_evictions: 0,
+            pair_refs_unbalanced: 0,
             events_queued: 0,
             backlog_refused: 0,
             owed: 0,

@@ -30,9 +30,11 @@
 //!   is validated and direct to its slot, so [`Endpoint::session_from`] finds who sent a datagram without a walk of
 //!   the sessions. Every input that touches a session settles it, and settling brings the session's entry in line with
 //!   its path (validation, migration, a rebind); freeing a slot removes it. A slot holds at most one entry, so the
-//!   table never fills; a lookup checks each entry against the session's path, so an entry whose path the table of
-//!   address pairs evicted since is not an answer. A datagram of a session whose path has no address left is dropped,
-//!   and the connection is told the path is lost (`path_lost`).
+//!   table never fills; a lookup checks each entry against the session's path. A datagram of a session whose path
+//!   has no address left is dropped, and the connection is told the path is lost (`path_lost`).
+//! - **Address pairs.** The table of address pairs holds the pairs sessions hold (counted at each settle) and, for
+//!   the length of one call, the pair a datagram or command minted; a pair no session keeps is removed in the same
+//!   call. It holds at most `NP * K + 1` entries, so it never evicts and a forged source adds nothing that stays.
 //! - **Amplification ledger.** Every outgoing datagram passes the [`Ledger`].
 //! - **Half-open cap.** A first Initial creates state only in a datagram of at least 1200 bytes (464 for a short
 //!   one), and only while fewer than 256 sessions are unauthenticated; a resumption Hello is exempt from the count.
@@ -45,7 +47,8 @@
 //!   application events are held until the answer allows it.
 //! - **Sub-sessions.** A second protocol to a connected peer costs no round trip.
 //!
-//! Invariants: no table grows; no input panics; a datagram is counted once in [`NodeStats`]; a session is freed
+//! Invariants: no table grows (the table of address pairs holds only the pairs sessions hold, at most `NP * K + 1`,
+//! and never evicts); no input panics; a datagram is counted once in [`NodeStats`]; a session is freed
 //! exactly once and its memory returns to its slot.
 
 use core::net::SocketAddr;
@@ -142,6 +145,8 @@ pub(crate) struct Counters {
     pub(crate) stateless_rejects: u64,
     pub(crate) stateless_refused: u64,
     pub(crate) retired: u64,
+    pub(crate) pair_evictions: u64,
+    pub(crate) pair_refs_unbalanced: u64,
 }
 
 /// The endpoint; see the module docs.
@@ -149,7 +154,7 @@ pub(crate) struct Counters {
 /// Type parameters: the crypto provider `P`, the source type `S` of source-backed streams, `N` stream slots, `C` chunk
 /// ring entries per stream half, `F` packets tracked in flight and `NP` paths per connection (as for the
 /// transport's `Connection`), `K` sessions in the table, `D` entries of the connection id table and of the table of address pairs (at least ten per
-/// session), `PK` prekeys and `TK` tickets in the responder's stores and `CT` tickets this node holds as a client.
+/// session, and above `NP * K`), `PK` prekeys and `TK` tickets in the responder's stores and `CT` tickets this node holds as a client.
 #[allow(clippy::type_complexity, reason = "the table sizes are the type's parameters")]
 pub struct Endpoint<
     's,
@@ -202,7 +207,7 @@ pub struct Endpoint<
     pub(crate) next_check: u64,
     pub(crate) stores: ResponderStores<PK, TK>,
     pub(crate) tickets: ClientTickets<CT>,
-    pub(crate) paths: Table<(SocketAddr, SocketAddr), u32, D>,
+    pub(crate) paths: Table<(SocketAddr, SocketAddr), PairRef, D>,
     pub(crate) next_path_gen: u32,
     pub(crate) ifaces: [Option<SocketAddr>; MAX_IFACES],
     pub(crate) subs_seen: Table<ConnId, (), SUBS_SEEN>,
@@ -278,13 +283,23 @@ impl<T, const K: usize> core::ops::DerefMut for Slots<'_, T, K> {
     }
 }
 
-/// A datagram built for a destination other than the one being batched, kept for the next call.
+/// A datagram built for a destination other than the one being batched, kept for the next call, with the addresses
+/// it was built for: it leaves for them whatever happened to its session meanwhile.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct StashMeta {
-    pub(crate) slot: usize,
-    pub(crate) path: PathId,
+    pub(crate) local: SocketAddr,
+    pub(crate) remote: SocketAddr,
     pub(crate) len: usize,
     pub(crate) segment: usize,
+}
+
+/// One entry of the table of address pairs: the generation its path id carries and how many sessions hold the pair
+/// (`Meta::held`). `u32` holds the most sessions an endpoint has (`K` below 2^32), so the count cannot overflow
+/// without a bug, which is counted, never wrapped.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PairRef {
+    pub(crate) generation: u32,
+    pub(crate) refs: u32,
 }
 
 macro_rules! ep_impl {
@@ -460,6 +475,9 @@ ep_impl! {
         mut cfg: EndpointConfig,
         mut slots: Slots<'s, Slot<'a, P, S, N, C, F, NP>, K>,
     ) -> Self {
+        // Every session holds at most `NP` pairs, so the table never evicts a held pair when it has room for all of
+        // them and one more (the pair a datagram mints before its session keeps it).
+        const { assert!(D > NP * K, "The table of address pairs needs at least one more entry than every session's paths.") };
         cfg.conn.cid_len = CID_LEN;
         let seed = cfg.seed;
         let last = slots.len().saturating_sub(1);
@@ -651,6 +669,8 @@ ep_impl! {
             first_too_short: self.counters.first_too_short,
             stateless_rejects: self.counters.stateless_rejects,
             stateless_refused: self.counters.stateless_refused,
+            pair_evictions: self.counters.pair_evictions,
+            pair_refs_unbalanced: self.counters.pair_refs_unbalanced,
             events_queued: self.events.len(),
             events_dropped: self.events.dropped,
             events_lost: self.events.lost,
@@ -731,24 +751,71 @@ ep_impl! {
 
     /// The path id of a pair of addresses, creating it if needed.
     pub(crate) fn path_id(&mut self, local: SocketAddr, remote: SocketAddr) -> PathId {
+        self.path_id_minted(local, remote).0
+    }
+
+    /// As [`path_id`](Self::path_id), and whether the pair was made by this call. A pair nobody holds yet has no
+    /// generation of its own to spend: the counter advances when a session takes the pair (`retain_pair`), so a flood
+    /// of pairs nobody keeps never wraps it.
+    pub(crate) fn path_id_minted(&mut self, local: SocketAddr, remote: SocketAddr) -> (PathId, bool) {
         let key = (local, remote);
         if let Some(i) = self.paths.index_of(&key) {
             self.paths.touch(&key);
-            let generation = self.paths.at_index(i).map_or(0, |(_, g)| *g);
-            return path_id_at(generation, i);
+            let generation = self.paths.at_index(i).map_or(0, |(_, p)| p.generation);
+            return (path_id_at(generation, i), false);
         }
         let generation = self.next_path_gen;
-        self.next_path_gen = self.next_path_gen.wrapping_add(1).max(1);
-        self.paths.insert(key, generation);
+        // The table holds at most `NP * K + 1` pairs (checked at construction), so this never evicts; the counter
+        // shows it if it ever does.
+        if self.paths.insert(key, PairRef { generation, refs: 0 }).is_some() {
+            self.counters.pair_evictions += 1;
+        }
         let i = self.paths.index_of(&key).unwrap_or(0);
-        path_id_at(generation, i)
+        (path_id_at(generation, i), true)
+    }
+
+    /// Take the pair of `id` off the table if no session holds it: what a call that minted a pair does when it ends
+    /// without any session keeping it (a datagram that did not authenticate, a dial or command that failed).
+    pub(crate) fn drop_unheld_pair(&mut self, id: PathId) {
+        let Some(key) = self.path_addrs(id) else { return };
+        if self.paths.get(&key).is_some_and(|p| p.refs == 0) {
+            self.paths.remove(&key);
+        }
+    }
+
+    /// A session now holds the pair of `id`.
+    pub(crate) fn retain_pair(&mut self, id: PathId) {
+        let Some(key) = self.path_addrs(id) else { return };
+        let Some(p) = self.paths.get_mut(&key) else { return };
+        let Some(refs) = p.refs.checked_add(1) else {
+            self.counters.pair_refs_unbalanced += 1;
+            return;
+        };
+        if p.refs == 0 {
+            self.next_path_gen = self.next_path_gen.wrapping_add(1).max(1);
+        }
+        p.refs = refs;
+    }
+
+    /// A session no longer holds the pair of `id`; the last one to let go removes it.
+    pub(crate) fn release_pair(&mut self, id: PathId) {
+        let Some(key) = self.path_addrs(id) else { return };
+        let Some(p) = self.paths.get_mut(&key) else { return };
+        let Some(refs) = p.refs.checked_sub(1) else {
+            self.counters.pair_refs_unbalanced += 1;
+            return;
+        };
+        p.refs = refs;
+        if refs == 0 {
+            self.paths.remove(&key);
+        }
     }
 
     /// The addresses a path id names.
     pub(crate) fn path_addrs(&self, id: PathId) -> Option<(SocketAddr, SocketAddr)> {
         let i = usize::try_from(id.0 & 0xFFFF_FFFF).ok()?;
-        let (key, generation) = self.paths.at_index(i)?;
-        (u64::from(*generation) == id.0 >> 32).then_some(*key)
+        let (key, pair) = self.paths.at_index(i)?;
+        (u64::from(pair.generation) == id.0 >> 32).then_some(*key)
     }
 
     // ---- the slot table ----
@@ -894,6 +961,7 @@ ep_impl! {
         let linked = slot.m.linked;
         let step_dialer = u64::from(slot.m.client);
         slot.m.held.clear();
+        let pairs = core::mem::replace(&mut slot.m.pair_ids, [None; NP]);
         slot.m.in_use = false;
         slot.m.state = State::Closing;
         slot.m.generation = slot.m.generation.wrapping_add(1);
@@ -904,6 +972,9 @@ ep_impl! {
         self.free = idx;
         self.live = self.live.saturating_sub(1);
         self.heap.set(i, None);
+        for id in pairs.iter().flatten() {
+            self.release_pair(*id);
+        }
         if let Some(p) = peer.filter(|_| linked) {
             self.unlink_peer(&p, idx);
         }

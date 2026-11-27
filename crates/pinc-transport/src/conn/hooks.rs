@@ -292,6 +292,12 @@ conn_impl! {
         self.paths.iter().map(|(_, p)| (p.id, p.info, p.validated))
     }
 
+    /// The ids of the connection's path slots, `None` for a free slot or a path that is gone: the set the endpoint's
+    /// table of address pairs counts the session as holding.
+    pub fn path_ids(&self) -> [Option<PathId>; NP] {
+        self.paths.slots.map(|s| s.filter(|p| !p.gone).map(|p| p.id))
+    }
+
     /// Run where the parent session runs: take its paths with their validation, and its active path. A path of this
     /// connection the parent does not hold validated is no longer validated here. A sub-session born while its parent
     /// was in its handshake took the path the parent dialed first, which the handshake may have left for another.

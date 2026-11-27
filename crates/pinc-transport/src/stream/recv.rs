@@ -240,14 +240,15 @@ impl<const C: usize> Recv<C> {
         self.contig.saturating_sub(self.read_off)
     }
 
-    /// Store a STREAM frame.
+    /// Store a STREAM frame. Whether it brought anything new: a byte not held before (beyond a hole too) or the final
+    /// size for the first time. A copy of a frame already received brings nothing.
     pub(super) fn on_data(
         &mut self,
         pool: &mut BufferPool<'_>,
         offset: u64,
         data: &[u8],
         fin: bool,
-    ) -> Result<(), StreamError> {
+    ) -> Result<bool, StreamError> {
         let end = offset
             .checked_add(data.len() as u64)
             .filter(|&e| e <= MAX_OFFSET)
@@ -260,11 +261,13 @@ impl<const C: usize> Recv<C> {
         if end > self.win.limit {
             return Err(StreamError::FlowControl);
         }
+        let mut news = false;
         if self.reset.is_none() {
-            self.store(pool, offset, data, end)?;
+            news = self.store(pool, offset, data, end)?;
         }
         self.highest = self.highest.max(end);
         if fin {
+            news |= self.final_size.is_none();
             self.final_size = Some(end);
             // Asked to stop before the end arrived: the sender has nothing left to reset, so nothing else would end it.
             // Every byte arrived, so a request not yet sent is never sent and a lost one is not sent again.
@@ -273,13 +276,14 @@ impl<const C: usize> Recv<C> {
                 self.stop = Stop::Acked;
             }
         }
-        Ok(())
+        Ok(news)
     }
 
-    fn store(&mut self, pool: &mut BufferPool<'_>, offset: u64, data: &[u8], end: u64) -> Result<(), StreamError> {
+    /// Store the part of a frame at or after the read position; whether it holds a byte not held before.
+    fn store(&mut self, pool: &mut BufferPool<'_>, offset: u64, data: &[u8], end: u64) -> Result<bool, StreamError> {
         let lo = offset.max(self.read_off);
         if lo >= end {
-            return Ok(());
+            return Ok(false);
         }
         let body = usize::try_from(lo - offset)
             .ok()
@@ -290,12 +294,14 @@ impl<const C: usize> Recv<C> {
         if last - self.read_off / CHUNK_SIZE as u64 >= C as u64 {
             return Err(StreamError::FlowControl);
         }
+        let mut held = 0;
         if lo < self.highest {
             for ov in self.ranges.overlaps(pool, lo..end) {
                 let part = body.get((ov.start - lo) as usize..(ov.end - lo) as usize);
                 if part.is_none_or(|p| !self.ring.matches(pool, ov.start, p)) {
                     return Err(StreamError::Conflict);
                 }
+                held += ov.end - ov.start;
             }
         }
         if self.ring.missing(first, last) > pool.available_chunks() {
@@ -304,7 +310,7 @@ impl<const C: usize> Recv<C> {
         self.ranges.insert(pool, lo..end).map_err(|_| StreamError::Fragmented)?;
         self.ring.write(pool, lo, body)?;
         self.contig = self.ranges.first().filter(|r| r.start == 0).map_or(0, |r| r.end);
-        Ok(())
+        Ok(held < end - lo)
     }
 
     /// The contiguous readable bytes at the read position, up to the end of their chunk.
