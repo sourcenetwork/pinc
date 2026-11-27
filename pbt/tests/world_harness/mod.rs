@@ -238,8 +238,9 @@ struct Ledger {
     delivered: BTreeMap<(usize, u32), u32>,
     /// (from, to) of the final messages delivered whole and intact.
     final_ok: BTreeSet<(usize, usize)>,
-    /// (from, seq, receiver) of broadcast messages to their deliveries.
-    bcast: BTreeMap<(usize, u32, usize), u32>,
+    /// Deliveries of each broadcast id per receiving node and life: a node restarted without its state may deliver an
+    /// id again.
+    bcast: BTreeMap<(usize, u32, usize, u32), u32>,
     bad: Vec<(&'static str, String)>,
 }
 
@@ -310,6 +311,8 @@ struct App {
     next: usize,
     led: Rc<RefCell<Ledger>>,
     seq: u32,
+    /// How many times the node booted: the app outlives its node's restarts.
+    life: u32,
     open: BTreeMap<usize, SessionId>,
     ours: BTreeSet<SessionId>,
     waiting: BTreeMap<usize, Vec<Pending>>,
@@ -330,6 +333,7 @@ impl App {
             next: 0,
             led,
             seq: 0,
+            life: 0,
             open: BTreeMap::new(),
             ours: BTreeSet::new(),
             waiting: BTreeMap::new(),
@@ -510,6 +514,7 @@ impl Layers for App {
     }
 
     fn boot(&mut self, _now: u64, host: &mut dyn Host) {
+        self.life += 1;
         if self.idx < self.apps {
             let _ = host.subscribe(TOPIC);
         }
@@ -552,10 +557,13 @@ impl Layers for App {
                 if origin != Some(from) {
                     led.bad("a broadcast message names another publisher", format!("{origin:?} for {from}"));
                 }
-                let c = led.bcast.entry((from, seq, self.idx)).or_insert(0);
+                let c = led.bcast.entry((from, seq, self.idx, self.life)).or_insert(0);
                 *c += 1;
                 if *c > 1 {
-                    led.bad("a broadcast message was delivered twice", format!("from {from} seq {seq} at {}", self.idx));
+                    led.bad(
+                        "a broadcast message was delivered twice in one life",
+                        format!("from {from} seq {seq} at {}", self.idx),
+                    );
                 }
             },
             _ => {},

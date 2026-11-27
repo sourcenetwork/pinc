@@ -15,7 +15,7 @@ use pinc_sim::suite::rec::Rec;
 use pinc_sim::suite::world::model::{Addr, IfaceSpec, Intent};
 use pinc_sim::{LinkConfig, Loss, NatConfig, NatKind, Node, NodeId, PortPolicy, Sim, SimConfig, StreamKind};
 use pinc_transport::stream::StreamId;
-use world_harness::{AppNode, AppOp, Shape, Spec, Step};
+use world_harness::{AppNode, AppOp, Restart, Shape, Spec, Step};
 
 mod world_harness;
 
@@ -310,4 +310,33 @@ fn on_big_stack(f: impl FnOnce() + Send + 'static) {
 #[test]
 fn a_session_with_no_path_ends_and_the_pair_reaches_each_other() {
     on_big_stack(|| world_harness::run_and_check(&spec_stuck(), 1));
+}
+
+/// A node restarted without its state may deliver a broadcast again: once per life, never twice in one.
+///
+/// Expected: "A broadcast message, delivered once" (pinc-node `event.rs`), "no id delivered twice in one life"
+/// (`broadcast_world.rs`). A node that lost its state cannot know it delivered the id before.
+///
+/// Actual: the harness's ledger counted deliveries over the whole run, so the second life of the restarted hub
+/// (`EPHYRA_REPLAY=11:148` of `world`: app 0 the only hub, restarted at 10 s with no state) failed it for a delivery
+/// the node could not know was a repeat. The ledger keys deliveries by life.
+///
+/// Who: a hub or any node that restarts without its persisted state, a node deployed from the relay binary included.
+#[test]
+fn a_hub_restarted_without_state_may_deliver_a_broadcast_again_once_per_life() {
+    let app = |public, nat| AppNode { public, nat };
+    // The shrunk case of `EPHYRA_REPLAY=11:148`, with a dedicated relay-role node added: app 0 is the only hub and
+    // restarts at 10 s with no state; app 1 publishes at 9 s.
+    let spec = Spec {
+        shape: Shape::Ordinary,
+        apps: vec![app(false, 0), app(false, 0)],
+        dedicated: 1,
+        loss_pm: 1,
+        reorder: true,
+        partition: None,
+        restart: Some(Restart { at_s: 10, down_s: 1, hub: 0, persist: false }),
+        script: vec![Step { t_ms: 9_000, node: 1, op: AppOp::Publish(10) }],
+        seed: 0,
+    };
+    on_big_stack(move || world_harness::run_and_check(&spec, 1));
 }
