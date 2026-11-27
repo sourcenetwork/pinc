@@ -20,7 +20,11 @@
 (* carries no nonce either: during a renewal it changes nothing, before    *)
 (* any mapping it fails the round, and its epoch is never noted (fix P1).  *)
 (* Every call that takes the clock ends a lease past its end first        *)
-(* (PortMap::expire, fix P2). The gateway grants or                        *)
+(* (PortMap::expire, fix P2). A grant whose lifetime is shorter than the   *)
+(* round trip is over when it arrives: it is not a mapping, it ends the    *)
+(* lease it renews (the gateway's mapping now runs for that lifetime       *)
+(* only), and the request fails (PortMap::grant, fix P4). The gateway      *)
+(* grants, grants a lifetime shorter than the round trip, or               *)
 (* refuses each request, forgets a mapping when its own clock passes the   *)
 (* mapping's end, restarts (losing every mapping and starting its epoch    *)
 (* again from 0) and announces its epoch; a host on the link sends         *)
@@ -31,7 +35,12 @@
 (* arrived, so the client's end is never later than the gateway's. A       *)
 (* gateway that restarts loses the mapping while the client still          *)
 (* publishes it: until the client hears from the restarted gateway it      *)
-(* cannot know, and that window cannot be closed.                          *)
+(* cannot know, and that window cannot be closed. Likewise a gateway that  *)
+(* answers a request with a lifetime shorter than the round trip shortens  *)
+(* the mapping, and the client still publishes it until it takes that      *)
+(* answer, or when the answer is lost, or when it takes a grant the        *)
+(* gateway gave before that answer (every request of a client carries the  *)
+(* same nonce, so an answer to an earlier try or round is taken as well).  *)
 (*                                                                         *)
 (* What must never happen. A published mapping (PortMap::mapped is Some,   *)
 (* what the node puts in its signed record) that the gateway no longer     *)
@@ -71,7 +80,11 @@
 (* PortMapLease_headerdrop.cfg (HeaderDrops = TRUE: the code before fix P1, *)
 (* which noted a header-form error's epoch and failed the renewal) and     *)
 (* PortMapLease_noexpirefirst.cfg (ExpireFirst = FALSE: the code before    *)
-(* fix P2, where only handle_timeout ended a lease);                       *)
+(* fix P2, where only handle_timeout ended a lease) and                    *)
+(* PortMapLease_overkeeps.cfg (OverEnds = FALSE: a renewal granted less    *)
+(* than its round trip taken as a failed renewal that keeps the lease held *)
+(* before; the rate of the requests after such a grant, one round per      *)
+(* failure wait, is the crate's test, not this model's);                   *)
 (* each says in its own comment what goes wrong.                           *)
 (*                                                                         *)
 (* Lean counterpart: proofs/lean/Pinc/PortMapLease.lean (renew_at before   *)
@@ -92,10 +105,11 @@ EXTENDS Integers, TLC
 \* KeepFloor: whether a start kept from before waits for the floor a later announce set (TRUE in the code).
 \* HeaderDrops: whether a header-form MAP error is taken as the answer to the request in flight, its epoch noted (FALSE
 \* in the code since fix P1); ExpireFirst: whether every call that takes the clock ends a lease past its end before
-\* anything else (TRUE in the code since fix P2).
+\* anything else (TRUE in the code since fix P2); OverEnds: whether a grant already over when it arrives ends the lease
+\* it renews (TRUE in the code since fix P4).
 \* The wait of 0 to 5 s between an announce and the renewal it brings (announce_delay) is below a tick: 0 here.
 CONSTANTS L, Sec, MaxT, MaxRestarts, Tries, Renew, Epoch, Expiry, StopDrop, RefusalDrops, AnnounceDrops, Floor, FloorOn,
-          KeepFloor, Spoofs, HeaderDrops, ExpireFirst
+          KeepFloor, Spoofs, HeaderDrops, ExpireFirst, OverEnds
 
 \* now: the clock, in ticks, shared by client and gateway (only their readings of it differ).
 \* boot: the tick the gateway last started at; restarts: how often it restarted.
@@ -119,9 +133,12 @@ CONSTANTS L, Sec, MaxT, MaxRestarts, Tries, Renew, Epoch, Expiry, StopDrop, Refu
 \* fast: two such starts were less than Floor apart (a ghost).
 \* dropBad: an announce took a mapping the gateway held out of the record (a ghost).
 \* hdrBad: a header-form error took a mapping the gateway held out of the record (a ghost).
+\* overtaken: the lease the client holds was cut short by a short grant of the gateway the client has not taken, or was
+\* taken from a grant the gateway gave before a short one (a ghost); staleGrants: the grant answers in flight that a
+\* later short grant overtook (a ghost).
 VARIABLES now, boot, restarts, gmap, gexp, req, resp, cstep, tries, renewing, pub, started, renewAt, cexp,
           prevAt, prevSrv, heardBoot, grantBoot, renewTried, lapseUntried, floorEnd, annNext, lastBrought, fast,
-          dropBad, hdrBad
+          dropBad, hdrBad, overtaken, staleGrants
 
 \* the gateway's part of the state
 gw == <<boot, restarts, gmap, gexp>>
@@ -132,7 +149,7 @@ gh == <<heardBoot, grantBoot, renewTried, lapseUntried>>
 \* what the datagrams without a nonce move: the floor, the announce kept for after a renewal, and their ghosts
 an == <<floorEnd, annNext, lastBrought, fast, dropBad, hdrBad>>
 \* every variable
-vars == <<now, gw, req, resp, cl, gh, an>>
+vars == <<now, gw, req, resp, cl, gh, an, overtaken, staleGrants>>
 
 \* The larger and the smaller of two ticks.
 Max(a, b) == IF a >= b THEN a ELSE b
@@ -182,6 +199,7 @@ Init == /\ now = 0 /\ boot = 0 /\ restarts = 0 /\ gmap = FALSE /\ gexp = 0
         /\ heardBoot = 0 /\ grantBoot = 0 /\ renewTried = FALSE /\ lapseUntried = FALSE
         \* no announce yet
         /\ floorEnd = 0 /\ annNext = -1 /\ lastBrought = -1 /\ fast = FALSE /\ dropBad = FALSE /\ hdrBad = FALSE
+        /\ overtaken = FALSE /\ staleGrants = {}
 
 (* ------------------------------ time ------------------------------ *)
 \* The clock moves on one tick, once nothing due is left undone; what is in flight is lost (the delivery bound).
@@ -190,8 +208,8 @@ Tick == /\ now < MaxT
         /\ ~ExpiryDue /\ ~RenewDue /\ cstep /= "ask"
         /\ now' = now + 1
         \* a datagram not delivered within its tick never is
-        /\ req' = {} /\ resp' = {}
-        /\ UNCHANGED <<gw, cl, gh, an>>
+        /\ req' = {} /\ resp' = {} /\ staleGrants' = {}
+        /\ UNCHANGED <<gw, cl, gh, an, overtaken>>
 
 (* ------------------------------ the client ------------------------------ *)
 \* handle_timeout, first branch: the lease reached its end on the client's clock: drop the mapping and ask again.
@@ -203,7 +221,8 @@ ClientExpire ==
     /\ NewRound
     \* the ghost notes a lease that ran out with no renewal request sent
     /\ lapseUntried' = (lapseUntried \/ ~renewTried)
-    /\ UNCHANGED <<now, gw, req, resp, renewAt, cexp, prevAt, prevSrv, heardBoot, grantBoot, renewTried, an>>
+    /\ UNCHANGED <<now, gw, req, resp, renewAt, cexp, prevAt, prevSrv, heardBoot, grantBoot, renewTried, an,
+                   overtaken, staleGrants>>
 
 \* handle_timeout, renew branch (PortMap::renew): half way, ask the gateway again with the same protocol.
 ClientRenew ==
@@ -211,7 +230,7 @@ ClientRenew ==
     /\ renewing' = TRUE
     \* a new round: its grant's lease starts now
     /\ NewRound
-    /\ UNCHANGED <<now, gw, req, resp, pub, renewAt, cexp, prevAt, prevSrv, gh, an>>
+    /\ UNCHANGED <<now, gw, req, resp, pub, renewAt, cexp, prevAt, prevSrv, gh, an, overtaken, staleGrants>>
 
 \* poll_datagram: a try of the round's request leaves (the timer of the tries is not modelled: any time).
 ClientSend ==
@@ -221,7 +240,7 @@ ClientSend ==
     \* the ghost notes that a renewal was asked for
     /\ renewTried' = (renewTried \/ renewing)
     /\ UNCHANGED <<now, gw, resp, cstep, renewing, pub, started, renewAt, cexp, prevAt, prevSrv,
-                   heardBoot, grantBoot, lapseUntried, an>>
+                   heardBoot, grantBoot, lapseUntried, an, overtaken, staleGrants>>
 
 \* PortMap::fail, as the client state changes it: a failed renewal of a held mapping goes back to held and renews
 \* again half way to the end; any other failure goes idle (the fallbacks to NAT-PMP and UPnP and the RETRY wait,
@@ -241,14 +260,14 @@ ClientGiveUp ==
     /\ Fresh
     /\ cstep = "ask" /\ tries = Tries
     /\ FailVars
-    /\ UNCHANGED <<now, gw, req, resp, cexp, prevAt, prevSrv, gh, an>>
+    /\ UNCHANGED <<now, gw, req, resp, cexp, prevAt, prevSrv, gh, an, overtaken, staleGrants>>
 
 \* handle_timeout in Step::Idle once RETRY has passed (any time here): PortMap::first, a new PCP round.
 ClientRetry ==
     /\ Fresh
     /\ cstep = "idle"
     /\ NewRound
-    /\ UNCHANGED <<now, gw, req, resp, renewing, pub, renewAt, cexp, prevAt, prevSrv, gh, an>>
+    /\ UNCHANGED <<now, gw, req, resp, renewing, pub, renewAt, cexp, prevAt, prevSrv, gh, an, overtaken, staleGrants>>
 
 \* PortMap::bring_forward(at) on a lease whose renewal is at `r`: the renewal moves to the start (at the earliest
 \* now) if that is sooner, and the next announce-brought renewal starts no sooner than Floor after it. The ghosts
@@ -264,23 +283,27 @@ BringForward(at, r) ==
 
 \* handle_datagram of a MAP answer (pcp_answer): taken only in Step::Pcp; it notes the epoch, then a grant is
 \* held (PortMap::grant: renewal at started + L/2, end at started + L, brought forward if an announce came while
-\* the request was in flight), and a refusal fails the round.
+\* the request was in flight), a grant already over ("short") ends the lease and fails the round, and a refusal fails
+\* the round.
 ClientMapAnswer ==
     /\ cstep = "ask" /\ Fresh
     /\ \E m \in resp :
-        /\ m.k \in {"grant", "refuse"}
+        /\ m.k \in {"grant", "short", "refuse"}
         \* the datagram is consumed
         /\ resp' = resp \ {m}
         \* note_epoch: the client now remembers this epoch
         /\ prevAt' = now /\ prevSrv' = m.e
-        \* the ghost: the last gateway incarnation the client heard
+        \* the ghosts: the last gateway incarnation the client heard; a short grant taken is heard, and a grant
+        \* taken is overtaken if a short one came after it
         /\ heardBoot' = m.b
-        /\ IF m.k = "grant" /\ ExpireFirst /\ now >= started + L
-           \* a grant whose lease already ended on the client's clock (the round's first request left L or more
-           \* ago): grant ends it at once (PortMap::expire) and asks again; it was never published
-           THEN /\ pub' = FALSE /\ renewing' = FALSE /\ NewRound /\ cexp' = started + L
-                /\ grantBoot' = m.b /\ renewTried' = FALSE
-                /\ UNCHANGED <<renewAt, lapseUntried, an>>
+        /\ overtaken' = CASE m.k = "short" -> FALSE [] m.k = "grant" -> m \in staleGrants [] OTHER -> overtaken
+        /\ UNCHANGED staleGrants
+        /\ IF m.k = "short" /\ OverEnds
+           \* a grant whose lifetime ends at or before now on the client's clock (it started when the round's first
+           \* request left): grant drops the lease held, if any, and fails (held None: PCP fails over, which holds
+           \* nothing here); the announce kept for after the answer stays kept, as in the code
+           THEN /\ pub' = FALSE /\ renewing' = FALSE /\ cstep' = "idle" /\ tries' = 0
+                /\ UNCHANGED <<started, renewAt, cexp, grantBoot, renewTried, lapseUntried, an>>
            ELSE IF m.k = "grant"
            \* a grant: the lease that started when the round's first request left
            THEN /\ pub' = TRUE /\ cstep' = "held" /\ tries' = 0 /\ renewing' = FALSE
@@ -294,7 +317,8 @@ ClientMapAnswer ==
                 /\ grantBoot' = m.b /\ renewTried' = FALSE
                 /\ UNCHANGED <<started, lapseUntried, dropBad, hdrBad>>
            \* a refusal: with RefusalDrops a refusal that shows a restart drops the mapping (note_epoch) and fail
-           \* asks again; without it fail keeps a mapping it was renewing (the code before the fix)
+           \* asks again; without it fail keeps a mapping it was renewing (the code before the fix); without OverEnds
+           \* a grant already over is taken as a refusal
            ELSE /\ IF RefusalDrops /\ Lost(m.e)
                    THEN /\ pub' = FALSE /\ renewing' = FALSE /\ NewRound /\ UNCHANGED renewAt
                    ELSE FailVars
@@ -329,7 +353,7 @@ ClientAnnounce ==
                                 THEN BringForward(start, renewAt) /\ UNCHANGED annNext
                                 ELSE UNCHANGED <<renewAt, floorEnd, annNext, lastBrought, fast>>
                    /\ UNCHANGED <<pub, renewing, cstep, tries, started, prevAt, prevSrv, heardBoot, dropBad>>
-    /\ UNCHANGED <<now, gw, req, cexp, grantBoot, renewTried, lapseUntried, hdrBad>>
+    /\ UNCHANGED <<now, gw, req, cexp, grantBoot, renewTried, lapseUntried, hdrBad, overtaken, staleGrants>>
 
 \* handle_datagram of a header-form MAP error (pcp_answer, Header with OP_MAP): it carries no nonce, so nothing ties
 \* it to a request and a host on the link can send one (fix P1). In a step but Step::Pcp it answers nothing. During a
@@ -352,7 +376,7 @@ ClientHeader ==
                         ELSE FailVars /\ UNCHANGED hdrBad
                 ELSE FailVars /\ UNCHANGED <<prevAt, prevSrv, heardBoot, hdrBad>>
     /\ UNCHANGED <<now, gw, req, cexp, grantBoot, renewTried, lapseUntried, floorEnd, annNext, lastBrought, fast,
-                   dropBad>>
+                   dropBad, overtaken, staleGrants>>
 
 \* PortMap::stop: the held mapping is dropped at once (unless StopDrop is off) and a release is sent for it, or, with
 \* none held, for the request of a round in flight, which may have made one (PortMap::in_flight, Step::Pcp).
@@ -362,18 +386,23 @@ ClientStop ==
     /\ pub' = (pub /\ ~StopDrop)
     \* the release (lifetime 0) goes out for a mapping that was held or a round that was asking
     /\ req' = IF pub \/ cstep = "ask" THEN req \cup {"release"} ELSE req
-    /\ UNCHANGED <<now, gw, resp, started, renewAt, cexp, prevAt, prevSrv, gh, an>>
+    /\ UNCHANGED <<now, gw, resp, started, renewAt, cexp, prevAt, prevSrv, gh, an, overtaken, staleGrants>>
 
 (* ------------------------------ the gateway ------------------------------ *)
-\* A MAP request arrives: the gateway grants it (its lease ends L ticks after the arrival) or refuses it, and
-\* answers with its epoch.
+\* A MAP request arrives: the gateway grants it (its lease ends L ticks after the arrival), grants a lifetime shorter
+\* than the round trip ("short": its lease ends in this tick, before the answer reaches the client), or refuses it,
+\* and answers with its epoch.
 GwMap ==
     /\ "map" \in req
     /\ req' = req \ {"map"}
-    /\ \E k \in {"grant", "refuse"} :
-        \* a grant (re)starts the gateway's lease now; a refusal leaves what it holds
-        /\ gmap' = (gmap \/ k = "grant")
-        /\ gexp' = IF k = "grant" THEN now + L ELSE gexp
+    /\ \E k \in {"grant", "short", "refuse"} :
+        \* a grant (re)starts the gateway's lease now, a short one for this tick only; a refusal leaves what it holds
+        /\ gmap' = (gmap \/ k /= "refuse")
+        /\ gexp' = CASE k = "grant" -> now + L [] k = "short" -> now [] OTHER -> gexp
+        \* the ghosts: a long grant makes the gateway hold the mapping again; a short one cuts the lease held short
+        \* and overtakes the grant answers still in flight
+        /\ overtaken' = CASE k = "grant" -> FALSE [] k = "short" -> (overtaken \/ pub) [] OTHER -> overtaken
+        /\ staleGrants' = IF k = "short" THEN staleGrants \cup {m \in resp : m.k = "grant"} ELSE staleGrants
         /\ resp' = resp \cup {[k |-> k, e |-> EpochNow, b |-> boot]}
     /\ UNCHANGED <<now, boot, restarts, cl, gh, an>>
 
@@ -381,13 +410,13 @@ GwMap ==
 GwRelease ==
     /\ "release" \in req
     /\ req' = req \ {"release"} /\ gmap' = FALSE
-    /\ UNCHANGED <<now, boot, restarts, gexp, resp, cl, gh, an>>
+    /\ UNCHANGED <<now, boot, restarts, gexp, resp, cl, gh, an, overtaken, staleGrants>>
 
 \* The gateway sends an ANNOUNCE with its epoch (after a restart, or at any time).
 GwAnnounce ==
     /\ ~\E m \in resp : m.k = "announce"
     /\ resp' = resp \cup {[k |-> "announce", e |-> EpochNow, b |-> boot]}
-    /\ UNCHANGED <<now, gw, req, cl, gh, an>>
+    /\ UNCHANGED <<now, gw, req, cl, gh, an, overtaken, staleGrants>>
 
 \* A host on the link sends an announce or a header-form MAP error of its own, with an epoch that reads as a gateway
 \* just started.
@@ -396,7 +425,7 @@ Spoof ==
     /\ \E k \in {"announce", "header"} :
         /\ ~\E m \in resp : m.k = k
         /\ resp' = resp \cup {[k |-> k, e |-> 0, b |-> boot]}
-    /\ UNCHANGED <<now, gw, req, cl, gh, an>>
+    /\ UNCHANGED <<now, gw, req, cl, gh, an, overtaken, staleGrants>>
 
 \* The gateway restarts: every mapping is lost and its epoch starts again from 0; it had run at least a tick.
 GwRestart ==
@@ -404,15 +433,16 @@ GwRestart ==
     /\ boot' = now /\ restarts' = restarts + 1 /\ gmap' = FALSE
     \* a restart takes longer than a datagram's trip: what was in flight is lost
     /\ req' = {} /\ resp' = {}
+    /\ overtaken' = FALSE /\ staleGrants' = {}
     /\ UNCHANGED <<now, gexp, cl, gh, an>>
 
 (* ------------------------------ the network ------------------------------ *)
 \* The network loses a request.
 LoseReq == /\ \E r \in req : req' = req \ {r}
-           /\ UNCHANGED <<now, gw, resp, cl, gh, an>>
+           /\ UNCHANGED <<now, gw, resp, cl, gh, an, overtaken, staleGrants>>
 \* The network loses an answer.
 LoseResp == /\ \E m \in resp : resp' = resp \ {m}
-            /\ UNCHANGED <<now, gw, req, cl, gh, an>>
+            /\ UNCHANGED <<now, gw, req, cl, gh, an, overtaken, staleGrants>>
 
 \* Every step the system can take.
 Next == \/ Tick \/ ClientExpire \/ ClientRenew \/ ClientSend \/ ClientGiveUp \/ ClientRetry \/ ClientMapAnswer
@@ -424,8 +454,9 @@ Spec == Init /\ [][Next]_vars
 
 (* ------------------------------ the checked properties ------------------------------ *)
 \* A published mapping is held by the gateway, unless the gateway restarted since it granted it and the client has
-\* heard nothing from the restarted gateway (the window no client can close).
-HeldByGateway == pub => (GwHolds \/ (grantBoot < boot /\ heardBoot < boot))
+\* heard nothing from the restarted gateway, or a short grant the client did not take cut it short (the windows no
+\* client can close).
+HeldByGateway == pub => (GwHolds \/ (grantBoot < boot /\ heardBoot < boot) \/ overtaken)
 
 \* After stop nothing is published.
 StoppedUnpublished == cstep = "stopped" => ~pub

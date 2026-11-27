@@ -16,7 +16,12 @@
 //!   and never panic"; `upnp`: the control URL is "a path or an `http://` URL of the same form and of the
 //!   description's own host", a description host is never "a loopback, unspecified, multicast, broadcast or
 //!   link-local host"; `lease`: "nothing overflows (every sum saturates)".
-#![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::cast_possible_truncation, missing_docs)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::cast_possible_truncation,
+    missing_docs
+)]
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
@@ -77,7 +82,10 @@ enum Answer {
     /// The right answer cut short.
     Cut(#[ephyra(gen = gens::int(0usize..=400))] usize),
     /// The right answer with one byte changed.
-    Flip(#[ephyra(gen = gens::int(0usize..=400))] usize, #[ephyra(gen = gens::int(1u8..=255))] u8),
+    Flip(
+        #[ephyra(gen = gens::int(0usize..=400))] usize,
+        #[ephyra(gen = gens::int(1u8..=255))] u8,
+    ),
     /// Bytes.
     Garbage(#[ephyra(gen = bytes(80))] Vec<u8>),
     /// The connection failed.
@@ -177,7 +185,10 @@ fn waits() -> impl Gen<Value = u64> {
 
 fn lifetimes() -> impl Gen<Value = u32> {
     gens::frequency(vec![
-        (4, gens::pick_from(vec![0u32, 1, 2, 30, 120, 3600, 7200, 86_400, 86_401, u32::MAX]).boxed()),
+        (
+            4,
+            gens::pick_from(vec![0u32, 1, 2, 30, 120, 3600, 7200, 86_400, 86_401, u32::MAX]).boxed(),
+        ),
         (1, gens::int(0u32..=u32::MAX).boxed()),
     ])
 }
@@ -222,9 +233,10 @@ struct Host {
     last_left: u64,
     /// When the first request left that led to the mapping held (the earliest the lease can have started).
     lease_first: u64,
-    /// The shortest and the longest lifetime, in seconds, a grant handed to the client could carry.
-    secs_lo: u64,
-    secs_hi: u64,
+    /// The lifetime, in seconds, of the grant handed to the client by the current op (cleared after every op).
+    pending_secs: Option<u64>,
+    /// The lifetime, in seconds, of the grant the client took for the lease it holds.
+    lease_secs: u64,
     boot: u64,
     stopped: bool,
     released: bool,
@@ -253,8 +265,8 @@ impl Host {
             round_first: None,
             last_left: 0,
             lease_first: 0,
-            secs_lo: u64::MAX,
-            secs_hi: 0,
+            pending_secs: None,
+            lease_secs: 0,
             boot: s.t0.saturating_sub(5000 * SEC),
             stopped: false,
             released: false,
@@ -271,12 +283,13 @@ impl Host {
         }
     }
 
-    /// A grant of `lifetime` seconds was handed over now: the lease it can make ends no later than this.
-    fn granted(&mut self, lifetime: u32) {
+    /// A grant of `lifetime` seconds was handed over now: the lease it can make ends no later than this. `takeable`
+    /// is whether the client can take it as a lease (a success with a port; the step and the nonce are checked by the
+    /// client's drop counters after the op).
+    fn granted(&mut self, lifetime: u32, takeable: bool) {
         let secs = lifetime.min(self.cfg.lifetime.max(1)).min(MAX_LIFETIME);
         self.bound = self.bound.max(self.now.saturating_add(u64::from(secs) * SEC));
-        self.secs_lo = self.secs_lo.min(u64::from(secs));
-        self.secs_hi = self.secs_hi.max(u64::from(secs));
+        self.pending_secs = (takeable && secs > 0).then_some(u64::from(secs));
     }
 
     /// A map request left the client now.
@@ -300,11 +313,17 @@ impl Host {
         let body: String = if req.starts_with(b"GET ") {
             "<root><device><serviceList><service><serviceType>urn:schemas-upnp-org:service:WANIPConnection:1</serviceType><controlURL>/ctl/IPConn</controlURL></service></serviceList></device></root>".into()
         } else if contains(req, b"GetExternalIPAddress") {
-            format!("<s:Envelope><s:Body><u:GetExternalIPAddressResponse><NewExternalIPAddress>{ext}</NewExternalIPAddress></u:GetExternalIPAddressResponse></s:Body></s:Envelope>")
+            format!(
+                "<s:Envelope><s:Body><u:GetExternalIPAddressResponse><NewExternalIPAddress>{ext}</NewExternalIPAddress></u:GetExternalIPAddressResponse></s:Body></s:Envelope>"
+            )
         } else {
             "<s:Envelope><s:Body></s:Body></s:Envelope>".into()
         };
-        format!("HTTP/1.1 200 OK\r\nContent-Type: text/xml\r\nContent-Length: {}\r\n\r\n{body}", body.len()).into_bytes()
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/xml\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        )
+        .into_bytes()
     }
 
     /// Everything the client wants sent now, checked: datagrams go to the gateway's port or the SSDP group, HTTP only
@@ -319,17 +338,24 @@ impl Host {
             let d = &buf[..len];
             assert!(to == self.gw() || to == SSDP, "a datagram to {to}");
             let map_request = pcp::decode_request(d).map(|r| r.lifetime > 0).unwrap_or(false)
-                || natpmp::decode_request(d).is_ok_and(|r| matches!(r, natpmp::Request::Map { lifetime, .. } if lifetime > 0));
+                || natpmp::decode_request(d)
+                    .is_ok_and(|r| matches!(r, natpmp::Request::Map { lifetime, .. } if lifetime > 0));
             if to == self.gw() && map_request {
                 self.left();
             }
             if self.stopped {
-                assert!(!self.released || !self.pm.stopped(), "a datagram after the release went out");
+                assert!(
+                    !self.released || !self.pm.stopped(),
+                    "a datagram after the release went out"
+                );
                 let release = pcp::decode_request(d).map(|r| r.lifetime == 0).unwrap_or(false)
                     || natpmp::decode_request(d)
                         .map(|r| matches!(r, natpmp::Request::Map { lifetime: 0, .. }))
                         .unwrap_or(false);
-                assert!(release, "after stop the client sent a datagram that is not a release: {d:?}");
+                assert!(
+                    release,
+                    "after stop the client sent a datagram that is not a release: {d:?}"
+                );
             }
         }
         if self.stopped && self.pm.stopped() {
@@ -338,13 +364,19 @@ impl Host {
         let mut req = [0u8; upnp::MAX_REQUEST];
         if let Some((to, len)) = self.pm.poll_http(&mut req) {
             assert!(len <= upnp::MAX_REQUEST);
-            assert!(self.ssdp_from.contains(&to.ip()), "HTTP to {to}, a host that did not answer the search");
+            assert!(
+                self.ssdp_from.contains(&to.ip()),
+                "HTTP to {to}, a host that did not answer the search"
+            );
             let r = req[..len].to_vec();
             if contains(&r, b"AddPortMapping") {
                 self.left();
             }
             if self.stopped {
-                assert!(contains(&r, b"DeletePortMapping"), "after stop the client sent HTTP that is not the delete");
+                assert!(
+                    contains(&r, b"DeletePortMapping"),
+                    "after stop the client sent HTTP that is not the delete"
+                );
             }
             self.last_http = r;
         }
@@ -352,6 +384,7 @@ impl Host {
 
     fn step(&mut self, op: &Op) {
         let before = (self.pm.mapped(), self.pm.protocol());
+        let dropped = self.pm.stats();
         let mut nonce_less = false;
         let mut timer = false;
         match op {
@@ -391,7 +424,7 @@ impl Host {
                 let mut b = [0u8; 60];
                 let n = pcp::encode_response(&r, &mut b).unwrap();
                 if *our_nonce {
-                    self.granted(*lifetime);
+                    self.granted(*lifetime, *port != 0);
                 } else {
                     nonce_less = true;
                 }
@@ -464,7 +497,7 @@ impl Host {
                     external_port: *port,
                     lifetime: *lifetime,
                 };
-                self.granted(*lifetime);
+                self.granted(*lifetime, *result == 0 && *port != 0);
                 self.nat(&r);
                 nonce_less = true;
             }
@@ -518,7 +551,7 @@ impl Host {
                     .and_then(upnp::soap_result)
                     .is_some_and(|r| matches!(r, upnp::SoapResult::Ok(_)));
                 if self.pm.awaiting_http() && ok && contains(&self.last_http, b"AddPortMapping") {
-                    self.granted(self.cfg.lifetime);
+                    self.granted(self.cfg.lifetime, true);
                 }
                 self.pm.handle_http(self.now, resp.as_deref());
             }
@@ -541,39 +574,52 @@ impl Host {
         if matches!(op, Op::Stop | Op::Restart) {
             self.round_first = None;
         }
-        let took = matches!(op, Op::PcpGrant { our_nonce: true, .. } | Op::NatMap { .. } | Op::Http(_));
-        if took && self.pm.mapped().is_some() {
-            // the earliest request the lease can have come from: kept across a renewal, as the client keeps it
-            let first = self.round_first.take();
-            self.lease_first = match (before.0, first) {
-                (Some(_), Some(f)) => self.lease_first.min(f),
-                (None, Some(f)) => f,
-                _ => self.lease_first,
-            };
+        let took = matches!(
+            op,
+            Op::PcpGrant { our_nonce: true, .. } | Op::NatMap { .. } | Op::Http(_)
+        );
+        // only a grant the client took makes a lease: one it dropped (wrong step, nonce or address) is counted
+        let taken = self.pending_secs.filter(|_| self.pm.stats() == dropped);
+        if let Some(secs) = taken.filter(|_| took && self.pm.mapped().is_some()) {
+            // the earliest request the lease can have come from; no request seen leaving means the client queued it
+            // in this very call (a lease that ended at `now` starts the next round), so it left now
+            self.lease_first = self.round_first.take().unwrap_or(now);
+            self.last_left = self.last_left.max(self.lease_first);
+            self.lease_secs = secs;
         }
         if let Some(ext) = self.pm.mapped() {
             assert!(!self.stopped, "a stopped client reports a mapping");
-            // a lease is no longer than the longest grant, counted from the last request that left
+            // a lease is no longer than the grant that made it, counted from the last request that left (the lease
+            // starts at one of the requests of its round, never after the last)
             assert!(
-                now < self.last_left.saturating_add(self.secs_hi.saturating_mul(SEC)),
+                now < self.last_left.saturating_add(self.lease_secs.saturating_mul(SEC)),
                 "at {now} the client reports {ext}, whose lease runs past the last request ({}) plus {} s",
                 self.last_left,
-                self.secs_hi
+                self.lease_secs
             );
             if timer {
-                assert!(now < self.bound, "after the timer at {now} the client reports {ext}, whose lease ends by {}", self.bound);
+                assert!(
+                    now < self.bound,
+                    "after the timer at {now} the client reports {ext}, whose lease ends by {}",
+                    self.bound
+                );
             } else {
-                assert!(now < self.bound, "at {now} the client reports {ext}, whose lease ended by {} on its clock", self.bound);
+                assert!(
+                    now < self.bound,
+                    "at {now} the client reports {ext}, whose lease ended by {} on its clock",
+                    self.bound
+                );
             }
         }
         if nonce_less && before.1 == Some(Proto::Pcp) {
             let ended = self.pm.mapped().is_none()
-                && now >= self.lease_first.saturating_add(self.secs_lo.saturating_mul(SEC));
+                && now >= self.lease_first.saturating_add(self.lease_secs.saturating_mul(SEC));
             assert!(
                 ended || self.pm.mapped() == before.0,
                 "a datagram without this client's nonce changed the PCP mapping held"
             );
         }
+        self.pending_secs = None;
         self.drain();
     }
 
@@ -588,6 +634,9 @@ fn contains(hay: &[u8], needle: &[u8]) -> bool {
     hay.windows(needle.len()).any(|w| w == needle)
 }
 
+/// The oracle can fail on the drop it guards: with a header-form PCP error or an announce during a renewal made to
+/// drop the mapping held (the client before the fix), seed 12926282748352115173 fails at iteration 535 of the
+/// default 3000 (`EPHYRA_REPLAY=12926282748352115173:535`): a grant, a timer, `PcpHeaderError`.
 #[ephyra::test(gen = runs(), tests = 3000)]
 fn client_keeps_its_lease_and_nonce_invariants(run: (Setup, Vec<Op>)) {
     let (setup, ops) = run;
@@ -621,7 +670,12 @@ fn client_invariants_with_a_timely_host_and_no_header_errors(run: (Setup, Vec<Op
 
 fn ip_any() -> impl Gen<Value = IpAddr> {
     gens::frequency(vec![
-        (3, gens::int(0u32..=u32::MAX).map(|v| IpAddr::V4(Ipv4Addr::from(v))).boxed()),
+        (
+            3,
+            gens::int(0u32..=u32::MAX)
+                .map(|v| IpAddr::V4(Ipv4Addr::from(v)))
+                .boxed(),
+        ),
         (
             1,
             (gens::int(0u64..=u64::MAX), gens::int(0u64..=u64::MAX))
@@ -648,7 +702,11 @@ fn pcp_responses() -> impl Gen<Value = pcp::Response> {
             }
         } else {
             let opcode = *g.pick(&[pcp::OP_ANNOUNCE, pcp::OP_MAP]);
-            let result = if opcode == pcp::OP_MAP { g.int(1u8..=255) } else { g.int(0u8..=255) };
+            let result = if opcode == pcp::OP_MAP {
+                g.int(1u8..=255)
+            } else {
+                g.int(0u8..=255)
+            };
             pcp::Response::Header {
                 opcode,
                 result,
@@ -682,7 +740,11 @@ fn pcp_response_accepts_only_its_own_encodings(b: Vec<u8>) {
     let mut out = [0u8; 64];
     let n = pcp::encode_response(&r, &mut out).unwrap();
     // An IPv4-mapped address decodes as the IPv4 address and encodes back to the same 16 bytes.
-    assert_eq!(&out[..n], &b[..], "decode accepted bytes that encode does not produce for {r:?}");
+    assert_eq!(
+        &out[..n],
+        &b[..],
+        "decode accepted bytes that encode does not produce for {r:?}"
+    );
 }
 
 fn nat_responses() -> impl Gen<Value = natpmp::Response> {
@@ -722,7 +784,11 @@ fn natpmp_response_decode_and_encode_agree(b: Vec<u8>) {
     let Ok(r) = natpmp::decode_response(&b) else { return };
     let mut out = [0u8; 16];
     let n = natpmp::encode_response(&r, &mut out).unwrap();
-    assert_eq!(&out[..n], &b[..], "decode accepted bytes that encode does not produce for {r:?}");
+    assert_eq!(
+        &out[..n],
+        &b[..],
+        "decode accepted bytes that encode does not produce for {r:?}"
+    );
 }
 
 #[ephyra::test(gen = nat_responses(), tests = 5000)]
@@ -770,7 +836,11 @@ fn pcp_request_accepts_only_its_own_encodings(b: Vec<u8>) {
     let Ok(r) = pcp::decode_request(&b) else { return };
     let mut out = [0u8; 64];
     let n = pcp::encode_request(&r, &mut out).unwrap();
-    assert_eq!(&out[..n], &b[..], "decode accepted bytes that encode does not produce for {r:?}");
+    assert_eq!(
+        &out[..n],
+        &b[..],
+        "decode accepted bytes that encode does not produce for {r:?}"
+    );
 }
 
 fn nat_requests() -> impl Gen<Value = natpmp::Request> {
@@ -802,7 +872,11 @@ fn natpmp_request_decode_and_encode_agree(b: Vec<u8>) {
     let Ok(r) = natpmp::decode_request(&b) else { return };
     let mut out = [0u8; 16];
     let n = natpmp::encode_request(&r, &mut out).unwrap();
-    assert_eq!(&out[..n], &b[..], "decode accepted bytes that encode does not produce for {r:?}");
+    assert_eq!(
+        &out[..n],
+        &b[..],
+        "decode accepted bytes that encode does not produce for {r:?}"
+    );
     assert_eq!(natpmp::decode_request(&out[..n]), Ok(r));
 }
 
@@ -848,7 +922,12 @@ fn location(g: &mut Source) -> String {
 
 fn ssdp_answers() -> ephyra::BoxGen<Vec<u8>> {
     mostly_valid(|g: &mut Source| {
-        let status = *g.pick(&["HTTP/1.1 200 OK", "HTTP/1.1 200", "HTTP/1.0 200 OK", "HTTP/1.1 404 Not Found"]);
+        let status = *g.pick(&[
+            "HTTP/1.1 200 OK",
+            "HTTP/1.1 200",
+            "HTTP/1.0 200 OK",
+            "HTTP/1.1 404 Not Found",
+        ]);
         let loc = location(g);
         let name = *g.pick(&["LOCATION", "Location", "location", " LOCATION "]);
         format!("{status}\r\nCACHE-CONTROL: max-age=120\r\n{name}: {loc}\r\nST: upnp:rootdevice\r\n\r\n").into_bytes()
@@ -858,7 +937,9 @@ fn ssdp_answers() -> ephyra::BoxGen<Vec<u8>> {
 #[ephyra::test(gen = ssdp_answers(), tests = 20_000)]
 fn ssdp_location_names_only_usable_hosts(b: Vec<u8>) {
     let Some(url) = upnp::ssdp_location(&b) else { return };
-    let IpAddr::V4(ip) = url.addr.ip() else { panic!("an IPv6 location") };
+    let IpAddr::V4(ip) = url.addr.ip() else {
+        panic!("an IPv6 location")
+    };
     assert!(pinc_portmap::addr::usable_host(ip), "a location on {ip}");
     assert_ne!(url.addr.port(), 0);
     assert!(!url.path().is_empty() && url.path().len() <= upnp::MAX_PATH);
@@ -897,7 +978,9 @@ fn descriptions() -> ephyra::BoxGen<Vec<u8>> {
 #[ephyra::test(gen = descriptions(), tests = 20_000)]
 fn control_url_is_on_the_description_host(desc: Vec<u8>) {
     let base = Url::new(SocketAddr::new(IpAddr::V4(GW), 5000), b"/rootDesc.xml").unwrap();
-    let Some((ctl, svc)) = upnp::control_of(&desc, &base) else { return };
+    let Some((ctl, svc)) = upnp::control_of(&desc, &base) else {
+        return;
+    };
     assert!(svc < upnp::SERVICES.len());
     assert_eq!(ctl.addr.ip(), base.addr.ip(), "a control URL on another host was taken");
     assert!(!ctl.path().is_empty() && ctl.path().len() <= upnp::MAX_PATH);
@@ -905,7 +988,11 @@ fn control_url_is_on_the_description_host(desc: Vec<u8>) {
     let mut out = [0u8; upnp::MAX_REQUEST];
     if let Some(n) = upnp::soap(&ctl, svc, &upnp::Call::ExternalIp, &mut out) {
         let line_end = out[..n].windows(2).position(|w| w == b"\r\n").unwrap();
-        assert_eq!(out[..line_end].iter().filter(|c| **c == b' ').count(), 2, "the request line has extra spaces");
+        assert_eq!(
+            out[..line_end].iter().filter(|c| **c == b' ').count(),
+            2,
+            "the request line has extra spaces"
+        );
     }
 }
 
@@ -935,7 +1022,10 @@ fn http_answers_parse_within_their_bytes(b: Vec<u8>) {
         let head_end = b.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
         let full = &b[head_end + 4..];
         assert_eq!(&full[..body.len()], body, "the body is not what follows the head");
-        assert_eq!(std::str::from_utf8(&b[9..12]).ok().and_then(|s| s.parse().ok()), Some(status));
+        assert_eq!(
+            std::str::from_utf8(&b[9..12]).ok().and_then(|s| s.parse().ok()),
+            Some(status)
+        );
     }
     if let Some(upnp::SoapResult::Ok(body)) = upnp::soap_result(&b) {
         let _ = upnp::external_ip(body);
@@ -947,10 +1037,22 @@ fn http_answers_parse_within_their_bytes(b: Vec<u8>) {
 
 fn epochs_and_times() -> impl Gen<Value = (u64, u32, u64, u32)> {
     (
-        gens::frequency(vec![(1, gens::edges(0u64..=u64::MAX).boxed()), (3, gens::int(0u64..=u64::MAX).boxed())]),
-        gens::frequency(vec![(1, gens::edges(0u32..=u32::MAX).boxed()), (3, gens::int(0u32..=u32::MAX).boxed())]),
-        gens::frequency(vec![(1, gens::edges(0u64..=u64::MAX).boxed()), (3, gens::int(0u64..=u64::MAX).boxed())]),
-        gens::frequency(vec![(1, gens::edges(0u32..=u32::MAX).boxed()), (3, gens::int(0u32..=u32::MAX).boxed())]),
+        gens::frequency(vec![
+            (1, gens::edges(0u64..=u64::MAX).boxed()),
+            (3, gens::int(0u64..=u64::MAX).boxed()),
+        ]),
+        gens::frequency(vec![
+            (1, gens::edges(0u32..=u32::MAX).boxed()),
+            (3, gens::int(0u32..=u32::MAX).boxed()),
+        ]),
+        gens::frequency(vec![
+            (1, gens::edges(0u64..=u64::MAX).boxed()),
+            (3, gens::int(0u64..=u64::MAX).boxed()),
+        ]),
+        gens::frequency(vec![
+            (1, gens::edges(0u32..=u32::MAX).boxed()),
+            (3, gens::int(0u32..=u32::MAX).boxed()),
+        ]),
     )
 }
 

@@ -1,6 +1,7 @@
-//! How the node reads a reconcile stream: a peer that never ends a message cannot grow the node's buffer, and a peer
-//! that writes faster than the node reads (several messages before one read) is not a protocol failure. A real node over
-//! a scripted endpoint whose streams hold exactly the bytes a test puts there; the node consumes only what it reads.
+//! How the node reads a reconcile or a transfer stream: a peer that never ends a message cannot grow the node's
+//! buffer, and a peer that writes faster than the node reads (several messages before one read) is not a protocol
+//! failure. A real node over a scripted endpoint whose streams hold exactly the bytes a test puts there; the node
+//! consumes only what it reads.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -21,8 +22,13 @@ use pinc_core::{
     Command, CommandError, Event, Events, IfaceEvent, IfaceId, NodeStats, Reply, Role, SendState, SessionId,
     SessionStats, TraceRecord, Transmit, Value,
 };
-use pinc_crypto::{Drbg, IdentityAlg, Keypair, NodeId};
-use pinc_node::{Config as NodeConfig, Enabled, Ep, NodeEvent, ReconcileFailure, SETS_ALPN};
+use pinc_crypto::{Drbg, IdentityAlg, Keypair, NodeId, Secret, Software};
+use pinc_dtn::bundle::{Outgoing, Plan, seal_bundle, serve, serve_len};
+use pinc_dtn::head::Erasure;
+use pinc_dtn::hlc::Hlc;
+use pinc_dtn::layout::SliceLayout;
+use pinc_dtn::seal::SealSeeds;
+use pinc_node::{Config as NodeConfig, DTN_ALPN, Enabled, Ep, NodeEvent, ReconcileFailure, SETS_ALPN};
 use pinc_reconcile::{Initiator, Limits, MemIndex, Responder, Step};
 use pinc_security::{Alpn, Env, KeyHandle, LocalIdentity, PrekeyPolicy, SoftPrekeys};
 use pinc_tests::{Caps, LayerApps, SplitMix64};
@@ -207,6 +213,22 @@ fn limits() -> Limits {
     }
 }
 
+/// The smallest message limit every valid exchange fits in, with the longest items the limits allow: a long set
+/// reference and a full part make the first message longer than `max_message`.
+fn edge_limits() -> Limits {
+    let base = Limits {
+        max_item: 16,
+        ..Limits::default()
+    };
+    Limits {
+        max_message: base.min_message(),
+        ..base
+    }
+}
+
+/// A set reference as long as `edge_limits` allow.
+const LONG_SET: &[u8] = &[0x5a; 16];
+
 /// The most the node's buffer of one stream may hold.
 fn bound() -> usize {
     2 * (limits().max_body() + 3)
@@ -226,16 +248,19 @@ fn items(seed: u64, n: usize) -> Vec<Vec<u8>> {
     v
 }
 
-fn apps(mine: &[Vec<u8>]) -> LayerApps {
-    let mut a = LayerApps::new(
-        0x11,
-        Enabled {
-            sets: true,
-            ..Enabled::NONE
-        },
-    );
-    a.sets.insert(SET, mine);
-    a.sets.limits = Some(limits());
+const SETS_ON: Enabled = Enabled {
+    sets: true,
+    ..Enabled::NONE
+};
+const DTN_ON: Enabled = Enabled {
+    dtn: true,
+    ..Enabled::NONE
+};
+
+fn apps(mine: &[Vec<u8>], set: &[u8], lim: Limits, on: Enabled) -> LayerApps {
+    let mut a = LayerApps::new(0x11, on);
+    a.sets.insert(set, mine);
+    a.sets.limits = Some(lim);
     a
 }
 
@@ -244,6 +269,10 @@ fn peer() -> NodeId {
 }
 
 fn build(mine: &[Vec<u8>]) -> Box<SNode> {
+    build_with(mine, SET, limits(), SETS_ON)
+}
+
+fn build_with(mine: &[Vec<u8>], set: &[u8], lim: Limits, on: Enabled) -> Box<SNode> {
     let kp = Keypair::from_seed(IdentityAlg::Ed25519, &[0x11; 32]).unwrap();
     let identity = LocalIdentity::from_keypair(&kp, KeyHandle(1)).unwrap();
     let prov = Caps(pinc_crypto::Software, true);
@@ -286,7 +315,7 @@ fn build(mine: &[Vec<u8>]) -> Box<SNode> {
             Box::new(Keypair::from_seed(IdentityAlg::Ed25519, &[0x11; 32]).unwrap()),
             (),
             7,
-            apps(mine),
+            apps(mine, set, lim, on),
         )
         .unwrap(),
     )
@@ -382,7 +411,8 @@ fn reply_for(idx: &MemIndex, request: &[u8]) -> Vec<u8> {
 
 /// A message that never ends: it announces more than any honest message holds, or a length within the limit with
 /// bytes that are no message, and the peer has far more to write. The node takes at most its bound from the stream
-/// and the round ends as a protocol failure.
+/// and the round ends as a protocol failure. It guards the bound of the buffer only (it also passes on a reader that
+/// refuses at once); a message the node must read whole is the other tests.
 #[test]
 fn an_endless_message_on_a_round_is_refused_and_the_buffer_does_not_grow() {
     run(|| {
@@ -406,7 +436,8 @@ fn an_endless_message_on_a_round_is_refused_and_the_buffer_does_not_grow() {
     });
 }
 
-/// The same on the answering side: the stream is reset with the protocol code and the node took no more than its bound.
+/// The same on the answering side: the stream is reset with the protocol code and the node took no more than its
+/// bound. It guards the bound of the buffer only.
 #[test]
 fn an_endless_message_on_an_answered_stream_is_refused_and_the_buffer_does_not_grow() {
     run(|| {
@@ -459,40 +490,178 @@ fn a_reply_in_one_large_chunk_completes_the_round_with_the_right_report() {
     });
 }
 
-/// The answering side with a request as large as an honest peer writes it, in one chunk: the node answers it with the
-/// messages the library's responder writes, and refuses nothing.
+/// The answering side with a request longer than the message limit and no longer than the body bound (a long set
+/// reference and a full part, as an honest peer writes it), in one chunk: the node answers it with the messages the
+/// library's responder writes, and refuses nothing.
 #[test]
-fn a_full_size_request_in_one_chunk_is_answered() {
+fn a_request_longer_than_the_message_limit_is_answered() {
     run(|| {
-        let (mine, theirs) = (items(1, 5), items(2, 3000));
-        let mut node = build(&mine);
+        let lim = edge_limits();
+        let mine = items(1, 5);
+        let theirs: Vec<Vec<u8>> = (0u8..17).map(|i| vec![i; 16]).collect();
+        let mut node = build_with(&mine, LONG_SET, lim, SETS_ON);
         let (s, x) = answering(&mut node);
-        let mut init = Initiator::new(limits());
         let mut req = Vec::new();
-        init.start(
-            &MemIndex::from_sorted(theirs.iter().map(Vec::as_slice)).unwrap(),
-            SET,
-            &mut req,
-        )
-        .unwrap();
+        Initiator::new(lim)
+            .start(
+                &MemIndex::from_sorted(theirs.iter().map(Vec::as_slice)).unwrap(),
+                LONG_SET,
+                &mut req,
+            )
+            .unwrap();
+        let body = req.len() - 3;
+        assert!(
+            body > lim.max_message && body <= lim.max_body(),
+            "the request body ({body}) must pass the message limit ({}) and stay within the body bound ({})",
+            lim.max_message,
+            lim.max_body()
+        );
         feed(&mut node, s, x, req.clone(), RecvStatus::Open);
         assert!(
             node.endpoint_mut().reset.is_empty(),
             "the node refused an honest request"
         );
         let mine_idx = MemIndex::from_sorted(mine.iter().map(Vec::as_slice)).unwrap();
-        let want = {
-            let (mut r, mut tx) = (Responder::new(limits()), Vec::new());
-            let step = r.handle(&mine_idx, &req, &mut tx).unwrap();
-            let mut all = tx.clone();
-            let mut step = step;
-            while step == Step::Chunk {
-                tx.clear();
-                step = r.resume(&mine_idx, &mut tx).unwrap();
-                all.extend_from_slice(&tx);
-            }
-            all
-        };
+        let mut r = Responder::new(lim);
+        let mut tx = Vec::new();
+        let mut step = r.handle(&mine_idx, &req, &mut tx).unwrap();
+        let mut want = tx.clone();
+        while step == Step::Chunk {
+            tx.clear();
+            step = r.resume(&mine_idx, &mut tx).unwrap();
+            want.extend_from_slice(&tx);
+        }
         assert_eq!(node.endpoint_mut().opened.get(&(s, x)), Some(&want));
+    });
+}
+
+/// A peer that writes two whole requests before the node reads once: both are answered, in order, with what the
+/// library's responder writes for them.
+#[test]
+fn two_requests_in_one_chunk_are_both_answered() {
+    run(|| {
+        let mine = items(1, 100);
+        let mut theirs: Vec<Vec<u8>> = mine.iter().take(90).cloned().chain(items(7, 10)).collect();
+        theirs.sort_unstable();
+        theirs.dedup();
+        let (mine_idx, theirs_idx) = (
+            MemIndex::from_sorted(mine.iter().map(Vec::as_slice)).unwrap(),
+            MemIndex::from_sorted(theirs.iter().map(Vec::as_slice)).unwrap(),
+        );
+        // the exchange the library runs between the two sets: the first request, the reply, the request that answers it
+        let (mut init, mut resp) = (Initiator::new(limits()), Responder::new(limits()));
+        let (mut first, mut r1, mut second, mut r2) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        init.start(&theirs_idx, SET, &mut first).unwrap();
+        assert_eq!(resp.handle(&mine_idx, &first, &mut r1).unwrap(), Step::Send);
+        assert_eq!(init.handle(&theirs_idx, &r1, &mut second).unwrap(), Step::Send);
+        assert_eq!(resp.handle(&mine_idx, &second, &mut r2).unwrap(), Step::Send);
+        let mut node = build(&mine);
+        let (s, x) = answering(&mut node);
+        feed(&mut node, s, x, [first, second].concat(), RecvStatus::Open);
+        assert!(node.endpoint_mut().reset.is_empty(), "the node refused honest requests");
+        assert_eq!(node.endpoint_mut().opened.get(&(s, x)), Some(&[r1, r2].concat()));
+    });
+}
+
+/// A holder that writes its whole bundle before the node reads once (the offer and every run of symbols the node will
+/// ask for, more than twice the longest frame): the node takes every frame, asks for each run, receives the bundle and
+/// acknowledges it, and does not reset the stream.
+#[test]
+fn a_transfer_in_one_large_chunk_is_received_whole() {
+    run(|| {
+        const BODY_MAX: usize = 1 << 20;
+        let mut node = build_with(&[], SET, limits(), DTN_ON);
+        let keys = LayerApps::new(0x11, DTN_ON).dtn.keys();
+        let holder = Keypair::from_seed(IdentityAlg::Ed25519, &[0x42; 32]).unwrap();
+        let mut payload = vec![0u8; 2300 << 10];
+        SplitMix64::new(9).fill(&mut payload);
+        // one erasure block of every data symbol, so each ask is the next `CHUNK` bytes of them
+        let plan = Plan {
+            created: Hlc::new(1_700_000_000_000, 0),
+            lifetime_ms: 600_000,
+            copies: 1,
+            erasure: Erasure { k: 255, m: 0 },
+            slice_log: 4,
+        };
+        let seeds = SealSeeds {
+            eph_x25519: Secret::new([3; 32]),
+            kem_m: Secret::new([4; 32]),
+        };
+        let layout = SliceLayout::new(plan.erasure.k, plan.erasure.m, plan.slice_log, payload.len() as u64).unwrap();
+        let mut sealed = vec![0; layout.total_len() as usize];
+        let mut outboard = vec![0; layout.outboard_len().unwrap() as usize];
+        let out = Outgoing {
+            recipient: &keys,
+            plan,
+            seeds: &seeds,
+        };
+        let signed = seal_bundle(&Software, &holder, &out, &payload, &mut sealed, &mut outboard).unwrap();
+        let frame = |ty: u8, body: &[u8]| {
+            let mut f = vec![ty];
+            f.extend_from_slice(&(body.len() as u32).to_be_bytes());
+            f.extend_from_slice(body);
+            f
+        };
+        let mut offer = 1u16.to_be_bytes().to_vec();
+        offer.extend_from_slice(&0u64.to_be_bytes());
+        let at = offer.len();
+        offer.resize(at + signed.encoded_len(), 0);
+        signed.encode(&mut offer[at..]).unwrap();
+        let mut all = frame(1, &offer);
+        // the node asks for at most 64 KiB of symbols at a time, from the first one on
+        let run = (64u64 << 10) / layout.slice_len();
+        let total = layout.total_symbols();
+        let mut asks = 0;
+        for first in (0..total).step_by(run as usize) {
+            let end = (first + run).min(total);
+            let mut body = first.to_be_bytes().to_vec();
+            body.extend_from_slice(&end.to_be_bytes());
+            let at = body.len();
+            body.resize(at + serve_len(&layout, &(first..end)).unwrap(), 0);
+            serve(&layout, &sealed, &outboard, &(first..end), &mut body[at..]).unwrap();
+            all.extend_from_slice(&frame(3, &body));
+            asks += 1;
+        }
+        assert!(
+            all.len() > 2 * BODY_MAX,
+            "the burst ({} bytes) must not fit the buffer ({})",
+            all.len(),
+            2 * BODY_MAX
+        );
+        let s = SessionId(INC);
+        node.handle_timeout(NOW);
+        node.endpoint_mut().live.push((s, peer()));
+        deliver(
+            &mut node,
+            Event::Incoming {
+                session: s,
+                node: peer(),
+                alpn: Alpn::new(DTN_ALPN).unwrap(),
+            },
+        );
+        deliver(&mut node, Event::StreamOpened { session: s, stream: 1 });
+        feed(&mut node, s, 1, all, RecvStatus::Open);
+        assert!(
+            node.endpoint_mut().reset.is_empty(),
+            "the node reset the stream of an honest holder: {:?}",
+            node.endpoint_mut().reset
+        );
+        let mut got = Vec::new();
+        while let Some(e) = node.poll_event() {
+            if let NodeEvent::DtnReceived { payload, .. } = e {
+                got.push(payload);
+            }
+        }
+        assert_eq!(got, [payload], "the bundle is received once and intact");
+        // what the node wrote: one ask per run, then the acknowledgement
+        let wrote = node.endpoint_mut().opened.get(&(s, 1)).cloned().unwrap_or_default();
+        let (mut types, mut at) = (Vec::new(), 0);
+        while at + 5 <= wrote.len() {
+            types.push(wrote[at]);
+            at += 5 + u32::from_be_bytes(wrote[at + 1..at + 5].try_into().unwrap()) as usize;
+        }
+        let mut want = vec![2u8; asks];
+        want.push(4);
+        assert_eq!(types, want, "one ask for each run, then the acknowledgement");
     });
 }

@@ -411,6 +411,7 @@ impl PortMap {
         if expiry <= now {
             self.held = None;
             self.renewing = false;
+            self.announce_next = None;
             self.fail(now);
             return;
         }
@@ -974,7 +975,7 @@ impl PortMap {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::cast_possible_truncation)]
 mod tests {
     use core::net::Ipv4Addr;
 
@@ -1141,6 +1142,58 @@ mod tests {
             pm.step,
             Step::NatAddr,
             "it failed the request: the next protocol is tried"
+        );
+    }
+
+    /// An announce during a renewal is kept for after its answer; a renewal answered with a lifetime already over
+    /// ends the lease and drops that kept start, so the next fresh grant renews at the middle of its lease and not at
+    /// once because of an announce that came before the lease it ended.
+    #[test]
+    fn a_kept_announce_does_not_outlive_the_lease_a_short_grant_ended() {
+        let mut pm = granted(7200);
+        let renew = pm.poll_timeout().unwrap();
+        pm.handle_timeout(renew);
+        assert_eq!(drain(&mut pm), 1);
+        let mut ab = [0u8; 24];
+        let n = pcp::encode_response(
+            &pcp::Response::Header {
+                opcode: pcp::OP_ANNOUNCE,
+                result: 0,
+                lifetime: 0,
+                epoch: 5000 + ((renew - T0) / SEC) as u32,
+            },
+            &mut ab,
+        )
+        .unwrap();
+        pm.handle_datagram(renew + SEC / 10, gw(), &ab[..n]);
+        assert!(
+            pm.announce_next.is_some(),
+            "the announce is kept for after the renewal's answer"
+        );
+        let at = renew + 3 * SEC / 2;
+        let mut b = [0u8; 60];
+        let n = map(NONCE, 5000 + ((at - T0) / SEC) as u32, 1, &mut b);
+        pm.handle_datagram(at, gw(), &b[..n]);
+        assert_eq!(pm.mapped(), None);
+        assert_eq!(pm.announce_next, None, "the lease the announce was for is over");
+        // the failure schedule goes on until the client asks PCP again
+        let mut now = at;
+        for _ in 0..64 {
+            if pm.step == Step::Pcp {
+                break;
+            }
+            now = pm.poll_timeout().unwrap().max(now);
+            pm.handle_timeout(now);
+            drain(&mut pm);
+        }
+        assert_eq!(pm.step, Step::Pcp, "the client asks PCP again");
+        let n = map(NONCE, 5000 + ((now - T0) / SEC) as u32, 7200, &mut b);
+        pm.handle_datagram(now, gw(), &b[..n]);
+        assert!(pm.mapped().is_some());
+        assert_eq!(
+            pm.held.map(|l| l.renew),
+            Some(lease::renew_at(pm.started, 7200)),
+            "the renewal is at the middle of the lease, not brought forward"
         );
     }
 

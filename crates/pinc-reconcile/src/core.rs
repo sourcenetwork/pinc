@@ -917,6 +917,10 @@ impl Core {
                 tag::FULL | tag::COLD if init => {
                     let mut theirs = Items::read(r, max_item)?;
                     let cap = lim.max_report;
+                    // vertexia: a part is checked against its own range, the order and the overlap of the parts, not
+                    // against the ranges this side asked: a responder answers an equal range by silence, so the asked
+                    // ranges are never known settled and keeping them would grow with the set. Checking it needs the
+                    // responder to acknowledge equal ranges (a wire change).
                     msg_floor.disjoint(lo, hi)?;
                     if kind == tag::COLD {
                         cold_floor.ascending(lo, hi)?;

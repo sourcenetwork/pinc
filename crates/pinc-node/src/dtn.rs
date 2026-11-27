@@ -23,7 +23,7 @@
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
 use core::fmt;
-use core::ops::Range;
+use core::ops::{ControlFlow, Range};
 
 use pinc_core::{Command, SessionId};
 use pinc_crypto::NodeId as FullId;
@@ -793,36 +793,30 @@ where
             return;
         };
         let mut buf = core::mem::take(&mut ds.inb);
-        // At most the room is read; the rest waits on the stream and is drained again after the frames in hand are
-        // handled. A full buffer that holds no whole frame is a frame longer than the bound.
-        let cap = wire::BODY_MAX * 2;
-        let (_, mut more) = self.io.drain_stream(session, stream, &mut buf, cap);
+        // At most the room is read; the rest waits on the stream and is read after the frames in hand are handled.
         let mut stop = None;
-        loop {
-            let mut used = 0;
-            while stop.is_none() {
-                let rest = buf.get(used..).unwrap_or_default();
-                let (ty, total) = match wire::next(rest) {
-                    Ok(Some(f)) => f,
-                    Ok(None) => break,
-                    Err(()) => {
-                        stop = Some(Stop::Break);
-                        break;
-                    }
-                };
-                let body = rest.get(wire::HDR..total).unwrap_or_default();
-                stop = self.dtn_frame(session, stream, &mut ds, ty, body).err();
-                used += total;
-            }
-            buf.drain(..used);
-            if stop.is_some() || !more {
-                break;
-            }
-            if used == 0 {
-                stop = Some(Stop::Break);
-                break;
-            }
-            (_, more) = self.io.drain_stream(session, stream, &mut buf, cap);
+        let (_, broken) = self.read_messages(
+            session,
+            stream,
+            &mut buf,
+            wire::BODY_MAX * 2,
+            |inb| wire::next(inb).map(|f| f.map(|(ty, total)| (total, ty))),
+            |node, frame, ty| match node.dtn_frame(
+                session,
+                stream,
+                &mut ds,
+                ty,
+                frame.get(wire::HDR..).unwrap_or_default(),
+            ) {
+                Ok(()) => ControlFlow::Continue(()),
+                Err(s) => {
+                    stop = Some(s);
+                    ControlFlow::Break(())
+                }
+            },
+        );
+        if broken {
+            stop = Some(Stop::Break);
         }
         match stop {
             None => {

@@ -468,6 +468,7 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `PortMapLease_nofloor` | MaxT 7 -> 6 |
 | `PortMapLease_norenew` | MaxT 7 -> 6 |
 | `PortMapLease_nostopdrop` | MaxT 7 -> 6 |
+| `PortMapLease_overkeeps` | MaxT 7 -> 6 |
 | `PortMapLease_refusal` | MaxT 7 -> 6 |
 | `PortMapLease_stalefloor` | MaxT 7 -> 6 |
 | `PrekeyCache` | MaxClock 6 -> 4 (the cache fills, a get refreshes the older entry, the next insert evicts the least recently used) |

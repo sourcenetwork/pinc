@@ -19,10 +19,13 @@ Stated assumption for `renew_before_expiry`: the start plus the longest lease fi
 clock, nanoseconds since its endpoint started, about 584 years short of that).
 
 Theorems: `clamp_le` (the cap), `renew_le_expiry` and `renew_before_expiry` (the renewal comes before the end),
-`back_is_restart` (an epoch that went back by more than a second is a restart), `same_pace_no_restart` (an epoch
+`expiry_mono` (a lease reckoned from an earlier start ends no later: the client's end, from when its request left, is
+never after the gateway's, from when the request arrived, so a grant already over on the client's clock may still be
+held by the gateway but never the other way round), `back_is_restart` (an epoch that went back by more than a second is a restart), `same_pace_no_restart` (an epoch
 that moved exactly as the client's clock did is no restart).
 
-TLA+ counterpart: proofs/tla/PortMapLease.tla (renewal half way, the end on the client's clock, the epoch rule).
+TLA+ counterpart: proofs/tla/PortMapLease.tla (renewal half way, the end on the client's clock, the epoch rule). The
+client's steps (what `grant`, `expire` and `fail` do with these numbers) are model checked there only.
 -/
 
 namespace Pinc.PortMapLease
@@ -85,6 +88,12 @@ theorem renew_before_expiry (sent l : Nat) (h1 : 1 ≤ l) (hs : sent + MAX_LIFET
   have hm : clamp l * 1000000000 ≤ 86400 * 1000000000 := Nat.mul_le_mul_right _ hc2
   have hh : clamp l * (1000000000 / 2) < clamp l * 1000000000 :=
     Nat.mul_lt_mul_of_pos_left (by decide) (by omega)
+  omega
+
+/-- A lease reckoned from an earlier start ends no later. -/
+theorem expiry_mono (sent arr l : Nat) (h : sent ≤ arr) : expiry sent l ≤ expiry arr l := by
+  -- the same lifetime added to a smaller start, and `sat` keeps the order
+  unfold expiry sat
   omega
 
 /-- An epoch that went back by more than one second is a restart. -/
