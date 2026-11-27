@@ -16,13 +16,15 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 
 use pinc_core::{
-    Answer, Command, Endpoint, EndpointConfig, Event, LEDGER_ENTRIES, MAX_HALF_OPEN, Query, Role, Slot, TraceEvent,
+    Answer, Command, Endpoint, EndpointConfig, Event, IfaceEvent, IfaceId, LEDGER_ENTRIES, MAX_HALF_OPEN, Query, Role,
+    Slot, TraceEvent,
 };
 use pinc_crypto::identity::MAX_SIGNATURE_LEN;
 use pinc_crypto::{Aead, Drbg, IdentityAlg, Keypair, Software};
 use pinc_security::message::{FULL_INITIAL_MIN, Initial, MessageType, PrekeyField, ResumeHello, SHORT_INITIAL_MIN};
 use pinc_security::{
-    AeadSet, ConnId, CreditRecord, Env, KeyHandle, KeyResponse, LocalIdentity, SoftKeys, SoftPrekeys, VERSION,
+    AeadSet, ConnId, CreditRecord, Env, KeyHandle, KeyResponse, LocalIdentity, PrekeyPolicy, SoftKeys, SoftPrekeys,
+    VERSION,
 };
 use pinc_tests::*;
 use pinc_transport::conn::{Resources, Tables};
@@ -1458,5 +1460,139 @@ fn a_command_whose_paths_are_refused_leaves_no_pair_behind() {
             "a refused punch left its pair"
         );
         assert_eq!(net.nodes[s].ep.node_stats().pair_evictions, 0);
+    });
+}
+
+/// A dialer whose hybrid server answers from another address keeps the pair of that address until the handshake
+/// ends: nothing it sends on the reply's path is dropped for want of a pair.
+#[test]
+fn a_dialer_keeps_the_pair_of_a_reply_from_another_address_until_the_handshake_ends() {
+    big_stack(|| {
+        let mut net = CoreNet::new(5 * MS_NS);
+        let (c, s) = (net.add(1), net.add_with_alg(2, IdentityAlg::Hybrid));
+        net.shown = Some((net.nodes[s].addr, "10.8.8.8:4433".parse().unwrap()));
+        let t0 = net.now;
+        let (peer, to) = (net.nodes[s].node, net.nodes[s].addr);
+        net.nodes[c].connect(t0, peer, ALPN_A, to, Role::Other).unwrap();
+        let connected = net.run(t0 + 10 * SEC_NS, |n| {
+            n.nodes[c].count(|e| matches!(e, Event::Connected { .. })) > 0
+        });
+        assert!(connected, "the handshake did not complete: {:?}", net.nodes[c].events);
+        assert_eq!(
+            net.nodes[c].ep.node_stats().dropped_out,
+            0,
+            "the dialer dropped a datagram for want of the reply path's pair"
+        );
+    });
+}
+
+/// A session whose active path's address goes keeps its pair until a new path validates: its datagrams in between
+/// leave, and the data written after the move arrives.
+#[test]
+fn a_session_whose_active_address_goes_keeps_its_pair_until_a_new_path_validates() {
+    big_stack(|| {
+        let mut net = CoreNet::new(5 * MS_NS);
+        let (s, c) = (net.add(1), net.add(2));
+        let (sc, _) = net.connect_pair(c, s, ALPN_A, Role::Other);
+        net.run_for(SEC_NS);
+        let (old, elsewhere) = (net.nodes[c].addr, "10.0.9.9:4433".parse().unwrap());
+        net.nodes[c].addr = elsewhere;
+        net.loss = Some(Box::new(move |from, _, _| from == old));
+        let now = net.now;
+        net.nodes[c].ep.iface_event(now, IfaceId(0), IfaceEvent::Down);
+        net.nodes[c]
+            .ep
+            .iface_event(now, IfaceId(0), IfaceEvent::AddrChange(elsewhere));
+        net.nodes[c].ep.iface_event(now, IfaceId(0), IfaceEvent::Up);
+        let dropped = net.nodes[c].ep.node_stats().dropped_out;
+        written_to(&mut net, c, sc, b"after the move");
+        net.run_for(6 * SEC_NS);
+        assert!(
+            net.nodes[s].ep.session_from(&elsewhere, |_| true).is_some(),
+            "the server never saw the new address"
+        );
+        assert!(got(&net, s, b"after the move"), "the bytes never arrived");
+        assert_eq!(
+            net.nodes[c].ep.node_stats().dropped_out,
+            dropped,
+            "a datagram of the moved session was dropped for want of a pair"
+        );
+    });
+}
+
+type TinyEp = Endpoint<'static, 'static, Caps, NoSource, 1, 2, 16, 2, 1, 4, 4, 4, 2>;
+type TinySlot = Slot<'static, Caps, NoSource, 1, 2, 16, 2>;
+
+/// A command that mints a pair for every one of its paths while the session still holds its own never makes the
+/// table push out a held pair: the table holds `NP * (K + 1)` entries (here 2 * 2 = 4).
+#[test]
+fn a_command_that_mints_every_path_anew_evicts_no_held_pair() {
+    big_stack(|| {
+        let now = 100 * SEC_NS;
+        let kp = Keypair::from_seed(IdentityAlg::Ed25519, &[7u8; 32]).unwrap();
+        let id = LocalIdentity::from_keypair(&kp, KeyHandle(1)).unwrap();
+        let peer = LocalIdentity::from_keypair(
+            &Keypair::from_seed(IdentityAlg::Ed25519, &[8u8; 32]).unwrap(),
+            KeyHandle(1),
+        )
+        .unwrap()
+        .node_id();
+        let slots: Box<[TinySlot; 1]> = vec![Slot::new(small_memory())]
+            .into_boxed_slice()
+            .try_into()
+            .ok()
+            .unwrap();
+        let prov = Caps(Software, true);
+        let mut ep: Box<TinyEp> = Box::new(Endpoint::new(
+            now,
+            prov,
+            Drbg::new(&[3; 32]),
+            id,
+            EndpointConfig::new(5),
+            Box::leak(slots),
+        ));
+        let mut drbg = Drbg::new(&[4; 32]);
+        let mut env = Env {
+            provider: &prov,
+            now,
+            drbg: &mut drbg,
+        };
+        let mut prekeys = SoftPrekeys::new(&mut env, PrekeyPolicy::default()).unwrap();
+        ep.set_prekey(prekeys.acquire(&mut env).unwrap());
+        assert!(ep.register_alpn(ALPN_A));
+        ep.add_iface("10.0.0.1:4433".parse().unwrap()).unwrap();
+        let first: SocketAddr = "203.0.113.1:4433".parse().unwrap();
+        let second: SocketAddr = "203.0.113.2:4433".parse().unwrap();
+        let reply = ep
+            .command(
+                now,
+                Command::Connect {
+                    node: peer,
+                    alpn: ALPN_A,
+                    addrs: &[first, second],
+                    role: Role::Other,
+                },
+            )
+            .unwrap();
+        let session = match reply.value {
+            pinc_core::Value::Session(s) => s,
+            v => panic!("not a session: {v:?}"),
+        };
+        assert_eq!(ep.trace_path_count(), 2);
+        let relay = |n: u8| -> SocketAddr { ([240, 0, 0, n], 0).into() };
+        let new = [relay(1), relay(2)];
+        ep.command(
+            now,
+            Command::FlightPaths {
+                session,
+                addrs: &new,
+                skip_primary: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(ep.node_stats().pair_evictions, 0, "a held pair was pushed out");
+        let mut buf = vec![0u8; 65_536];
+        while ep.poll_transmit(now, &mut buf).is_some() {}
+        assert_eq!(ep.node_stats().dropped_out, 0, "a datagram of the session had no path");
     });
 }

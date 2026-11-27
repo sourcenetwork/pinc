@@ -171,10 +171,11 @@ impl Pair {
 
 /// A failed punch spends its budget and nothing the peer sends gives it back: the chain of the reproducer
 /// (`repro_pairs.rs`, whose fixture this file repeats, as test files share no code) runs for 60 s with data moving
-/// the whole time, and after the nine probes' span (about 8.1 s) neither end sends a direct datagram. A peer refills
-/// the challenges an end may send back only by a path that validates (`Paths::back_left`), and none does here.
+/// the whole time, and after the nine probes' span (about 8.1 s) neither end sends a direct datagram. A challenge
+/// received refills nothing (`Paths::back_left` is refilled by a punch this end starts and by a validation); the
+/// core alone is run here, with no connectivity layer and no REACH_OUT.
 #[test]
-fn a_peer_cannot_refill_the_challenges_an_end_sends_back_without_validating_a_path() {
+fn a_challenge_received_does_not_refill_the_challenges_an_end_sends_back() {
     big_stack(|| {
         let mut p = Pair::new();
         let now = p.now;

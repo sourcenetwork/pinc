@@ -792,7 +792,8 @@ pub struct NodeStats {
     /// With today's sizes it stays 0, as a first message of the floor's size pays for its reject three times over; it
     /// guards the bound should a reject ever grow.
     pub stateless_refused: u64,
-    /// Address pairs a full table pushed out. The table holds only the pairs sessions hold, so it stays 0.
+    /// Address pairs a full table pushed out. The table holds the pairs sessions hold and the `NP` a command mints
+    /// for one (`NP * (K + 1)` entries at most, checked at construction), so it stays 0.
     pub pair_evictions: u64,
     /// Times a session's count of an address pair would have gone below 0 or past its type: the pair stays. It stays 0.
     pub pair_refs_unbalanced: u64,

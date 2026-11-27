@@ -236,6 +236,7 @@ ep_impl! {
             }
             Command::FlightPaths { session, addrs, skip_primary } => {
                 let i = self.live(session)?;
+                // `live` checked the connection: nothing below returns between a mint and its settle.
                 let mut ids: [Option<(pinc_transport::conn::PathId, PathInfo)>; NP] = [None; NP];
                 // The table holds NP paths, the dial's own among them. A relay path reaches any peer that has a
                 // carrier, a direct address only a peer that can be reached there, so when the list is longer than the
@@ -247,7 +248,12 @@ ep_impl! {
                 for (d, a) in ids.iter_mut().zip(relay_first) {
                     *d = self.route_for(a).map(|l| (self.path_id(l, *a), path_info(a, self.cfg.conn.interface_mtu)));
                 }
-                let conn = self.slots.get_mut(i).and_then(|s| s.conn.as_mut()).ok_or(CommandError::NoSession)?;
+                let Some(conn) = self.slots.get_mut(i).and_then(|s| s.conn.as_mut()) else {
+                    for (id, _) in ids.iter().flatten() {
+                        self.drop_unheld_pair(*id);
+                    }
+                    return Err(CommandError::NoSession);
+                };
                 let mut env = env!(self, now);
                 // A full table makes room by dropping its oldest unvalidated path, so the paths are added from the
                 // least wanted to the most wanted, and the fan-out names the ones that are still tracked.
@@ -328,7 +334,10 @@ ep_impl! {
                 let i = self.live(session)?;
                 let local = self.route_for(&addr).ok_or(CommandError::NoRoute)?;
                 let pid = self.path_id(local, addr);
-                let conn = self.slots.get_mut(i).and_then(|s| s.conn.as_mut()).ok_or(CommandError::NoSession)?;
+                let Some(conn) = self.slots.get_mut(i).and_then(|s| s.conn.as_mut()) else {
+                    self.drop_unheld_pair(pid);
+                    return Err(CommandError::NoSession);
+                };
                 let mut env = env!(self, now);
                 let punched = conn.punch(&mut env, pid, path_info(&addr, self.cfg.conn.interface_mtu));
                 self.settle(i, now);

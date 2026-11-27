@@ -34,7 +34,13 @@
 //!   has no address left is dropped, and the connection is told the path is lost (`path_lost`).
 //! - **Address pairs.** The table of address pairs holds the pairs sessions hold (counted at each settle) and, for
 //!   the length of one call, the pair a datagram or command minted; a pair no session keeps is removed in the same
-//!   call. It holds at most `NP * K + 1` entries, so it never evicts and a forged source adds nothing that stays.
+//!   call. It holds at most `NP * K + NP` entries (a command mints up to `NP` pairs for a session that still holds its
+//!   own `NP`), checked at construction, so it never evicts. A forged source adds nothing that stays, except a path a
+//!   half-open session learns before its handshake ends (`conn/recv.rs`), which holds its pair, within the session's
+//!   `NP`, until it is replaced or the session ends. A pair's generation is 32 bits and advances once per pair a
+//!   session takes from no holder, so it wraps after 2^32 such pairs (about 71 minutes of one authenticated peer
+//!   learning a new path every microsecond); only then can the id of a gone active path name a new pair. That is
+//!   accepted.
 //! - **Amplification ledger.** Every outgoing datagram passes the [`Ledger`].
 //! - **Half-open cap.** A first Initial creates state only in a datagram of at least 1200 bytes (464 for a short
 //!   one), and only while fewer than 256 sessions are unauthenticated; a resumption Hello is exempt from the count.
@@ -47,7 +53,7 @@
 //!   application events are held until the answer allows it.
 //! - **Sub-sessions.** A second protocol to a connected peer costs no round trip.
 //!
-//! Invariants: no table grows (the table of address pairs holds only the pairs sessions hold, at most `NP * K + 1`,
+//! Invariants: no table grows (the table of address pairs holds only the pairs sessions hold, at most `NP * K + NP`,
 //! and never evicts); no input panics; a datagram is counted once in [`NodeStats`]; a session is freed
 //! exactly once and its memory returns to its slot.
 
@@ -154,7 +160,7 @@ pub(crate) struct Counters {
 /// Type parameters: the crypto provider `P`, the source type `S` of source-backed streams, `N` stream slots, `C` chunk
 /// ring entries per stream half, `F` packets tracked in flight and `NP` paths per connection (as for the
 /// transport's `Connection`), `K` sessions in the table, `D` entries of the connection id table and of the table of address pairs (at least ten per
-/// session, and above `NP * K`), `PK` prekeys and `TK` tickets in the responder's stores and `CT` tickets this node holds as a client.
+/// session, and at least `NP * (K + 1)`), `PK` prekeys and `TK` tickets in the responder's stores and `CT` tickets this node holds as a client.
 #[allow(clippy::type_complexity, reason = "the table sizes are the type's parameters")]
 pub struct Endpoint<
     's,
@@ -475,9 +481,9 @@ ep_impl! {
         mut cfg: EndpointConfig,
         mut slots: Slots<'s, Slot<'a, P, S, N, C, F, NP>, K>,
     ) -> Self {
-        // Every session holds at most `NP` pairs, so the table never evicts a held pair when it has room for all of
-        // them and one more (the pair a datagram mints before its session keeps it).
-        const { assert!(D > NP * K, "The table of address pairs needs at least one more entry than every session's paths.") };
+        // Every session holds at most `NP` pairs, and a command mints up to `NP` more for one session before its settle
+        // releases the old ones, so the table never evicts a held pair when it has room for `NP * (K + 1)`.
+        const { assert!(D >= NP * (K + 1), "The table of address pairs holds NP pairs per session and NP a command mints for one.") };
         cfg.conn.cid_len = CID_LEN;
         let seed = cfg.seed;
         let last = slots.len().saturating_sub(1);
@@ -765,7 +771,7 @@ ep_impl! {
             return (path_id_at(generation, i), false);
         }
         let generation = self.next_path_gen;
-        // The table holds at most `NP * K + 1` pairs (checked at construction), so this never evicts; the counter
+        // The table holds at most `NP * K + NP` pairs (checked at construction), so this never evicts; the counter
         // shows it if it ever does.
         if self.paths.insert(key, PairRef { generation, refs: 0 }).is_some() {
             self.counters.pair_evictions += 1;

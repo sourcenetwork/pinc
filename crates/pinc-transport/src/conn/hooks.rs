@@ -292,10 +292,19 @@ conn_impl! {
         self.paths.iter().map(|(_, p)| (p.id, p.info, p.validated))
     }
 
-    /// The ids of the connection's path slots, `None` for a free slot or a path that is gone: the set the endpoint's
-    /// table of address pairs counts the session as holding.
+    /// The ids of the paths this connection can still name in a datagram or adopt: every tracked path, the active one
+    /// also when its address is gone, and a handshake reply's path not yet followed. The set the endpoint's table of
+    /// address pairs counts the session as holding.
     pub fn path_ids(&self) -> [Option<PathId>; NP] {
-        self.paths.slots.map(|s| s.filter(|p| !p.gone).map(|p| p.id))
+        let mut ids = self.paths.slots.map(|s| s.map(|p| p.id));
+        // A reply that finds no free slot cannot be adopted (`learn_path` refuses at a full table), so needs no pair.
+        if let Some((id, ..)) = self.reply_from
+            && !ids.contains(&Some(id))
+            && let Some(free) = ids.iter_mut().find(|s| s.is_none())
+        {
+            *free = Some(id);
+        }
+        ids
     }
 
     /// Run where the parent session runs: take its paths with their validation, and its active path. A path of this

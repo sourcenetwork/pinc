@@ -261,8 +261,9 @@ pub(crate) struct Paths<const NP: usize> {
     pub(crate) slots: [Option<Path>; NP],
     pub(crate) active: usize,
     pub(crate) held: usize,
-    /// The challenges this end may still send back with a response; refilled only by this end's own punch round and
-    /// by a path that validates, never by time or by what the peer sends.
+    /// The challenges this end may still send back with a response; refilled by a punch this end starts
+    /// (`start_punch`: its own, or one the host starts for a peer's REACH_OUT) and by a validation, never by time or
+    /// by a challenge received.
     pub(crate) back_left: u8,
 }
 
