@@ -189,6 +189,11 @@ e2e:
 distributed *args:
     RUSTFLAGS="{{native}}" cargo run -q --release --manifest-path distributed/Cargo.toml --target-dir {{measure_target}} -- {{args}}
 
+# The property tests on ephyra and the reproducers of what they found: a workspace of its own (`pbt/`), release build.
+# A failing property prints its replay line (`EPHYRA_REPLAY=seed:iteration`). Extra arguments go to cargo test.
+pbt *args:
+    cd pbt && cargo test --release --no-fail-fast {{args}}
+
 # Every test without the hwenc feature, for machines without `swtpm`.
 test-default *args:
     cargo nextest run --workspace --profile ci {{args}}
