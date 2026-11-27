@@ -326,6 +326,8 @@ impl<N: Node, R: Random, C: CostModel> Sim<N, R, C> {
         slot.state = NodeState::Crashed;
         slot.timer_gen += 1;
         slot.timer_at = None;
+        slot.timer_last = None;
+        slot.timer_left = false;
         slot.busy_until = 0;
         self.close_all_streams(t, n);
         self.trace_line(format_args!("{{\"t\":{t},\"k\":\"crash\",\"n\":{n}}}"));

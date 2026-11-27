@@ -139,7 +139,9 @@ pub struct Metrics {
     /// One entry per node, by node index.
     pub nodes: Vec<NodeMetrics>,
     pub(crate) drops: [u64; 11],
-    /// Timeouts a node returned that were not strictly after a timer call (each was replaced by now plus 1 ms).
+    /// Timer calls that left due a deadline that was due at the node's previous timer call, which left it due as well
+    /// (pinc-node's rule, `pinc_node::TimerStats`); each was moved to the call's time plus 1 ms. A deadline at the
+    /// call's own time, which the next call moves, is not counted.
     pub timer_violations: u64,
     /// Datagrams the links duplicated.
     pub duplicated: u64,

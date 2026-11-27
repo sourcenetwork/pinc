@@ -326,6 +326,8 @@ pub struct Probe {
     pub ticks_per_call: u64,
     /// When true a requested timeout is not cleared when it fires, so the node keeps asking for a past time.
     pub sticky: bool,
+    /// Timer calls that name their own time as the next deadline before the timer clears.
+    pub again: u32,
     /// The time of every call to `handle_datagram`, which shows when the node actually ran.
     pub call_times: Vec<Time>,
     /// A datagram the node queues when it is suspended (a farewell), as `(local, remote, data)`.
@@ -368,7 +370,10 @@ impl Node for Probe {
     }
 
     fn handle_timeout(&mut self, now: Time) {
-        if !self.sticky {
+        if self.again > 0 {
+            self.again -= 1;
+            self.timer = Some(now);
+        } else if !self.sticky {
             self.timer = None;
         }
         self.events.push_back(ProbeEvent::Timer(now));

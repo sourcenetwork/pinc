@@ -424,7 +424,7 @@ fn finish(
             }
             if n.timer_violations() > 0 {
                 let msg = format!(
-                    "{} timeouts were not later than the call that returned them",
+                    "{} timer calls left the endpoint's deadline due twice in a row",
                     n.timer_violations()
                 );
                 r.violation(end, "G-SPEC", i, &msg);
