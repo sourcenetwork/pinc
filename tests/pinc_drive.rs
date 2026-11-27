@@ -24,6 +24,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use nuclei::Handle;
+use nuclei::sync::oneshot;
+use pinc::{Discovery, Endpoint, Error, Hosted};
 use pinc_common::{ECHO, SINK, bind, bind_idle, client, join_all, node, pattern, pattern_hash, poll_drop, within};
 
 pinc_tests::install_counting_allocator!();
@@ -436,22 +438,17 @@ async fn the_last_datagram_of_an_endpoint_leaves_with_its_call() {
 
 /// The last call of a host is its close, and the peer sees the code although no future is polled after the close and
 /// the endpoint is dropped at once. On the code that returned every call before its send, the close frame waited for
-/// a later poll that never came, and the peer's session hung until its idle timeout (pinc#636).
+/// a later poll that never came, and the peer's session hung until its idle timeout (pinc#636). The client closes
+/// once the server has accepted: a dial whose handshake round trip is 20 ms or more reports before the server's host
+/// has the session, and a session that ended before its host read it is never offered on accept (pinc#436).
 #[nuclei::test]
 async fn the_last_close_of_an_endpoint_reaches_the_peer() {
     within(30, async {
         let server = bind(pinc_common::builder().alpn(ECHO)).await;
         let client = bind_idle(pinc_common::builder().alpn(ECHO)).await;
         let conn = client.connect(server.addr(), ECHO).await.unwrap();
-        let (why_tx, why_rx) = nuclei::sync::oneshot::channel::<pinc::Error>();
-        nuclei::spawn_local({
-            let server = server.clone();
-            async move {
-                let c = server.accept().await.unwrap().into_connection();
-                let _ = why_tx.send(c.closed().await);
-            }
-        })
-        .detach();
+        let (why_rx, accepted) = closed_on_accept(&server);
+        within(20, accepted).await.unwrap();
         conn.close(0).await;
         drop(conn);
         drop(client);
@@ -462,6 +459,23 @@ async fn the_last_close_of_an_endpoint_reaches_the_peer() {
         );
     })
     .await;
+}
+
+/// Accept the next session of `server` in a task of its own: the second receiver fires once it is accepted, the first
+/// with the reason it closed.
+fn closed_on_accept<H: Hosted + 'static, D: Discovery + 'static>(
+    server: &Endpoint<H, D>,
+) -> (oneshot::Receiver<Error>, oneshot::Receiver<()>) {
+    let (why_tx, why_rx) = oneshot::channel::<Error>();
+    let (up_tx, up_rx) = oneshot::channel::<()>();
+    let server = server.clone();
+    nuclei::spawn_local(async move {
+        let c = server.accept().await.unwrap().into_connection();
+        let _ = up_tx.send(());
+        let _ = why_tx.send(c.closed().await);
+    })
+    .detach();
+    (why_rx, up_rx)
 }
 
 #[allow(dead_code)]
