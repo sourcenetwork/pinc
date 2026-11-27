@@ -88,8 +88,26 @@ impl Swtpm {
         }
     }
 
+    /// Connect a store to the simulator. The readiness probe's close can still reset or refuse the first client (swtpm
+    /// serves one connection at a time), so a failed connect is retried with a deadline and bounded backoff.
+    #[allow(
+        clippy::needless_pass_by_value,
+        reason = "every caller builds the configuration in the call"
+    )]
     pub fn open(&self, config: TpmConfig) -> TpmStore<SimTransport> {
-        TpmStore::connect_simulator(("127.0.0.1", self.port), None, config).unwrap()
+        let deadline = Instant::now() + STARTUP_DEADLINE;
+        let mut backoff = Duration::from_millis(1);
+        loop {
+            match TpmStore::connect_simulator(("127.0.0.1", self.port), None, config.clone()) {
+                Ok(store) => return store,
+                Err(e) => assert!(
+                    Instant::now() < deadline,
+                    "the simulator did not accept a store within {STARTUP_DEADLINE:?}: {e:?}"
+                ),
+            }
+            std::thread::sleep(backoff);
+            backoff = (backoff * 2).min(Duration::from_millis(50));
+        }
     }
 }
 
