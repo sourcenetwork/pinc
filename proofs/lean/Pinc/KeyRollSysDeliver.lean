@@ -210,7 +210,7 @@ theorem Sys.setNode_setNode (S : Sys) (n : Bool) (a b : Node) : (S.setNode n a).
 theorem inv_setOut {P : Params} {S : Sys} {n : Bool} (h : Inv P S) (o : Option Msg) (r : Option Nat)
     (hnn : NodeInv P n { S.nd n with out := o, reqAt := r })
     (hA : ∀ a, o = some a → a.answer = true → ∃ c ∈ S.stl, c.ans = a ∧ c.n = n)
-    (hU : ∀ a, o = some a → a.answer = false → ∀ p ∈ S.net, p.pl ≠ some a) :
+    (hU : ∀ a, o = some a → a.answer = false → ∀ p ∈ S.net, ∀ r, p.pl = some r → r.answer = false → r.share ≠ a.share) :
     Inv P (S.setNode n { S.nd n with out := o, reqAt := r }) := by
   have fr : ∀ m, (S.setNode n { S.nd n with out := o, reqAt := r }).nd m = S.nd m ∨
       (m = n ∧ (S.setNode n { S.nd n with out := o, reqAt := r }).nd m = { S.nd n with out := o, reqAt := r }) :=
@@ -285,10 +285,10 @@ theorem inv_setOut {P : Params} {S : Sys} {n : Bool} (h : Inv P S) (o : Option M
     · rw [e] at hl; exact h.ansLastStl _ a hl
   case lastAnsStl => intro m sh a hl; rw [eRoll] at hl; exact h.lastAnsStl m sh a hl
   case unsent =>
-    intro m mm ho ha p hp heq
+    intro m mm ho ha p hp r heq hr
     by_cases hmn : m = n
-    · subst hmn; rw [hsame] at ho; exact hU mm ho ha p hp heq
-    · rw [hne m hmn] at ho; exact h.unsent m mm ho ha p hp heq
+    · subst hmn; rw [hsame] at ho; exact hU mm ho ha p hp r heq hr
+    · rw [hne m hmn] at ho; exact h.unsent m mm ho ha p hp r heq hr
   case compOK =>
     intro c hc
     obtain ⟨⟨k, k1, k2⟩, k3⟩ := h.compOK c hc

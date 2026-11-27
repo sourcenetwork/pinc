@@ -22,7 +22,7 @@ def Node.lastRid (s : Node) : Option T :=
 /-- A message sent by node `n` that has drawn `c` atoms: shares are public values of its own atoms, an answer carries
 the identifier of the request share it answers and the Diffie-Hellman value of the two atoms with it bound in. -/
 structure MsgOK (n : Bool) (c : Nat) (m : Msg) : Prop where
-  req : m.answer = false → m = Msg.req m.share ∧ ∃ k, m.share = .pub (atomOf n k) ∧ k < c
+  req : m.answer = false → m = Msg.req m.share m.roll ∧ ∃ k, m.share = .pub (atomOf n k) ∧ k < c
   ans : m.answer = true → ∃ k k', m.share = .pub (atomOf n k) ∧ k < c ∧ m.to = .id (.pub (atomOf (!n) k')) ∧
     m.gdh = .bound (.id (.pub (atomOf (!n) k'))) (Dh (atomOf n k) (atomOf (!n) k'))
 
@@ -69,7 +69,7 @@ structure NodeInv (P : Params) (n : Bool) (s : Node) : Prop where
   lastMsg : ∀ sh a, s.roll.last = some (sh, a) → MsgOK n s.ctr a
   lastAns : ∀ sh a, s.roll.last = some (sh, a) → a.answer = true
   outReq : ∀ m, s.out = some m → m.answer = false → s.roll.pending = some m
-  pendSeed : ∀ seed rq, s.roll.st = .req seed rq → rq = Msg.req (.pub seed) ∧ ∃ k, seed = atomOf n k ∧ k < s.ctr
+  pendSeed : ∀ seed rq, s.roll.st = .req seed rq → rq = Msg.req (.pub seed) rq.roll ∧ ∃ k, seed = atomOf n k ∧ k < s.ctr
   ansLast : ∀ m, s.lastAns = some m → MsgOK n s.ctr m ∧ m.answer = true
 
 /-- Prove every field of `NodeInv` separately. -/
@@ -88,12 +88,12 @@ theorem NodeInv.init (P : Params) (n : Bool) : NodeInv P n (Node.init n) := by
 
 theorem NodeInv.begin {P : Params} {n : Bool} {s : Node} (h : NodeInv P n s) (hnx : s.nxt = none)
     (hst : s.stg = none) :
-    NodeInv P n { s with roll := { s.roll with st := .req (atomOf n s.ctr) (Msg.req (.pub (atomOf n s.ctr))) },
-                         out := some (Msg.req (.pub (atomOf n s.ctr))), reqAt := none, ctr := s.ctr + 1 } := by
-  have hm : MsgOK n (s.ctr + 1) (Msg.req (.pub (atomOf n s.ctr))) :=
+    NodeInv P n { s with roll := { s.roll with st := .req (atomOf n s.ctr) (Msg.req (.pub (atomOf n s.ctr)) s.roll.rolls) },
+                         out := some (Msg.req (.pub (atomOf n s.ctr)) s.roll.rolls), reqAt := none, ctr := s.ctr + 1 } := by
+  have hm : MsgOK n (s.ctr + 1) (Msg.req (.pub (atomOf n s.ctr)) s.roll.rolls) :=
     ⟨fun _ => ⟨rfl, s.ctr, rfl, by show s.ctr < s.ctr + 1; omega⟩, fun a => by simp [Msg.req] at a⟩
-  have hp : ({ s.roll with st := .req (atomOf n s.ctr) (Msg.req (.pub (atomOf n s.ctr))) } : Roll).pending
-      = some (Msg.req (.pub (atomOf n s.ctr))) := rfl
+  have hp : ({ s.roll with st := .req (atomOf n s.ctr) (Msg.req (.pub (atomOf n s.ctr)) s.roll.rolls) } : Roll).pending
+      = some (Msg.req (.pub (atomOf n s.ctr)) s.roll.rolls) := rfl
   node_inv
   · exact h.dialer
   · exact h.kfSk
@@ -561,7 +561,7 @@ theorem NodeInv.consumed {P : Params} {n : Bool} {s : Node} (h : NodeInv P n s) 
   case rolls =>
     simp only [consumed_chg, consumed_roll, Roll.completed]
     rw [NodeInv.rolls h]; exact rolls_inc _
-  case derOK => exact DerOK.snoc (NodeInv.derOK h) _ (Or.inr ⟨rfl, k, by simp [hps1, hps2, Msg.req]⟩)
+  case derOK => exact DerOK.snoc (NodeInv.derOK h) _ (Or.inr ⟨rfl, k, by rw [hps1]; simp [hps2, Msg.req]⟩)
   case lastInv => simp [Roll.completed]
   case stgLast => intro hh; simp only [consumed_stg, hr.2] at hh; simp at hh
   case noDup => exact NoDupStg.snoc (NodeInv.noDup h) _ (by intro x _ _ hd; simp at hd)
@@ -723,7 +723,7 @@ theorem NodeInv.rekeyRx {P : Params} {n : Bool} {s : Node} (h : NodeInv P n s) (
         exact h.staged m lvl (atomOf (!n) k) hmok ha' hk (gated_nodup P s m ha' hn hg') hn hlvl
 
 theorem NodeInv.pending_req {P : Params} {n : Bool} {s : Node} (h : NodeInv P n s) {m : Msg}
-    (hp : s.roll.pending = some m) : ∃ seed, m = Msg.req (.pub seed) := by
+    (hp : s.roll.pending = some m) : ∃ seed, m = Msg.req (.pub seed) m.roll := by
   unfold Roll.pending at hp
   cases hst : s.roll.st with
   | idle => simp [hst] at hp
@@ -734,7 +734,7 @@ theorem NodeInv.pending_req {P : Params} {n : Bool} {s : Node} (h : NodeInv P n 
 
 theorem NodeInv.pending_answer {P : Params} {n : Bool} {s : Node} (h : NodeInv P n s) {m : Msg}
     (hp : s.roll.pending = some m) : m.answer = false := by
-  obtain ⟨seed, rfl⟩ := h.pending_req hp; rfl
+  obtain ⟨seed, e⟩ := h.pending_req hp; rw [e]; rfl
 
 /-- The depth of a key is its generation. -/
 theorem NodeInv.depths {P : Params} {n : Bool} {s : Node} (h : NodeInv P n s) :

@@ -80,11 +80,8 @@ theorem inv_consume {P : Params} {S : Sys} {n : Bool} (h : Inv P S) {p : Pkt} (h
     have hmm : m' = rq := (Option.some.inj hpd).symm
     obtain ⟨p', hp', r, hr1, hr2, hr3⟩ := a7
     have hrm := (h.netMsg p' hp' r hr1).req hr2
-    have hrr : r = Msg.req r.share := hrm.1
-    have hmq : rq = Msg.req rq.share := by rw [hps1]; rfl
     have hrs : r.share = rq.share := T.id.inj (hr3.symm.trans (by rw [hcm']; exact hto))
-    have hreq : r = rq := by rw [hrr, hrs, ← hmq]
-    exact h.unsent n m' hm' hq'' p' hp' (by rw [hr1, hreq, hmm])
+    exact h.unsent n m' hm' hq'' p' hp' r hr1 hr2 (by rw [hrs, hmm])
   have hnn := (h.node n).consumed seed rq b m.spn hst hnoreq
   generalize hs' : (S.nd n).consumed (S.nd n).roll.completed (T.bound (.id rq.share) (Dh seed b)) m.spn rq.share = s' at hnn ⊢
   have fr := fun m' => Sys.setNode_cases S n m' s'

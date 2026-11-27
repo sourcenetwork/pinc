@@ -82,7 +82,7 @@ pub fn carrier_decision(p: &CarrierView, now: u64) -> bool {
 pub fn view_json(v: &TimerView) -> String {
     let ph = ["hs", "conn", "closing", "closed"][usize::from(v.phase)];
     format!(
-        r#"{{"ph":"{ph}","close":{},"keys":{},"act":{},"sent":{},"ka":{},"pa":{},"la":{},"stx":{},"wd":{},"ld":{},"idle":{},"conf":{},"hs":{},"rekey":{},"rec":{},"ack":{},"amp":{},"paced":{},"path":{},"mtu":{}}}"#,
+        r#"{{"ph":"{ph}","close":{},"keys":{},"act":{},"sent":{},"ka":{},"pa":{},"la":{},"stx":{},"wd":{},"ld":{},"idle":{},"conf":{},"hs":{},"rekey":{},"rec":{},"ack":{},"amp":{},"rr":{},"kr":{},"paced":{},"path":{},"mtu":{}}}"#,
         v.close.map_or(-1, |c| i64::try_from(c).unwrap()),
         v.send_keys,
         us(v.last_activity),
@@ -100,6 +100,8 @@ pub fn view_json(v: &TimerView) -> String {
         cus(v.rec),
         cus(v.ack),
         v.amp_ok,
+        v.rr,
+        v.kr,
         cus(v.paced),
         cus(v.path),
         cus(v.mtu)
@@ -145,6 +147,12 @@ impl Log {
             *self.seen.entry(e).or_default() += 1;
         }
         *self.seen.entry(leak(op)).or_default() += 1;
+        if !v.rr && !v.kr {
+            *self.seen.entry("no_control_room").or_default() += 1;
+        }
+        if v.kr && !v.rr {
+            *self.seen.entry("ping_room_only").or_default() += 1;
+        }
         let evs: Vec<String> = ev.iter().map(|e| format!("\"{e}\"")).collect();
         let name = if n == 0 { "a" } else { "b" };
         let _ = writeln!(

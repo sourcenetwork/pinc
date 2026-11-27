@@ -541,7 +541,9 @@ theorem dupRequestAnswered {P : Params} {S : Sys}
   exact ⟨rfl, by simp [Node.chg, rf.ders]⟩
 
 /-- The dialer wins a collision: while its own request is out, the dialing side ignores the other side's request
-and keeps its state; the accepting side drops its own request and answers (`DialerWins`). -/
+and keeps its state; the accepting side drops its own request and answers a request of its own count
+(`DialerWins`). The TLA+ property has no `hroll`: that a crossing request always carries the acceptor's count is
+model checked only (`DialerWins`, `RollOnce` of `KeyRoll.tla`). -/
 theorem dialerWins {P : Params} {S : Sys} (hr : Reach P S) {n : Bool} {p : Pkt}
     {f : Bool} (hok : deliverOk P S n p f = true) {m : Msg}
     (hproc : ((S.nd n).afterRecv P p f S.now).2 = true) (hpl : p.pl = some m) (hm : m.answer = false)
@@ -549,7 +551,7 @@ theorem dialerWins {P : Params} {S : Sys} (hr : Reach P S) {n : Bool} {p : Pkt}
     (hnd : (S.nd n).roll.isDup m = false) (hreq : (S.nd n).roll.isIdle = false) (hnx : (S.nd n).nxt = none) :
     ((S.nd n).roll.dialer = true →
       ((deliverUpd P S n p f).nd n).roll = (S.nd n).roll ∧ ((deliverUpd P S n p f).nd n).stg = none) ∧
-    ((S.nd n).roll.dialer = false →
+    (m.roll = (S.nd n).roll.rolls → (S.nd n).roll.dialer = false →
       ((deliverUpd P S n p f).nd n).roll.st = .idle ∧ ((deliverUpd P S n p f).nd n).out ≠ none) := by
   have I := hr.inv
   obtain ⟨hp, hsrc⟩ := deliverOk_spec hok
@@ -578,11 +580,11 @@ theorem dialerWins {P : Params} {S : Sys} (hr : Reach P S) {n : Bool} {p : Pkt}
   simp only [hpl, hproc, hact, Bool.and_self, if_true] at hd1
   constructor
   · intro hdl
-    have hc : (!s1.roll.isIdle && s1.roll.dialer) = true := by rw [rf.roll]; simp [hreq, hdl]
+    have hc : s1.roll.blocks m = true := by rw [rf.roll]; simp [Roll.blocks, hreq, hdl]
     rw [hd1, rekeyRx_busy s1 m n _ hm hg hnd1 hc]
     exact ⟨rf.roll, hk.2⟩
-  · intro hdl
-    have hc : (!s1.roll.isIdle && s1.roll.dialer) = false := by rw [rf.roll]; simp [hdl]
+  · intro hroll hdl
+    have hc : s1.roll.blocks m = false := by rw [rf.roll]; simp [Roll.blocks, hdl, hroll]
     rw [hd1, rekeyRx_stage s1 m n _ (atomOf (!n) kk) hm hg hnd1 hc hkk]
     simp [Node.staged, Roll.answeredWith]
 

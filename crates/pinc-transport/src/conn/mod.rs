@@ -213,9 +213,10 @@ pub struct Connection<
     next_pn: u64,
     started: u64,
     odcid: ConnId,
-    /// Where the handshake message a dialing side's machine took last came from: the path, the source id and the
-    /// arrival time of the datagram that completed it. Acted on only once the session is established.
-    reply_from: Option<(PathId, ConnId, u64)>,
+    /// Where the handshake message a dialing side's machine took last came from: the path and the arrival time of
+    /// the datagram that completed it. Acted on only once the session is established. The source id of the packet
+    /// header is never kept: the peer's id comes from the authenticated message.
+    reply_from: Option<(PathId, u64)>,
     resumed: bool,
     confirmed: bool,
     ext_release: bool,

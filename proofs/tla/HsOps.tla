@@ -187,24 +187,28 @@ StoredIds(sl) == {sl[i].tid : i \in Occ(sl)}
 RECURSIVE FreshFrom(_, _, _)
 FreshFrom(sl, c, j) == IF j > ATT THEN NIL ELSE IF TidT(c[j]) \notin StoredIds(sl) THEN TidT(c[j]) ELSE FreshFrom(sl, c, j + 1)
 
-(* one ticket of issue_batch: [ok, sl, tid] *)
-IssueOne(sl, c, res, cr, peer, al, ad) ==
+(* one ticket of issue_batch: [ok, stop, sl, tid, at]; mine holds the slots of the batch's earlier tickets, the newest
+   and unexpired, so the victim is one of them only when the store is full of the batch (or 0 when it has no slot):
+   the batch then ends (stop) and stores nothing more *)
+IssueOne(sl, c, res, cr, peer, al, ad, mine) ==
     LET tid == FreshFrom(sl, c, 1)
         slot == [occ |-> TRUE, tid |-> tid, psk |-> Psk(res, tid, cr), peer |-> peer, al |-> al, ad |-> ad, cr |-> cr,
                  exp |-> FALSE, stamp |-> Clk(sl) + 1]
         at == Victim(sl)
-    IN IF tid = NIL THEN [ok |-> FALSE, sl |-> sl, tid |-> NIL]
-       ELSE [ok |-> TRUE, sl |-> Norm(Put(sl, at, slot)), tid |-> IF at = 0 THEN NIL ELSE tid]
+    IN IF tid = NIL THEN [ok |-> FALSE, stop |-> FALSE, sl |-> sl, tid |-> NIL, at |-> 0]
+       ELSE IF at = 0 \/ at \in mine THEN [ok |-> TRUE, stop |-> TRUE, sl |-> sl, tid |-> NIL, at |-> 0]
+       ELSE [ok |-> TRUE, stop |-> FALSE, sl |-> Norm(Put(sl, at, slot)), tid |-> tid, at |-> at]
 
 (* issue_batch for the Len(cs) tickets asked for; cs[j] is the draw sequence of ticket j; the tickets that did get stored
    are in tids *)
-RECURSIVE IssueAll(_, _, _, _, _, _, _, _, _)
-IssueAll(sl, cs, j, res, cr, peer, al, ad, tids) ==
+RECURSIVE IssueAll(_, _, _, _, _, _, _, _, _, _)
+IssueAll(sl, cs, j, res, cr, peer, al, ad, tids, mine) ==
     IF j > Len(cs) THEN [ok |-> TRUE, sl |-> sl, tids |-> tids]
-    ELSE LET r == IssueOne(sl, cs[j], res, cr, peer, al, ad)
+    ELSE LET r == IssueOne(sl, cs[j], res, cr, peer, al, ad, mine)
          IN IF ~r.ok THEN [ok |-> FALSE, sl |-> r.sl, tids |-> tids]
-            ELSE IssueAll(r.sl, cs, j + 1, res, cr, peer, al, ad, IF r.tid = NIL THEN tids ELSE Append(tids, r.tid))
-Issue(sl, cs, res, cr, peer, al, ad) == IssueAll(sl, cs, 1, res, cr, peer, al, ad, <<>>)
+            ELSE IF r.stop THEN [ok |-> TRUE, sl |-> r.sl, tids |-> tids]
+            ELSE IssueAll(r.sl, cs, j + 1, res, cr, peer, al, ad, Append(tids, r.tid), mine \cup {r.at})
+Issue(sl, cs, res, cr, peer, al, ad) == IssueAll(sl, cs, 1, res, cr, peer, al, ad, <<>>, {})
 
 (* the tickets an issue produced, for the ledger *)
 IssuedOf(tids, res, cr, peer, al, ad) ==
@@ -530,6 +534,9 @@ RHello(st, s, sto, m, cs) ==
        ELSE IF st.ph # "idle" THEN RDrop(st, sto)
        ELSE IF m.ver # "ok" THEN RFatal(st, sto)
        ELSE IF ~Served(m.al) THEN RFatal(st, sto)
+       \* a live ticket that fits but whose binder does not verify: no answer and nothing changes (the Hello proved
+       \* nothing; Failure::Authentication, which the screen drops as well), so a later valid Hello is still served
+       ELSE IF i0 # 0 /\ ~t.exp /\ t.al = m.al /\ t.ad = m.ad /\ Binder(t.psk, thh) # m.binder THEN RDrop(st, sto)
        ELSE IF ~usable THEN ROk(st, {M([ty |-> "RRej", echo |-> thh])}, {}, stoRej)
        ELSE IF ~is.ok THEN RRes([st EXCEPT !.ph = "failed"], {}, {"failed"}, "fatal", sto1, iss, {})
        ELSE RRes([st EXCEPT !.ph = "resumed", !.peer = t.peer, !.tid = m.tid, !.tpsk = t.psk, !.thh = thh,

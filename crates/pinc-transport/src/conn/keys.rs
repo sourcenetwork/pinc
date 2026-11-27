@@ -21,10 +21,10 @@
 //!
 //! # The REKEY frame
 //!
-//! The REKEY frame carries one message: `kind(1)` (0 request, 1 answer), `share(32)`, and for an answer `echo(8)`
-//! and `switch_pn(varint)`. A request is sent again every probe timeout until it is answered; a lost answer is sent
-//! again at once. A request that arrives in a packet opened under the previous generation's key is a late copy of
-//! a settled roll and is ignored.
+//! The REKEY frame carries one message: `kind(1)` (0 request, 1 answer), `share(32)`, for a request `roll(varint)`
+//! (the rolls its sender has completed) and for an answer `echo(8)` and `switch_pn(varint)`. A request is sent again
+//! every probe timeout until it is answered; a lost answer is sent again at once. A request that arrives in a packet
+//! opened under the previous generation's key is a late copy of a settled roll and is ignored.
 //!
 //! Invariants: a receive key of the next generation is installed only after a packet authenticated under it, so a
 //! forged phase bit costs one failed open and changes nothing; a generation only moves forward; the sending key of
@@ -249,7 +249,10 @@ impl<P: Provider> Keys<P> {
             return Some(r);
         }
         let r = self.roll.pending()?;
-        if self.request_at.is_none_or(|t| now >= t.saturating_add(pto)) {
+        if self
+            .request_at
+            .is_none_or(|t| resend_at(t, pto).is_some_and(|d| now >= d))
+        {
             self.request_at = Some(now);
             return Some(r);
         }
@@ -279,7 +282,7 @@ impl<P: Provider> Keys<P> {
     /// When the pending request goes out again, if one is waiting for its answer.
     pub(crate) fn rekey_deadline(&self, pto: u64) -> Option<u64> {
         self.roll.pending()?;
-        self.request_at.map(|t| t.saturating_add(pto))
+        self.request_at.and_then(|t| resend_at(t, pto))
     }
 
     /// The peer asked for a roll: stage the new keys and queue the answer. `next_pn` is the next packet number this
@@ -319,6 +322,13 @@ impl<P: Provider> Keys<P> {
         self.request_at = None;
         Ok(())
     }
+}
+
+/// When a request sent at `sent` goes out again: one probe timeout `pto` later, or never when that is past the end of
+/// the clock. `poll_rekey` and `rekey_deadline` both ask this, so the timer is never due while the
+/// request waits.
+fn resend_at(sent: u64, pto: u64) -> Option<u64> {
+    crate::recovery::deadline_after(sent, pto)
 }
 
 conn_impl! {
@@ -372,5 +382,35 @@ conn_impl! {
         {
             self.violation(env.now, code::INTERNAL);
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, reason = "tests assert")]
+mod tests {
+    use super::*;
+    use pinc_crypto::{Drbg, Software};
+
+    #[test]
+    fn a_request_is_never_due_past_the_end_of_the_clock() {
+        let p = Software;
+        let mut drbg = Drbg::new(&[3; 32]);
+        let mut env = Env {
+            provider: &p,
+            now: 0,
+            drbg: &mut drbg,
+        };
+        let mut keys = Keys::<Software>::new(true);
+        keys.begin(|roll| roll.start(&mut env)).unwrap();
+        let now = u64::MAX - 5;
+        let sent = keys.poll_rekey(now, 1000).unwrap();
+        assert!(!sent.answer);
+        // The deadline passes the end of the clock: no deadline, and no resend however late the call.
+        assert_eq!(keys.rekey_deadline(1000), None);
+        assert_eq!(keys.poll_rekey(u64::MAX, 1000), None);
+        // With room before the end, the deadline is `pto` after the send and the request goes out again then.
+        assert_eq!(keys.rekey_deadline(2), Some(now + 2));
+        assert_eq!(keys.poll_rekey(now + 1, 2), None);
+        assert_eq!(keys.poll_rekey(now + 2, 2), Some(sent));
     }
 }

@@ -42,7 +42,7 @@ use pinc_crypto::{Aead, Drbg, IdentityAlg, Keypair, NodeId, Secret, Software};
 use pinc_security::keyroll::Rekey;
 use pinc_security::message::{Initial, MessageType, PrekeyField};
 use pinc_security::responder::{Screen, screen_first};
-use pinc_security::tickets::MAX_EXPORT_ENTRY_LEN;
+use pinc_security::tickets::{MAX_BATCH, MAX_EXPORT_ENTRY_LEN, MAX_EXPORT_TICKETS};
 use pinc_security::{
     AeadSet, AlpnList, AmpBudget, Alpn, ClientTickets, ConnId, CreditRecord, Env, Established, Event, Initiator,
     InitiatorParams, KeyHandle, LocalIdentity, Output, PrekeyCache, PrekeyInfo, Responder, ResponderConfig,
@@ -149,7 +149,8 @@ fn amp_runs() -> impl Gen<Value = Vec<AmpOp>> {
 }
 
 /// A caller that sends only when the budget allows it never sends more than three times what it received before
-/// validation, counting in 128 bits; below saturation, the budget allows exactly what the formula of the doc allows.
+/// validation, counting in 128 bits; below saturation, the budget allows exactly what the formula of the doc allows,
+/// and once the sent counter is saturated an unvalidated path sends nothing more (its true total is unknown).
 #[ephyra::test(gen = amp_runs(), tests = 20_000)]
 fn the_amplification_budget_keeps_three_times_the_true_received_count(ops: Vec<AmpOp>) {
     let mut b = AmpBudget::new();
@@ -162,9 +163,14 @@ fn the_amplification_budget_keeps_three_times_the_true_received_count(ops: Vec<A
             },
             AmpOp::Send(n) => {
                 let allowed = b.can_send(*n);
-                if !validated && rx <= u128::from(u64::MAX) && tx <= u128::from(u64::MAX) {
+                // `sent()` at u64::MAX is the saturated count: the true total may be larger, so only a counter below
+                // it is exact.
+                if !validated && rx <= u128::from(u64::MAX) && tx < u128::from(u64::MAX) {
                     let formula = tx + u128::from(*n) + 48 <= 3 * rx;
                     assert_eq!(allowed, formula, "the budget disagrees with tx + n + 48 <= 3 * rx");
+                }
+                if !validated && tx >= u128::from(u64::MAX) {
+                    assert!(!allowed, "an unvalidated path whose sent counter is saturated may still send");
                 }
                 if allowed {
                     b.on_send(*n);
@@ -604,8 +610,8 @@ fn export_sizes() -> impl Gen<Value = (usize, usize)> {
     )
 }
 
-/// A store of up to 300 peers exports its newest `max` tickets into a buffer of the documented size, and a store of
-/// the same capacity restores them, for counts on both sides of 255.
+/// A store of up to 300 peers exports its newest `max` tickets, at most 255 (the count is one byte), into a buffer of
+/// the documented size, and a store of the same capacity restores exactly those, for counts on both sides of 255.
 #[ephyra::test(gen = export_sizes(), tests = 60)]
 fn a_large_store_exports_and_restores_its_newest_tickets(x: (usize, usize)) {
     let (live, max) = x;
@@ -625,10 +631,22 @@ fn a_large_store_exports_and_restores_its_newest_tickets(x: (usize, usize)) {
     ephyra::signature(if live.min(max) > 255 { "more than 255" } else { "at most 255" });
     assert!(r.is_ok(), "export of {} tickets into the documented buffer failed: {r:?}", live.min(max));
     let n = r.unwrap();
+    let kept = live.min(max).min(MAX_EXPORT_TICKETS);
+    assert_eq!(buf[1] as usize, kept, "the export's count is not the newest at most max and 255");
     let mut back: Box<ClientTickets<300>> = Box::default();
     let got = back.restore(&buf[..n], T0);
-    assert_eq!(got, Ok(live.min(max)), "a restore of the export did not store every exported ticket");
-    assert_eq!(back.len(), live.min(max), "the restored store holds another number of tickets");
+    assert_eq!(got, Ok(kept), "a restore of the export did not store every exported ticket");
+    assert_eq!(back.len(), kept, "the restored store holds another number of tickets");
+    // The newest `kept` peers are the ones exported, each with its own ticket; the older ones are not.
+    for i in 0..live {
+        let t = back.take(&node(i as u16), ALPNS[0], T0);
+        if i >= live - kept {
+            let got = t.map(|t| *t.peer());
+            assert_eq!(got, Some(node(i as u16)), "the ticket of peer {i}, among the newest, was not restored");
+        } else {
+            assert!(t.is_none(), "the ticket of peer {i}, older than the newest {kept}, was restored");
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -709,7 +727,7 @@ fn issue_and_redeem<const N: usize>(count: usize, before: usize) -> Vec<bool> {
     let batch = stores.tickets.issue_batch(&mut env, &srv, count, 3600).unwrap();
     assert_eq!(
         batch.entries().len(),
-        if N == 0 { 0 } else { count.min(4) },
+        count.min(MAX_BATCH).min(N),
         "N={N}: a batch of {count} holds {} tickets",
         batch.entries().len()
     );

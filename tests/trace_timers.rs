@@ -66,7 +66,7 @@ use lifecycle::{close_run, dead_run, idle_run, link_run, sleep_hold_run, violati
 use random::random_run;
 use rec::Log;
 use relay::{Carrier, relay_run};
-use unconfirmed::{dial_run, unconfirmed_run};
+use unconfirmed::{dial_run, thin_budget_run, unconfirmed_run};
 
 #[test]
 fn timers_match_the_models() {
@@ -124,6 +124,8 @@ fn timers_match_the_models() {
             next(&mut log);
             unconfirmed_run(&mut log, 750 + i as u64, thin, turn);
         }
+        next(&mut log);
+        thin_budget_run(&mut log, 790);
         for (i, (relay, carrier, node)) in [
             (true, Carrier::Fresh, None),
             (true, Carrier::Edge, None),
@@ -187,6 +189,8 @@ fn timers_match_the_models() {
             "near_direct",
             "near_heard_sampled",
             "near_heard_unsampled",
+            "no_control_room",
+            "ping_room_only",
         ] {
             assert!(
                 log.seen.get(k).copied().unwrap_or(0) > 0,

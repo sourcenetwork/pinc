@@ -519,23 +519,33 @@ def freshId (l : Slots) (draw : Nat → Option (List Nat)) : Nat → Nat → Exc
     | some tid => if (find l tid).isNone then (.ok tid, p + 1) else freshId l draw k (p + 1)
 
 /-- `issue_batch`: for each of `k` tickets draw a fresh id, stamp it with the next clock value and place it in the
-victim slot (the batch lists only the tickets that found a slot). On a failure the tickets already placed stay
-stored and the call returns the error, as the code does. `mk tid` is the ticket of the session with id `tid`. -/
+victim slot. `mine` holds the slots this batch has filled: when `victim` finds no slot, or one of `mine`, the batch
+ends there (after the draw and the clock step, as the code does) with the tickets already placed, so a ticket of the
+batch never evicts another of the same batch. The code's `victim` skips the protected slots instead; the two agree on
+every reachable store, because a slot of `mine` is neither empty nor expired (its expiry is at least `now`) and holds
+a stamp above every other, so `victim` reaches one only when every other slot is protected or missing. The trace
+replay of `issue_batch` checks the agreement on the code's runs. On a failure the tickets already placed stay stored
+and the call returns the error, as the code does. `mk tid` is the ticket of the session with id `tid`. -/
 def issueLoop (mk : List Nat → Tk) (now : Nat) (draw : Nat → Option (List Nat)) :
-    Nat → Store → Nat → Store × Except Fail (List (List Nat))
-  | 0, st, _ => (st, .ok [])
-  | k + 1, st, p =>
+    Nat → Store → Nat → List Nat → Store × Except Fail (List (List Nat))
+  | 0, st, _, _ => (st, .ok [])
+  | k + 1, st, p, mine =>
     match (freshId st.slots draw idAttempts p).1 with
     | .error e => (st, .error e)
     | .ok tid =>
-      let r := issueAt st.slots now ⟨mk tid, st.clock + 1⟩
-      let rest := issueLoop mk now draw k ⟨r.1, st.clock + 1⟩ (freshId st.slots draw idAttempts p).2
-      (rest.1, rest.2.map fun ids => if r.2 then tid :: ids else ids)
+      match victim st.slots now with
+      | none => (⟨st.slots, st.clock + 1⟩, .ok [])
+      | some j =>
+        if j ∈ mine then (⟨st.slots, st.clock + 1⟩, .ok [])
+        else
+          let rest := issueLoop mk now draw k ⟨(issueAt st.slots now ⟨mk tid, st.clock + 1⟩).1, st.clock + 1⟩
+            (freshId st.slots draw idAttempts p).2 (j :: mine)
+          (rest.1, rest.2.map (tid :: ·))
 
 /-- `ServerTickets::issue_batch` with `count` asked: `min count MAX_BATCH` tickets. -/
 def issueBatch (st : Store) (mk : List Nat → Tk) (now : Nat) (draw : Nat → Option (List Nat)) (count : Nat) :
     Store × Except Fail (List (List Nat)) :=
-  issueLoop mk now draw (min count maxBatch) st 0
+  issueLoop mk now draw (min count maxBatch) st 0 []
 
 /-- Setting a slot: what an index holds afterwards. -/
 theorem set_get_cases {α : Type} {l : List α} {j k : Nat} {x y : α} (h : (l.set j x)[k]? = some y) :
@@ -664,68 +674,179 @@ theorem issueAt_stamps {st : Store} (hs : StampInv st) (now : Nat) (s : Slot) (h
         have := hs.1 a x hx'; omega
       · exact hs.2 a b x y hx' hy' hxy
 
+/-- The clock step alone keeps the stamp invariant. -/
+theorem StampInv.tick {st : Store} (hs : StampInv st) : StampInv ⟨st.slots, st.clock + 1⟩ :=
+  ⟨fun i t h => by have := hs.1 i t h; simp only; omega, hs.2⟩
+
 theorem issueLoop_length (mk : List Nat → Tk) (now : Nat) (draw : Nat → Option (List Nat)) :
-    ∀ (k : Nat) (st : Store) (p : Nat), (issueLoop mk now draw k st p).1.slots.length = st.slots.length := by
+    ∀ (k : Nat) (st : Store) (p : Nat) (mine : List Nat),
+      (issueLoop mk now draw k st p mine).1.slots.length = st.slots.length := by
   intro k
   induction k with
-  | zero => intro st p; simp [issueLoop]
+  | zero => intro st p mine; simp [issueLoop]
   | succ k ih =>
-    intro st p
+    intro st p mine
     simp only [issueLoop]
     cases (freshId st.slots draw idAttempts p).1 with
-    | error e => simp
+    | error e => rfl
     | ok tid =>
       simp only
-      rw [ih]
-      exact issueAt_length _ _ _
+      cases victim st.slots now with
+      | none => rfl
+      | some j =>
+        simp only
+        split
+        · rfl
+        · rw [ih]; exact issueAt_length _ _ _
 
 theorem issueLoop_distinct (mk : List Nat → Tk) (hmk : ∀ t, (mk t).tid = t) (now : Nat)
     (draw : Nat → Option (List Nat)) :
-    ∀ (k : Nat) (st : Store) (p : Nat), Distinct st.slots → Distinct (issueLoop mk now draw k st p).1.slots := by
+    ∀ (k : Nat) (st : Store) (p : Nat) (mine : List Nat), Distinct st.slots →
+      Distinct (issueLoop mk now draw k st p mine).1.slots := by
   intro k
   induction k with
-  | zero => intro st p h; simpa [issueLoop] using h
+  | zero => intro st p mine h; simpa [issueLoop] using h
   | succ k ih =>
-    intro st p hd
+    intro st p mine hd
     simp only [issueLoop]
     cases hf : (freshId st.slots draw idAttempts p).1 with
-    | error e => simpa using hd
+    | error e => exact hd
     | ok tid =>
       simp only
-      apply ih
-      apply issueAt_distinct hd
-      intro i t ht
-      show t.tid ≠ (mk tid).tid
-      rw [hmk]
-      exact issue_ids_distinct hf i t ht
+      cases victim st.slots now with
+      | none => exact hd
+      | some j =>
+        simp only
+        split
+        · exact hd
+        · apply ih
+          apply issueAt_distinct hd
+          intro i t ht
+          show t.tid ≠ (mk tid).tid
+          rw [hmk]
+          exact issue_ids_distinct hf i t ht
 
 theorem issueLoop_stamps (mk : List Nat → Tk) (now : Nat) (draw : Nat → Option (List Nat)) :
-    ∀ (k : Nat) (st : Store) (p : Nat), StampInv st → StampInv (issueLoop mk now draw k st p).1 := by
+    ∀ (k : Nat) (st : Store) (p : Nat) (mine : List Nat), StampInv st →
+      StampInv (issueLoop mk now draw k st p mine).1 := by
   intro k
   induction k with
-  | zero => intro st p h; simpa [issueLoop] using h
+  | zero => intro st p mine h; simpa [issueLoop] using h
   | succ k ih =>
-    intro st p hs
+    intro st p mine hs
     simp only [issueLoop]
-    cases hf : (freshId st.slots draw idAttempts p).1 with
-    | error e => simpa using hs
+    cases (freshId st.slots draw idAttempts p).1 with
+    | error e => exact hs
     | ok tid =>
       simp only
-      exact ih _ _ (issueAt_stamps hs now _ rfl)
+      cases victim st.slots now with
+      | none => exact hs.tick
+      | some j =>
+        simp only
+        split
+        · exact hs.tick
+        · exact ih _ _ _ (issueAt_stamps hs now _ rfl)
 
 theorem issueLoop_reach {N : Nat} (mk : List Nat → Tk) (now : Nat) (draw : Nat → Option (List Nat)) :
-    ∀ (k : Nat) (st : Store) (p : Nat), Reach N st.slots → Reach N (issueLoop mk now draw k st p).1.slots := by
+    ∀ (k : Nat) (st : Store) (p : Nat) (mine : List Nat), Reach N st.slots →
+      Reach N (issueLoop mk now draw k st p mine).1.slots := by
   intro k
   induction k with
-  | zero => intro st p h; simpa [issueLoop] using h
+  | zero => intro st p mine h; simpa [issueLoop] using h
   | succ k ih =>
-    intro st p hr
+    intro st p mine hr
     simp only [issueLoop]
-    cases hf : (freshId st.slots draw idAttempts p).1 with
-    | error e => simpa using hr
+    cases (freshId st.slots draw idAttempts p).1 with
+    | error e => exact hr
     | ok tid =>
       simp only
-      exact ih _ _ (Reach.issue now _ hr)
+      cases victim st.slots now with
+      | none => exact hr
+      | some j =>
+        simp only
+        split
+        · exact hr
+        · exact ih _ _ _ (Reach.issue now _ hr)
+
+/-- A slot the batch has already filled (one of `mine`) holds afterwards what it held before the rest of the batch. -/
+theorem issueLoop_keep (mk : List Nat → Tk) (now : Nat) (draw : Nat → Option (List Nat)) :
+    ∀ (k : Nat) (st : Store) (p : Nat) (mine : List Nat) (i : Nat), i ∈ mine →
+      (issueLoop mk now draw k st p mine).1.slots[i]? = st.slots[i]? := by
+  intro k
+  induction k with
+  | zero => intro st p mine i _; simp [issueLoop]
+  | succ k ih =>
+    intro st p mine i hi
+    simp only [issueLoop]
+    cases (freshId st.slots draw idAttempts p).1 with
+    | error e => rfl
+    | ok tid =>
+      simp only
+      cases hv : victim st.slots now with
+      | none => rfl
+      | some j =>
+        simp only
+        split
+        · rfl
+        · rename_i hj
+          rw [ih _ _ _ i (List.mem_cons_of_mem j hi)]
+          simp only [issueAt, hv]
+          exact List.getElem?_set_ne (fun e => by subst e; exact hj hi)
+
+/-- Every id the loop returns is in the store it returns. -/
+theorem issueLoop_stored (mk : List Nat → Tk) (hmk : ∀ t, (mk t).tid = t) (now : Nat)
+    (draw : Nat → Option (List Nat)) :
+    ∀ (k : Nat) (st : Store) (p : Nat) (mine : List Nat) (ids : List (List Nat)),
+      (issueLoop mk now draw k st p mine).2 = .ok ids → ∀ tid ∈ ids,
+        ∃ (i : Nat) (s : Slot), (issueLoop mk now draw k st p mine).1.slots[i]? = some (some s) ∧ s.tid = tid := by
+  intro k
+  induction k with
+  | zero =>
+    intro st p mine ids h t ht
+    simp only [issueLoop, Except.ok.injEq] at h
+    subst h; simp at ht
+  | succ k ih =>
+    intro st p mine ids
+    simp only [issueLoop]
+    cases (freshId st.slots draw idAttempts p).1 with
+    | error e => intro h; simp at h
+    | ok tid =>
+      simp only
+      cases hv : victim st.slots now with
+      | none =>
+        intro h t ht
+        simp only [Except.ok.injEq] at h
+        subst h; simp at ht
+      | some j =>
+        simp only
+        by_cases hj : j ∈ mine
+        · simp only [hj, ↓reduceIte]
+          intro h t ht
+          simp only [Except.ok.injEq] at h
+          subst h; simp at ht
+        · simp only [hj, ↓reduceIte]
+          intro h t ht
+          cases hr : (issueLoop mk now draw k ⟨(issueAt st.slots now ⟨mk tid, st.clock + 1⟩).1, st.clock + 1⟩
+              (freshId st.slots draw idAttempts p).2 (j :: mine)).2 with
+          | error e => rw [hr] at h; simp [Except.map] at h
+          | ok r =>
+            rw [hr] at h
+            simp only [Except.map, Except.ok.injEq] at h
+            subst h
+            rcases List.mem_cons.mp ht with rfl | hr'
+            · refine ⟨j, ⟨mk t, st.clock + 1⟩, ?_, hmk t⟩
+              rw [issueLoop_keep mk now draw k _ _ _ j (List.mem_cons_self ..)]
+              simp only [issueAt, hv]
+              simp [List.getElem?_set_self (victim_lt hv)]
+            · exact ih _ _ _ r hr t hr'
+
+/-- `Tickets.issue_batch_stored`: every ticket `issue_batch` returns is in the store when the call returns, whatever
+the generator drew: a ticket of the batch never evicts another of the same batch. -/
+theorem issue_batch_stored (st : Store) (mk : List Nat → Tk) (hmk : ∀ t, (mk t).tid = t) (now : Nat)
+    (draw : Nat → Option (List Nat)) (count : Nat) {ids : List (List Nat)}
+    (h : (issueBatch st mk now draw count).2 = .ok ids) :
+    ∀ tid ∈ ids, ∃ (i : Nat) (s : Slot), (issueBatch st mk now draw count).1.slots[i]? = some (some s) ∧ s.tid = tid :=
+  issueLoop_stored mk hmk now draw _ st 0 [] ids h
 
 /-- The server stores reachable from empty by `issue_batch` (with any generator output) and `remove`. -/
 inductive SReach (N : Nat) : Store → Prop where
@@ -737,7 +858,7 @@ inductive SReach (N : Nat) : Store → Prop where
 theorem sreach_reach {N : Nat} {st : Store} (h : SReach N st) : Reach N st.slots := by
   induction h with
   | init => exact Reach.init
-  | issue mk hmk now draw count _ ih => exact issueLoop_reach mk now draw _ _ _ ih
+  | issue mk hmk now draw count _ ih => exact issueLoop_reach mk now draw _ _ _ _ ih
   | remove i _ ih => exact Reach.remove i ih
 
 /-- `Tickets.server_len`: a server store has `N` slots, so it holds at most `N` tickets; `N = 0` stores nothing. -/
@@ -751,7 +872,7 @@ distinct, whatever the generator returned. -/
 theorem server_ids_distinct {N : Nat} {st : Store} (h : SReach N st) : Distinct st.slots := by
   induction h with
   | init => intro i j s t hs; exact (replicate_none_get hs).elim
-  | issue mk hmk now draw count _ ih => exact issueLoop_distinct mk hmk now draw _ _ _ ih
+  | issue mk hmk now draw count _ ih => exact issueLoop_distinct mk hmk now draw _ _ _ _ ih
   | remove i _ ih =>
     intro a b x y hx hy hxy
     simp only at hx hy
@@ -765,7 +886,7 @@ theorem server_ids_distinct {N : Nat} {st : Store} (h : SReach N st) : Distinct 
 theorem server_stamps {N : Nat} {st : Store} (h : SReach N st) : StampInv st := by
   induction h with
   | init => exact StampInv.empty N
-  | issue mk hmk now draw count _ ih => exact issueLoop_stamps mk now draw _ _ _ ih
+  | issue mk hmk now draw count _ ih => exact issueLoop_stamps mk now draw _ _ _ _ ih
   | remove i _ ih =>
     constructor
     · intro a x hx
@@ -797,31 +918,21 @@ theorem server_evicts_oldest {N : Nat} {st : Store} (h : SReach N st) {now j : N
 
 /-- `Tickets.issue_zero_empty`: a store without slots issues no ticket (the batch is empty), whatever it draws. -/
 theorem issue_zero_empty (mk : List Nat → Tk) (now : Nat) (draw : Nat → Option (List Nat)) :
-    ∀ (k : Nat) (st : Store) (p : Nat) (ids : List (List Nat)), st.slots = [] →
-      (issueLoop mk now draw k st p).2 = .ok ids → ids = [] := by
-  intro k
-  induction k with
-  | zero => intro st p ids _ h; simpa [issueLoop] using h.symm
-  | succ k ih =>
-    intro st p ids hs h
-    obtain ⟨sl, c⟩ := st
-    simp only at hs
-    subst hs
-    simp only [issueLoop] at h
-    cases hf : (freshId [] draw idAttempts p).1 with
-    | error e => rw [hf] at h; simp at h
+    ∀ (k : Nat) (st : Store) (p : Nat) (mine : List Nat) (ids : List (List Nat)), st.slots = [] →
+      (issueLoop mk now draw k st p mine).2 = .ok ids → ids = [] := by
+  intro k st p mine ids hs
+  cases k with
+  | zero => intro h; simp only [issueLoop, Except.ok.injEq] at h; exact h.symm
+  | succ k =>
+    simp only [issueLoop]
+    cases (freshId st.slots draw idAttempts p).1 with
+    | error e => intro h; simp at h
     | ok tid =>
-      rw [hf] at h
-      have hv := (victim_none_iff [] now).2 rfl
-      simp only [issueAt, hv] at h
-      cases hr : (issueLoop mk now draw k ⟨[], c + 1⟩ (freshId [] draw idAttempts p).2).2 with
-      | error e => rw [hr] at h; simp [Except.map] at h
-      | ok r =>
-        rw [hr] at h
-        simp only [Except.map, Except.ok.injEq] at h
-        have := ih ⟨[], c + 1⟩ _ r rfl hr
-        subst this
-        simpa using h.symm
+      have hv : victim st.slots now = none := (victim_none_iff st.slots now).2 hs
+      simp only [hv]
+      intro h
+      simp only [Except.ok.injEq] at h
+      exact h.symm
 
 /-- `Tickets.issue_all_collide`: when every one of the 8 draws is an id that is already stored, the call asked for
 at least one ticket fails with `TicketId` and stores nothing. -/
@@ -874,6 +985,9 @@ end Pinc.Tickets
 #audit_axioms Pinc.Tickets.server_ids_distinct
 #audit_axioms Pinc.Tickets.server_stamps
 #audit_axioms Pinc.Tickets.server_evicts_oldest
+#audit_axioms Pinc.Tickets.issueLoop_keep
+#audit_axioms Pinc.Tickets.issueLoop_stored
+#audit_axioms Pinc.Tickets.issue_batch_stored
 #audit_axioms Pinc.Tickets.issue_zero_empty
 #audit_axioms Pinc.Tickets.issue_all_collide
 #audit_axioms Pinc.Tickets.issue_refuse

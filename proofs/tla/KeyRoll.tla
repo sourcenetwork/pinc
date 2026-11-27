@@ -42,6 +42,18 @@
 (* REKEY body travels in an authenticated packet, so the attacker of this  *)
 (* model is passive for REKEY (it only delays, drops and repeats).         *)
 (*                                                                         *)
+(* A request carries roll, the number of rolls its sender had completed   *)
+(* when it asked; the receiver answers only a request whose number equals  *)
+(* its own count (a duplicate of the last request answered excepted), so a *)
+(* late copy of a settled request, or one written after an answer that is  *)
+(* still on its way, is refused. RollOnce checks, for every request ever   *)
+(* sent, that Roll itself would give a new key only for the request the    *)
+(* peer is waiting on; the transport gates are not used for it. Without    *)
+(* it the model let the double-count bug through: late and crossing        *)
+(* requests reached Roll only through the gates of the layer (the previous *)
+(* key, the staged keys, Begin with nothing staged), which keep them away  *)
+(* in this model, so no invariant asked what Roll alone does with them.    *)
+(*                                                                         *)
 (* The collision rule is one rule for both sides: the dialer keeps its     *)
 (* request and ignores the acceptor's, the acceptor drops its own and      *)
 (* answers. A duplicate of the request being answered is answered again    *)
@@ -82,8 +94,8 @@ RECURSIVE Depth(_)
 Depth(s) == IF s.t = "base" THEN 0 ELSE 1 + Depth(s.s)
 
 (* ---- REKEY messages: to is the echo of an answer (NONE in a request) ---- *)
-Req(sh) == [ans |-> FALSE, sh |-> sh, spn |-> 0, to |-> NONE, gdh |-> NONE]
-Ans(sh, spn, to, gdh) == [ans |-> TRUE, sh |-> sh, spn |-> spn, to |-> to, gdh |-> gdh]
+Req(sh, roll) == [ans |-> FALSE, sh |-> sh, spn |-> 0, roll |-> roll, to |-> NONE, gdh |-> NONE]
+Ans(sh, spn, to, gdh) == [ans |-> TRUE, sh |-> sh, spn |-> spn, roll |-> 0, to |-> to, gdh |-> gdh]
 
 (* ---- keyroll.rs: Roll ---- *)
 RInit(dialer) == [dialer |-> dialer, st |-> "idle", seed |-> NONE, req |-> NONE, last |-> NONE, rolls |-> 0]
@@ -92,16 +104,19 @@ RInit(dialer) == [dialer |-> dialer, st |-> "idle", seed |-> NONE, req |-> NONE,
 RStart(r, fresh) ==
     IF r.st # "idle" THEN [res |-> "unexpected", r |-> r, msg |-> NONE]
     ELSE IF fresh = NONE THEN [res |-> "randomness", r |-> r, msg |-> NONE]
-    ELSE [res |-> "ok", r |-> [r EXCEPT !.st = "req", !.seed = fresh, !.req = Req(Pub(fresh))], msg |-> Req(Pub(fresh))]
+    ELSE [res |-> "ok", r |-> [r EXCEPT !.st = "req", !.seed = fresh, !.req = Req(Pub(fresh), r.rolls)],
+          msg |-> Req(Pub(fresh), r.rolls)]
 
 IsDup(r, req) == r.last # NONE /\ r.last.sh = req.sh
 
 (* Roll::on_request: the answer to a request. The order of the checks is the code's: an answer is refused, a
-   duplicate request gets the same answer and no key, the dialer ignores a request while its own is out, the
-   accepting side drops its own request, then the randomness and the share. drew: a fresh value was drawn. *)
+   duplicate request gets the same answer and no key, a request whose roll number is not this side's count is
+   refused, the dialer ignores a request while its own is out, the accepting side drops its own request, then the
+   randomness and the share. drew: a fresh value was drawn. *)
 ROnRequest(r, req, spn, fresh) ==
     IF req.ans THEN [res |-> "unexpected", r |-> r, ans |-> NONE, dh |-> NONE, drew |-> FALSE]
     ELSE IF IsDup(r, req) THEN [res |-> "ok", r |-> r, ans |-> r.last.ans, dh |-> NONE, drew |-> FALSE]
+    ELSE IF req.roll # r.rolls THEN [res |-> "unexpected", r |-> r, ans |-> NONE, dh |-> NONE, drew |-> FALSE]
     ELSE IF r.st # "idle" /\ r.dialer THEN [res |-> "unexpected", r |-> r, ans |-> NONE, dh |-> NONE, drew |-> FALSE]
     ELSE LET r1 == IF r.st # "idle" THEN [r EXCEPT !.st = "idle", !.seed = NONE, !.req = NONE] ELSE r
          IN IF fresh = NONE THEN [res |-> "randomness", r |-> r1, ans |-> NONE, dh |-> NONE, drew |-> FALSE]
@@ -345,6 +360,13 @@ FreshSeal == [][ev'.t = "send" => (\A x \in slog : ~(x.sec = ev'.p.sec /\ x.pn =
 (* every request share is used for one roll, every answer share for one answer *)
 SharesOnce == /\ \A x, y \in comp : x.req = y.req => x = y
               /\ \A n \in Nodes : nd[n].roll.rolls = nd[n].chg
+
+(* Roll alone, given any request ever sent by the peer (whatever the transport would let through), gives a new key
+   only for the request the peer is waiting on: a late or early copy is refused or answered again without a key *)
+RollOnce == \A n \in Nodes : \A p \in net :
+    (p.from = Peer(n) /\ p.pl # NONE /\ ~p.pl.ans) =>
+        LET r == ROnRequest(nd[n].roll, p.pl, 0, Atom(n, Cap0 + Cap1 + 1))
+        IN (r.res = "ok" /\ r.dh # NONE) => (nd[Peer(n)].roll.st = "req" /\ nd[Peer(n)].roll.req.sh = p.pl.sh)
 
 (* the old key is held exactly one PTO: its deadline is the promotion time plus PTO *)
 HoldOnePTO == \A n \in Nodes : nd[n].prev # NONE => nd[n].prev.until = nd[n].promAt + PTO

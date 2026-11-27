@@ -56,8 +56,8 @@ St == s[N]
 
 SOf(v) == [ph |-> v.ph, close |-> v.close, keys |-> v.keys, act |-> v.act, sent |-> v.sent, ka |-> v.ka, pa |-> v.pa,
            la |-> v.la, stx |-> v.stx, wd |-> v.wd, ld |-> v.ld]
-COf(v) == [conf |-> v.conf, hs |-> v.hs, rekey |-> v.rekey, rec |-> v.rec, ack |-> v.ack, amp |-> v.amp,
-           paced |-> v.paced, path |-> v.path, mtu |-> v.mtu]
+COf(v) == [conf |-> v.conf, hs |-> v.hs, rekey |-> v.rekey, rec |-> v.rec, ack |-> v.ack, amp |-> v.amp, rr |-> v.rr,
+           kr |-> v.kr, paced |-> v.paced, path |-> v.path, mtu |-> v.mtu]
 Has(x) == \E j \in DOMAIN E.ev : E.ev[j] = x
 \* the state after the call is the model's, so are the events, and so is the idle deadline the code computed
 Put(r) == /\ s' = [s EXCEPT ![N] = r.s]

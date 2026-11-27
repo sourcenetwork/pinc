@@ -21,8 +21,8 @@ theorem beginOk_spec {P : Params} {S : Sys} {n : Bool} (h : beginOk P S n = true
 
 /-- The node after `Begin`. -/
 def beginNode (s : Node) (n : Bool) : Node :=
-  { s with roll := { s.roll with st := .req (atomOf n s.ctr) (Msg.req (.pub (atomOf n s.ctr))) },
-           out := some (Msg.req (.pub (atomOf n s.ctr))), reqAt := none, ctr := s.ctr + 1 }
+  { s with roll := { s.roll with st := .req (atomOf n s.ctr) (Msg.req (.pub (atomOf n s.ctr)) s.roll.rolls) },
+           out := some (Msg.req (.pub (atomOf n s.ctr)) s.roll.rolls), reqAt := none, ctr := s.ctr + 1 }
 
 theorem beginUpd_eq {P : Params} {S : Sys} {n : Bool} (h : beginOk P S n = true) :
     beginUpd S n = { (S.setNode n (beginNode (S.nd n) n)) with
@@ -169,17 +169,18 @@ theorem inv_begin {P : Params} {S : Sys} {n : Bool} (h : Inv P S) (hok : beginOk
     · subst hmn; rw [hsame] at hl; exact h.lastAnsStl m sh a (by simpa [beginNode] using hl)
     · rw [hne m hmn] at hl; exact h.lastAnsStl m sh a hl
   case unsent =>
-    intro m mm ho ha p hp heq
+    intro m mm ho ha p hp r heq hr hrs
     by_cases hmn : m = n
     · subst hmn
       rw [hsame] at ho; simp only [beginNode, Option.some.injEq] at ho; subst ho
-      obtain ⟨_, k, hk, hk2⟩ := (h.netMsg p hp _ heq).req (by simp [Msg.req])
-      simp only [Msg.req] at hk
+      obtain ⟨_, k, hk, hk2⟩ := (h.netMsg p hp _ heq).req hr
+      simp only [Msg.req] at hrs
+      rw [hrs] at hk
       have := pub_atom_inj hk
       obtain ⟨e1, e2⟩ := this
       subst e1
       omega
-    · rw [hne m hmn] at ho; exact h.unsent m mm ho ha p hp heq
+    · rw [hne m hmn] at ho; exact h.unsent m mm ho ha p hp r heq hr hrs
   case compOK =>
     intro c hc
     obtain ⟨⟨k, hk1, hk2⟩, hp⟩ := h.compOK c hc
@@ -457,7 +458,7 @@ theorem inv_send {P : Params} {S : Sys} {n w : Bool} (h : Inv P S) (hok : sendOk
     rw [eRoll] at hl
     exact h.lastAnsStl m sh a hl
   case unsent =>
-    intro m mm ho ha p hp heq
+    intro m mm ho ha p hp r heq hr hrs
     by_cases hmn : m = n
     · subst hmn; rw [eOutN] at ho
       rcases hoo with h0 | h0
@@ -467,22 +468,21 @@ theorem inv_send {P : Params} {S : Sys} {n w : Bool} (h : Inv P S) (hok : sendOk
         · simp only at heq
           have := hno (by rw [heq]; simp)
           rw [this] at ho; simp at ho
-        · exact h.unsent m mm ho' ha p hp heq
+        · exact h.unsent m mm ho' ha p hp r heq hr hrs
     · rw [eOut m hmn] at ho
       rcases List.mem_cons.1 hp with rfl | hp
       · simp only at heq
-        subst heq
         obtain ⟨_, k, hk, _⟩ := (h.node m).outMsg _ ho |>.req ha
-        rcases hplm _ rfl with ho' | ⟨_, hpd⟩
+        rcases hplm _ heq with ho' | ⟨_, hpd⟩
         · have := (h.node n).outMsg _ ho'
-          obtain ⟨_, k', hk', _⟩ := this.req ha
-          obtain ⟨e1, _⟩ := pub_atom_inj (hk.symm.trans hk')
+          obtain ⟨_, k', hk', _⟩ := this.req hr
+          obtain ⟨e1, _⟩ := pub_atom_inj (hk.symm.trans (hrs.symm.trans hk'))
           exact hmn e1
         · have := (h.node n).pendMsg _ hpd
-          obtain ⟨_, k', hk', _⟩ := this.req ha
-          obtain ⟨e1, _⟩ := pub_atom_inj (hk.symm.trans hk')
+          obtain ⟨_, k', hk', _⟩ := this.req hr
+          obtain ⟨e1, _⟩ := pub_atom_inj (hk.symm.trans (hrs.symm.trans hk'))
           exact hmn e1
-      · exact h.unsent m mm ho ha p hp heq
+      · exact h.unsent m mm ho ha p hp r heq hr hrs
   case compOK =>
     intro c hc
     obtain ⟨⟨k, k1, k2⟩, k3⟩ := h.compOK c hc

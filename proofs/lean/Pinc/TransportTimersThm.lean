@@ -46,8 +46,8 @@ def foldD (t : Nat) : List (Option Nat) → Nat
 /-- The deadlines `poll_timeout` reads besides the idle deadline, in its order, each under its gate. -/
 def reads (k : K) (s : S) (c : C) : List (Option Nat) :=
   if suspended s then [linkEnd k s, s.wd] ++ (if s.ld.isSome then [c.recov] else [])
-  else (if !c.conf then [c.hs] else []) ++ [c.rekey, c.recov] ++ (if c.amp then [c.ack] else [])
-    ++ [c.paced, c.path, s.wd, linkEnd k s] ++ (if s.ph == .conn then [keepDue s, c.mtu] else [])
+  else (if !c.conf then [c.hs] else []) ++ [if c.rr then c.rekey else none, c.recov] ++ (if c.amp then [c.ack] else [])
+    ++ [c.paced, c.path, s.wd, linkEnd k s] ++ (if s.ph == .conn then [if c.kr then keepDue s else none, c.mtu] else [])
 
 theorem addD_le (t : Nat) (x : Option Nat) : addD t x ≤ t := by
   cases x <;> simp [addD]; omega
@@ -87,7 +87,8 @@ theorem poll_open {k : K} {s : S} {c : C} (h : isOpen s = true) :
   unfold poll reads
   cases hp : s.ph <;> simp [isOpen, hp] at h ⊢ <;>
     (by_cases hs : suspended s = true <;> by_cases hl : s.ld.isSome = true <;>
-      by_cases hc : c.conf = true <;> by_cases ha : c.amp = true <;> simp [hs, hl, hc, ha, foldD])
+      by_cases hc : c.conf = true <;> by_cases ha : c.amp = true <;> by_cases hr : c.rr = true <;>
+      by_cases hk : c.kr = true <;> simp [hs, hl, hc, ha, hr, hk, foldD])
 
 /-! ## `poll_timeout` is the minimum of the deadlines it names -/
 

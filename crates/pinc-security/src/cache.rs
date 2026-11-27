@@ -1,7 +1,8 @@
 //! The responder's bounded LRU of initiator prekeys, keyed by the 32-byte prekey hash.
 //!
-//! Invariants: it never holds more than `N` entries; a lookup refreshes the entry's recency; inserting into a full
-//! cache evicts the least recently used entry; `N = 0` is valid and caches nothing, so every short Initial misses.
+//! Invariants: it never holds more than `N` entries; a lookup ([`PrekeyCache::get`]) refreshes the entry's recency, a
+//! peek ([`PrekeyCache::peek`]) does not; inserting into a full cache evicts the least recently used entry; `N = 0` is
+//! valid and caches nothing, so every short Initial misses.
 //! Lookup and eviction scan the `N` slots, which is the bound on the work per call.
 // vertexia: linear scan over N slots, a hash index if N grows past a few thousand.
 
@@ -74,6 +75,16 @@ impl<const N: usize> PrekeyCache<N> {
         Some(&entry.encaps_key)
     }
 
+    /// The encapsulation key cached under `hash`, leaving its recency and the clock untouched: a lookup that proved
+    /// nothing (a screened datagram) must not decide which entry is evicted next.
+    pub fn peek(&self, hash: &[u8; 32]) -> Option<&[u8; KEM_ENCAPS_KEY_LEN]> {
+        self.entries
+            .iter()
+            .flatten()
+            .find(|e| &e.hash == hash)
+            .map(|e| &e.encaps_key)
+    }
+
     /// Cache `encaps_key` under `hash`, evicting the least recently used entry if the cache is full.
     pub fn insert(&mut self, hash: [u8; 32], encaps_key: &[u8; KEM_ENCAPS_KEY_LEN]) {
         let stamp = self.tick();
@@ -96,5 +107,27 @@ impl<const N: usize> PrekeyCache<N> {
                 stamp,
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_peek_leaves_which_entry_is_evicted_and_a_get_changes_it() {
+        let k = [1; KEM_ENCAPS_KEY_LEN];
+        let mut c: PrekeyCache<2> = PrekeyCache::new();
+        c.insert([1; 32], &k);
+        c.insert([2; 32], &k);
+        assert!(c.peek(&[1; 32]).is_some());
+        assert!(c.peek(&[9; 32]).is_none());
+        c.insert([3; 32], &k);
+        assert!(c.peek(&[1; 32]).is_none(), "the peek kept the oldest entry fresh");
+        assert!(c.peek(&[2; 32]).is_some());
+        assert!(c.get(&[2; 32]).is_some());
+        c.insert([4; 32], &k);
+        assert!(c.peek(&[3; 32]).is_none());
+        assert!(c.peek(&[2; 32]).is_some());
     }
 }

@@ -17,11 +17,12 @@
 )]
 
 use pinc_crypto::{Aead, IdentityAlg, NodeId, Secret};
-use pinc_security::message::MAX_MESSAGE_LEN;
+use pinc_security::message::{MAX_MESSAGE_LEN, MessageType};
+use pinc_security::responder::{Screen, screen_first};
 use pinc_security::tickets::{DEFAULT_TICKET_LIFETIME_S, MAX_BATCH};
 use pinc_security::{
-    ClientTickets, CreditRecord, Env, Event, Failure, Output, PacketKey, ResponderStores, ServerTickets, TicketBatch,
-    TicketEntry,
+    AeadSet, AlpnList, ClientTickets, CreditRecord, Env, Event, Failure, Output, PacketKey, ResponderStores,
+    ServerTickets, TicketBatch, TicketEntry,
 };
 
 mod sec_common;
@@ -153,6 +154,32 @@ fn a_ticket_expires_at_the_responder() {
             1,
             "the expired ticket was dropped and a new one issued"
         );
+    });
+}
+
+/// The screen answers a Hello with an expired ticket with a reject and keeps the ticket store as it was: it runs on a
+/// datagram that proved nothing.
+#[test]
+fn screening_a_hello_with_an_expired_ticket_removes_nothing() {
+    big_stack(|| {
+        let mut w = world();
+        w.full();
+        let dial = w.dial();
+        let mut i = w.initiator_with(dial, ALPN, false, true);
+        let Some(Output::Send { data, .. }) = i.poll_output() else {
+            panic!("no hello")
+        };
+        let hello = data.to_vec();
+        assert_eq!(hello[0], 6);
+        w.now += LIFETIME_NS + 1;
+        let alpns = AlpnList::new(&w.r_alpns).unwrap();
+        let own = AeadSet::from_bits(3).unwrap();
+        assert_eq!(w.stores.tickets.len(), 1);
+        for _ in 0..2 {
+            let s = screen_first(&mut w.stores, &alpns, own, w.now, MessageType::ResumeHello, &hello);
+            assert!(matches!(s, Screen::Reject(_)), "an expired ticket is rejected: {s:?}");
+            assert_eq!(w.stores.tickets.len(), 1, "the screen removed a ticket");
+        }
     });
 }
 
@@ -420,7 +447,11 @@ fn server_tickets_are_bounded_and_evict_the_oldest() {
         };
         let mut store: ServerTickets<3> = ServerTickets::new();
         let a = store.issue_batch(&mut env, r, 4, 60).unwrap();
-        assert_eq!(a.entries().len(), MAX_BATCH.min(4));
+        assert_eq!(
+            a.entries().len(),
+            3,
+            "a batch never evicts its own ticket: it ends at the capacity"
+        );
         assert_eq!(store.len(), 3, "capacity 3 holds at most 3");
         assert_eq!(store.capacity(), 3);
         let zero: ServerTickets<0> = ServerTickets::new();
@@ -663,6 +694,130 @@ fn the_ticket_key_is_bound_to_the_remembered_credit_record() {
         };
         let mut rsp = w.responder();
         let out = w.run(&mut ini, &mut rsp, None);
-        assert_eq!(out.types()[..2], [6, 8], "the binder does not verify: reject");
+        assert_eq!(out.types(), vec![6], "the binder does not verify: no answer");
+    });
+}
+
+#[test]
+fn restore_counts_the_tickets_it_holds() {
+    big_stack(|| {
+        let mut w = world();
+        let out = w.full();
+        let i = out.i_est().unwrap().clone();
+        let mut src: ClientTickets<8> = ClientTickets::new();
+        for p in 0..3u8 {
+            let mut est = i.clone();
+            est.peer = NodeId {
+                alg: IdentityAlg::Ed25519,
+                bytes: [p; 32],
+            };
+            let mut one = TicketBatch::new();
+            one.push(TicketEntry {
+                tid: [p; 16],
+                lifetime_s: 3600,
+            });
+            src.accept_batch(&est, &one, w.now);
+        }
+        let mut buf = [0u8; 2 + 8 * pinc_security::tickets::MAX_EXPORT_ENTRY_LEN];
+        let n = src.export(w.now, 8, &mut buf).unwrap();
+        let state = &buf[..n];
+        let mut big: ClientTickets<8> = ClientTickets::new();
+        assert_eq!(big.restore(state, w.now), Ok(3));
+        // More tickets than capacity: the count is what the store holds.
+        let mut two: ClientTickets<2> = ClientTickets::new();
+        assert_eq!(two.restore(state, w.now), Ok(2));
+        assert_eq!(two.len(), 2);
+        let mut none: ClientTickets<0> = ClientTickets::new();
+        assert_eq!(none.restore(state, w.now), Ok(0));
+        // The same state twice: the second restore replaces the first's tickets and counts each once.
+        assert_eq!(big.restore(state, w.now), Ok(3));
+        assert_eq!(big.len(), 3);
+        // Expired entries are not stored and not counted.
+        let mut late: ClientTickets<8> = ClientTickets::new();
+        assert_eq!(late.restore(state, w.now + 2 * 3600 * 1_000_000_000), Ok(0));
+    });
+}
+
+#[test]
+fn export_writes_the_newest_255_tickets_of_a_large_store() {
+    big_stack(|| {
+        let mut w = world();
+        let out = w.full();
+        let i = out.i_est().unwrap().clone();
+        for (cap, held) in [(255usize, 255usize), (256, 256), (300, 300)] {
+            let mut store: Box<ClientTickets<300>> = Box::default();
+            for p in 0..held {
+                let mut est = i.clone();
+                let mut bytes = [0u8; 32];
+                bytes[..2].copy_from_slice(&(p as u16).to_be_bytes());
+                est.peer = NodeId {
+                    alg: IdentityAlg::Ed25519,
+                    bytes,
+                };
+                let mut one = TicketBatch::new();
+                one.push(TicketEntry {
+                    tid: [p as u8; 16],
+                    lifetime_s: 3600,
+                });
+                store.accept_batch(&est, &one, w.now + p as u64);
+            }
+            let mut buf = vec![0u8; 2 + cap * pinc_security::tickets::MAX_EXPORT_ENTRY_LEN];
+            let n = store.export(w.now, cap, &mut buf).unwrap();
+            assert_eq!(buf[1], held.min(255) as u8, "cap {cap}");
+            let mut back: Box<ClientTickets<300>> = Box::default();
+            assert_eq!(back.restore(&buf[..n], w.now), Ok(held.min(255)));
+            // The newest are kept: the peer inserted last is in the restored store, the first of 300 is not.
+            let last = NodeId {
+                alg: IdentityAlg::Ed25519,
+                bytes: {
+                    let mut b = [0u8; 32];
+                    b[..2].copy_from_slice(&((held - 1) as u16).to_be_bytes());
+                    b
+                },
+            };
+            assert!(back.take(&last, ALPN, w.now).is_some());
+            if held > 255 {
+                let first = NodeId {
+                    alg: IdentityAlg::Ed25519,
+                    bytes: [0; 32],
+                };
+                assert!(back.take(&first, ALPN, w.now).is_none(), "the oldest was written");
+            }
+        }
+    });
+}
+
+#[test]
+fn the_initiator_names_the_server_id_only_once_the_reply_authenticated() {
+    big_stack(|| {
+        let want = pinc_security::ConnId::new(b"respond0").unwrap();
+        // A full handshake: nothing before the run, the Reply's id after it.
+        let mut w = world();
+        let dial = w.dial();
+        let mut i = w.initiator_with(dial, ALPN, false, false);
+        let mut r = w.responder();
+        assert_eq!(i.server_cid(), None);
+        let out = w.run(&mut i, &mut r, None);
+        assert!(out.both_established());
+        assert_eq!(i.server_cid(), Some(want));
+        // A resumption: the resume Reply's id.
+        let mut w = world();
+        w.full();
+        let dial = w.dial();
+        let mut i = w.initiator_with(dial, ALPN, false, true);
+        let mut r = w.responder();
+        assert_eq!(i.server_cid(), None);
+        let out = w.run(&mut i, &mut r, None);
+        assert!(out.i_est().unwrap().resumed);
+        assert_eq!(i.server_cid(), Some(want));
+        // A Reply whose signature does not verify names nobody.
+        let mut w = world();
+        let dial = w.dial();
+        let mut i = w.initiator_with(dial, ALPN, false, false);
+        let mut r = w.responder();
+        let t = Tamper::flip(1, 200);
+        let out = w.run(&mut i, &mut r, Some(&t));
+        assert!(out.i_est().is_none());
+        assert_eq!(i.server_cid(), None);
     });
 }

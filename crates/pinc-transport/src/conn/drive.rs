@@ -215,9 +215,10 @@ conn_impl! {
 
     /// A dialing side's session is established, so the message that led there authenticated: the Reply's sealed block
     /// opened and the responder's signature verified, or the resume Reply's confirmation tag matched. Only now does
-    /// the datagram that completed it count: its source id becomes the peer's first id, and the session continues on
-    /// its path (the answer to a flight sent on several paths came back there), while the path that did not answer
-    /// is validated only when a challenge on it is answered. A handshake packet whose message does not authenticate
+    /// the datagram that completed it count: the server id the authenticated message named becomes the peer's first
+    /// id (the header's source id is never read), and the session continues on its path (the answer to a flight sent on
+    /// several paths came back there), while the path that did not answer is validated only when a challenge on it is
+    /// answered. A handshake packet whose message does not authenticate
     /// moves no path, validates none and names no id.
     ///
     /// The reference model acts on the server flight in the same order: it opens the sealed part and verifies the
@@ -225,7 +226,12 @@ conn_impl! {
     /// after its reply has opened. Here nothing leaves between the signature check and the establishment, so the
     /// Finish leaves on the new active path, as the reference's does.
     fn follow_reply(&mut self) {
-        let Some((id, scid, at)) = self.reply_from.take() else { return };
+        let Some((id, at)) = self.reply_from.take() else { return };
+        // An established dialing side always has the authenticated id; without it nothing can be addressed.
+        let Some(scid) = self.hs.server_cid() else {
+            self.silent_close(CloseReason::Handshake(Failure::UnexpectedMessage));
+            return;
+        };
         self.cids.set_first_remote(scid);
         // A reply on a path the dial does not hold adds it now, as a responder learns one, at the table's bound; at a
         // full table the session stays on its path.

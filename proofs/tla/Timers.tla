@@ -70,8 +70,9 @@ K == [idle |-> IDLE, hold |-> HOLD, wake |-> WAKE, ldm |-> LDM, cf |-> CF, ir |-
 Comps == {"hs", "rec", "ack", "path", "rekey", "paced", "mtu"}
 Pats == {[x \in Comps |-> None]} \cup {[x \in Comps |-> IF x = y THEN v ELSE None] : y \in Comps, v \in CD}
         \cup {[x \in Comps |-> v] : v \in CD}
-CSet == {[conf |-> cf, amp |-> am, hs |-> f["hs"], rec |-> f["rec"], ack |-> f["ack"], path |-> f["path"],
-          rekey |-> f["rekey"], paced |-> f["paced"], mtu |-> f["mtu"]] : cf \in BOOLEAN, am \in BOOLEAN, f \in Pats}
+CSet == {[conf |-> cf, amp |-> am, rr |-> rr, kr |-> kr, hs |-> f["hs"], rec |-> f["rec"], ack |-> f["ack"],
+          path |-> f["path"], rekey |-> f["rekey"], paced |-> f["paced"], mtu |-> f["mtu"]] :
+          cf \in BOOLEAN, am \in BOOLEAN, rr \in BOOLEAN, kr \in BOOLEAN, f \in Pats}
 CC == {"none", "dead", "hs", "unconf"}
 CloseWhy == {"local", "peer", "viol", "idle", "dead", "hs", "unconf"}
 
@@ -135,9 +136,9 @@ Some(x) == IF x = None THEN {} ELSE {x}
 Enabled(c) ==
     {Idle(s, K)} \cup Some(LinkEnd(s, K)) \cup Some(s.wd)
     \cup (IF Suspended(s) THEN (IF s.ld # None THEN Some(c.rec) ELSE {})
-          ELSE Some(c.rekey) \cup Some(c.rec) \cup Some(c.paced) \cup Some(c.path)
+          ELSE (IF c.rr THEN Some(c.rekey) ELSE {}) \cup Some(c.rec) \cup Some(c.paced) \cup Some(c.path)
                \cup (IF ~c.conf THEN Some(c.hs) ELSE {}) \cup (IF c.amp THEN Some(c.ack) ELSE {})
-               \cup (IF s.ph = "conn" THEN Some(KeepDue(s)) \cup Some(c.mtu) ELSE {}))
+               \cup (IF s.ph = "conn" THEN (IF c.kr THEN Some(KeepDue(s)) ELSE {}) \cup Some(c.mtu) ELSE {}))
 MinOf(X) == CHOOSE x \in X : \A y \in X : x <= y
 PollMin == Open(s) => \A c \in CSet : LET p == PollB(s, c, K, BUG)
                                           E == Enabled(c)

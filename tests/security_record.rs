@@ -388,7 +388,10 @@ fn amp_budget_examples() {
     huge.on_receive(u64::MAX);
     huge.on_send(u64::MAX);
     huge.on_send(u64::MAX);
-    assert!(huge.can_send(1), "the comparison does not overflow");
+    assert!(
+        !huge.can_send(1),
+        "a saturated send count allows nothing more, and the comparison does not overflow"
+    );
 }
 
 #[test]

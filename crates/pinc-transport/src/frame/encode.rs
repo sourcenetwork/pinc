@@ -39,7 +39,7 @@ impl Frame<'_> {
             Self::MaxStreamData { id, max: error } | Self::StopSending { id, error } => [id, error, 0],
             Self::Stream { id, offset, .. } => [id, offset, 0],
             Self::Close { error: v } | Self::Extension { ty: v, .. } | Self::MaxStreams { limit: v } => [v, 0, 0],
-            Self::Rekey(r) => [r.switch_pn, 0, 0],
+            Self::Rekey(r) => [r.switch_pn, r.roll, 0],
             _ => [0; 3],
         }
     }
@@ -64,7 +64,15 @@ impl Frame<'_> {
             Self::MaxStreams { limit } => 1 + vlen(limit),
             Self::Datagram { data, implicit_len } => datagram_overhead(data.len(), implicit_len) + data.len(),
             Self::MtuProbeEcho { .. } => 1 + 2,
-            Self::Rekey(r) => 1 + 1 + 32 + if r.answer { ECHO_LEN + vlen(r.switch_pn) } else { 0 },
+            Self::Rekey(r) => {
+                1 + 1
+                    + 32
+                    + if r.answer {
+                        ECHO_LEN + vlen(r.switch_pn)
+                    } else {
+                        vlen(r.roll)
+                    }
+            }
             Self::NewTickets(ref batch) => 1 + 1 + batch.entries().len() * TICKET_LEN,
             Self::Extension { ty, body } => vlen(ty) + prefixed_len(body),
         }

@@ -7,12 +7,16 @@ import Pinc.Record
 
 A model of `pinc-security/src/keyroll.rs`, written to be read against it.
 
-* `Rekey` is the wire form of a REKEY body: `kind(1)` (0 request, 1 answer), `share(32)`, and for an answer `echo(8)`
-  (the identifier of the request it answers) and a varint `switch_pn`. `encode`/`decode` follow the code, strictly: an unknown kind, a short body, a trailing byte and
-  a `switch_pn` of 2^63 or more are refused. `decode (encode r) = r` and an accepted body is the one encoding of
-  its message (the varint is `Pinc.Varint`).
+* `Rekey` is the wire form of a REKEY body: `kind(1)` (0 request, 1 answer), `share(32)`, then for a request the
+  varint `roll` (how many rolls its sender had completed when it asked) and for an answer `echo(8)` (the identifier of
+  the request it answers) and a varint `switch_pn`. `encode`/`decode` follow the code, strictly: an unknown kind, a
+  short body, a trailing byte and a `switch_pn` or `roll` of 2^63 or more are refused. `decode (encode r) = r` and an
+  accepted body is the one encoding of its message (the varint is `Pinc.Varint`). A flipped kind byte is refused or
+  read as the other kind (`decode_kind`): a 9-byte roll gives a request the length of an answer.
 * `Roll` is the state machine: Idle or Requested, the dialer flag, `last` (the last request answered and the answer
-  given) and the completed-rolls counter. `start`, `onRequest` and `onAnswer` keep the order of the checks of the
+  given) and the completed-rolls counter, which a request carries (`Msg.roll`): `onRequest` answers only a request
+  whose number is its own count (`onRequest_stale`, `onRequest_early`). `start`, `onRequest` and `onAnswer` keep the
+  order of the checks of the
   code, including the state a failure leaves behind (the accepting side that dropped its own request and then
   failed on the random generator or the peer share stays Idle). A fresh X25519 secret is an input (`fresh`), an
   atom drawn by the caller; `none` stands for a refused generator.
@@ -43,34 +47,40 @@ open Pinc
 /-! ## The codec -/
 
 /-- A REKEY message: `answer`, the 32-byte `share` and, for an answer, the 8-byte `echo` (the identifier of the
-request it answers) and the first packet number sealed under the new keys. A request has `echo` zero and
-`switchPn = 0` (`Rekey.echo` and `Rekey.switch_pn` "zero in a request"). -/
+request it answers) and the first packet number sealed under the new keys; for a request, `roll`, the rolls its
+sender had completed. A request has `echo` zero and `switchPn = 0`, an answer `roll = 0` (`Rekey.echo`,
+`Rekey.switch_pn` "zero in a request", `Rekey.roll` "zero in an answer"). -/
 structure Rekey where
   answer : Bool
   share : List Nat
   echo : List Nat
   switchPn : Nat
+  roll : Nat
   deriving DecidableEq
 
 /-- A message the code can build: a 32-byte share and an 8-byte echo of bytes; a request carries zeros; a number is
 a `u64`. -/
 def Rekey.WF (r : Rekey) : Prop :=
   r.share.length = 32 ∧ Varint.ValidBytes r.share ∧ r.echo.length = 8 ∧ Varint.ValidBytes r.echo ∧
-    (r.answer = false → r.echo = List.replicate 8 0 ∧ r.switchPn = 0) ∧ r.switchPn < 2 ^ 64
+    (r.answer = false → r.echo = List.replicate 8 0 ∧ r.switchPn = 0) ∧ (r.answer = true → r.roll = 0) ∧
+    r.switchPn < 2 ^ 64 ∧ r.roll < 2 ^ 64
 
-/-- `Rekey::encode` into a buffer large enough; `none` is the `VarintOverflow` of a switch number of 2^63 or more. -/
+/-- `Rekey::encode` into a buffer large enough; `none` is the `VarintOverflow` of a switch or roll number of 2^63 or
+more. -/
 def Rekey.encode (r : Rekey) : Option (List Nat) :=
   if r.answer then
     if r.switchPn ≥ Varint.limit then none
     else some (1 :: r.share ++ r.echo ++ Varint.encodeBytes r.switchPn)
-  else some (0 :: r.share)
+  else if r.roll ≥ Varint.limit then none
+  else some (0 :: r.share ++ Varint.encodeBytes r.roll)
 
 /-- The reasons `Rekey::decode` refuses. -/
 inductive DecErr where
   | kind | short | trailing | varint
   deriving DecidableEq, Repr
 
-/-- `Rekey::decode`: the kind byte, the 32-byte share, for an answer the 8-byte echo and the varint, then nothing. -/
+/-- `Rekey::decode`: the kind byte, the 32-byte share, for a request the varint roll, for an answer the 8-byte echo
+and the varint switch number, then nothing. -/
 def Rekey.decode (buf : List Nat) : Except DecErr Rekey :=
   match buf with
   | [] => .error .short
@@ -85,13 +95,23 @@ def Rekey.decode (buf : List Nat) : Except DecErr Rekey :=
         else
           match Varint.decode (after.drop 8) with
           | .error _ => .error .varint
-          | .ok (v, n) => if n = (after.drop 8).length then .ok ⟨true, share, after.take 8, v⟩ else .error .trailing
-      else if after.isEmpty then .ok ⟨false, share, List.replicate 8 0, 0⟩ else .error .trailing
+          | .ok (v, n) => if n = (after.drop 8).length then .ok ⟨true, share, after.take 8, v, 0⟩ else .error .trailing
+      else
+        match Varint.decode after with
+        | .error _ => .error .varint
+        | .ok (v, n) => if n = after.length then .ok ⟨false, share, List.replicate 8 0, 0, v⟩ else .error .trailing
 
-/-- A request is 33 bytes. -/
-theorem encode_request_len (r : Rekey) (h : r.answer = false) (hw : r.share.length = 32) :
-    ∃ b, r.encode = some b ∧ b.length = 33 := by
-  refine ⟨0 :: r.share, by simp [Rekey.encode, h], by simp [hw]⟩
+/-- A request is 34 to 42 bytes. -/
+theorem encode_request_len (r : Rekey) (h : r.answer = false) (hw : r.share.length = 32) (hv : r.roll < Varint.limit) :
+    ∃ b, r.encode = some b ∧ 34 ≤ b.length ∧ b.length ≤ 42 := by
+  have hl := Varint.encode_length r.roll hv
+  have h1 := Varint.encodedLen_pos r.roll
+  have hn : ¬ r.roll ≥ Varint.limit := Nat.not_le.mpr hv
+  refine ⟨(0 :: r.share) ++ Varint.encodeBytes r.roll, by simp [Rekey.encode, h, hn], ?_⟩
+  simp only [List.length_append, List.length_cons, hw, Varint.length_encodeBytes]
+  have := hl.2
+  unfold Varint.maxLen at this
+  omega
 
 /-- An answer is 42 to 50 bytes. -/
 theorem encode_answer_len (r : Rekey) (h : r.answer = true) (hw : r.share.length = 32) (he : r.echo.length = 8)
@@ -107,17 +127,22 @@ theorem encode_answer_len (r : Rekey) (h : r.answer = true) (hw : r.share.length
   omega
 
 /-- Decoding a request body. -/
-theorem decode_request_body (share : List Nat) (hs : share.length = 32) :
-    Rekey.decode (0 :: share) = .ok ⟨false, share, List.replicate 8 0, 0⟩ := by
-  have e1 : share.take 32 = share := List.take_of_length_le (by omega)
-  have e2 : share.drop 32 = [] := List.drop_of_length_le (by omega)
-  have h2 : ¬ (share.length < 32) := by omega
-  simp [Rekey.decode, h2, e1, e2]
+theorem decode_request_body (share : List Nat) (v : Nat) (hs : share.length = 32) (hv : v < Varint.limit) :
+    Rekey.decode ((0 :: share) ++ Varint.encodeBytes v) = .ok ⟨false, share, List.replicate 8 0, 0, v⟩ := by
+  have key := Varint.decode_encode v [] hv
+  simp only [List.append_nil] at key
+  have e1 : (share ++ Varint.encodeBytes v).take 32 = share := by
+    rw [List.take_append_of_le_length (by omega)]; exact List.take_of_length_le (by omega)
+  have e2 : (share ++ Varint.encodeBytes v).drop 32 = Varint.encodeBytes v := by
+    rw [List.drop_append_of_le_length (by omega)]; simp [hs]
+  have h2 : ¬ ((share ++ Varint.encodeBytes v).length < 32) := by simp [hs]
+  simp only [Rekey.decode, List.cons_append, e1, e2, key, h2, ite_false]
+  simp
 
 /-- Decoding an answer body. -/
 theorem decode_answer_body (share echo : List Nat) (v : Nat) (hs : share.length = 32) (he : echo.length = 8)
     (hv : v < Varint.limit) :
-    Rekey.decode ((1 :: share) ++ echo ++ Varint.encodeBytes v) = .ok ⟨true, share, echo, v⟩ := by
+    Rekey.decode ((1 :: share) ++ echo ++ Varint.encodeBytes v) = .ok ⟨true, share, echo, v, 0⟩ := by
   have key := Varint.decode_encode v [] hv
   simp only [List.append_nil] at key
   have h2 : ¬ ((share ++ echo ++ Varint.encodeBytes v).length < 32) := by simp [hs, he]
@@ -136,9 +161,9 @@ theorem decode_answer_body (share echo : List Nat) (v : Nat) (hs : share.length 
 
 /-- The round trip: decoding an encoding gives the message back. -/
 theorem decode_encode (r : Rekey) (hw : r.WF) (b : List Nat) (h : r.encode = some b) : Rekey.decode b = .ok r := by
-  obtain ⟨hs, hv, he, hev, hq, hp⟩ := hw
-  obtain ⟨a, s, e, p⟩ := r
-  simp only at hs hq he
+  obtain ⟨hs, hv, he, hev, hq, ha, hp, hr⟩ := hw
+  obtain ⟨a, s, e, p, q⟩ := r
+  simp only at hs hq he ha
   cases a with
   | true =>
     by_cases hn : p ≥ Varint.limit
@@ -146,13 +171,17 @@ theorem decode_encode (r : Rekey) (hw : r.WF) (b : List Nat) (h : r.encode = som
     · simp only [Rekey.encode, hn, if_false, if_true] at h
       simp only [Option.some.injEq] at h
       subst h
+      have hr0 : q = 0 := ha rfl
+      subst hr0
       exact decode_answer_body s e p hs he (Nat.lt_of_not_ge hn)
   | false =>
-    simp only [Rekey.encode, Bool.false_eq_true, if_false, Option.some.injEq] at h
-    subst h
-    obtain ⟨he0, hp0⟩ := hq rfl
-    subst he0; subst hp0
-    exact decode_request_body s hs
+    by_cases hn : q ≥ Varint.limit
+    · simp [Rekey.encode, hn] at h
+    · simp only [Rekey.encode, Bool.false_eq_true, if_false, hn, Option.some.injEq] at h
+      subst h
+      obtain ⟨he0, hp0⟩ := hq rfl
+      subst he0; subst hp0
+      exact decode_request_body s q hs (Nat.lt_of_not_ge hn)
 
 /-- Strict decoding: an accepted body is exactly the one encoding of its message, so the encoding is unique:
 an accepted body re-encodes to itself. -/
@@ -199,7 +228,7 @@ theorem encode_decode (b : List Nat) (hb : Varint.ValidBytes b) (r : Rekey) (h :
                 have hbnd := Varint.decode_bounds (rest.drop 40) hva v _ hd
                 rw [List.take_length] at hcan
                 have hlt : v < Varint.limit := hbnd.1
-                refine ⟨?_, hshare, hvs, hecho, hevs, by simp, ?_⟩
+                refine ⟨?_, hshare, hvs, hecho, hevs, by simp, by simp, ?_, by simp⟩
                 · have hnl : ¬ v ≥ Varint.limit := by omega
                   simp only [Rekey.encode, ite_true, hnl, ite_false]
                   rw [← hcan.1]
@@ -214,17 +243,30 @@ theorem encode_decode (b : List Nat) (hb : Varint.ValidBytes b) (r : Rekey) (h :
         · have hk0 : k = 0 := by omega
           subst hk0
           simp only [show ¬ ((0:Nat) = 1) by omega, if_false] at h
-          by_cases hae : (rest.drop 32).isEmpty = true
-          · simp only [hae, if_true, Except.ok.injEq] at h
-            subst h
-            have hd0 : rest.drop 32 = [] := by simpa using hae
-            have hrt : rest.take 32 = rest := by
-              have := List.take_append_drop 32 rest
-              rw [hd0] at this; simpa using this
-            refine ⟨?_, hshare, hvs, by simp, ?_, by simp, by simp⟩
-            · simp only [Rekey.encode, Bool.false_eq_true, if_false, hrt]
-            · intro x hx; simp at hx; omega
-          · simp [hae] at h
+          have hva : Varint.ValidBytes (rest.drop 32) := fun x hx => hrest x (List.mem_of_mem_drop hx)
+          rcases hd : Varint.decode (rest.drop 32) with e | ⟨v, n⟩
+          · rw [hd] at h; simp at h
+          · rw [hd] at h
+            simp only at h
+            by_cases hn : n = (rest.drop 32).length
+            · rw [if_pos hn, Except.ok.injEq] at h
+              subst h
+              rw [hn] at hd
+              have hcan := Varint.decode_canonical (rest.drop 32) hva v _ hd
+              have hbnd := Varint.decode_bounds (rest.drop 32) hva v _ hd
+              rw [List.take_length] at hcan
+              have hlt : v < Varint.limit := hbnd.1
+              refine ⟨?_, hshare, hvs, by simp, ?_, by simp, by simp, by simp, ?_⟩
+              · have hnl : ¬ v ≥ Varint.limit := by omega
+                simp only [Rekey.encode, Bool.false_eq_true, if_false, hnl]
+                rw [← hcan.1]
+                have := List.take_append_drop 32 rest
+                simp [this]
+              · intro x hx; simp at hx; omega
+              · show v < 2 ^ 64
+                have : Varint.limit = 2 ^ 63 := rfl
+                omega
+            · rw [if_neg hn] at h; simp at h
 
 /-- The encoding is unique: two well-formed messages with the same body are equal. -/
 theorem encode_injective (r s : Rekey) (hr : r.WF) (hs : s.WF) (b : List Nat) (h1 : r.encode = some b)
@@ -243,14 +285,46 @@ theorem decode_short (k : Nat) (rest : List Nat) (h : k ≤ 1) (hs : rest.length
   simp [Rekey.decode, this, hs]
 theorem encode_big_switch (r : Rekey) (ha : r.answer = true) (h : r.switchPn ≥ Varint.limit) : r.encode = none := by
   simp [Rekey.encode, ha, h]
-/-- A request with a byte after the share is refused. -/
-theorem decode_request_trailing (share : List Nat) (x : Nat) (rest : List Nat) (hs : share.length = 32) :
-    Rekey.decode (0 :: (share ++ x :: rest)) = .error .trailing := by
-  have h1 : ¬ ((0:Nat) > 1) := by omega
-  have h2 : ¬ ((share ++ x :: rest).length < 32) := by simp [hs]
-  have e2 : (share ++ x :: rest).drop 32 = x :: rest := by
+theorem encode_big_roll (r : Rekey) (ha : r.answer = false) (h : r.roll ≥ Varint.limit) : r.encode = none := by
+  simp [Rekey.encode, ha, h]
+/-- A request with a byte after the roll number is refused. -/
+theorem decode_request_trailing (share : List Nat) (v x : Nat) (rest : List Nat) (hs : share.length = 32)
+    (hv : v < Varint.limit) :
+    Rekey.decode ((0 :: share) ++ Varint.encodeBytes v ++ x :: rest) = .error .trailing := by
+  have key := Varint.decode_encode v (x :: rest) hv
+  have e0 : share ++ Varint.encodeBytes v ++ x :: rest = share ++ (Varint.encodeBytes v ++ x :: rest) := by simp
+  have e2 : (share ++ (Varint.encodeBytes v ++ x :: rest)).drop 32 = Varint.encodeBytes v ++ x :: rest := by
     rw [List.drop_append_of_le_length (by omega)]; simp [hs]
-  simp [Rekey.decode, hs, e2]
+  have h2 : ¬ ((share ++ (Varint.encodeBytes v ++ x :: rest)).length < 32) := by simp [hs]
+  have hne : ¬ ((Varint.encodeBytes v).length = (Varint.encodeBytes v ++ x :: rest).length) := by simp
+  simp only [Rekey.decode, List.cons_append, e0, e2, key, h2, hne, if_false]
+  simp
+/-- The kind byte decides the kind: a body accepted with kind byte `k` is an answer exactly when `k = 1`, so a
+flipped kind byte is refused or read as the other kind (`Strict` of `RekeyCodec.tla`). -/
+theorem decode_kind (k : Nat) (rest : List Nat) (r : Rekey) (h : Rekey.decode (k :: rest) = .ok r) :
+    r.answer = decide (k = 1) := by
+  unfold Rekey.decode at h
+  simp only at h
+  split at h
+  · cases h
+  · split at h
+    · cases h
+    · split at h
+      · rename_i h1
+        subst h1
+        split at h
+        · cases h
+        · split at h
+          · cases h
+          · split at h
+            · cases h; rfl
+            · cases h
+      · rename_i h1
+        split at h
+        · cases h
+        · split at h
+          · cases h; simp [h1]
+          · cases h
 
 /-! ## Symbolic terms -/
 
@@ -307,16 +381,19 @@ def T.depth : T → Nat
 
 /-- A REKEY message. `to` is the echo of an answer, the identifier of the request it answers (`id` of the request
 share); a request carries `junk` (zeros on the wire). `gdh` is a GHOST field (no code reads it): the
-Diffie-Hellman value its sender used. -/
+Diffie-Hellman value its sender used. `roll` is, for a request, the rolls its sender had completed when it asked
+(`Rekey::roll`); an answer carries 0. -/
 structure Msg where
   answer : Bool
   share : T
   spn : Nat
   to : T
   gdh : T
+  roll : Nat
   deriving DecidableEq, Repr
 
-def Msg.req (sh : T) : Msg := ⟨false, sh, 0, .junk, .junk⟩
+/-- A request with share `sh` from a sender that has completed `roll` rolls. -/
+def Msg.req (sh : T) (roll : Nat) : Msg := ⟨false, sh, 0, .junk, .junk, roll⟩
 
 /-- `Roll::state`. -/
 inductive St where
@@ -350,7 +427,7 @@ def Roll.start (r : Roll) (fresh : Option Atom) : Roll × Except Fail Msg :=
   else match fresh with
     | none => (r, .error .randomness)
     | some a =>
-      let m := Msg.req (.pub a)
+      let m := Msg.req (.pub a) r.rolls
       ({ r with st := .req a m }, .ok m)
 
 /-- A request whose share is the share of the last request answered. -/
@@ -358,6 +435,11 @@ def Roll.isDup (r : Roll) (req : Msg) : Bool :=
   match r.last with
   | some (sh, _) => decide (sh = req.share)
   | none => false
+
+/-- The two refusals of a request that is not a duplicate, in the code's order: its roll number is not this side's
+count (a late copy of a settled request, or one sent before an answer still on its way), or this side is the dialer
+and its own request is out. Both return `UnexpectedMessage` and change nothing. -/
+def Roll.blocks (r : Roll) (req : Msg) : Bool := req.roll != r.rolls || (!r.isIdle && r.dialer)
 
 /-- `Roll::on_request`: the answer, and the Diffie-Hellman value to roll with (`none` for a duplicate). The order of
 the checks is the code's. -/
@@ -368,7 +450,7 @@ def Roll.onRequest (r : Roll) (req : Msg) (spn : Nat) (fresh : Option Atom) :
     match r.last with
     | some (_, a) => (r, .ok (a, none))
     | none => (r, .error .unexpected)
-  else if !r.isIdle && r.dialer then (r, .error .unexpected)
+  else if r.blocks req then (r, .error .unexpected)
   else
     let r1 := if r.isIdle then r else { r with st := .idle }
     match fresh with
@@ -378,7 +460,7 @@ def Roll.onRequest (r : Roll) (req : Msg) (spn : Nat) (fresh : Option Atom) :
       | none => (r1, .error .invalid)
       | some dh =>
         let bd := T.bound (.id req.share) dh
-        let ans : Msg := ⟨true, .pub a, spn, .id req.share, bd⟩
+        let ans : Msg := ⟨true, .pub a, spn, .id req.share, bd, 0⟩
         ({ r1 with last := some (req.share, ans), rolls := Record.inc r.rolls }, .ok (ans, some bd))
 
 /-- `Roll::on_answer`: the Diffie-Hellman value (with the request identifier bound in) and the peer's switch
@@ -400,7 +482,7 @@ theorem start_busy (r : Roll) (fresh : Option Atom) (h : r.isIdle = false) :
     r.start fresh = (r, .error .unexpected) := by simp [Roll.start, h]
 
 theorem start_ok (r : Roll) (a : Atom) (h : r.isIdle = true) :
-    r.start (some a) = ({ r with st := .req a (Msg.req (.pub a)) }, .ok (Msg.req (.pub a))) := by
+    r.start (some a) = ({ r with st := .req a (Msg.req (.pub a) r.rolls) }, .ok (Msg.req (.pub a) r.rolls)) := by
   simp [Roll.start, h]
 
 /-- An answer sent to `on_request`, or a request sent to `on_answer`, is refused and changes nothing. -/
@@ -423,17 +505,39 @@ theorem onRequest_dup (r : Roll) (req : Msg) (spn : Nat) (fresh : Option Atom) (
 theorem onRequest_dialer_collision (r : Roll) (req : Msg) (spn : Nat) (fresh : Option Atom) (seed : Atom) (m : Msg)
     (hd : r.dialer = true) (hs : r.st = .req seed m) (hk : req.answer = false) (hn : r.isDup req = false) :
     r.onRequest req spn fresh = (r, .error .unexpected) := by
-  simp [Roll.onRequest, hk, hn, hd, hs, Roll.isIdle]
+  simp [Roll.onRequest, Roll.blocks, hk, hn, hd, hs, Roll.isIdle]
 
-/-- ... and the accepting side drops its own request and answers: it ends Idle, with the answer
-(a fresh public value, the switch number) and the Diffie-Hellman value of its fresh atom and the peer's share. -/
+/-- ... and the accepting side drops its own request and answers a request of its count: it ends Idle, with the
+answer (a fresh public value, the switch number) and the Diffie-Hellman value of its fresh atom and the peer's share. -/
 theorem onRequest_acceptor_collision (r : Roll) (req : Msg) (spn : Nat) (a b : Atom) (seed : Atom) (m : Msg)
     (hd : r.dialer = false) (hs : r.st = .req seed m) (hk : req.answer = false) (hn : r.isDup req = false)
-    (hsh : req.share = .pub b) :
+    (hr : req.roll = r.rolls) (hsh : req.share = .pub b) :
     (r.onRequest req spn (some a)).1.st = .idle ∧
     (r.onRequest req spn (some a)).2 =
-      .ok (⟨true, .pub a, spn, .id req.share, .bound (.id req.share) (Dh a b)⟩, some (.bound (.id req.share) (Dh a b))) := by
-  simp [Roll.onRequest, hk, hn, hd, hs, Roll.isIdle, hsh, dhOf]
+      .ok (⟨true, .pub a, spn, .id req.share, .bound (.id req.share) (Dh a b), 0⟩,
+        some (.bound (.id req.share) (Dh a b))) := by
+  simp [Roll.onRequest, Roll.blocks, hk, hn, hd, hs, Roll.isIdle, hsh, dhOf, hr]
+
+/-- A request whose roll number is not this side's count (and is not a repeat of the last one answered) is refused
+and changes nothing, on either side and in either state. -/
+theorem onRequest_other_roll (r : Roll) (req : Msg) (spn : Nat) (fresh : Option Atom) (hk : req.answer = false)
+    (hn : r.isDup req = false) (hr : req.roll ≠ r.rolls) :
+    r.onRequest req spn fresh = (r, .error .unexpected) := by
+  simp [Roll.onRequest, Roll.blocks, hk, hn, hr]
+
+/-- `Roll.on_request` below the count: a late copy of a request of a roll this side has already counted is refused,
+so it never gives a second key. -/
+theorem onRequest_stale (r : Roll) (req : Msg) (spn : Nat) (fresh : Option Atom) (hk : req.answer = false)
+    (hn : r.isDup req = false) (hr : req.roll < r.rolls) :
+    r.onRequest req spn fresh = (r, .error .unexpected) :=
+  onRequest_other_roll r req spn fresh hk hn (Nat.ne_of_lt hr)
+
+/-- Above the count: a request sent after an answer that this side has not counted yet (the requester completed a
+roll this side has not) is refused. -/
+theorem onRequest_early (r : Roll) (req : Msg) (spn : Nat) (fresh : Option Atom) (hk : req.answer = false)
+    (hn : r.isDup req = false) (hr : r.rolls < req.roll) :
+    r.onRequest req spn fresh = (r, .error .unexpected) :=
+  onRequest_other_roll r req spn fresh hk hn (Nat.ne_of_gt hr)
 
 
 /-- The completed-rolls counter moves by one exactly when a fresh request is answered with a Diffie-Hellman
@@ -450,7 +554,7 @@ theorem onRequest_rolls (r : Roll) (req : Msg) (spn : Nat) (fresh : Option Atom)
   · simp [a1]
   · by_cases a2 : r.isDup req = true
     · cases hl : r.last <;> simp [a1, a2, hl]
-    · by_cases a3 : (!r.isIdle && r.dialer) = true
+    · by_cases a3 : r.blocks req = true
       · simp [a1, a2, a3]
       · cases fresh with
         | none => simp [a1, a2, a3, hr1]
@@ -467,7 +571,7 @@ theorem onRequest_no_dh_unchanged (r : Roll) (req : Msg) (spn : Nat) (fresh : Op
   · simp [a1] at h
   · by_cases a2 : r.isDup req = true
     · cases hl : r.last <;> simp [a1, a2, hl]
-    · by_cases a3 : (!r.isIdle && r.dialer) = true
+    · by_cases a3 : r.blocks req = true
       · simp [a1, a2, a3] at h
       · cases fresh with
         | none => simp [a1, a2, a3] at h
@@ -515,18 +619,18 @@ theorem onAnswer_once (r : Roll) (a : Msg) (c : T × Nat) (hok : (r.onAnswer a).
 /-- Agreement: when the requester completes with the answer to its request, both sides computed the same
 Diffie-Hellman value (the unordered pair of the two atoms), and the requester learned the switch number the answerer
 announced. -/
-theorem agreement (A B : Roll) (ra rb : Atom) (spn : Nat) (hnd : B.isDup (Msg.req (.pub ra)) = false)
+theorem agreement (A B : Roll) (ra rb : Atom) (spn : Nat) (hnd : B.isDup (Msg.req (.pub ra) B.rolls) = false)
     (hB : B.dialer = false ∨ B.isIdle = true) :
     ∃ B' ans dhB dhA,
-      B.onRequest (Msg.req (.pub ra)) spn (some rb) = (B', .ok (ans, some dhB)) ∧
-      (({ A with st := .req ra (Msg.req (.pub ra)) } : Roll).onAnswer ans).2 = .ok (dhA, spn) ∧ dhA = dhB := by
-  have hc : (!B.isIdle && B.dialer) = false := by
-    rcases hB with h | h <;> simp [h]
-  refine ⟨(B.onRequest (Msg.req (.pub ra)) spn (some rb)).1,
-    ⟨true, .pub rb, spn, .id (.pub ra), .bound (.id (.pub ra)) (Dh rb ra)⟩, .bound (.id (.pub ra)) (Dh rb ra),
+      B.onRequest (Msg.req (.pub ra) B.rolls) spn (some rb) = (B', .ok (ans, some dhB)) ∧
+      (({ A with st := .req ra (Msg.req (.pub ra) B.rolls) } : Roll).onAnswer ans).2 = .ok (dhA, spn) ∧ dhA = dhB := by
+  have hc : B.blocks (Msg.req (.pub ra) B.rolls) = false := by
+    rcases hB with h | h <;> simp [Roll.blocks, Msg.req, h]
+  refine ⟨(B.onRequest (Msg.req (.pub ra) B.rolls) spn (some rb)).1,
+    ⟨true, .pub rb, spn, .id (.pub ra), .bound (.id (.pub ra)) (Dh rb ra), 0⟩, .bound (.id (.pub ra)) (Dh rb ra),
     .bound (.id (.pub ra)) (Dh ra rb), ?_, ?_, by rw [Dh_comm]⟩
-  · have hnd' : B.isDup ⟨false, .pub ra, 0, .junk, .junk⟩ = false := hnd
-    simp [Roll.onRequest, Msg.req, hnd', hc, dhOf]
+  · simp only [Roll.onRequest, hnd, hc]
+    simp [Msg.req, dhOf]
   · simp [Roll.onAnswer, Msg.req, dhOf]
 
 /-! ## Post-compromise security (symbolic) -/
@@ -759,11 +863,18 @@ theorem forged_phase_changes_nothing (k : RecvKeys) (now : Nat) : (k.expire now)
 #audit_axioms Pinc.KeyRoll.encode_injective
 #audit_axioms Pinc.KeyRoll.decode_unknown_kind
 #audit_axioms Pinc.KeyRoll.encode_big_switch
+#audit_axioms Pinc.KeyRoll.encode_big_roll
+#audit_axioms Pinc.KeyRoll.encode_request_len
+#audit_axioms Pinc.KeyRoll.decode_request_trailing
+#audit_axioms Pinc.KeyRoll.decode_kind
 #audit_axioms Pinc.KeyRoll.encode_answer_len
 #audit_axioms Pinc.KeyRoll.Dh_comm
 #audit_axioms Pinc.KeyRoll.onRequest_dup
 #audit_axioms Pinc.KeyRoll.onRequest_dialer_collision
 #audit_axioms Pinc.KeyRoll.onRequest_acceptor_collision
+#audit_axioms Pinc.KeyRoll.onRequest_other_roll
+#audit_axioms Pinc.KeyRoll.onRequest_stale
+#audit_axioms Pinc.KeyRoll.onRequest_early
 #audit_axioms Pinc.KeyRoll.onRequest_rolls
 #audit_axioms Pinc.KeyRoll.onRequest_no_dh_unchanged
 #audit_axioms Pinc.KeyRoll.onAnswer_ok

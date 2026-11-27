@@ -8,7 +8,7 @@ use pinc_security::message::{Initial, MessageType, PrekeyField};
 use pinc_security::responder::{Screen, screen_first};
 use pinc_security::tickets::MAX_EXPORT_ENTRY_LEN;
 use pinc_security::{
-    AeadSet, AlpnList, AmpBudget, Alpn, ClientTickets, ConnId, CreditRecord, Env, Established, Initiator,
+    AeadSet, AlpnList, AmpBudget, Alpn, ClientTickets, ConnId, CreditRecord, Env, Established, Failure, Initiator,
     InitiatorParams, KeyHandle, LocalIdentity, Output, PrekeyInfo, Responder, ResponderConfig, ResponderStores, Roll,
     Ticket, TicketBatch, TicketEntry, Traffic, VERSION,
 };
@@ -357,9 +357,11 @@ fn roll_acceptor_drops_a_request_the_dialer_answered() {
     let a1 = dialer.on_request(&mut env, &r1, 10).unwrap();
     let dialer_first = *a1.dh.unwrap().expose();
     let r2 = dialer.start(&mut env).unwrap();
-    let a2 = acceptor.on_request(&mut env, &r2, 20).unwrap();
+    let a2 = acceptor.on_request(&mut env, &r2, 20);
+    assert!(matches!(a2, Err(Failure::UnexpectedMessage)), "the acceptor's answer to R2 is not refused");
     let acceptor_first = a2
-        .dh
+        .ok()
+        .and_then(|a| a.dh)
         .map(|d| *d.expose())
         .or_else(|| acceptor.on_answer(&env, &a1.answer).ok().map(|c| *c.dh.expose()));
     assert_eq!(acceptor_first, Some(dialer_first), "the two sides' first rolls used different values");

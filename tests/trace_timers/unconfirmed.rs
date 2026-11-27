@@ -6,6 +6,7 @@ use pinc_tests::*;
 
 use crate::duo::{app, close, init, poll, take_over, timeout};
 use crate::rec::Log;
+use pinc_transport::conn::{Drop, PathId};
 
 /// A dialing side whose Finish never reached the responder (#390): A holds the session, connected and unconfirmed, B
 /// still waits in its handshake, and nothing either writes arrives. B's handshake runs out, and A ends the session as
@@ -80,6 +81,59 @@ pub fn unconfirmed_run(log: &mut Log, seed: u64, thin: bool, turn: Option<(u64, 
             assert_eq!(d.tx(log, n), 0);
             app(log, n, &mut d.nodes[n], d.now, 10);
         }
+    });
+}
+
+/// A responder whose amplification budget is between the PING and the REKEY datagrams (the Finish never reached it, so
+/// its session is not validated): the keepalive gate `kr` is open while the REKEY gate `rr` is closed. Junk datagrams
+/// from the dialer's address add three times their size to the budget, a few bytes at a time, and the run stops at the
+/// first state with `kr` open and `rr` closed, then polls and runs the timer there.
+pub fn thin_budget_run(log: &mut Log, seed: u64) {
+    let mut w = World::new(IdentityAlg::Ed25519);
+    w.seed = seed as u8;
+    let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+    let mut net = setup(&mut w, &mut sa, &mut sb, Link::new(seed, Params::new(10 * MS)));
+    net.drop_finish = true;
+    assert!(net.run(net.now + 5 * SEC, |n| n.a.conn.is_connected()));
+    take_over(net, |d| {
+        d.init(log);
+        // B's reply flight is resent until the budget is spent (no datagram arrives), which closes both gates.
+        for _ in 0..400 {
+            let v = d.nodes[1].conn.trace_timers();
+            if !(v.kr && v.rr) {
+                break;
+            }
+            d.tx(log, 1);
+            d.lose_all();
+            assert!(d.advance_to_next(log), "no timer while the budget is spent");
+        }
+        for _ in 0..400 {
+            let v = d.nodes[1].conn.trace_timers();
+            assert!(!v.rr || v.kr, "the REKEY gate is open while the PING gate is closed");
+            if v.kr && !v.rr {
+                break;
+            }
+            let mut junk = [0u8; 2];
+            let (now, stores) = (d.now, &mut *d.stores);
+            let r = d.nodes[1].with_lent(now, |c, env, l| {
+                c.handle_datagram_with(env, l, stores, PathId(2), &mut junk)
+            });
+            let res = if matches!(r, Err(Drop::Duplicate)) {
+                "dup"
+            } else {
+                "undecryptable"
+            };
+            log.line(1, &mut d.nodes[1], now, "recv", &format!(r#","res":"{res}""#));
+        }
+        let v = d.nodes[1].conn.trace_timers();
+        assert!(
+            v.kr && !v.rr,
+            "the budget never stopped between the PING and the REKEY datagram"
+        );
+        d.poll(log, 1);
+        d.timeout(log, 1);
+        d.tx(log, 1);
+        d.poll(log, 1);
     });
 }
 

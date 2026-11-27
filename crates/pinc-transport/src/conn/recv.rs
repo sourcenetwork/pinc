@@ -263,8 +263,9 @@ conn_impl! {
             return Err(Drop::Empty);
         }
         if self.client {
-            // A dialing side believes nothing of the packet itself: its path (held or not) and source id count only
-            // once the message it completes has authenticated (`follow_reply`).
+            // A dialing side believes nothing of the packet itself: its path (held or not) counts only once the message
+            // it completes has authenticated (`follow_reply`), and the peer's id is the one inside that message, never
+            // the header's source id.
             if self.cids.first_local() != header.dcid {
                 return Err(Drop::Unroutable);
             }
@@ -285,7 +286,7 @@ conn_impl! {
         let r = self.hs.feed(&self.pool, env, stores, len);
         self.count_unauthentic(&r);
         if self.client && r.is_ok() {
-            self.reply_from = Some((ctx.path_id, header.scid, ctx.now));
+            self.reply_from = Some((ctx.path_id, ctx.now));
         }
         self.pump(env);
         r.map_err(Drop::Handshake)

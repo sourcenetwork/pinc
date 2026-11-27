@@ -46,7 +46,7 @@ and the answer is queued again: the same answer that went out before (`DupReques
 theorem duplicate_answered_again :
     deliverOk P1 f1S6 true f1Pk1 false = true ∧
     ((f1S6.nd true).afterRecv P1 f1Pk1 false f1S6.now).2 = true ∧
-    ((f1S6.nd true).roll.isDup (Msg.req (.pub (atomOf false 0)))) = true ∧
+    ((f1S6.nd true).roll.isDup (Msg.req (.pub (atomOf false 0)) 0)) = true ∧
     (f1S6.nd true).nxt.isSome = true ∧
     ((deliverUpd P1 f1S6 true f1Pk1 false).nd true).out ≠ none ∧
     ((deliverUpd P1 f1S6 true f1Pk1 false).nd true).out = (f1S6.nd true).lastAns := by

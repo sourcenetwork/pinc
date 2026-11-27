@@ -198,6 +198,18 @@ impl<const C: usize> Recv<C> {
         self.pool_demand(reach)
     }
 
+    /// The largest limit up to `candidate` whose [`Recv::charged_demand`] is within `budget` bytes. The demand counts
+    /// whole chunks from the read position, less the chunks held, so it is the last limit that ends in the chunk the
+    /// budget reaches. A result at or below the current limit means nothing more fits.
+    pub(super) fn fit_limit(&self, candidate: u64, budget: u64) -> u64 {
+        if self.charged_demand(candidate) <= budget {
+            return candidate;
+        }
+        let chunk = CHUNK_SIZE as u64;
+        let chunks = (budget / chunk).saturating_add(self.ring.held() as u64);
+        candidate.min(((self.read_off / chunk).saturating_add(chunks).saturating_mul(chunk)).max(self.read_off))
+    }
+
     /// The pool bytes credit up to `limit` may claim, as [`Recv::unreceived`].
     pub(super) fn pool_demand(&self, limit: u64) -> u64 {
         let reach = self.final_size.map_or(limit, |f| f.min(limit));
@@ -372,5 +384,38 @@ impl<const C: usize> Recv<C> {
         self.contig = final_size;
         self.release_all(pool);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `fit_limit` is the largest limit up to the candidate whose demand is within the budget, with and without data
+    /// carried, at several read positions.
+    #[test]
+    fn fit_limit_is_the_last_limit_within_the_budget() {
+        let chunk = CHUNK_SIZE as u64;
+        for (highest, read_off) in [(0, 0), (1, 0), (1, 20_000), (1, chunk), (1, 3 * chunk + 5)] {
+            let mut r = Recv::<8>::NEW;
+            r.init(4 * chunk);
+            r.highest = highest;
+            r.read_off = read_off;
+            for budget in (0..=6).map(|k| k * chunk) {
+                for candidate in [read_off, read_off + 1, read_off + chunk, read_off + 5 * chunk + 7] {
+                    let fit = r.fit_limit(candidate, budget);
+                    assert!(fit <= candidate);
+                    if fit == candidate {
+                        assert!(r.charged_demand(fit) <= budget);
+                    } else {
+                        assert!(r.charged_demand(fit) <= budget, "fit {fit} over {budget}");
+                        assert!(
+                            r.charged_demand(fit + 1) > budget,
+                            "fit {fit} is not the last within {budget}"
+                        );
+                    }
+                }
+            }
+        }
     }
 }

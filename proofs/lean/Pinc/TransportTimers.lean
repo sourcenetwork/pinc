@@ -76,6 +76,12 @@ structure C where
   ack : Option Nat
   /-- The active path may still be sent 64 bytes (the acknowledgement deadline is read only then). -/
   amp : Bool
+  /-- A REKEY request can be written: the send ring and the active path have room for the smallest datagram that
+  carries it (the REKEY deadline is read only then, so a deadline that cannot be acted on is not offered). -/
+  rr : Bool
+  /-- A keepalive can be written: the send ring and the active path have room for the smallest datagram that carries
+  a PING (the keepalive deadline is read only then). The two rooms differ, so each deadline has its own gate. -/
+  kr : Bool
   paced : Option Nat
   path : Option Nat
   mtu : Option Nat
@@ -152,10 +158,10 @@ def poll (k : K) (s : S) (c : C) : Option Nat :=
       some (if s.ld.isSome then addD t c.recov else t)
     else
       let t1 := if !c.conf then addD (idle k s) c.hs else idle k s
-      let t2 := addD (addD t1 c.rekey) c.recov
+      let t2 := addD (addD t1 (if c.rr then c.rekey else none)) c.recov
       let t3 := if c.amp then addD t2 c.ack else t2
       let t4 := addD (addD (addD (addD t3 c.paced) c.path) s.wd) (linkEnd k s)
-      some (if s.ph == .conn then addD (addD t4 (keepDue s)) c.mtu else t4)
+      some (if s.ph == .conn then addD (addD t4 (if c.kr then keepDue s else none)) c.mtu else t4)
 
 /-- The state after a call and what it reported. -/
 structure R where

@@ -521,13 +521,15 @@ impl Responder {
         let alpn = self.cfg.alpns.find(hello.alpn).ok_or(Failure::UnknownAlpn)?;
         let mut th = hello_transcript(&hello_fields(&hello));
         let th_hello = th.snapshot();
-        let found = match find_ticket(&stores.tickets, env.now, alpn, &hello, &th_hello) {
-            Ticket::Opens(i) => stores.tickets.remove(i),
-            Ticket::Expired(i) => {
+        let found = match answer_to(find_ticket(&stores.tickets, env.now, alpn, &hello, &th_hello)) {
+            Answer::Open(i) => stores.tickets.remove(i),
+            Answer::Expired(i) => {
                 stores.tickets.remove(i);
                 None
             }
-            Ticket::Missing | Ticket::Mismatch | Ticket::Binder => None,
+            Answer::Reject => None,
+            // The screen drops it as well: nothing is sent and the state allows a later valid Hello.
+            Answer::Silence => return Err(Failure::Authentication),
         };
         let Some(slot) = found else {
             // Unknown, expired or not matching: tell the initiator to start a full handshake.
@@ -620,6 +622,32 @@ enum Ticket {
     Opens(usize),
 }
 
+/// What the responder does with a first Hello, by what its ticket id names. The responder and [`screen_first`] both
+/// decide through [`answer_to`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Answer {
+    /// Resume with the ticket at the index.
+    Open(usize),
+    /// Remove the expired ticket at the index and send a Resume Reject.
+    Expired(usize),
+    /// Send a Resume Reject: the dialer holding a ticket goes to a full handshake.
+    Reject,
+    /// Send nothing: a live ticket with a wrong binder. The sender has not shown it holds the ticket's secret, and
+    /// the id is 16 random bytes that cross the wire only in the ticket's peer's Hello, so a reject would tell a
+    /// sender that already has the id that the ticket is live.
+    Silence,
+}
+
+/// The one verdict on a ticket lookup, for the responder and the screen.
+const fn answer_to(t: Ticket) -> Answer {
+    match t {
+        Ticket::Opens(i) => Answer::Open(i),
+        Ticket::Expired(i) => Answer::Expired(i),
+        Ticket::Missing | Ticket::Mismatch => Answer::Reject,
+        Ticket::Binder => Answer::Silence,
+    }
+}
+
 /// The ticket a Hello names and whether it opens for it: unexpired, for the same protocol and cipher, and the binder
 /// verifies. Nothing is removed.
 fn find_ticket<const N: usize>(
@@ -685,9 +713,8 @@ pub enum Screen {
 }
 
 /// Decide what to do with `message`, the whole first handshake message of type `kind`, as the [`Responder`] would on
-/// its first message, without taking a ticket or keeping any state (a ticket past its expiry is let go, as the
-/// responder does). A full Initial is always admitted: only a session can judge it. `own` is the set of ciphers this
-/// node offers.
+/// its first message, without taking a ticket or keeping any state. A full Initial is always admitted: only a session
+/// can judge it. `own` is the set of ciphers this node offers.
 pub fn screen_first<const PK: usize, const TK: usize>(
     stores: &mut ResponderStores<PK, TK>,
     alpns: &AlpnList,
@@ -705,7 +732,7 @@ pub fn screen_first<const PK: usize, const TK: usize>(
                 return Screen::Drop;
             }
             match initial.prekey {
-                PrekeyField::Hash(h) if stores.prekeys.get(h).is_none() => {
+                PrekeyField::Hash(h) if stores.prekeys.peek(h).is_none() => {
                     reject_bytes(&initial_th(&initial).snapshot(), MessageType::PrekeyReject)
                 }
                 _ => Screen::Admit { resume: false },
@@ -719,19 +746,12 @@ pub fn screen_first<const PK: usize, const TK: usize>(
                 return Screen::Drop;
             };
             let th_hello = hello_transcript(&hello_fields(&hello)).snapshot();
-            match find_ticket(&stores.tickets, now, alpn, &hello, &th_hello) {
-                Ticket::Opens(_) => Screen::Admit { resume: true },
-                // A live ticket with a wrong binder gets no answer, where a missing, expired or mismatched ticket
-                // gets a reject: the reject sends a dialer that holds a ticket to a full handshake, and this sender
-                // has not shown it holds the ticket's secret. The id is 16 random bytes the responder gave the
-                // session's peer and that cross the wire only in that peer's Hello, so the silence tells only a
-                // sender that already has the id that the ticket is live.
-                Ticket::Binder => Screen::Drop,
-                Ticket::Expired(i) => {
-                    stores.tickets.remove(i);
-                    reject_bytes(&th_hello, MessageType::ResumeReject)
-                }
-                Ticket::Missing | Ticket::Mismatch => reject_bytes(&th_hello, MessageType::ResumeReject),
+            match answer_to(find_ticket(&stores.tickets, now, alpn, &hello, &th_hello)) {
+                Answer::Open(_) => Screen::Admit { resume: true },
+                Answer::Silence => Screen::Drop,
+                // An expired ticket is not removed here: the screen runs on a datagram that proved nothing, and
+                // `victim` takes an expired slot first.
+                Answer::Expired(_) | Answer::Reject => reject_bytes(&th_hello, MessageType::ResumeReject),
             }
         }
         _ => Screen::Admit { resume: false },

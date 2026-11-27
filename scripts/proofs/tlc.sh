@@ -39,6 +39,7 @@ par run_tlc credit_w2 Credit Credit_w2
 par run_tlc credit Credit Credit
 par run_tlc transcript Transcript Transcript
 par run_tlc amp Amp Amp
+par witness_tlc amp_unguarded Amp Amp_unguarded TrueBound
 par run_tlc padding Padding Padding
 par run_tlc_deep varint Varint Varint
 par run_tlc_deep rekeycodec RekeyCodec RekeyCodec
@@ -81,6 +82,7 @@ par witness_tlc reconcile_w_refused Reconcile Reconcile_w_refused NotRefused
 par run_tlc tickets_client Tickets Tickets
 par run_tlc tickets_client3 Tickets Tickets_n3
 par run_tlc tickets_server Tickets Tickets_server
+par run_tlc tickets_server1 Tickets Tickets_server1
 par run_tlc tickets_zero Tickets Tickets_zero
 par run_tlc prekeycache PrekeyCache PrekeyCache
 par run_tlc prekeycache_n0 PrekeyCache PrekeyCache_n0

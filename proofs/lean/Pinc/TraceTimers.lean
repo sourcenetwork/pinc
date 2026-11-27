@@ -52,7 +52,7 @@ def sOf (v : J) : Except String S := do
 
 def cOf (v : J) : Except String C := do
   pure { conf := ← boolF v "conf", hs := ← optF v "hs", rekey := ← optF v "rekey", recov := ← optF v "rec",
-         ack := ← optF v "ack", amp := ← boolF v "amp", paced := ← optF v "paced", path := ← optF v "path",
+         ack := ← optF v "ack", amp := ← boolF v "amp", rr := ← boolF v "rr", kr := ← boolF v "kr", paced := ← optF v "paced", path := ← optF v "path",
          mtu := ← optF v "mtu" }
 
 /-- What the recovery timer read at a `handle_timeout` call for the carrier rule. -/

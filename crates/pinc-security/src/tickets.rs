@@ -38,6 +38,8 @@ pub const DEFAULT_SERVER_TICKETS: usize = 4000;
 pub const DEFAULT_CLIENT_TICKETS: usize = 48;
 /// The version byte of an exported ticket state.
 pub const EXPORT_VERSION: u8 = 1;
+/// The most tickets an exported state holds: its count is one byte.
+pub const MAX_EXPORT_TICKETS: usize = 255;
 /// The longest exported entry: `alg(1) node(32) alpn_len(1) alpn tid(16) psk(32) aead(1) expiry(8) credit(6)`.
 pub const MAX_EXPORT_ENTRY_LEN: usize = 1 + 32 + 1 + MAX_ALPN_LEN + TID_LEN + 32 + 1 + 8 + CREDIT_RECORD_LEN;
 
@@ -185,26 +187,29 @@ impl Ticket {
     }
 }
 
-/// Pick the slot to fill: an empty one, else an expired one, else the one with the lowest stamp.
+/// Pick the slot to fill: an empty one, else an expired one, else the one with the lowest stamp. A slot index for
+/// which `protected` holds is never picked.
 fn victim<T>(
     slots: &[Option<T>],
+    protected: impl Fn(usize) -> bool,
     now: u64,
     expiry_of: impl Fn(&T) -> u64,
     stamp_of: impl Fn(&T) -> u64,
 ) -> Option<usize> {
-    slots
-        .iter()
-        .position(Option::is_none)
+    let open = || (0..slots.len()).filter(|i| !protected(*i));
+    open()
+        .find(|i| slots.get(*i).is_some_and(Option::is_none))
         .or_else(|| {
-            slots
-                .iter()
-                .position(|s| s.as_ref().is_some_and(|s| expiry_of(s) < now))
+            open().find(|i| {
+                slots
+                    .get(*i)
+                    .and_then(Option::as_ref)
+                    .is_some_and(|s| expiry_of(s) < now)
+            })
         })
         .or_else(|| {
-            slots
-                .iter()
-                .enumerate()
-                .filter_map(|(i, s)| s.as_ref().map(|s| (stamp_of(s), i)))
+            open()
+                .filter_map(|i| slots.get(i)?.as_ref().map(|s| (stamp_of(s), i)))
                 .min()
                 .map(|(_, i)| i)
         })
@@ -269,7 +274,8 @@ impl<const N: usize> ServerTickets<N> {
 
     /// Issue `count` (at most [`MAX_BATCH`]) fresh single-use tickets for `session` and store them. The batch is
     /// sent to the peer inside the session's protected channel; it holds fewer tickets than asked (none, if `N` is
-    /// 0) when the store has no room.
+    /// 0) when the store has no room: a ticket of the batch never evicts another of the same batch, so every ticket
+    /// returned is in the store when the call returns.
     ///
     /// # Errors
     /// [`Failure::Randomness`] if the generator refuses; [`Failure::TicketId`] if no id different from every stored one
@@ -282,7 +288,8 @@ impl<const N: usize> ServerTickets<N> {
         lifetime_s: u32,
     ) -> Result<TicketBatch, Failure> {
         let mut batch = TicketBatch::new();
-        for _ in 0..count.min(MAX_BATCH) {
+        let mut mine = [usize::MAX; MAX_BATCH];
+        for n in 0..count.min(MAX_BATCH) {
             let tid = self.fresh_id(env)?;
             self.clock = self.clock.wrapping_add(1);
             let slot = ServerSlot {
@@ -295,11 +302,15 @@ impl<const N: usize> ServerTickets<N> {
                 expiry: expiry(env.now, lifetime_s),
                 stamp: self.clock,
             };
-            let at = victim(&self.slots, env.now, |s| s.expiry, |s| s.stamp);
-            if let Some(s) = at.and_then(|i| self.slots.get_mut(i)) {
-                *s = Some(slot);
-                batch.push(TicketEntry { tid, lifetime_s });
+            let at = victim(&self.slots, |i| mine.contains(&i), env.now, |s| s.expiry, |s| s.stamp);
+            let Some((i, s)) = at.and_then(|i| self.slots.get_mut(i).map(|s| (i, s))) else {
+                break;
+            };
+            *s = Some(slot);
+            if let Some(m) = mine.get_mut(n) {
+                *m = i;
             }
+            batch.push(TicketEntry { tid, lifetime_s });
         }
         Ok(batch)
     }
@@ -393,7 +404,7 @@ impl<const N: usize> ClientTickets<N> {
             .slots
             .iter()
             .position(|s| s.as_ref().is_some_and(|s| s.ticket.peer == slot.ticket.peer));
-        let at = same.or_else(|| victim(&self.slots, now, |s| s.ticket.expiry, |s| s.stamp));
+        let at = same.or_else(|| victim(&self.slots, |_| false, now, |s| s.ticket.expiry, |s| s.stamp));
         if let Some(s) = at.and_then(|i| self.slots.get_mut(i)) {
             *s = Some(slot);
         }
@@ -443,7 +454,8 @@ impl<const N: usize> ClientTickets<N> {
         self.slots.get_mut(at)?.take().map(|s| s.ticket)
     }
 
-    /// Write the state for persistence: the newest at most `max` unexpired tickets, oldest first, as
+    /// Write the state for persistence: the newest at most `max` (and at most [`MAX_EXPORT_TICKETS`], 255: the
+    /// count is one byte) unexpired tickets, oldest first, as
     /// `version(1) count(1)` and then per ticket `alg(1) node(32) alpn_len(1) alpn tid(16) psk(32) aead(1)
     /// expiry(8) credit(6)`. Returns the length written.
     ///
@@ -461,7 +473,7 @@ impl<const N: usize> ClientTickets<N> {
         for (l, s) in live.iter_mut().zip(&self.slots) {
             *l = s.as_ref().filter(|s| s.ticket.expiry >= now);
         }
-        let count = live.iter().flatten().count().min(max);
+        let count = live.iter().flatten().count().min(max).min(MAX_EXPORT_TICKETS);
         let skip = live.iter().flatten().count() - count;
         let mut order: [(u64, usize); N] = [(0, 0); N];
         let mut n = 0;
@@ -494,7 +506,9 @@ impl<const N: usize> ClientTickets<N> {
     }
 
     /// Load a state written by [`ClientTickets::export`] (after the caller unsealed it): every entry that has not
-    /// expired by `now` is stored as [`ClientTickets::accept_batch`] stores tickets. Returns how many were stored.
+    /// expired by `now` is stored as [`ClientTickets::accept_batch`] stores tickets. Returns how many of them the store
+    /// holds when this returns (a ticket replaced or evicted by a later one is not counted; a state holds at most
+    /// [`MAX_EXPORT_TICKETS`]).
     ///
     /// # Errors
     /// A [`WireError`] if `bytes` is not exactly one well-formed state; nothing is stored then.
@@ -509,15 +523,15 @@ impl<const N: usize> ClientTickets<N> {
         }
         let mut r = Reader::new(bytes);
         read_export_header(&mut r)?;
-        let mut stored = 0;
+        let before = self.clock;
         for _ in 0..count {
             let t = read_export_entry(&mut r)?;
             if t.expiry >= now {
                 self.insert(t, now);
-                stored += 1;
             }
         }
-        Ok(stored)
+        // Every slot written here carries a stamp above `before`; one overwritten by a later ticket counts once.
+        Ok(self.slots.iter().flatten().filter(|s| s.stamp > before).count())
     }
 }
 
@@ -547,4 +561,65 @@ fn read_export_entry(r: &mut Reader<'_>) -> Result<Ticket, WireError> {
         expiry,
         credit,
     })
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::assert_is_empty, reason = "tests assert")]
+mod tests {
+    use super::*;
+    use pinc_crypto::{Drbg, Software};
+
+    use crate::session::Traffic;
+
+    fn session() -> Established {
+        Established {
+            peer: NodeId {
+                alg: IdentityAlg::Ed25519,
+                bytes: [7; 32],
+            },
+            alpn: Alpn::new(b"pinc/1").unwrap(),
+            traffic: Traffic {
+                aead: Aead::Aes128Gcm,
+                send: Secret::new([1; 32]),
+                recv: Secret::new([2; 32]),
+            },
+            resume: Secret::new([5; 32]),
+            tickets: TicketBatch::new(),
+            resumed: false,
+            peer_credit: CreditRecord::NONE,
+            local_credit: CreditRecord::NONE,
+            remembered_credit: CreditRecord::NONE,
+            cid_secret: Secret::new([3; 32]),
+        }
+    }
+
+    fn issue<const N: usize>(store: &mut ServerTickets<N>, drbg: &mut Drbg, count: usize) -> TicketBatch {
+        let p = Software;
+        let mut env = Env {
+            provider: &p,
+            now: 1_000,
+            drbg,
+        };
+        store.issue_batch(&mut env, &session(), count, 60).unwrap()
+    }
+
+    #[test]
+    fn a_batch_never_evicts_its_own_ticket() {
+        let mut drbg = Drbg::new(&[9; 32]);
+        // A batch larger than the capacity ends at the capacity, and every ticket it returns is stored.
+        let mut small: ServerTickets<2> = ServerTickets::new();
+        let b = issue(&mut small, &mut drbg, 4);
+        assert_eq!((b.entries().len(), small.len()), (2, 2));
+        assert!(b.entries().iter().all(|e| small.find(&e.tid).is_some()));
+        // Into a full store, the batch evicts the oldest tickets and keeps its own.
+        let mut full: ServerTickets<4> = ServerTickets::new();
+        let old = issue(&mut full, &mut drbg, 4);
+        let b = issue(&mut full, &mut drbg, 3);
+        assert_eq!((b.entries().len(), full.len()), (3, 4));
+        assert!(b.entries().iter().all(|e| full.find(&e.tid).is_some()));
+        assert_eq!(old.entries().iter().filter(|e| full.find(&e.tid).is_some()).count(), 1);
+        // No room at all: an empty batch.
+        let mut none: ServerTickets<0> = ServerTickets::new();
+        assert!(issue(&mut none, &mut drbg, 2).entries().is_empty());
+    }
 }

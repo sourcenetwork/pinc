@@ -20,7 +20,7 @@
 //! | `0x30`, `0x31` | DATAGRAM | without length (data to the end of the packet), with length (varint, then data) |
 //! | `0x3a` | `MTU_PROBE_ECHO` | mtu (2 bytes, big-endian) |
 //! | `0x3b`, `0x3c` | SLEEP, WAKE | none |
-//! | `0x3d` | REKEY | kind (1 byte: 0 request, 1 answer), share (32 bytes), and for an answer the switch packet number (varint) |
+//! | `0x3d` | REKEY | kind (1 byte: 0 request, 1 answer), share (32 bytes), then for a request the sender's roll count (varint), for an answer the 8-byte echo and the switch packet number (varint) |
 //! | `0x3e` | READY | none |
 //! | `0x3f` | `NEW_TICKETS` | a ticket batch: count (1 byte, 0 to 4), then per ticket the id (16 bytes) and the lifetime in seconds (4 bytes) |
 //! | `0x40` and up | extension | length (varint), body bytes |

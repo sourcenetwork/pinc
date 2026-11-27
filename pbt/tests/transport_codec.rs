@@ -107,6 +107,12 @@ fn one_frame(g: &mut Source, out: &mut Vec<u8>, last: bool) {
                         [0; 8]
                     },
                     switch_pn: if answer { value(g) } else { 0 },
+                    // The sender's roll count: a roll of 2^63 is refused by the encoder (the frame is then not emitted).
+                    roll: if answer {
+                        0
+                    } else {
+                        [0, 63, 64, 127, 128, 1 << 62, (1 << 63) - 1, 1 << 63][g.int(0usize..=7)]
+                    },
                 })
             }
             16 => {

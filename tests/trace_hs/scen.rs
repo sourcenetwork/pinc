@@ -185,7 +185,7 @@ fn base(c: &mut Ctx) {
         let bad = flip_field(&hello, "binder");
         let rs = sim.r_new(1);
         let (r, d) = sim.r_recv(rs, &bad);
-        assert!(r.is_ok() && d.sends[0][0] == 8 && d.early.is_none());
+        assert!(is_dropped(&r) && d.sends.is_empty() && d.early.is_none());
         let rs2 = sim.r_new(1);
         let (r, d) = sim.r_recv(rs2, &ex(&hello));
         assert!(r.is_ok() && d.early.is_some() && d.est.is_some());
@@ -506,12 +506,12 @@ fn expiry(c: &mut Ctx) {
         assert_eq!(first[0][0], 1, "an expired ticket is not taken");
         sim.drive(is, first, None, 3, 3);
     });
-    // three tickets per session: all three are issued, two fit the store, the last one is the one the client keeps
+    // three tickets per session on a store of two: the batch ends at two (it never evicts its own), the client keeps the last
     c.world(false, |sim| {
         sim.tps = 3;
         let (is, first) = sim.start(1, 1, false, false);
         sim.drive(is, first, None, 1, 1);
-        assert_eq!(sim.ests[&('R', 1)].tickets.entries().len(), 3);
+        assert_eq!(sim.ests[&('R', 1)].tickets.entries().len(), 2);
         sim.accept(is, 1);
         assert_eq!(sim.client.len(), 1);
         sim.tps = 1;

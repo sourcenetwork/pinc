@@ -224,13 +224,23 @@ fn valid_message(g: &mut Source) -> (u8, Vec<u8>) {
             let answer = g.bool();
             let bits = g.int(0u32..=63);
             let switch_pn = if bits == 0 { 0 } else { g.int(0u64..=(1u64 << bits) - 1) };
-            let m = Rekey {
+            // A request carries the sender's roll count; one past 2^63 - 1 does not encode.
+            let roll = if answer { 0 } else { [0, 63, 64, 127, 128, 1 << 62, (1 << 63) - 1, 1 << 63][g.index(8)] };
+            let mut m = Rekey {
                 answer,
                 share: arr(g),
                 echo: if answer { arr(g) } else { [0; 8] },
                 switch_pn: if answer { switch_pn } else { 0 },
+                roll,
             };
-            write_with(|w| m.write(w))
+            let written = write_with(|w| m.write(w));
+            if roll == 1 << 63 {
+                assert!(written.is_err(), "a roll of 2^63 was encoded");
+                m.roll = 0;
+                write_with(|w| m.write(w))
+            } else {
+                written
+            }
         },
     };
     (kind, bytes.unwrap())

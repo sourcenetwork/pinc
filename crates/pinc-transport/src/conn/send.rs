@@ -17,7 +17,7 @@
 
 use core::ops::RangeInclusive;
 
-use pinc_crypto::Provider;
+use pinc_crypto::{Aead, Provider};
 use pinc_security::AmpBudget;
 use pinc_security::Env;
 use pinc_security::amp::{FACTOR, OVERHEAD};
@@ -29,7 +29,8 @@ use super::event::Ev;
 use super::{Connection, Phase};
 use crate::frame::{Frame, MAX_ACK_RANGES, ack_len, stream_overhead, ty, write_ack};
 use crate::packet::{
-    ConnId, LongHeader, LongType, PN_LEN_BASE, PnLayout, ShortHeader, encode_pn, handshake_packet, seal,
+    ConnId, LongHeader, LongType, MAX_CID_LEN, PN_LEN_BASE, PnLayout, ShortHeader, encode_pn, handshake_packet, seal,
+    short_header_len,
 };
 use crate::recovery::{FrameRef, FrameRefs, MAX_FRAME_REFS, PathKind, REPAIR_FRAME_BYTES, Sent};
 use crate::stream::pool::BufferPool;
@@ -217,6 +218,44 @@ conn_impl! {
         order
     }
 
+    /// Whether a control frame can be written now: every one is recorded in flight, so none is written while the ring
+    /// has no slot for the packet. The send path and the timer both ask this.
+    pub(super) fn control_room(&self) -> bool {
+        self.rec.ring_has_room()
+    }
+
+    /// Whether a REKEY request can leave on path `ti` now: the ring has a slot and the path's amplification budget
+    /// covers the smallest datagram that carries one. The send path and the resend deadline both ask this.
+    pub(super) fn rekey_room(&self, ti: usize) -> bool {
+        self.control_room() && self.amp_room(ti) >= self.control_min(ti, REKEY_MAX)
+    }
+
+    /// The size of the smallest datagram that carries one control frame of `payload` bytes on path `ti`: a short
+    /// header with the path's connection id, the packet number, the payload (at least 4 bytes, the least the packet
+    /// builder seals) and the tag. The builder refuses to write below it and every gate of a control frame asks it,
+    /// so a gate is open only where the builder can write.
+    pub(super) fn control_min(&self, ti: usize, payload: usize) -> usize {
+        let cid = self
+            .paths
+            .get(ti)
+            .and_then(|p| p.dcid)
+            .or_else(|| self.cids.first_remote())
+            .map_or(MAX_CID_LEN, |c| c.as_bytes().len());
+        short_header_len(cid, self.pn_len) + payload.max(4) + Aead::TAG_LEN
+    }
+
+    /// Whether the acknowledgement that would be written now can leave on path `ti`: the budget covers the datagram
+    /// of its encoded size. The send path and the acknowledgement deadline both ask this.
+    pub(super) fn ack_room(&self, ti: usize) -> bool {
+        ack_len(self.rx.ack_ranges(self.life.clock)).is_ok_and(|n| self.amp_room(ti) >= self.control_min(ti, n))
+    }
+
+    /// Whether a keepalive PING can leave on path `ti` now: the ring has a slot and the path's amplification budget
+    /// covers a datagram. The send path and the keepalive deadline both ask this.
+    pub(super) fn keepalive_room(&self, ti: usize) -> bool {
+        self.control_room() && self.amp_room(ti) >= self.control_min(ti, 1)
+    }
+
     /// How many bytes an unvalidated path, and an unvalidated session, may still be sent.
     pub(super) fn amp_room(&self, ti: usize) -> usize {
         let left = |b: &AmpBudget| {
@@ -259,7 +298,7 @@ conn_impl! {
         };
         let mtu = probe.unwrap_or(base).min(out.len());
         let max_len = mtu.min(self.amp_room(ti));
-        if max_len < MIN_ROOM {
+        if max_len < self.control_min(ti, 4) {
             return self.dgram_end(note, [0; 3], None);
         }
         let window = out.get_mut(..max_len)?;
@@ -445,7 +484,8 @@ conn_impl! {
             Kind::ZeroRtt => LONG_HDR_MAX,
         };
         let size_cap = fill.probe.unwrap_or(window.len()).min(window.len());
-        if size_cap < hdr_cap + 16 + 4 {
+        let floor = if kind == Kind::Short { self.control_min(ti, 4) } else { hdr_cap + Aead::TAG_LEN + 4 };
+        if size_cap < floor {
             return None;
         }
         let payload_cap = size_cap - hdr_cap - 16;
@@ -711,7 +751,7 @@ conn_impl! {
         }
         // Control frames. Every one of them is recorded in flight, so none is written while the ring has no slot for the
         // packet: the packet would be refused whole and the acknowledgement in it would never leave.
-        let ring_room = self.rec.ring_has_room();
+        let ring_room = self.control_room();
         if ring_room {
             self.fill_control(payload, &mut pos, &mut out, fill);
         }
@@ -731,7 +771,7 @@ conn_impl! {
                 out.last_stream = None;
             }
         }
-        if fill.force && ring_room && !out.eliciting && put(payload, &mut pos, &Frame::Ping) {
+        if fill.force && ring_room && self.keepalive_room(ti) && !out.eliciting && put(payload, &mut pos, &Frame::Ping) {
             if ti == self.paths.active {
                 out.strong();
             } else {
@@ -772,6 +812,7 @@ conn_impl! {
         }
         if out.refs.len() < MAX_FRAME_REFS
             && payload.len().saturating_sub(*pos) >= REKEY_MAX
+            && self.rekey_room(fill.ti)
             && let Some(rekey) = self.poll_rekey(fill.now)
         {
             if put(payload, pos, &Frame::Rekey(rekey)) {

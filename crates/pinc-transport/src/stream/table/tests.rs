@@ -411,3 +411,61 @@ fn a_deferred_grant_goes_out_when_a_sibling_read_frees_room() {
         pool.free_chunk(c);
     }
 }
+
+/// A stream whose reader drained everything it was sent, with a window of 8 chunks on a pool of 3, is granted the
+/// largest limit that fits: the credit granted and not yet received never passes the free bytes, and a second pass with
+/// no change of room grants nothing more. Without the partial grant the limit stays and the slot stays deferred.
+#[test]
+fn a_drained_stream_is_granted_what_fits_on_a_pool_smaller_than_a_window() {
+    let chunk = CHUNK_SIZE as u64;
+    let mut pool = BufferPool::new_boxed(3);
+    let mut cfg = Config::new(false);
+    cfg.peer = PeerLimits {
+        window: 64 * 1024,
+        max_streams: 16,
+    };
+    cfg.credit = true;
+    let mut t: Streams<NoSource, 4, 65> = Streams::new(&cfg, &pool);
+    // The peer sends up to the limit it was given.
+    let mut sent = 0;
+    while let Some(n) = t
+        .stream_recv_window(0)
+        .map_or(Some(chunk), |w| w.1.checked_sub(sent))
+        .map(|n| n.min(chunk))
+        .filter(|n| *n > 0)
+    {
+        if t.on_stream_frame(&mut pool, 0, sent, &alloc::vec![7u8; n as usize], false)
+            .is_err()
+        {
+            break;
+        }
+        sent += n;
+    }
+    assert!(sent > 0, "the peer could send nothing");
+    // The reader's rate asks for a window of 8 chunks, more than the pool holds.
+    let i = t.find(0).unwrap();
+    t.slots.get_mut(i).unwrap().recv.win.size = 8 * chunk;
+    let mut read = 0;
+    while let Some(c) = t.read_chunk(&pool, 0) {
+        let n = c.len();
+        read += n as u64;
+        t.consume(&mut pool, 0, n, 1_000_000, 10_000_000).unwrap();
+    }
+    assert_eq!(read, sent, "the reader took everything");
+    let (_, limit) = t.stream_recv_window(0).unwrap();
+    assert!(
+        limit >= read + chunk,
+        "the limit {limit} did not move a chunk past the read position {read}"
+    );
+    assert!(t.slot(i).unwrap().recv.win.pending, "the grant is not queued");
+    assert!(
+        t.granted_unreceived() + t.reserved() <= pool.available_bytes(),
+        "the credit granted passes the free bytes"
+    );
+    t.regrant(&pool);
+    assert_eq!(
+        t.stream_recv_window(0).unwrap().1,
+        limit,
+        "a second pass with no new room granted more"
+    );
+}

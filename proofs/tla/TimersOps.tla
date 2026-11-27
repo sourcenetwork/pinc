@@ -22,8 +22,13 @@
 (* handshake is confirmed), hs (its retransmit deadline), rekey (the REKEY *)
 (* request resent), rec (loss recovery: the loss time or the probe         *)
 (* timeout), ack (the acknowledgement due), amp (the active path may still *)
-(* be sent 64 bytes), paced (the pacer's release), path (path probes and   *)
-(* idle-out) and mtu (the MTU retry and black-hole suspicion). Their own   *)
+(* be sent 64 bytes), rr and kr (a REKEY request, a PING, can be written: *)
+(* the send ring and the active path have room for the smallest datagram   *)
+(* that carries it; the REKEY request and the keepalive deadlines are each *)
+(* offered only under its own gate, so a deadline that cannot be acted on  *)
+(* never keeps the host polling), paced (the pacer's release),             *)
+(* path (path probes and idle-out) and mtu (the MTU retry and black-hole   *)
+(* suspicion). Their own                                                   *)
 (* rules are proved in their own models (TransportRecovery*, TransportCc*, *)
 (* TransportRx*, TransportMtu); here they are opaque. So are the decisions *)
 (* the components take inside a call: a close a component decides in      *)
@@ -76,10 +81,10 @@ PollB(s, c, k, bug) ==
                   t2 == IF bug = "nowake" THEN t1 ELSE AddD(t1, s.wd)
               IN IF s.ld # None THEN AddD(t2, c.rec) ELSE t2
          ELSE LET t1 == IF ~c.conf THEN AddD(Idle(s, k), c.hs) ELSE Idle(s, k)
-                  t2 == AddD(AddD(t1, c.rekey), c.rec)
+                  t2 == AddD(AddD(t1, IF c.rr THEN c.rekey ELSE None), c.rec)
                   t3 == IF c.amp THEN AddD(t2, c.ack) ELSE t2
                   t4 == AddD(AddD(AddD(AddD(t3, c.paced), c.path), s.wd), LinkEnd(s, k))
-              IN IF s.ph = "conn" THEN AddD(AddD(t4, KeepDue(s)), c.mtu) ELSE t4
+              IN IF s.ph = "conn" THEN AddD(AddD(t4, IF c.kr THEN KeepDue(s) ELSE None), c.mtu) ELSE t4
 Poll(s, c, k) == PollB(s, c, k, "none")
 
 Silent(s) == [s EXCEPT !.ph = "closed", !.close = None]

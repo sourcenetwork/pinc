@@ -60,12 +60,12 @@ use pinc_crypto::{IdentityAlg, Provider};
 use pinc_security::initiator::REJECT_GAP;
 use pinc_security::message::{MAX_MESSAGE_LEN, MessageType};
 use pinc_security::{
-    Env, Event as SecEvent, Failure, Initiator, KeyHandle, KeyRequest, Output, Responder, ResponderStores,
+    ConnId, Env, Event as SecEvent, Failure, Initiator, KeyHandle, KeyRequest, Output, Responder, ResponderStores,
 };
 use pinc_wire::{Reader, varint};
 
 use super::reasm::Reassembly;
-use crate::recovery::{MS, SECOND};
+use crate::recovery::{MS, SECOND, deadline_after};
 use crate::stream::pool::{BufferPool, CHUNK_SIZE, Chunk};
 
 /// The first resend delay of a dialing side when no round trip is known (the algorithm's 500 ms).
@@ -431,7 +431,7 @@ impl Handshake {
             request: None,
             request_announced: false,
             stage: Stage::Open,
-            retx_at: client.then(|| now.saturating_add(first)),
+            retx_at: client.then(|| deadline_after(now, first)).flatten(),
             held: false,
             sends,
             srtt: 0,
@@ -511,7 +511,7 @@ impl Handshake {
                         }
                         // A responder's resend schedule starts when its flight first goes out.
                         if !self.client && self.stage == Stage::Open && self.retx_at.is_none() {
-                            self.retx_at = Some(self.clock.saturating_add(SERVER_FIRST));
+                            self.retx_at = deadline_after(self.clock, SERVER_FIRST);
                         }
                         // It has answered: it holds the handshake for a slow dialer's Finish.
                         if !self.client && self.stage == Stage::Open && !reject && !self.timing.hold {
@@ -551,7 +551,7 @@ impl Handshake {
             SecEvent::ResumeRejected => {
                 self.sends = 1;
                 self.first_sent = self.clock;
-                self.retx_at = Some(self.clock.saturating_add(self.timing.first()));
+                self.retx_at = deadline_after(self.clock, self.timing.first());
             }
             SecEvent::Established(est) => {
                 self.connect_at = None;
@@ -601,7 +601,7 @@ impl Handshake {
             {
                 self.finish_pto = pto;
             }
-            self.retx_at = Some(now.saturating_add(self.finish_first));
+            self.retx_at = deadline_after(now, self.finish_first);
             // The wait for the peer's confirmation counts from this instant too: the key answer that established the
             // session can come long after the last datagram or timer the handshake took.
             self.established = now;
@@ -659,6 +659,14 @@ impl Handshake {
     pub(crate) fn set_short_until(&mut self, until: u64) {
         if let Some(Machine::Client(m)) = machine_of(&mut self.machine) {
             m.set_short_until(until);
+        }
+    }
+
+    /// The server id a dialing side's authenticated Reply (or resume Reply) named, once the session is established.
+    pub(crate) fn server_cid(&mut self) -> Option<ConnId> {
+        match machine_of(&mut self.machine) {
+            Some(Machine::Client(m)) => m.server_cid(),
+            _ => None,
         }
     }
 
@@ -901,7 +909,7 @@ impl Handshake {
             return false;
         }
         if self.held && self.client && self.stage == Stage::Open {
-            self.retx_at = Some(now.saturating_add(HELD_RECHECK));
+            self.retx_at = deadline_after(now, HELD_RECHECK);
             return false;
         }
         if self.early
@@ -948,7 +956,7 @@ impl Handshake {
         }
         self.retransmitting = true;
         // A fallback or a reject restarts the schedule when its event is drained; otherwise the delay stands.
-        self.retx_at = Some(now.saturating_add(delay));
+        self.retx_at = deadline_after(now, delay);
         true
     }
 

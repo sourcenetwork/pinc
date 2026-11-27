@@ -909,7 +909,7 @@ fn rejects_wait_in_a_queue_of_sixteen_and_the_seventeenth_is_dropped() {
 }
 
 #[test]
-fn a_forged_hello_naming_an_expired_ticket_is_rejected_and_the_ticket_is_gone() {
+fn a_forged_hello_naming_an_expired_ticket_is_rejected_and_the_store_is_unchanged() {
     big_stack(|| {
         let mut d = Duo::new();
         let first = d.dial();
@@ -931,7 +931,8 @@ fn a_forged_hello_naming_an_expired_ticket_is_rejected_and_the_ticket_is_gone() 
             (1, 0),
             "{ns:?}"
         );
-        assert_eq!(d.srv.stores().tickets.len(), 0, "the expired ticket stayed");
+        // The screen runs on a datagram that proved nothing: it takes no ticket and keeps no state.
+        assert_eq!(d.srv.stores().tickets.len(), 1, "the screen removed a ticket");
     });
 }
 

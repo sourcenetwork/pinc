@@ -88,106 +88,107 @@ def newSlot (sl : List Slot) (t rs cr : Term) (peer : Nat) (al ad : Term) : Slot
   { occ := true, tid := t, psk := psk rs t cr, peer := peer, al := al, ad := ad, cr := cr, exp := false,
     stamp := Stamp sl }
 
-theorem IssueOne_cases (sl : List Slot) (c : List Nat) (rs cr : Term) (peer : Nat) (al ad : Term) :
-    (FreshFrom sl c = none ∧ (IssueOne sl c rs cr peer al ad).ok = false ∧ (IssueOne sl c rs cr peer al ad).sl = sl
-      ∧ (IssueOne sl c rs cr peer al ad).tid = none)
-    ∨ ∃ t, FreshFrom sl c = some t ∧ (IssueOne sl c rs cr peer al ad).ok = true ∧
-      (IssueOne sl c rs cr peer al ad).sl = Put sl (Victim sl) (newSlot sl t rs cr peer al ad) ∧
-      (IssueOne sl c rs cr peer al ad).tid = (if Victim sl = none then none else some t) := by
+theorem IssueOne_cases (sl : List Slot) (c : List Nat) (rs cr : Term) (peer : Nat) (al ad : Term) (mine : List Nat) :
+    (FreshFrom sl c = none ∧ (IssueOne sl c rs cr peer al ad mine).ok = false ∧
+      (IssueOne sl c rs cr peer al ad mine).sl = sl ∧ (IssueOne sl c rs cr peer al ad mine).tid = none)
+    ∨ ((IssueOne sl c rs cr peer al ad mine).ok = true ∧ (IssueOne sl c rs cr peer al ad mine).stop = true ∧
+      (IssueOne sl c rs cr peer al ad mine).sl = sl ∧ (IssueOne sl c rs cr peer al ad mine).tid = none)
+    ∨ ∃ t v, FreshFrom sl c = some t ∧ Victim sl = some v ∧ v ∉ mine ∧ (IssueOne sl c rs cr peer al ad mine).ok = true ∧
+      (IssueOne sl c rs cr peer al ad mine).stop = false ∧
+      (IssueOne sl c rs cr peer al ad mine).sl = Put sl (some v) (newSlot sl t rs cr peer al ad) ∧
+      (IssueOne sl c rs cr peer al ad mine).tid = some t ∧ (IssueOne sl c rs cr peer al ad mine).idx = some v := by
   unfold IssueOne
   cases h : FreshFrom sl c with
   | none => left; simp
-  | some t => right; exact ⟨t, rfl, rfl, rfl, rfl⟩
+  | some t =>
+    right
+    simp only
+    cases hv : Victim sl with
+    | none => left; simp
+    | some v =>
+      simp only
+      by_cases hm : v ∈ mine
+      · left; simp [hm]
+      · right; exact ⟨t, v, rfl, rfl, hm, by simp [hm, newSlot]⟩
 
-theorem IssueOne_uniq {sl : List Slot} (hu : UniqTids sl) (c : List Nat) (rs cr : Term) (peer : Nat) (al ad : Term) :
-    UniqTids (IssueOne sl c rs cr peer al ad).sl := by
-  rcases IssueOne_cases sl c rs cr peer al ad with ⟨-, -, h, -⟩ | ⟨t, hf, -, h, -⟩
+theorem IssueOne_uniq {sl : List Slot} (hu : UniqTids sl) (c : List Nat) (rs cr : Term) (peer : Nat) (al ad : Term)
+    (mine : List Nat) : UniqTids (IssueOne sl c rs cr peer al ad mine).sl := by
+  rcases IssueOne_cases sl c rs cr peer al ad mine with ⟨-, -, h, -⟩ | ⟨-, -, h, -⟩ | ⟨t, v, hf, -, -, -, -, h, -, -⟩
+  · rw [h]; exact hu
   · rw [h]; exact hu
   · rw [h]; exact Uniq_put hu _ _ rfl (FreshFrom_some hf)
 
-theorem IssueOne_prov {sl : List Slot} (c : List Nat) (rs cr : Term) (peer : Nat) (al ad : Term) :
-    ∀ x ∈ (IssueOne sl c rs cr peer al ad).sl, x.occ = true →
-      x ∈ sl ∨ ∃ t, x = newSlot sl t rs cr peer al ad := by
-  intro x hx ho
-  rcases IssueOne_cases sl c rs cr peer al ad with ⟨-, -, h, -⟩ | ⟨t, hf, -, h, -⟩
-  · rw [h] at hx; exact Or.inl hx
-  · rw [h] at hx
-    rcases Put_mem hx with hx | hx
-    · exact Or.inl hx
-    · exact Or.inr ⟨t, hx⟩
-
 theorem IssueAll_uniq (rs cr : Term) (peer : Nat) (al ad : Term) (cs : List (List Nat)) :
-    ∀ (sl : List Slot) (tids : List Term), UniqTids sl → UniqTids (IssueAll sl rs cr peer al ad tids cs).sl := by
+    ∀ (sl : List Slot) (tids : List Term) (mine : List Nat), UniqTids sl →
+      UniqTids (IssueAll sl rs cr peer al ad tids mine cs).sl := by
   induction cs with
-  | nil => intro sl tids hu; simpa [IssueAll] using hu
+  | nil => intro sl tids mine hu; simpa [IssueAll] using hu
   | cons c r ih =>
-    intro sl tids hu
+    intro sl tids mine hu
     simp only [IssueAll]
     split
-    · exact IssueOne_uniq hu c rs cr peer al ad
-    · exact ih _ _ (IssueOne_uniq hu c rs cr peer al ad)
+    · exact IssueOne_uniq hu c rs cr peer al ad mine
+    · split
+      · exact IssueOne_uniq hu c rs cr peer al ad mine
+      · exact ih _ _ _ (IssueOne_uniq hu c rs cr peer al ad mine)
 
 theorem IssueAll_tids_sub (rs cr : Term) (peer : Nat) (al ad : Term) (cs : List (List Nat)) :
-    ∀ (sl : List Slot) (tids : List Term), ∀ t ∈ tids, t ∈ (IssueAll sl rs cr peer al ad tids cs).tids := by
+    ∀ (sl : List Slot) (tids : List Term) (mine : List Nat), ∀ t ∈ tids,
+      t ∈ (IssueAll sl rs cr peer al ad tids mine cs).tids := by
   induction cs with
-  | nil => intro sl tids t ht; simpa [IssueAll] using ht
+  | nil => intro sl tids mine t ht; simpa [IssueAll] using ht
   | cons c r ih =>
-    intro sl tids t ht
+    intro sl tids mine t ht
     simp only [IssueAll]
     split
     · exact ht
-    · apply ih
-      split
+    · split
       · exact ht
-      · exact List.mem_append_left _ ht
+      · apply ih
+        split
+        · exact ht
+        · exact List.mem_append_left _ ht
 
 /-- Every occupied slot after `issue_batch` is an old slot or a ticket the batch issued. -/
 theorem IssueAll_prov (rs cr : Term) (peer : Nat) (al ad : Term) (cs : List (List Nat)) :
-    ∀ (sl : List Slot) (tids : List Term), ∀ x ∈ (IssueAll sl rs cr peer al ad tids cs).sl, x.occ = true →
-      x ∈ sl ∨ TicketOf x ∈ IssuedOf (IssueAll sl rs cr peer al ad tids cs).tids rs cr peer al ad := by
+    ∀ (sl : List Slot) (tids : List Term) (mine : List Nat), ∀ x ∈ (IssueAll sl rs cr peer al ad tids mine cs).sl,
+      x.occ = true → x ∈ sl ∨ TicketOf x ∈ IssuedOf (IssueAll sl rs cr peer al ad tids mine cs).tids rs cr peer al ad := by
   induction cs with
-  | nil => intro sl tids x hx ho; exact Or.inl (by simpa [IssueAll] using hx)
+  | nil => intro sl tids mine x hx ho; exact Or.inl (by simpa [IssueAll] using hx)
   | cons c r ih =>
-    intro sl tids x hx ho
-    rcases IssueOne_cases sl c rs cr peer al ad with ⟨-, hok, hsl, -⟩ | ⟨t, hf, hok, hsl, htid⟩
-    · simp only [IssueAll, hok] at hx ⊢
-      simp at hx ⊢
+    intro sl tids mine x hx ho
+    rcases IssueOne_cases sl c rs cr peer al ad mine with ⟨-, hok, hsl, -⟩ | ⟨hok, hst, hsl, -⟩
+      | ⟨t, v, hf, hv, hm, hok, hst, hsl, htid, hidx⟩
+    · simp only [IssueAll, hok, Bool.not_false, ite_true] at hx
       rw [hsl] at hx
       exact Or.inl hx
-    · have e : IssueAll sl rs cr peer al ad tids (c :: r) =
-          IssueAll (IssueOne sl c rs cr peer al ad).sl rs cr peer al ad
-            (match (IssueOne sl c rs cr peer al ad).tid with | none => tids | some t => tids ++ [t]) r := by
-        simp only [IssueAll, hok, Bool.not_true, Bool.false_eq_true, ite_false]
-        rfl
+    · simp only [IssueAll, hok, hst, Bool.not_true, Bool.false_eq_true, ite_false, ite_true] at hx
+      rw [hsl] at hx
+      exact Or.inl hx
+    · have e : IssueAll sl rs cr peer al ad tids mine (c :: r) =
+          IssueAll (Put sl (some v) (newSlot sl t rs cr peer al ad)) rs cr peer al ad (tids ++ [t]) (v :: mine) r := by
+        simp only [IssueAll, hok, hst, hsl, htid, hidx, Bool.not_true, Bool.false_eq_true, ite_false]
       rw [e] at hx ⊢
-      rcases ih _ _ x hx ho with h | h
-      · rw [hsl] at h
-        cases hv : Victim sl with
-        | none => rw [hv] at h; exact Or.inl (by simpa [Put] using h)
-        | some v =>
-          rw [hv] at h
-          rcases Put_mem h with h | h
-          · exact Or.inl h
-          · right
-            have hm := IssueAll_tids_sub rs cr peer al ad r (IssueOne sl c rs cr peer al ad).sl
-              (match (IssueOne sl c rs cr peer al ad).tid with | none => tids | some t => tids ++ [t])
-            have ht : t ∈ (match (IssueOne sl c rs cr peer al ad).tid with | none => tids | some t => tids ++ [t]) := by
-              rw [htid, hv]; simp
-            have := hm t ht
-            subst h
-            simp only [IssuedOf, List.mem_map]
-            exact ⟨t, this, rfl⟩
+      rcases ih _ _ _ x hx ho with h | h
+      · rcases Put_mem h with h | h
+        · exact Or.inl h
+        · right
+          have := IssueAll_tids_sub rs cr peer al ad r (Put sl (some v) (newSlot sl t rs cr peer al ad)) (tids ++ [t])
+            (v :: mine) t (by simp)
+          subst h
+          simp only [IssuedOf, List.mem_map]
+          exact ⟨t, this, rfl⟩
       · exact Or.inr h
 
 /-! ## What a responder step does to its store -/
 
 theorem Issue_uniq {sl : List Slot} (hu : UniqTids sl) (cs : List (List Nat)) (rs cr : Term) (peer : Nat) (al ad : Term) :
-    UniqTids (Issue sl cs rs cr peer al ad).sl := IssueAll_uniq rs cr peer al ad cs sl [] hu
+    UniqTids (Issue sl cs rs cr peer al ad).sl := IssueAll_uniq rs cr peer al ad cs sl [] [] hu
 
 theorem Issue_prov (sl : List Slot) (cs : List (List Nat)) (rs cr : Term) (peer : Nat) (al ad : Term) :
     ∀ x ∈ (Issue sl cs rs cr peer al ad).sl, x.occ = true →
       x ∈ sl ∨ TicketOf x ∈ IssuedOf (Issue sl cs rs cr peer al ad).tids rs cr peer al ad :=
-  IssueAll_prov rs cr peer al ad cs sl []
+  IssueAll_prov rs cr peer al ad cs sl [] []
 
 /-- The store a step leaves: still pairwise distinct ids, every new slot an issued ticket, and a prekey hash only
 added by a Finish that completes. -/
