@@ -498,9 +498,8 @@ conn_impl! {
     }
 
     /// Tell the connection path `id` can no longer be used: its local address is gone (the host's interface moved) or
-    /// the endpoint no longer holds its address pair. The path is no
-    /// longer usable: the connection leaves it for the best validated path at once, or as soon as one validates, and
-    /// then forgets it.
+    /// the endpoint no longer holds its address pair. The connection leaves the path for the best validated path at
+    /// once, or as soon as one validates, and then forgets it.
     ///
     /// # Errors
     /// [`PathError::Unknown`] if the path is not tracked.

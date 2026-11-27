@@ -1208,19 +1208,32 @@ fn a_kept_datagram_on_an_evicted_path_tells_its_session() {
         written_to(&mut net, s, sc, b"to the second");
         let (now, mut buf) = (net.now, vec![0u8; 65_536]);
         // One destination leaves; the other session's datagram is kept for the next call.
-        assert!(net.nodes[s].ep.poll_transmit(now, &mut buf).is_some());
+        let first = net.nodes[s]
+            .ep
+            .poll_transmit(now, &mut buf)
+            .expect("one datagram leaves");
+        let (sent, kept) = if first.remote == net.nodes[a].addr {
+            (sa, sc)
+        } else {
+            (sc, sa)
+        };
         let clients = [net.nodes[a].addr, net.nodes[c].addr];
         evict_address_pairs(&mut net, s, &clients);
         let before = net.nodes[s].ep.node_stats().dropped_out;
         while net.nodes[s].ep.poll_transmit(now, &mut buf).is_some() {}
-        assert!(
-            net.nodes[s].ep.node_stats().dropped_out > before,
-            "the kept datagram was not dropped"
+        assert_eq!(
+            net.nodes[s].ep.node_stats().dropped_out - before,
+            1,
+            "exactly the kept datagram was dropped"
         );
-        // The kept datagram belonged to one of the two: that session is told its path is lost.
+        // The kept datagram belonged to the session that did not leave: that one, and no other, is told its path is lost.
         assert!(
-            [sa, sc].iter().any(|x| !stats_of(&net, s, *x).path_validated),
-            "no session was told its path is lost"
+            !stats_of(&net, s, kept).path_validated,
+            "the session of the kept datagram was not told its path is lost"
+        );
+        assert!(
+            stats_of(&net, s, sent).path_validated,
+            "the session whose datagram left was told its path is lost"
         );
         written_to(&mut net, a, ca, b"from the first");
         written_to(&mut net, c, cc, b"from the second");

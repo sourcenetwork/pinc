@@ -561,6 +561,7 @@ par witness_tlc corerouteindex_keepold CoreRouteIndex CoreRouteIndex_keepold Exa
 par run_tlc corestalepath CoreStalePath CoreStalePath
 par witness_tlc corestalepath_silent CoreStalePath CoreStalePath_silent Left
 par witness_tlc corestalepath_w_recover CoreStalePath CoreStalePath_w_recover NoRecover
+par witness_tlc corestalepath_keptactive CoreStalePath CoreStalePath_keptactive Told
 par run_tlc corestate CoreState CoreState
 par witness_tlc corestate_lazy CoreState CoreState_lazy AtomicInv
 par witness_tlc corestate_tail CoreState CoreState_tail CanonInv
