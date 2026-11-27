@@ -14,7 +14,7 @@
 //! The test compares every call with a naive reading of the format and of the tables in the test itself: the input is
 //! accepted exactly when the naive parse reads one state (version 1, the three sections, known tags, an ALPN of 1 to
 //! 32 bytes, nothing left over), a refused input leaves the exported bytes unchanged, and an accepted one gives
-//! the bytes of the naive tables (a ticket that expired is skipped and one per peer is kept with the oldest evicted at
+//! the bytes and the counts of the naive tables (a ticket that expired is skipped and one per peer is kept with the oldest evicted at
 //! the bound, a round trip of 0 is skipped and a new peer is refused when the table is full, a prekey peer is replaced
 //! in place or the oldest evicted).
 #![allow(
@@ -225,20 +225,25 @@ fn parse(b: &[u8]) -> Option<M> {
     Some(m)
 }
 
-/// The tables after a restore of `inp` at `now`, and what the restore reports.
+/// The tables after a restore of `inp` at `now`, and what the restore reports. The ticket count is the tickets of
+/// the input this restore left in the store: one replaced by a later ticket of the same peer, or evicted by a later
+/// one at the bound, is not counted, nor is any ticket the store held before.
 fn apply(live: &mut M, inp: &M, now: u64) -> (usize, usize, usize) {
-    let mut stored = 0;
+    let mut fresh = vec![false; live.tk.len()];
     for t in &inp.tk {
         if t.expiry >= now {
-            stored += 1;
             if let Some(i) = live.tk.iter().position(|o| (o.alg, o.node) == (t.alg, t.node)) {
                 live.tk.remove(i);
+                fresh.remove(i);
             } else if live.tk.len() == CT {
                 live.tk.remove(0);
+                fresh.remove(0);
             }
             live.tk.push(t.clone());
+            fresh.push(true);
         }
     }
+    let stored = fresh.iter().filter(|f| **f).count();
     let mut peers = 0;
     for (a, n, r) in &inp.kr {
         if *r > 0 {
