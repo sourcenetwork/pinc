@@ -228,7 +228,7 @@ bench *args:
 tla-tools:
     mkdir -p "{{tla_home}}" "$HOME/.local/bin"
     just _fetch "{{tla_home}}/tla2tools.jar" https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar 936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88
-    just _fetch "{{tla_home}}/tla2tools-2026.11.19.jar" https://github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla2tools.jar fdffef247f563ef6edbfd44958d2a82db79e7564e07cb673262d896353fa6713
+    just _fetch "{{tla_home}}/tla2tools-2026.11.26.jar" https://github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla2tools.jar 67f9575c3b9ef7a0787b1bded34812862ffe79d711298e5a75b1a77720b19928
     just _fetch "{{tla_home}}/CommunityModules-deps-202611060952.jar" https://github.com/tlaplus/CommunityModules/releases/download/202611060952/CommunityModules-deps.jar a3b27c40f1fb5085f30c6ead37e918457f8cfc62c1e50a1dc668ef592ad2b5fb
     printf '#!/usr/bin/env bash\nexec java -XX:+UseParallelGC -cp "%s/tla2tools.jar" tlc2.TLC "$@"\n' "{{tla_home}}" > "$HOME/.local/bin/tlc"
     chmod +x "$HOME/.local/bin/tlc"
