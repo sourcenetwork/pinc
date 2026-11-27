@@ -297,5 +297,11 @@ CallRevoke(S, env, now, member) ==
 CallMoved(S, env, now) == Drain(AddressChangedOp(Begin(S, env), now))
 CallSnapshotTo(S, env, now, peer) == Drain(SnapshotToOp(Begin(S, env), env, now, peer))
 CallSetMaxFrame(S, env, mb) == Drain(SetMaxFrameOp(Begin(S, env), mb))
+\* stream_reset: a stream the hub peer wrote on ended, or its session did, with the session up; a snapshot of its cut
+\* short is closed (CloseOpen), so the next one starts a new round
+CallStreamReset(S, env, peer) == Drain([Begin(S, env) EXCEPT !.hv = CloseOpen(@, peer)])
+\* frames of a hub peer read from a session that is not the link's current one: the node drops them and does not call
+\* the machine (pinc-node events.rs parse_stream), so the machine is as it was and asks nothing
+CallStaleFrames(S, env) == Drain(Begin(S, env))
 CallStart(cfg, env, now, wall, floor) == StartOp(cfg, env, now, wall, floor)
 =============================================================================

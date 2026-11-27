@@ -187,6 +187,13 @@ ApTk(tk, es, now) ==
              r == ApTk(IF live THEN TkIns(tk, e) ELSE tk, Tail(es), now)
          IN [tk |-> r.tk, n |-> r.n + (IF live THEN 1 ELSE 0)]
 
+\* The ticket count restore reports (ClientTickets::restore): the tickets of the state still in the store once the
+\* whole state was applied. A ticket names its peer and the store holds one per peer, so a ticket of the store equal
+\* to an unexpired ticket of the state is one this restore stored (a later ticket of the state may have pushed an
+\* earlier one out, and then it is not counted).
+TkHeld(tk, es, now) ==
+    Len(SelectSeq(tk, LAMBDA x : \E j \in 1..Len(es) : es[j] = x /\ Ge(es[j].expiry, BEr(now, 8))))
+
 \* NodeRtt::restore_peer: a round trip of 0 is skipped; a known peer is overwritten in place, a new one is refused when the table is full
 RECURSIVE ApKr(_, _)
 ApKr(kr, es) ==
@@ -230,5 +237,5 @@ Restore(live, bs, now) ==
              e == ParseEk(h) IN
     IF ~e.ok THEN Refused([live1 EXCEPT !.kr = kr.kr])
     ELSE [ok |-> TRUE, live |-> [tk |-> tk.tk, kr |-> kr.kr, ek |-> ApEk(live.ek, e.l)],
-          res |-> <<tk.n, kr.n, h.ne>>]
+          res |-> <<TkHeld(tk.tk, t.l, now), kr.n, h.ne>>]
 =============================================================================

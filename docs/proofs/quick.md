@@ -188,6 +188,7 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `ConnectWs_ops` | FLs {14000000, 14000002} -> {14000002} (a payload of 2 bytes) |
 | `ConnectWs_reach` | ReadSizes {1, 1000} -> {1} |
 | `ConnectWs_reach_max` | ReadSizes {20, 1000} -> {20} |
+| `CorePairs` | Addrs 7 -> 6 pairs, GMAX 7 -> 5 (the table is exactly full at a command's peak, and fewer pairs are taken in a behaviour); the full config does not finish in 900 s |
 | `CoreRouteIndex` | Slots {1, 2, 3} -> {1, 2} |
 | `CoreRouteIndex_keepold` | Slots {1, 2, 3} -> {1, 2} |
 | `CoreRouteIndex_nofree` | Slots {1, 2, 3} -> {1, 2} |
@@ -474,6 +475,7 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `PrekeyCache` | MaxClock 6 -> 4 (the cache fills, a get refreshes the older entry, the next insert evicts the least recently used) |
 | `PrekeyCache_n0` | MaxClock 4 -> 3 |
 | `PrekeyCache_n3` | MaxClock 6 -> 3 (the cache fills; the invariants insert into the full cache) |
+| `PunchChain` | P 3 -> 2, CB 3 -> 2 |
 | `Queue` | PMAX 7 -> 4 |
 | `Queue_deep` | PMAX 8 -> 7 |
 | `Queue_drop` | PMAX 8 -> 7 |

@@ -402,6 +402,13 @@ theorem apEk_fresh (cap : Nat) : ∀ (es acc : List (Node × Bytes)), Uniq (acc 
       (by simp only [List.length_cons, List.length_append, List.length_nil] at hl ⊢; omega)]
     simp [List.append_assoc]
 
+/-- Every ticket of a store made of unexpired tickets of the state is counted. -/
+theorem tkHeld_self (now : Nat) (tk : List TkT) (h : ∀ t ∈ tk, now ≤ tkExp t) : tkHeld now tk tk = tk.length := by
+  unfold tkHeld
+  rw [List.filter_eq_self.mpr]
+  intro x hx
+  exact List.any_eq_true.mpr ⟨x, hx, by simp [h x hx]⟩
+
 /-- Restoring what was written into an empty endpoint gives exactly the tables written, and reports how many of each
 (a state with one entry per peer, within the bounds, round trips above 0, tickets not expired by `now`). -/
 theorem restore_fresh (c : Cfg) (hl : c.lazy = false) (hx : c.lax = false) (s : St) (now : Nat) (w : WFs s)
@@ -419,8 +426,9 @@ theorem restore_fresh (c : Cfg) (hl : c.lazy = false) (hx : c.lax = false) (s : 
   rw [apTk_fresh c.ct now s.tk [] (by simpa using u1) (by simpa using l1) e1,
     apKr_fresh c.kr s.kr [] (by simpa using u2) (by simpa using l2) e2,
     apEk_fresh c.ek s.ek [] (by simpa using u3) (by simpa using l3)]
+  have ht := tkHeld_self now s.tk e1
   cases s
-  simp
+  simp [ht]
 
 /-- A restore accepts exactly the inputs `parse` reads (the reader without the check that nothing follows is the
 witness of why it is there). -/

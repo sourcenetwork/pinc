@@ -577,7 +577,21 @@ par witness_tlc corerouteindex_keepold CoreRouteIndex CoreRouteIndex_keepold Exa
 par run_tlc corestalepath CoreStalePath CoreStalePath
 par witness_tlc corestalepath_silent CoreStalePath CoreStalePath_silent Left
 par witness_tlc corestalepath_w_recover CoreStalePath CoreStalePath_w_recover NoRecover
-par witness_tlc corestalepath_keptactive CoreStalePath CoreStalePath_keptactive Told
+par witness_tlc corestalepath_late CoreStalePath CoreStalePath_late KeptLeaves
+par run_tlc corestalepath_nofault CoreStalePath CoreStalePath_nofault
+par run_tlc corepairs CorePairs CorePairs
+par witness_tlc corepairs_mintfirst CorePairs CorePairs_mintfirst HeldStays
+par witness_tlc corepairs_norelease CorePairs CorePairs_norelease HeldStays
+par witness_tlc corepairs_tight CorePairs CorePairs_tight HeldStays
+par witness_tlc corepairs_nogen CorePairs CorePairs_nogen NoAlias
+par run_tlc punchchain PunchChain PunchChain
+par witness_tlc punchchain_unbounded PunchChain PunchChain_unbounded Cost
+par witness_tlc punchchain_w_reachout PunchChain PunchChain_w_reachout CostOne
+par run_tlc streamend StreamEnd StreamEnd
+par witness_tlc streamend_stale StreamEnd StreamEnd_stale Fresh
+par witness_tlc streamend_twice StreamEnd StreamEnd_twice EndOnce
+par witness_tlc streamend_queued StreamEnd StreamEnd_queued EndOnce
+par witness_tlc streamend_bytesonly StreamEnd StreamEnd_bytesonly Woken
 par run_tlc corestate CoreState CoreState
 par witness_tlc corestate_lazy CoreState CoreState_lazy AtomicInv
 par witness_tlc corestate_tail CoreState CoreState_tail CanonInv

@@ -17,8 +17,9 @@
 (*                                                                         *)
 (* Each line must be the call of MembershipOps.tla (CallStart, CallUp,     *)
 (* CallDown, CallBytes, CallTimeout, CallCarrierGone, CallCarrierReturn,   *)
-(* CallLeave, CallRevoke, CallMoved) on the node of the slot with the same *)
-(* env: the same sent frames in order (route and whether a session took   *)
+(* CallLeave, CallRevoke, CallMoved, CallStreamReset; CallStaleFrames for  *)
+(* the frames the node drops without a call) on the node of the slot     *)
+(* with the same env: the same sent frames in order (route and whether a session took   *)
 (* them), the same broadcast-layer calls, closes, events and trace records *)
 (* in order, the same store, and the same members, epoch, primary,         *)
 (* incarnation and roster. Each of these is an invariant of its own, so a  *)
@@ -136,6 +137,8 @@ LeaveOf(env) == CallLeave(Cur, env)
 MovedOf(env) == CallMoved(Cur, env, Now)
 SnapshotOf(env) == CallSnapshotTo(Cur, env, Now, Ev.peer)
 MaxFrameOf(env) == CallSetMaxFrame(Cur, env, L(Ev.mf))
+ResetOf(env) == CallStreamReset(Cur, env, Ev.peer)
+StaleOf(env) == CallStaleFrames(Cur, env)
 
 UpEv == Call("up", UpOf)
 DownEv == Call("dn", DownOf)
@@ -147,6 +150,8 @@ LeaveEv == Call("lv", LeaveOf)
 MovedEv == Call("mv", MovedOf)
 SnapshotEv == Call("sn", SnapshotOf)
 MaxFrameEv == Call("sm", MaxFrameOf)
+ResetEv == Call("sr", ResetOf)
+StaleEv == Call("xs", StaleOf)
 RevokeEv ==
     /\ Ev.op = "rv"
     /\ \E r \in {CallRevoke(Cur, EnvOf(Ev.env), Now, Ev.member)} : Done(r.S, IF r.ok THEN "ok" ELSE "full")
@@ -155,6 +160,7 @@ Step ==
     /\ i <= Len(Tr)
     /\ Ev.t = "mem"
     /\ \/ StartEv \/ UpEv \/ DownEv \/ BytesEv \/ TimeoutEv \/ GoneEv \/ ReturnEv \/ LeaveEv \/ MovedEv \/ SnapshotEv \/ MaxFrameEv \/ RevokeEv
+          \/ ResetEv \/ StaleEv
     /\ i' = i + 1
 
 \* the trace has ended: every event was a step of the model

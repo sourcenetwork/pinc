@@ -19,7 +19,9 @@
 (*            expired), and restoring it again changes nothing; for any    *)
 (*            state the tables hold the entries of the state that fit, no  *)
 (*            expired ticket, one entry per peer, never more than their    *)
-(*            bounds, and the counts reported are the ones stored          *)
+(*            bounds, and the counts reported are the ones stored (the     *)
+(*            ticket count: the state's tickets still in the store once    *)
+(*            the whole state was applied)                                 *)
 (*   Canon    a byte string that is accepted is the encoding of the state  *)
 (*            it reads: one reading, no leniency                           *)
 (*   Atomic   restore accepts exactly what the parse reads, and a refused  *)
@@ -133,12 +135,14 @@ Body(c, chk) ==
               /\ Members(r.live.tk, c.tk) /\ Members(r.live.kr, c.kr) /\ Members(r.live.ek, c.ek)
               /\ \A i \in 1..Len(r.live.tk) : O!Ge(r.live.tk[i].expiry, O!BEr(NOW, 8))
               /\ \A i \in 1..Len(r.live.kr) : O!NonZero(r.live.kr[i].rtt)
-              /\ r.res[1] = Len(c.tk) - Cardinality(expired) /\ r.res[3] = Len(c.ek)
+              \* into an empty endpoint every ticket stored is one of the state, so the count is the store's length
+              /\ r.res[1] = Len(r.live.tk) /\ r.res[1] <= Len(c.tk) - Cardinality(expired) /\ r.res[3] = Len(c.ek)
               /\ r.res[2] <= Len(c.kr)
               /\ (Canonical(c) => /\ r.live = c /\ r.res = <<Len(c.tk), Len(c.kr), Len(c.ek)>>
                                   /\ O!Restore(r.live, bs, NOW) = r)
               \* a second restore of any state keeps the bounds, whatever the tables held
               /\ \A L \in Lives : LET q == O!Restore(L, bs, NOW) IN q.ok /\ Within(q.live) /\ Distinct(q.live.tk)
+                                                                  /\ q.res[1] <= Len(q.live.tk)
        [] chk = "trunc" -> \A k \in 0..(n - 1) : \A L \in Lives : Refused(L, Take(bs, k))
        [] chk = "trail" -> \A x \in 1..5 : \A L \in Lives : Refused(L, bs \o Fill(x, 9))
        [] chk = "tcanon" -> \A x \in 1..5 : Canon(bs \o Fill(x, 9)) /\ Canon(Take(bs, n - x))

@@ -220,6 +220,13 @@ def apTk (ct now : Nat) : List TkT → List TkT → List TkT × Nat
       (r.1, r.2 + 1)
     else apTk ct now es tk
 
+/-- The ticket count `restore` reports (`ClientTickets::restore`): the tickets of the state `es` still in the store
+`tk` once the whole state was applied. A ticket names its peer and the store holds one per peer, so a ticket of the
+store equal to an unexpired ticket of the state is one this restore stored (`==`, the structural equality: the
+instance search does not reach `DecidableEq` of the eight-field product). -/
+def tkHeld (now : Nat) (es tk : List TkT) : Nat :=
+  (tk.filter (fun x => es.any (fun e => decide (now ≤ tkExp e) && e == x))).length
+
 /-- `NodeRtt::restore_peer`: a round trip of 0 is skipped, a known peer is overwritten in place, a new peer is
 refused when the table is full. The second component is 1 when the entry was stored. -/
 def krIns (cap : Nat) (kr : List (Node × Nat)) (e : Node × Nat) : List (Node × Nat) × Nat :=
@@ -257,7 +264,7 @@ structure Cfg where
 
 /-- Every stage in the order of the code: split, check the round trips and prekey peers, tickets (checked whole,
 then stored), round trips, prekey peers. The result is the tables afterwards and, when the state was accepted, what
-the restore reports (tickets stored, round trips stored, prekey peers). -/
+the restore reports (the state's tickets still in the store, round trips stored, prekey peers). -/
 def restore (c : Cfg) (live : St) (b : Bytes) (now : Nat) : St × Option (Nat × Nat × Nat) :=
   match hdrP c.lax b with
   | none => (live, none)
@@ -275,6 +282,6 @@ def restore (c : Cfg) (live : St) (b : Bytes) (now : Nat) : St × Option (Nat ×
           let k := apKr c.kr kl live.kr
           match ekDec (hNe h) (hEk h) with
           | none => (⟨t.1, k.1, live.ek⟩, none)
-          | some el => (⟨t.1, k.1, apEk c.ek el live.ek⟩, some (t.2, k.2, hNe h))
+          | some el => (⟨t.1, k.1, apEk c.ek el live.ek⟩, some (tkHeld now tl t.1, k.2, hNe h))
 
 end Pinc.CoreState
