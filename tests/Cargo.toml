@@ -1861,3 +1861,7 @@ path = "portmap_noalloc.rs"
 [[test]]
 name = "keystore_noalloc"
 path = "keystore_noalloc.rs"
+
+[[test]]
+name = "sim_connect_reach"
+path = "sim_connect_reach.rs"

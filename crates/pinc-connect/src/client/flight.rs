@@ -228,6 +228,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
             held: false,
             fwd,
             withheld,
+            reach_at: None,
         };
         if let Some(s) = self.sess.iter_mut().find(|s| s.is_none()) {
             *s = Some(entry);

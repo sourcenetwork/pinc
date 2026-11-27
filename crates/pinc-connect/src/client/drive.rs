@@ -68,6 +68,9 @@ pub(super) struct Sess {
     /// The dial started without a usable record and without a home relay: its first flight leaves when the answer to
     /// the lookup arrives.
     pub(super) withheld: bool,
+    /// When the last REACH_OUT of the peer that was answered with punches arrived: the peer starts at most one round
+    /// per [`punch::UPGRADE_INTERVAL`], the cadence of this node's own rounds.
+    pub(super) reach_at: Option<u64>,
 }
 
 /// A peer heard by local discovery.
@@ -233,6 +236,7 @@ drive_impl! {
                         held: false,
                         fwd: false,
                         withheld: false,
+                        reach_at: None,
                     });
                 }
                 let st = ep.stats(session);
@@ -265,6 +269,16 @@ drive_impl! {
                 }
             }
             Event::ReachOut { session } => {
+                // Each Punch refills the session's challenge budget, so a peer that sends REACH_OUT after REACH_OUT
+                // would keep it full: one round per cadence, the pace of a legitimate peer's own rounds.
+                // vertexia: a session this layer does not follow (its table is full) is not limited; it never punches
+                // for itself either, and the endpoint bounds the paths it can hold.
+                if let Some(s) = self.sess_mut(session) {
+                    if s.reach_at.is_some_and(|at| now.saturating_sub(at) < punch::UPGRADE_INTERVAL) {
+                        return;
+                    }
+                    s.reach_at = Some(now);
+                }
                 let mut body = [0u8; pinc_core::REACH_BODY_MAX];
                 let n = ep.reach_body(session, &mut body);
                 let mut cands = [self.me_addr_pub(); MAX_ADDRS];
