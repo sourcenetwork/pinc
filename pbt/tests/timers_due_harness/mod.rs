@@ -20,7 +20,10 @@ use pinc_core::{Command, Event, IfaceEvent, IfaceId, Role, SessionId, Value};
 #[derive(Clone, Debug, PartialEq, Eq, ephyra::Arbitrary)]
 pub enum Op {
     /// Nothing for this many ms.
-    Wait(#[ephyra(gen = gens::frequency(vec![(3, gens::int(1u64..=600).boxed()), (1, gens::int(1u64..=40_000).boxed())]))] u64),
+    Wait(
+        #[ephyra(gen = gens::frequency(vec![(3, gens::int(1u64..=600).boxed()), (1, gens::int(1u64..=40_000).boxed())]))]
+         u64,
+    ),
     /// A new bidirectional stream with `len` bytes, finished when `fin`.
     Write {
         #[ephyra(gen = gens::int(0u8..=1))]
@@ -43,9 +46,15 @@ pub enum Op {
         on: bool,
     },
     /// The link drops everything for this many ms.
-    Cut(#[ephyra(gen = gens::frequency(vec![(3, gens::int(1u64..=3_000).boxed()), (1, gens::int(1u64..=90_000).boxed())]))] u64),
+    Cut(
+        #[ephyra(gen = gens::frequency(vec![(3, gens::int(1u64..=3_000).boxed()), (1, gens::int(1u64..=90_000).boxed())]))]
+         u64,
+    ),
     /// The link loses this many per mille from now on.
-    Loss(#[ephyra(gen = gens::frequency(vec![(2, gens::constant(0u16).boxed()), (1, gens::int(1u16..=1000).boxed())]))] u16),
+    Loss(
+        #[ephyra(gen = gens::frequency(vec![(2, gens::constant(0u16).boxed()), (1, gens::int(1u16..=1000).boxed())]))]
+        u16,
+    ),
     /// 0 down, 1 up, 2 suspend, 3 resume, 4 resume on a new address.
     Iface {
         #[ephyra(gen = gens::int(0u8..=1))]
@@ -121,6 +130,8 @@ pub struct World {
     pub sb: Option<SessionId>,
     pub done: Vec<Op>,
     pub known: bool,
+    /// The known cause was met (with `known`): the rest of the case is skipped.
+    pub ended: bool,
 }
 
 fn fail(v: Option<Violation>) {
@@ -146,8 +157,9 @@ fn peer_asleep(n: &Net, i: usize) -> bool {
 
 /// The rule, on every host at the net's instant: a host that is due gets its `handle_timeout`, `service` and
 /// `poll_transmit` until `None`, and must then be due later. With `known`, a host whose peer sleeps is let through
-/// (the keepalive that cannot leave while the ring is full, `repro_transport2.rs`).
-fn check(n: &mut Net, done: &[Op], known: bool) {
+/// (the keepalive that cannot leave while the ring is full, `repro_transport2.rs`): the check returns true and the
+/// case ends there, since the run would spin at that instant.
+fn check(n: &mut Net, done: &[Op], known: bool) -> bool {
     let now = n.now;
     for i in 0..n.hosts.len() {
         if n.hosts[i].ep.poll_timeout().is_none_or(|d| d > now) {
@@ -157,16 +169,39 @@ fn check(n: &mut Net, done: &[Op], known: bool) {
         n.hosts[i].service(now);
         n.pump(i);
         let after = n.hosts[i].ep.poll_timeout();
-        if after.is_some_and(|d| d <= now) && !(known && peer_asleep(n, i)) {
+        if known && after.is_some_and(|d| d <= now) && peer_asleep(n, i) {
+            return true;
+        }
+        if after.is_some_and(|d| d <= now) {
             let s = n.hosts[i].ep.node_stats();
-            let last: Vec<_> = n.hosts[i].events.iter().rev().take(4).map(|(t, e)| (t.saturating_sub(10 * SEC) / MS, format!("{e:?}").chars().take(40).collect::<String>())).collect();
+            let last: Vec<_> = n.hosts[i]
+                .events
+                .iter()
+                .rev()
+                .take(4)
+                .map(|(t, e)| {
+                    (
+                        t.saturating_sub(10 * SEC) / MS,
+                        format!("{e:?}").chars().take(40).collect::<String>(),
+                    )
+                })
+                .collect();
             let h = &n.hosts[i];
             let ss: Vec<_> = h
                 .opened
                 .iter()
                 .chain(&h.dialed)
                 .filter_map(|s| h.stats(*s))
-                .map(|st| (st.established, st.pto_count, st.pto, st.pulse_due, st.held, st.heard.saturating_sub(10 * SEC) / MS))
+                .map(|st| {
+                    (
+                        st.established,
+                        st.pto_count,
+                        st.pto,
+                        st.pulse_due,
+                        st.held,
+                        st.heard.saturating_sub(10 * SEC) / MS,
+                    )
+                })
                 .collect();
             let sig = kind(done.last());
             ephyra::signature(sig);
@@ -178,20 +213,28 @@ fn check(n: &mut Net, done: &[Op], known: bool) {
             );
         }
     }
+    false
 }
 
 impl World {
     /// Run the net to `deadline` with the rule checked at every step.
     pub fn run_to(&mut self, deadline: u64) {
+        if self.ended {
+            return;
+        }
         let (done, known) = (self.done.clone(), self.known);
-        let mut first = true;
+        let (mut first, mut ended) = (true, false);
         self.net.run(deadline, |n| {
             if !first {
-                check(n, &done, known);
+                ended = check(n, &done, known);
             }
             first = false;
-            false
+            ended
         });
+        if ended {
+            self.ended = true;
+            return;
+        }
         fail(self.net.first_violation());
         self.net.now = self.net.now.max(deadline);
     }
@@ -202,7 +245,11 @@ impl World {
     }
 
     fn session(&self, side: u8) -> Option<(usize, SessionId)> {
-        if side == 0 { Some((self.a, self.sa)) } else { self.sb.map(|s| (self.b, s)) }
+        if side == 0 {
+            Some((self.a, self.sa))
+        } else {
+            self.sb.map(|s| (self.b, s))
+        }
     }
 
     fn host(&self, side: u8) -> usize {
@@ -230,17 +277,16 @@ impl World {
 
     /// The server's newest session.
     fn incoming(&self) -> Option<SessionId> {
-        self.net.hosts[self.b]
-            .events
-            .iter()
-            .rev()
-            .find_map(|(_, e)| match e {
-                Event::Incoming { session, .. } => Some(*session),
-                _ => None,
-            })
+        self.net.hosts[self.b].events.iter().rev().find_map(|(_, e)| match e {
+            Event::Incoming { session, .. } => Some(*session),
+            _ => None,
+        })
     }
 
     pub fn apply(&mut self, op: &Op) {
+        if self.ended {
+            return;
+        }
         let now = self.net.now;
         self.done.push(op.clone());
         match *op {
@@ -255,26 +301,32 @@ impl World {
                     let data = (0..len).map(|i| (i % 251) as u8).collect();
                     self.net.hosts[h].write(now, s, st, data, fin);
                 }
-            },
+            }
             Op::Datagram { from, len } => {
                 if let Some((h, s)) = self.session(from) {
-                    let _ = self.net.hosts[h].cmd(now, Command::SendDatagram { session: s, data: &vec![9; len] });
+                    let _ = self.net.hosts[h].cmd(
+                        now,
+                        Command::SendDatagram {
+                            session: s,
+                            data: &vec![9; len],
+                        },
+                    );
                 }
-            },
+            }
             Op::Ping(from) => {
                 if let Some((h, s)) = self.session(from) {
                     let _ = self.net.hosts[h].cmd(now, Command::Ping { session: s });
                 }
-            },
+            }
             Op::Read { host, on } => {
                 let h = self.host(host);
                 self.net.hosts[h].auto_read = on;
-            },
+            }
             Op::Cut(ms) => {
                 self.net.faults.cut = true;
                 self.run_for(ms);
                 self.net.faults.cut = false;
-            },
+            }
             Op::Loss(pm) => self.net.faults.loss = pm,
             Op::Iface { host, ev } => {
                 let h = self.host(host);
@@ -286,35 +338,35 @@ impl World {
                     _ => IfaceEvent::Resume { moved: true },
                 };
                 self.net.hosts[h].ep.iface_event(now, IfaceId(0), ev);
-            },
+            }
             Op::Sleep(host) => {
                 let h = self.host(host);
                 let _ = self.net.hosts[h].cmd(now, Command::Suspend);
-            },
+            }
             Op::Wake { host, moved } => {
                 let h = self.host(host);
                 let _ = self.net.hosts[h].cmd(now, Command::Resume { moved });
-            },
+            }
             Op::Close(from) => {
                 if let Some((h, s)) = self.session(from) {
                     let _ = self.net.hosts[h].cmd(now, Command::Close { session: s, error: 0 });
                 }
-            },
+            }
             Op::Shutdown(host) => {
                 let h = self.host(host);
                 let _ = self.net.hosts[h].cmd(now, Command::Shutdown);
-            },
+            }
             Op::Redial => {
                 if let Some(s) = self.dial() {
                     self.sa = s;
                 }
-            },
+            }
             Op::Punch { from, port } => {
                 if let Some((h, s)) = self.session(from) {
                     let addr: SocketAddr = ([198, 51, 100, 7], 9000 + port).into();
                     let _ = self.net.hosts[h].cmd(now, Command::Punch { session: s, addr });
                 }
-            },
+            }
         }
         self.run_for(30);
         self.sb = self.incoming().or(self.sb);
@@ -356,6 +408,7 @@ pub fn world(c: &Case, start: u64) -> World {
         sb: None,
         done: Vec::new(),
         known: false,
+        ended: false,
     };
     let deadline = w.net.now.saturating_add(31 * SEC);
     let done = Vec::new();

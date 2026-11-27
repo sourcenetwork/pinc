@@ -160,7 +160,9 @@ fn forge(captured: &[(SocketAddr, SocketAddr, Vec<u8>)], from: SocketAddr, d: &[
         }
         return vec![x];
     }
-    let Some((dcid, scid, total, _, _)) = frag(d) else { return Vec::new() };
+    let Some((dcid, scid, total, _, _)) = frag(d) else {
+        return Vec::new();
+    };
     let msg = assemble(captured, from, dcid, total);
     let pad = if d.len() >= 1200 { 1200 } else { 0 };
     let out: Vec<Option<Vec<u8>>> = match *f {
@@ -181,22 +183,25 @@ fn forge(captured: &[(SocketAddr, SocketAddr, Vec<u8>)], from: SocketAddr, d: &[
                     _ => vec![b, a],
                 }
             }
-        },
+        }
         Forge::Total { delta, off, len } => {
             let t = (total as i64 + i64::from(delta)).clamp(1, 4096) as usize;
             let o = usize::from(off) % t;
             let n = usize::from(len).min(t - o);
             let bytes: Vec<u8> = (o..o + n).map(|i| msg.get(i).copied().unwrap_or(0)).collect();
             vec![packet(dcid, scid, t, o, &bytes, pad)]
-        },
+        }
         Forge::Overwrite { off, len, byte } => {
             let o = usize::from(off) % total;
             let n = usize::from(len).min(total - o);
             vec![packet(dcid, scid, total, o, &vec![byte; n], pad)]
-        },
+        }
     };
     out.into_iter().flatten().collect()
 }
+
+/// The state a `PBT_TRACE` line is printed on a change of: time, counts and the node stats it shows.
+type TraceKey = (u64, usize, usize, u64, u64, u64, u64, u64, u64, u64, u64, u64);
 
 /// The third party: it reads every datagram the hosts sent (the tap sits before the link's loss) and sends what its
 /// rules derive from them.
@@ -206,7 +211,7 @@ struct Tap {
     injected: usize,
     /// (arrival time, destination is the server, length) of each forgery.
     log: Vec<(u64, bool, usize)>,
-    last: Option<(u64, usize, usize, u64, u64, u64, u64, u64, u64, u64, u64, u64)>,
+    last: Option<TraceKey>,
 }
 
 impl Tap {
@@ -226,10 +231,26 @@ impl Tap {
             && let Some(h) = n.hosts.get(1)
         {
             let s = h.ep.node_stats();
-            let key = (s.datagrams_in, s.sessions, s.half_open, s.dropped_in, s.holders_refused, s.backlog_refused, s.fragments_held, s.fragments_replayed, s.fragments_expired, s.fragments_evicted, s.stalled_in, s.first_too_short);
+            let key = (
+                s.datagrams_in,
+                s.sessions,
+                s.half_open,
+                s.dropped_in,
+                s.holders_refused,
+                s.backlog_refused,
+                s.fragments_held,
+                s.fragments_replayed,
+                s.fragments_expired,
+                s.fragments_evicted,
+                s.stalled_in,
+                s.first_too_short,
+            );
             if self.last != Some(key) {
                 self.last = Some(key);
-                eprintln!("{} ms: server (in, sessions, half_open, dropped_in, holders_refused, backlog_refused, held, replayed, expired, evicted, stalled, too_short) {key:?}", (n.now - t0) / MS);
+                eprintln!(
+                    "{} ms: server (in, sessions, half_open, dropped_in, holders_refused, backlog_refused, held, replayed, expired, evicted, stalled, too_short) {key:?}",
+                    (n.now - t0) / MS
+                );
             }
         }
         n.faults.loss = if n.now < t0 + c.lossy_ms * MS { c.loss } else { 0 };
@@ -260,7 +281,9 @@ impl Tap {
                 );
             }
             for act in &c.acts {
-                if usize::from(act.dir) != dir || !(k == usize::from(act.trigger) || act.every && k > usize::from(act.trigger)) {
+                if usize::from(act.dir) != dir
+                    || !(k == usize::from(act.trigger) || act.every && k > usize::from(act.trigger))
+                {
                     continue;
                 }
                 for f in forge(&n.captured, from, &d, &act.forge) {
@@ -326,7 +349,10 @@ fn known_cause(net: &Net, c: &Case, a: usize, b: usize, ca: SocketAddr, sa: Sock
     // A by its rule: an exact copy of a client datagram from another address that may arrive first.
     let stand_in = c.drop_first || (c.loss > 0 && c.lossy_ms > 0);
     let copied_first = |act: &Act| {
-        act.dir == 0 && matches!(act.src, Src::Other(_)) && matches!(&act.forge, Forge::Copy(e) if e.is_empty()) && (act.offset <= 0 || stand_in)
+        act.dir == 0
+            && matches!(act.src, Src::Other(_))
+            && matches!(&act.forge, Forge::Copy(e) if e.is_empty())
+            && (act.offset <= 0 || stand_in)
     };
     if c.acts.iter().any(copied_first) {
         return Some("A: a copy of the first flight from another address may make the session");
@@ -334,15 +360,20 @@ fn known_cause(net: &Net, c: &Case, a: usize, b: usize, ca: SocketAddr, sa: Sock
     // B by its rule: one damaged copy of the first message from the client's address that may stand in for the
     // genuine one.
     let damaged_first = |act: &Act| {
-        act.dir == 0 && act.src == Src::Victim && !act.every && !matches!(&act.forge, Forge::Copy(e) if e.is_empty()) && (act.offset < 0 || stand_in)
+        act.dir == 0
+            && act.src == Src::Victim
+            && !act.every
+            && !matches!(&act.forge, Forge::Copy(e) if e.is_empty())
+            && (act.offset < 0 || stand_in)
     };
     if c.acts.iter().any(damaged_first) {
         return Some("B: a damaged first message may stand in for the genuine one");
     }
-    let spoofed_parts = |act: &Act| {
-        act.dir == 0 && act.every && !matches!(&act.forge, Forge::Copy(e) if e.is_empty())
-    };
-    c.acts.iter().any(spoofed_parts).then_some("D: spoofed fragments keep the first message from completing intact")
+    let spoofed_parts = |act: &Act| act.dir == 0 && act.every && !matches!(&act.forge, Forge::Copy(e) if e.is_empty());
+    c.acts
+        .iter()
+        .any(spoofed_parts)
+        .then_some("D: spoofed fragments keep the first message from completing intact")
 }
 
 /// [`run`], letting the causes of `repro_core2.rs` pass when `exclude_known`.
@@ -392,13 +423,25 @@ pub fn run_with(c: &Case, exclude_known: bool) {
             return;
         }
         let s = net.hosts[b].ep.node_stats();
-        let ended: Vec<_> = net.hosts[a].events.iter().filter(|(_, e)| matches!(e, Event::Closed { .. } | Event::ConnectFailed { .. })).collect();
+        let ended: Vec<_> = net.hosts[a]
+            .events
+            .iter()
+            .filter(|(_, e)| matches!(e, Event::Closed { .. } | Event::ConnectFailed { .. }))
+            .collect();
         let detail = format!(
             "client up {up} at {:?} ms, server incoming {}; client ended {ended:?}; server sent (bytes to): {:?}; client sent (bytes to): {:?}, dropped_in {}; server: half_open {} sessions {} holders_refused {} fragments held {} replayed {} expired {} evicted {} dropped_in {}; forged {:?}",
             at.map(|t| (t - t0) / MS),
             incoming(&net),
-            net.sent_to.iter().filter(|((h, _), _)| *h == b).map(|((_, to), n)| (*to, *n)).collect::<Vec<_>>(),
-            net.sent_to.iter().filter(|((h, _), _)| *h == a).map(|((_, to), n)| (*to, *n)).collect::<Vec<_>>(),
+            net.sent_to
+                .iter()
+                .filter(|((h, _), _)| *h == b)
+                .map(|((_, to), n)| (*to, *n))
+                .collect::<Vec<_>>(),
+            net.sent_to
+                .iter()
+                .filter(|((h, _), _)| *h == a)
+                .map(|((_, to), n)| (*to, *n))
+                .collect::<Vec<_>>(),
             net.hosts[a].ep.node_stats().dropped_in,
             s.half_open,
             s.sessions,
@@ -408,7 +451,10 @@ pub fn run_with(c: &Case, exclude_known: bool) {
             s.fragments_expired,
             s.fragments_evicted,
             s.dropped_in,
-            tap.log.iter().map(|(t, to_s, l)| ((t - t0) / MS, *to_s, *l)).collect::<Vec<_>>(),
+            tap.log
+                .iter()
+                .map(|(t, to_s, l)| ((t - t0) / MS, *to_s, *l))
+                .collect::<Vec<_>>(),
         );
         if tap.injected == 0 {
             ephyra::signature("the honest handshake failed on a link that turned clean, with no third party");
@@ -433,7 +479,11 @@ pub fn run_with(c: &Case, exclude_known: bool) {
     let last = tap.log.iter().map(|l| l.0).max().unwrap_or(t0);
     if last + 61 * SEC + 10 * MS <= net.now {
         let s = net.hosts[b].ep.node_stats();
-        assert!(s.half_open == 0, "{} half-open sessions are left 61 s after the last forgery", s.half_open);
+        assert!(
+            s.half_open == 0,
+            "{} half-open sessions are left 61 s after the last forgery",
+            s.half_open
+        );
     }
 }
 
@@ -455,4 +505,3 @@ pub fn quiet(split: bool) -> Case {
         acts: Vec::new(),
     }
 }
-

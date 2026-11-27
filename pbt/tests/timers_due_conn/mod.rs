@@ -35,7 +35,10 @@ type Stores = ResponderStores<8, 512>;
 /// What the application (or the link) does next; `from` is 0 for the dialer, 1 for the server.
 #[derive(Clone, Debug, PartialEq, Eq, ephyra::Arbitrary)]
 pub enum COp {
-    Wait(#[ephyra(gen = gens::frequency(vec![(3, gens::int(1u64..=600).boxed()), (1, gens::int(1u64..=40_000).boxed())]))] u64),
+    Wait(
+        #[ephyra(gen = gens::frequency(vec![(3, gens::int(1u64..=600).boxed()), (1, gens::int(1u64..=40_000).boxed())]))]
+         u64,
+    ),
     Write {
         #[ephyra(gen = gens::int(0u8..=1))]
         from: u8,
@@ -67,7 +70,10 @@ pub enum COp {
     Probe(#[ephyra(gen = gens::int(0u8..=1))] u8),
     Close(#[ephyra(gen = gens::int(0u8..=1))] u8),
     /// The link drops everything for this many ms.
-    Cut(#[ephyra(gen = gens::frequency(vec![(3, gens::int(1u64..=3_000).boxed()), (1, gens::int(1u64..=60_000).boxed())]))] u64),
+    Cut(
+        #[ephyra(gen = gens::frequency(vec![(3, gens::int(1u64..=3_000).boxed()), (1, gens::int(1u64..=60_000).boxed())]))]
+         u64,
+    ),
     Read {
         #[ephyra(gen = gens::int(0u8..=1))]
         from: u8,
@@ -158,7 +164,7 @@ impl Side<'_> {
                     Event::KeyRequest(_) => key = true,
                     Event::Connected { .. } => self.connected = true,
                     Event::StreamReadable(id) => readable.push(id),
-                    _ => {},
+                    _ => {}
                 }
             }
             while self.conn.recv_datagram().is_some() {
@@ -167,7 +173,12 @@ impl Side<'_> {
             if self.reading {
                 for id in readable {
                     while let Some(n) = self.conn.read_chunk(id).map(<[u8]>::len) {
-                        if n == 0 || self.conn.consume(&mut env!(self, now), &mut Lent { spill: &mut self.spill }, id, n).is_err() {
+                        if n == 0
+                            || self
+                                .conn
+                                .consume(&mut env!(self, now), &mut Lent { spill: &mut self.spill }, id, n)
+                                .is_err()
+                        {
                             break;
                         }
                     }
@@ -208,8 +219,13 @@ impl Side<'_> {
     /// Everything the side has to send, onto the link (path 1) or nowhere (any other path).
     fn transmit(&mut self, now: u64, to_client: bool, link: &mut Link, buf: &mut [u8]) {
         for _ in 0..20_000 {
-            let Some(Transmit { path, len, segment_size }) =
-                self.conn.poll_transmit(&mut env!(self, now), &mut Lent { spill: &mut self.spill }, buf)
+            let Some(Transmit {
+                path,
+                len,
+                segment_size,
+            }) = self
+                .conn
+                .poll_transmit(&mut env!(self, now), &mut Lent { spill: &mut self.spill }, buf)
             else {
                 return;
             };
@@ -218,15 +234,23 @@ impl Side<'_> {
             }
             for seg in buf[..len].chunks(segment_size.max(1)) {
                 link.seq += 1;
-                link.q.push(Reverse((now.saturating_add(link.delay), link.seq, to_client, seg.to_vec())));
+                link.q.push(Reverse((
+                    now.saturating_add(link.delay),
+                    link.seq,
+                    to_client,
+                    seg.to_vec(),
+                )));
             }
         }
         panic!("poll_transmit never returned None");
     }
 }
 
+/// A datagram on the link: (arrival time, sequence, toward the server, bytes).
+type InFlight = (u64, u64, bool, Vec<u8>);
+
 struct Link {
-    q: BinaryHeap<Reverse<(u64, u64, bool, Vec<u8>)>>,
+    q: BinaryHeap<Reverse<InFlight>>,
     seq: u64,
     delay: u64,
     cut: bool,
@@ -262,7 +286,11 @@ pub fn run_with(c: &CCase, known_full_ring: bool) -> Summary {
     let mut ctab = Box::new(Table::new(&stream::Config::new(true), &BufferPool::new_boxed(CHUNKS)));
     let mut stab = Box::new(Table::new(&stream::Config::new(false), &BufferPool::new_boxed(CHUNKS)));
     let (closs, sloss) = (LossEstimate::new(), LossEstimate::new());
-    let start = if c.end == 0 { 1_000 * 1_000 * MS } else { u64::MAX - c.end * MS };
+    let start = if c.end == 0 {
+        1_000 * 1_000 * MS
+    } else {
+        u64::MAX - c.end * MS
+    };
     let mut cfg = Config::new();
     cfg.flight_split = c.flight_split;
 
@@ -350,7 +378,9 @@ pub fn run_with(c: &CCase, known_full_ring: bool) -> Summary {
             let Reverse((_, _, to_client, mut d)) = link.q.pop().unwrap();
             if to_client {
                 let a = &mut s[0];
-                let _ = a.conn.handle_datagram(&mut env!(a, now), &mut Lent { spill: &mut a.spill }, PathId(1), &mut d);
+                let _ = a
+                    .conn
+                    .handle_datagram(&mut env!(a, now), &mut Lent { spill: &mut a.spill }, PathId(1), &mut d);
             } else {
                 let b = &mut s[1];
                 let _ = b.conn.handle_datagram_with(
@@ -389,7 +419,8 @@ pub fn run_with(c: &CCase, known_full_ring: bool) -> Summary {
             if x.conn.poll_timeout().is_none_or(|t| t > now) {
                 continue;
             }
-            x.conn.handle_timeout(&mut env!(x, now), &mut Lent { spill: &mut x.spill });
+            x.conn
+                .handle_timeout(&mut env!(x, now), &mut Lent { spill: &mut x.spill });
             x.transmit(now, k == 1, &mut link, &mut buf);
             let after = x.conn.poll_timeout();
             // The known case (repro_transport.rs): the probe deadline saturates at the end of the clock. Nothing can
@@ -453,45 +484,49 @@ pub fn run_with(c: &CCase, known_full_ring: bool) -> Summary {
 
 fn apply(s: &mut [Side<'_>; 2], op: &COp, now: u64, link: &mut Link, cut_until: &mut Option<u64>) {
     match *op {
-        COp::Wait(_) => {},
+        COp::Wait(_) => {}
         COp::Write { from, len } => {
             let x = &mut s[usize::from(from)];
             if let Ok(id) = x.conn.open_bi() {
                 x.outs.push((id, len.max(1)));
             }
-        },
+        }
         COp::Datagram { from, len } => {
             let _ = s[usize::from(from)].conn.send_datagram(&vec![3; len]);
-        },
+        }
         COp::Ping(from) => s[usize::from(from)].conn.ping(),
         COp::Keepalive { from, ms } => s[usize::from(from)].conn.set_keepalive((ms > 0).then_some(ms * MS)),
         COp::LinkDown { from, down } => {
             let x = &mut s[usize::from(from)];
             x.conn.set_link_down(&mut env!(x, now), down);
-        },
+        }
         COp::Sleep(from) => {
             let x = &mut s[usize::from(from)];
             x.conn.sleep(&mut env!(x, now));
-        },
+        }
         COp::Wake(from) => {
             let x = &mut s[usize::from(from)];
             x.conn.wake(&mut env!(x, now));
-        },
+        }
         COp::Probe(from) => {
             let x = &mut s[usize::from(from)];
-            if x.path2 || x.conn.add_path(&mut env!(x, now), PathId(2), PathInfo::default()).is_ok() {
+            if x.path2
+                || x.conn
+                    .add_path(&mut env!(x, now), PathId(2), PathInfo::default())
+                    .is_ok()
+            {
                 x.path2 = true;
                 let _ = x.conn.probe(&mut env!(x, now), PathId(2));
             }
-        },
+        }
         COp::Close(from) => {
             let x = &mut s[usize::from(from)];
             x.conn.close(&mut env!(x, now), &mut Lent { spill: &mut x.spill }, 0);
-        },
+        }
         COp::Cut(ms) => {
             link.cut = true;
             *cut_until = Some(now.saturating_add(ms * MS));
-        },
+        }
         COp::Read { from, on } => s[usize::from(from)].reading = on,
     }
 }

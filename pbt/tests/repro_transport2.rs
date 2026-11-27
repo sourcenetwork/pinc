@@ -61,9 +61,17 @@ fn an_endpoint_keepalive_does_not_stay_due_while_the_peer_sleeps() {
             delay_ms: 1,
             jitter_ms: 0,
             ops: vec![
-                Op::Write { from: 1, len: 127_301, fin: true },
+                Op::Write {
+                    from: 1,
+                    len: 127_301,
+                    fin: true,
+                },
                 Op::Sleep(0),
-                Op::Write { from: 1, len: 262_145, fin: false },
+                Op::Write {
+                    from: 1,
+                    len: 262_145,
+                    fin: false,
+                },
             ],
         });
     });

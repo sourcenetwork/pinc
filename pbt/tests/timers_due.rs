@@ -23,7 +23,9 @@ use timers_due_harness::{Case, in_support, run};
 #[test]
 fn no_timer_stays_due_after_it_ran() {
     big_stack(|| {
-        let config = ephyra::Config::default().tests(60).name("no_timer_stays_due_after_it_ran");
+        let config = ephyra::Config::default()
+            .tests(60)
+            .name("no_timer_stays_due_after_it_ran");
         ephyra::check(&config, ephyra::any::<Case>(), |c: Case| run(&c)).assert_passed();
     });
 }
@@ -33,9 +35,13 @@ fn no_timer_stays_due_after_it_ran() {
 #[test]
 fn no_timer_stays_due_after_it_ran_apart_from_the_known_cause() {
     big_stack(|| {
-        let config = ephyra::Config::default().tests(60).name("no_timer_stays_due_after_it_ran_apart_from_the_known_cause");
-        ephyra::check(&config, ephyra::any::<Case>(), |c: Case| timers_due_harness::run_with(&c, 10 * core_harness::SEC, true))
-            .assert_passed();
+        let config = ephyra::Config::default()
+            .tests(60)
+            .name("no_timer_stays_due_after_it_ran_apart_from_the_known_cause");
+        ephyra::check(&config, ephyra::any::<Case>(), |c: Case| {
+            timers_due_harness::run_with(&c, 10 * core_harness::SEC, true)
+        })
+        .assert_passed();
     });
 }
 
@@ -66,7 +72,9 @@ fn an_idle_pair_keeps_the_timer_rule() {
 #[test]
 fn no_connection_timer_stays_due_after_it_ran() {
     big_stack(|| {
-        let config = ephyra::Config::default().tests(80).name("no_connection_timer_stays_due_after_it_ran");
+        let config = ephyra::Config::default()
+            .tests(80)
+            .name("no_connection_timer_stays_due_after_it_ran");
         ephyra::check(&config, ephyra::any::<CCase>(), |c: CCase| timers_due_conn::run(&c)).assert_passed();
     });
 }
@@ -75,7 +83,9 @@ fn no_connection_timer_stays_due_after_it_ran() {
 #[test]
 fn no_connection_timer_stays_due_after_it_ran_apart_from_a_full_ring() {
     big_stack(|| {
-        let config = ephyra::Config::default().tests(80).name("no_connection_timer_stays_due_after_it_ran_apart_from_a_full_ring");
+        let config = ephyra::Config::default()
+            .tests(80)
+            .name("no_connection_timer_stays_due_after_it_ran_apart_from_a_full_ring");
         ephyra::check(&config, ephyra::any::<CCase>(), |c: CCase| {
             let _ = timers_due_conn::run_with(&c, true);
         })

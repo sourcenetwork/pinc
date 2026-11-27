@@ -111,7 +111,12 @@ fn run(c: &UCase) {
         panic!(
             "the handshake did not complete within 30 s: client connected at {at:?} ms, server incoming {}; {sent} copies sent; client ended {:?}",
             incoming(&net),
-            net.hosts[a].events.iter().filter(|(_, e)| matches!(e, Event::ConnectFailed { .. })).map(|(t, _)| (*t - t0) / MS).collect::<Vec<_>>(),
+            net.hosts[a]
+                .events
+                .iter()
+                .filter(|(_, e)| matches!(e, Event::ConnectFailed { .. }))
+                .map(|(t, _)| (*t - t0) / MS)
+                .collect::<Vec<_>>(),
         );
     }
 }
@@ -139,10 +144,22 @@ fn the_source_id_edit_changes_one_header_byte() {
         let mut net = Net::new(0);
         let (a, b) = (net.add(1, HostCfg::default()), net.add(2, HostCfg::default()));
         let (addr, peer, now) = (net.hosts[b].addr, net.hosts[b].id, net.now);
-        let r = net.hosts[a].cmd(now, Command::Connect { node: peer, alpn: ALPN_A, addrs: &[addr], role: Role::Other });
+        let r = net.hosts[a].cmd(
+            now,
+            Command::Connect {
+                node: peer,
+                alpn: ALPN_A,
+                addrs: &[addr],
+                role: Role::Other,
+            },
+        );
         assert!(r.is_ok());
         net.pump_all();
-        let d = net.captured.first().map(|c| c.2.clone()).expect("the client sent its first flight");
+        let d = net
+            .captured
+            .first()
+            .map(|c| c.2.clone())
+            .expect("the client sent its first flight");
         let (_, hlen) = LongHeader::parse(&d).expect("a long header");
         let x = with_scid_changed(&d, 3, 0x40).expect("a handshake packet");
         let diff: Vec<usize> = (0..d.len()).filter(|&i| d[i] != x[i]).collect();

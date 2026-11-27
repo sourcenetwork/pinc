@@ -81,23 +81,23 @@ fn a_late_copy_from_another_address_is_harmless() {
 /// unchanged when `with_first` (else it was lost).
 fn damaged_second_part(jitter_ms: u64, seed: u64, with_first: bool) -> Case {
     let mut acts = vec![
-            Act {
-                dir: 0,
-                trigger: 0,
-                every: false,
-                forge: Forge::Copy(Vec::new()),
-                src: Src::Victim,
-                offset: 0,
-            },
-            Act {
-                dir: 0,
-                trigger: 1,
-                every: false,
-                forge: Forge::Copy(vec![Edit(12971, 0, 0)]),
-                src: Src::Victim,
-                offset: 0,
-            },
-        ];
+        Act {
+            dir: 0,
+            trigger: 0,
+            every: false,
+            forge: Forge::Copy(Vec::new()),
+            src: Src::Victim,
+            offset: 0,
+        },
+        Act {
+            dir: 0,
+            trigger: 1,
+            every: false,
+            forge: Forge::Copy(vec![Edit(12971, 0, 0)]),
+            src: Src::Victim,
+            offset: 0,
+        },
+    ];
     if !with_first {
         acts.remove(0);
     }
