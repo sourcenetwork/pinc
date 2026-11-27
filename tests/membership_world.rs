@@ -92,6 +92,14 @@ pub enum Op {
     SetMaxFrame {
         max: usize,
     },
+    StreamReset {
+        peer: NodeId,
+    },
+    /// Frames of a hub peer read from a session that is not the link's current one: the node drops them without a
+    /// call into the machine.
+    StaleFrames {
+        peer: NodeId,
+    },
 }
 
 /// The public state of a machine after a call.
@@ -610,6 +618,19 @@ impl World {
     /// Node `i` raises the frame body limit it reads (recorded).
     pub fn set_max_frame(&mut self, i: usize, max: usize) {
         self.call(i, |m, _, _| m.set_max_frame(max), |()| Op::SetMaxFrame { max });
+    }
+
+    /// The stream `peer` wrote on to node `i` ended, its session staying up (recorded).
+    pub fn stream_reset(&mut self, i: usize, peer: usize) {
+        let pid = id(peer);
+        self.call(i, |m, _, _| m.stream_reset(&pid), |()| Op::StreamReset { peer: pid });
+    }
+
+    /// Node `i` reads frames of hub `peer` from a session that is not the link's current one and drops them: recorded
+    /// as a call that does not reach the machine (`pinc-node` `parse_stream`).
+    pub fn stale_frames(&mut self, i: usize, peer: usize) {
+        let pid = id(peer);
+        self.call(i, |_, _, _| (), |()| Op::StaleFrames { peer: pid });
     }
 
     /// The address of node `i` changed (recorded).

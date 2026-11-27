@@ -966,6 +966,36 @@ fn wide_frames(c: &mut Ctx) {
     w.run(2 * SEC);
 }
 
+/// A hub's snapshot is cut after its first frame, which lists a ghost member nobody else knows; the stream ends with
+/// its session staying up, the rest of the cut snapshot arrives from the session it superseded and is dropped unread,
+/// and the hub's next full snapshot omits the ghost: the cut one did not count as a round, so the ghost is aged and
+/// gone a lease later.
+fn stream_reset_closes_a_cut_snapshot(c: &mut Ctx) {
+    let mut w = c.started(1, 2);
+    let (m, hub, y, ghost) = (1, 0, 2, id(7));
+    let ry = *w.nodes[m].m.members().find(|(k, _)| **k == id(y)).unwrap().1;
+    let cut = pinc_membership::codec::entry_bytes(&ghost, &rec(3, 0, 1), Alive::Alive);
+    w.inject(m, hub, &Frame::Snap(Snap::new(false, true, &cut).unwrap()));
+    assert!(w.has(m, 7), "the cut snapshot's first frame listed the ghost");
+    w.stream_reset(m, hub);
+    w.stale_frames(m, hub);
+    let full = pinc_membership::codec::entry_bytes(&id(y), &ry, Alive::Alive);
+    w.inject(m, hub, &Frame::Snap(Snap::new(false, false, &full).unwrap()));
+    assert_eq!(
+        traces(&w, m, |t| matches!(t, Trace::Absent { member } if *member == ghost)),
+        1,
+        "the full snapshot ages what only the cut one listed"
+    );
+    assert!(w.has(m, 7), "kept for the lease");
+    assert!(
+        w.run_until(
+            pinc_membership::consts::LEASE + pinc_membership::consts::SLOW_TICK + SEC,
+            |w| !w.has(m, 7)
+        ),
+        "a ghost: the member is still in the view"
+    );
+}
+
 /// Record every node scenario into `membership.ndjson`.
 pub fn run(tw: &mut TraceWriter) {
     let sink: Sink = Rc::new(RefCell::new(Vec::new()));
@@ -1002,6 +1032,7 @@ pub fn run(tw: &mut TraceWriter) {
     leave_and_resend(&mut c);
     leave_notice(&mut c);
     wide_frames(&mut c);
+    stream_reset_closes_a_cut_snapshot(&mut c);
     for line in sink.borrow().iter() {
         tw.line(FILE, line);
     }
