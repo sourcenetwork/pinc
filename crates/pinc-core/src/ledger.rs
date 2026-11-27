@@ -6,7 +6,8 @@
 //! first (we dialed it) is validated from the start, and so is an address the host dials, even one that wrote first.
 //! Each sent datagram counts its size plus 28 bytes (the IP and UDP headers).
 //!
-//! Invariants (while an address's byte counts are below 2^64, where they saturate): the ledger holds at most
+//! Invariants (the received count saturates at 2^64; the charged count of an unvalidated address never passes it, a
+//! charge that would is refused): the ledger holds at most
 //! [`LEDGER_ENTRIES`] addresses and evicts the one inserted first when full; for an address that is not validated the
 //! bytes charged never exceed three times the bytes received, so a spoofed
 //! source gets at most three times what it sent; the address of an evicted entry that is later written to counts as

@@ -9,7 +9,7 @@ use std::rc::Rc;
 
 use pinc_crypto::IdentityAlg;
 use pinc_tests::*;
-use pinc_transport::conn::{PathId, PathInfo};
+use pinc_transport::conn::{CloseReason, PathId, PathInfo};
 use pinc_transport::packet::{Header, packets};
 
 /// The path the Reply comes back on, which the dialing side does not hold.
@@ -464,7 +464,8 @@ fn a_resumed_responders_path_is_validated_by_the_first_1rtt_packet_and_not_by_ea
 
 /// A copy of a resumption Hello from a source that never receives the Reply: the responder is established at it, but
 /// no packet under the 1-RTT keys ever comes, so the source stays unvalidated, gets at most three times what it sent
-/// and no challenge, and the session ends unconfirmed at the connect deadline.
+/// and no challenge, and the session ends by the idle timeout (75 s): the responder has no confirm deadline, so it
+/// holds its slot until then.
 #[test]
 fn a_copied_hello_from_a_forged_source_never_validates_and_gets_at_most_three_times() {
     big_stack(|| {
@@ -511,7 +512,12 @@ fn a_copied_hello_from_a_forged_source_never_validates_and_gets_at_most_three_ti
             "the copied Hello did not establish the responder"
         );
         assert_eq!(net.b.conn.active_path(), Some(forged));
-        net.run(net.now + 70 * SEC, |n| n.b.closed().is_some());
+        net.run(net.now + 76 * SEC, |n| n.b.closed().is_some());
+        assert_eq!(
+            net.b.closed(),
+            Some(CloseReason::IdleTimeout),
+            "the session did not end by the idle timeout"
+        );
         assert!(!net.b.conn.path_validated(forged));
         assert!(
             b_slot(&net, forged).sent.iter().all(Option::is_none),

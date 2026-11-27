@@ -1134,7 +1134,7 @@ mod tests {
         assert_eq!(drain(&mut pm), 1);
         let at = renew + 3 * SEC / 2;
         let mut b = [0u8; 60];
-        let n = map(NONCE, 5000 + ((at - T0) / SEC) as u32, 1, &mut b);
+        let n = map(NONCE, 5000 + u32::try_from((at - T0) / SEC).unwrap_or(0), 1, &mut b);
         pm.handle_datagram(at, gw(), &b[..n]);
         assert_eq!(pm.mapped(), None);
         assert_eq!(

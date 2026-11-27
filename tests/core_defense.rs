@@ -642,7 +642,7 @@ fn a_hello_with_a_forged_binder_is_not_exempt() {
 }
 
 #[test]
-fn a_charge_near_the_top_of_the_range_saturates_instead_of_overflowing() {
+fn a_charge_past_the_end_of_the_counter_is_refused() {
     use pinc_core::Ledger;
     let v: SocketAddr = "10.9.9.8:1000".parse().unwrap();
     let mut l = Ledger::new(1);

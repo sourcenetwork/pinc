@@ -301,7 +301,7 @@ impl Link {
             .flatten()
             .min()
     }
-    pub(crate) fn pop_b(&mut self, now: u64) -> Option<(PathId, Vec<u8>)> {
+    pub fn pop_b(&mut self, now: u64) -> Option<(PathId, Vec<u8>)> {
         self.routes.iter_mut().find_map(|r| r.ab.pop(now).map(|d| (r.b, d)))
     }
     pub(crate) fn pop_a(&mut self, now: u64) -> Option<(PathId, Vec<u8>)> {
