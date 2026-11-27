@@ -11,8 +11,13 @@ The packet of SPL and SPU is 1 to `maxTunnel - 35` bytes: the code reads it up t
 datagram whose header and packet exceed `maxTunnel`, both with `PacketSize` and with nothing in between that can
 fail (the packet runs to the end of the datagram), so the two checks are one bound here.
 
+A QAD and a DNSQ carry zero bytes after their fields (`padD`): the query is `QAD_LEN` (19) and `DNSQ_LEN` (484)
+bytes, the least lengths whose three times pay for the longest answer and its 28 header bytes (`query_pays`), so the
+ledger of the node that answers lets the answer go to a source that proved nothing. A short padding is `Truncated`,
+a padding byte that is not zero is `Padding`.
+
 Theorems: `decodeD_bytes` (round trip), `decodeD_inv` (canonical form), `decodeD_injective`, `encodeD_ok`,
-`encodeD_short`, and the exact refusals.
+`encodeD_short`, `query_pays`, and the exact refusals.
 -/
 
 namespace Pinc.ConnCodec
@@ -33,6 +38,24 @@ def layoutD : Nat → Option L
   | 8 | 9 => some ⟨[.node, .u8], some (maxTunnel - 35, .packetSize)⟩
   | _ => none
 
+/-- The zero bytes after the fields of a datagram: 10 after a QAD's nonce, 450 after a DNSQ's node, none else. -/
+def padD (ty : Nat) : Nat := if ty = 1 then 10 else if ty = 3 then 450 else 0
+
+/-- `n` zero bytes. -/
+def zeros (n : Nat) : List Nat := List.replicate n 0
+
+/-- Read the padding: `n` bytes, each zero. -/
+def rdPad (n : Nat) (r : List Nat) : Except CErr (List Nat) :=
+  if r.length < n then .error (lwD (.trunc (n - r.length)))
+  else if r.take n = zeros n then .ok (r.drop n) else .error .padding
+
+/-- The longest QADR (type, nonce, an IPv6 address) and the longest DNSR (`MAX_DNS_DATAGRAM`, which is
+`maxTunnel`) with their 28 header bytes are at most three times the padded query, and one byte less would not do. -/
+theorem query_pays :
+    (1 + 8 + 19) + 28 ≤ 3 * (1 + 8 + padD 1) ∧ 3 * (1 + 8 + padD 1 - 1) < (1 + 8 + 19) + 28 ∧
+    maxTunnel + 28 ≤ 3 * (1 + 33 + padD 3) ∧ 3 * (1 + 33 + padD 3 - 1) < maxTunnel + 28 := by
+  simp [padD, maxTunnel, maxPacket]
+
 /-- `Datagram::decode`. -/
 def decodeD (b : List Nat) : Except CErr Fr := do
   let (ty, r) ← liftW lwD (rdU8 b)
@@ -42,15 +65,16 @@ def decodeD (b : List Nat) : Except CErr Fr := do
     | none => throw (CErr.unknownType ty)
     | some l => do
       let (fs, r) ← rdLayout lwD l r
+      let r ← rdPad (padD ty) r
       finish r
       pure ⟨ty, fs⟩
 
-/-- `Datagram::encode` (with the field checks of the decoder). -/
+/-- `Datagram::encode` (with the field checks of the decoder, and the padding written in one put). -/
 def Fr.opsD (f : Fr) : List Op :=
   .put [f.ty] ::
     if f.ty = 4 then opsLayout ⟨[.node, .u8], some (maxRecordLen, CErr.dframe .bodySize)⟩ f.fs
     else match layoutD f.ty with
-      | some l => opsLayout l f.fs
+      | some l => opsLayout l f.fs ++ [.put (zeros (padD f.ty))]
       | none => []
 
 def Fr.encodeD (cap : Nat) (f : Fr) : Except CErr (List Nat) := run lwD cap f.opsD []
@@ -63,11 +87,36 @@ def Fr.validD (f : Fr) : Prop :=
     | none => False
 
 /-- The bytes of a datagram. -/
-def Fr.bytesD (f : Fr) : List Nat := f.ty :: encFs f.fs
+def Fr.bytesD (f : Fr) : List Nat := f.ty :: (encFs f.fs ++ zeros (padD f.ty))
 
 theorem decodeD_layout (ty : Nat) (l : L) (r : List Nat) (h4 : ty ≠ 4) (hl : layoutD ty = some l) :
-    decodeD (ty :: r) = (do let (fs, r) ← rdLayout lwD l r; finish r; pure ⟨ty, fs⟩) := by
+    decodeD (ty :: r) =
+      (do let (fs, r) ← rdLayout lwD l r; let r ← rdPad (padD ty) r; finish r; pure ⟨ty, fs⟩) := by
   simp [decodeD, rdU8, liftW, h4, hl, bind, Except.bind, pure, Except.pure]
+
+theorem zeros_length (n : Nat) : (zeros n).length = n := by simp [zeros]
+
+theorem rdPad_zeros (n : Nat) (r : List Nat) : rdPad n (zeros n ++ r) = .ok r := by
+  have ht : (zeros n ++ r).take n = zeros n := List.take_left' (zeros_length n)
+  have hd : (zeros n ++ r).drop n = r := List.drop_left' (zeros_length n)
+  have hl : ¬ (zeros n ++ r).length < n := by rw [List.length_append, zeros_length]; omega
+  unfold rdPad
+  rw [if_neg hl, if_pos ht, hd]
+
+theorem rdPad_inv {n r r'} (h : rdPad n r = .ok r') : r = zeros n ++ r' := by
+  unfold rdPad at h
+  by_cases hl : r.length < n
+  · simp [hl] at h
+  · by_cases ht : r.take n = zeros n
+    · simp only [hl, ht, ite_false, ite_true, Except.ok.injEq] at h
+      subst h
+      rw [← ht, List.take_append_drop]
+    · simp [hl, ht] at h
+
+/-- The layouts with a tail carry no padding. -/
+theorem padD_tail {ty : Nat} {l : L} (hl : layoutD ty = some l) (ht : l.tail ≠ none) : padD ty = 0 := by
+  unfold layoutD at hl
+  split at hl <;> simp only [Option.some.injEq, reduceCtorEq] at hl <;> subst hl <;> simp_all [padD]
 
 theorem decodeD_bytes (f : Fr) (hv : f.validD) : decodeD f.bytesD = .ok f := by
   obtain ⟨ty, fs⟩ := f
@@ -75,7 +124,7 @@ theorem decodeD_bytes (f : Fr) (hv : f.validD) : decodeD f.bytesD = .ok f := by
   · subst h4
     have hv' : DnsrOk fs := by unfold Fr.validD at hv; simpa using hv
     have := dnsrG_enc lwD (fun s => CErr.dframe (CErr.status s)) (CErr.dframe .bodySize) 4 fs hv'
-    simpa [Fr.bytesD, decodeD, rdU8, liftW, bind, Except.bind, pure, Except.pure] using this
+    simpa [Fr.bytesD, padD, zeros, decodeD, rdU8, liftW, bind, Except.bind, pure, Except.pure] using this
   · cases hl : layoutD ty with
     | none => unfold Fr.validD at hv; simp [h4, hl] at hv
     | some l =>
@@ -83,11 +132,13 @@ theorem decodeD_bytes (f : Fr) (hv : f.validD) : decodeD f.bytesD = .ok f := by
       simp only [Fr.bytesD]
       rw [decodeD_layout ty l _ h4 hl]
       by_cases ht : l.tail = none
-      · have := rdLayout_enc_app lwD l ht fs hv' []
-        rw [List.append_nil] at this
-        simp [this, finish_nil, bind, Except.bind, pure, Except.pure]
+      · have := rdLayout_enc_app lwD l ht fs hv' (zeros (padD ty))
+        have hp := rdPad_zeros (padD ty) []
+        rw [List.append_nil] at hp
+        simp [this, hp, finish_nil, bind, Except.bind, pure, Except.pure]
       · have := rdLayout_enc lwD l fs hv'
-        simp [this, finish_nil, bind, Except.bind, pure, Except.pure]
+        have hp : padD ty = 0 := padD_tail hl ht
+        simp [this, hp, zeros, rdPad, finish_nil, bind, Except.bind, pure, Except.pure]
 
 theorem decodeD_inv {b f} (h : decodeD b = .ok f) (hb : Byte b) : f.validD ∧ f.bytesD = b := by
   rcases b with _ | ⟨ty, r⟩
@@ -99,21 +150,22 @@ theorem decodeD_inv {b f} (h : decodeD b = .ok f) (hb : Byte b) : f.validD ∧ f
       obtain ⟨t, hd, e⟩ := decodeDnsrG_inv h hbr
       refine ⟨?_, ?_⟩
       · unfold Fr.validD; simp [t, hd]
-      · simp [Fr.bytesD, t, e]
+      · simp [Fr.bytesD, padD, zeros, t, e]
     · cases hl : layoutD ty with
       | none => simp [decodeD, rdU8, liftW, h4, hl, throw, throwThe, MonadExceptOf.throw, bind, Except.bind] at h
       | some l =>
         rw [decodeD_layout ty l r h4 hl] at h
         simp only [bind_ok, pure, Except.pure, Except.ok.injEq] at h
-        obtain ⟨⟨fs, r1⟩, h1, u, hu, rfl⟩ := h
+        obtain ⟨⟨fs, r1⟩, h1, r2, h2, u, hu, rfl⟩ := h
         have hf := finish_ok hu
-        simp only at hf
         subst hf
+        have hz := rdPad_inv h2
+        rw [List.append_nil] at hz
+        subst hz
         obtain ⟨hlo, e, _⟩ := rdLayout_inv lwD l h1 hbr
         refine ⟨?_, ?_⟩
         · unfold Fr.validD; simp [h4, hl, hlo]
-        · rw [List.append_nil] at e
-          simp [Fr.bytesD]
+        · simp [Fr.bytesD]
           exact e.symm
 
 theorem decodeD_injective {a b f} (ha : decodeD a = .ok f) (hb : decodeD b = .ok f) (hba : Byte a) (hbb : Byte b) :
@@ -131,7 +183,7 @@ theorem opsD_good (f : Fr) (hv : f.validD) : (∀ o ∈ f.opsD, o.good) ∧ opsB
       · simp [Op.good]
       · exact g o ho
     · unfold opsBytes at b
-      simp [Fr.opsD, Fr.bytesD, h4, opsBytes, Op.bytes, b]
+      simp [Fr.opsD, Fr.bytesD, h4, padD, zeros, opsBytes, Op.bytes, b]
   · cases hl : layoutD f.ty with
     | none => unfold Fr.validD at hv; simp [h4, hl] at hv
     | some l =>
@@ -139,10 +191,11 @@ theorem opsD_good (f : Fr) (hv : f.validD) : (∀ o ∈ f.opsD, o.good) ∧ opsB
       obtain ⟨g, b⟩ := opsLayout_good hv'
       refine ⟨?_, ?_⟩
       · intro o ho
-        simp only [Fr.opsD, h4, hl, ite_false, List.mem_cons] at ho
-        rcases ho with rfl | ho
+        simp only [Fr.opsD, h4, hl, ite_false, List.mem_cons, List.mem_append, List.not_mem_nil, or_false] at ho
+        rcases ho with rfl | ho | rfl
         · simp [Op.good]
         · exact g o ho
+        · simp [Op.good]
       · unfold opsBytes at b
         simp [Fr.opsD, Fr.bytesD, h4, hl, opsBytes, Op.bytes, b]
 
@@ -172,12 +225,33 @@ theorem decodeD_unknown (t : Nat) (r : List Nat) (h4 : t ≠ 4) (hl : layoutD t 
     decodeD (t :: r) = .error (.unknownType t) := by
   simp [decodeD, rdU8, liftW, h4, hl, throw, throwThe, MonadExceptOf.throw, bind, Except.bind]
 
-/-- Bytes after a datagram of a fixed size are refused. -/
+/-- Bytes after a datagram of a fixed size and its padding are refused. -/
 theorem decodeD_trailing (f : Fr) (l : L) (h4 : f.ty ≠ 4) (hl : layoutD f.ty = some l) (ht : l.tail = none)
     (hv : LayoutOk l f.fs) (x : Nat) (r : List Nat) :
-    decodeD (f.ty :: (encFs f.fs ++ x :: r)) = .error .trailing := by
+    decodeD (f.ty :: (encFs f.fs ++ (zeros (padD f.ty) ++ x :: r))) = .error .trailing := by
   rw [decodeD_layout f.ty l _ h4 hl, rdLayout_enc_app lwD l ht f.fs hv]
-  simp [finish_cons, bind, Except.bind]
+  have hp := rdPad_zeros (padD f.ty) (x :: r)
+  simp [hp, finish_cons, bind, Except.bind]
+
+/-- A padding shorter than its datagram's is refused with the shortfall: the unpadded QAD and DNSQ among them. -/
+theorem decodeD_pad_short (f : Fr) (l : L) (h4 : f.ty ≠ 4) (hl : layoutD f.ty = some l) (ht : l.tail = none)
+    (hv : LayoutOk l f.fs) (k : Nat) (hk : k < padD f.ty) :
+    decodeD (f.ty :: (encFs f.fs ++ zeros k)) = .error (lwD (.trunc (padD f.ty - k))) := by
+  rw [decodeD_layout f.ty l _ h4 hl, rdLayout_enc_app lwD l ht f.fs hv]
+  have hp : rdPad (padD f.ty) (zeros k) = .error (lwD (.trunc (padD f.ty - k))) := by
+    simp [rdPad, zeros_length, hk]
+  simp [hp, bind, Except.bind]
+
+/-- A padding of the right length that is not all zero is refused. -/
+theorem decodeD_pad_nonzero (f : Fr) (l : L) (h4 : f.ty ≠ 4) (hl : layoutD f.ty = some l) (ht : l.tail = none)
+    (hv : LayoutOk l f.fs) (z r : List Nat) (hz : z.length = padD f.ty) (hnz : z ≠ zeros (padD f.ty)) :
+    decodeD (f.ty :: (encFs f.fs ++ (z ++ r))) = .error .padding := by
+  rw [decodeD_layout f.ty l _ h4 hl, rdLayout_enc_app lwD l ht f.fs hv]
+  have hp : rdPad (padD f.ty) (z ++ r) = .error .padding := by
+    have hl' : ¬ z.length + r.length < padD f.ty := by omega
+    have ht' : (z ++ r).take (padD f.ty) = z := List.take_left' hz
+    simp [rdPad, List.length_append, hl', ht', hnz]
+  simp [hp, bind, Except.bind]
 
 /-- A tunnelled packet that is empty or too long for the datagram. -/
 theorem decodeD_tunnel_packet (ty : Nat) (hty : ty = 8 ∨ ty = 9) (n : List Nat) (hn : NodeOk n) (hbn : Byte n)

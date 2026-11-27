@@ -41,6 +41,12 @@ pub struct SlotView {
     pub last_tx: u64,
     /// The smoothed round trip of the path, 0 while unknown.
     pub rtt: u64,
+    /// Bytes received on the path, counted against its amplification budget.
+    pub amp_received: u64,
+    /// Bytes charged on the path against its amplification budget.
+    pub amp_sent: u64,
+    /// The bytes the connection may still build a datagram of for the path (`usize::MAX` when unlimited).
+    pub amp_room: usize,
 }
 
 /// The path table and what the path rules read beside it.
@@ -70,7 +76,8 @@ conn_impl! {
                 .paths
                 .slots
                 .iter()
-                .map(|s| {
+                .enumerate()
+                .map(|(i, s)| {
                     s.as_ref().map(|p| SlotView {
                         id: p.id.0,
                         relay: p.info.kind == PathKind::Relay,
@@ -86,6 +93,9 @@ conn_impl! {
                         last_rx: p.last_rx,
                         last_tx: p.last_tx,
                         rtt: p.rtt,
+                        amp_received: p.amp.received(),
+                        amp_sent: p.amp.sent(),
+                        amp_room: self.amp_room(i),
                     })
                 })
                 .collect(),

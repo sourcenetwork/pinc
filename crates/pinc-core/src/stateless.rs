@@ -20,7 +20,6 @@ use pinc_security::message::REJECT_LEN;
 use pinc_transport::packet::handshake_packet;
 
 use crate::endpoint::ep_impl;
-use crate::trace::trace;
 use crate::tx::Transmit;
 
 /// The most rejects waiting to be sent.
@@ -104,14 +103,7 @@ ep_impl! {
             self.counters.dropped_in += 1;
             return;
         }
-        let allowed = self.ledger.allow_send(remote, len as u64);
-        trace!(self, now, LedgerTx {
-            addr: crate::rx::addr_key(&remote),
-            allowed: u64::from(allowed),
-            rx: self.ledger.get(&remote).map_or(0, |e| e.rx),
-            tx: self.ledger.get(&remote).map_or(0, |e| e.tx),
-        });
-        if !allowed {
+        if !self.charge(now, remote, len as u64) {
             self.counters.stateless_refused += 1;
             return;
         }

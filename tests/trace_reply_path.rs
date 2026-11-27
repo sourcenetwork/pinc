@@ -222,13 +222,15 @@ fn full(l: &mut Log, alg: IdentityAlg, seed: u64, added: &[u64], removed: &[u64]
     for &q in removed {
         rm(l, &mut net, q);
     }
+    let dialed = held(&net, p);
     let reply = answer(&mut net);
     for d in &reply {
         rx(l, &mut net, p, d);
     }
     keys(l, &mut net);
     assert!(net.a.conn.is_connected(), "the Reply on path {p} was not taken");
-    assert!(held(&net, p) && active(&net) == p && net.a.conn.path_validated(PathId(p)));
+    // A reply proves its path only when the dial held it: anyone can send a copy of the Reply from any source.
+    assert!(held(&net, p) && active(&net) == p && net.a.conn.path_validated(PathId(p)) == dialed);
     // Once established, a dialing side takes no handshake packet: the Reply again, on a path it does not hold.
     rx(l, &mut net, 7, &reply[0]);
     assert!(!held(&net, 7) && active(&net) == p);
@@ -333,6 +335,7 @@ fn resume(l: &mut Log, seed: u64, added: &[u64], p: u64, coalesce: bool) {
     for &q in added {
         add(l, &mut net, q);
     }
+    let dialed = held(&net, p);
     let mut reply = answer(&mut net);
     if coalesce {
         assert!(
@@ -347,7 +350,8 @@ fn resume(l: &mut Log, seed: u64, added: &[u64], p: u64, coalesce: bool) {
     }
     keys(l, &mut net);
     assert!(net.a.conn.is_connected(), "the resume Reply on path {p} was not taken");
-    assert!(held(&net, p) && active(&net) == p && net.a.conn.path_validated(PathId(p)));
+    // A reply proves its path only when the dial held it: anyone can send a copy of the Reply from any source.
+    assert!(held(&net, p) && active(&net) == p && net.a.conn.path_validated(PathId(p)) == dialed);
     if p != 1 {
         assert!(held(&net, 1), "the path the session left was given up");
     }

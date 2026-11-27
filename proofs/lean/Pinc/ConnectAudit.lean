@@ -89,6 +89,9 @@ import Pinc.ConnectOwnThm
 #audit_axioms Pinc.ConnCodec.decodeD_encode
 #audit_axioms Pinc.ConnCodec.decodeD_empty
 #audit_axioms Pinc.ConnCodec.decodeD_trailing
+#audit_axioms Pinc.ConnCodec.decodeD_pad_short
+#audit_axioms Pinc.ConnCodec.decodeD_pad_nonzero
+#audit_axioms Pinc.ConnCodec.query_pays
 #audit_axioms Pinc.ConnCodec.decodeD_tunnel_packet
 #audit_axioms Pinc.ConnCodec.Rec.parse_bytes
 #audit_axioms Pinc.ConnCodec.Rec.parse_inv

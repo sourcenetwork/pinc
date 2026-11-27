@@ -4,9 +4,10 @@
 (*                                                                         *)
 (* The Rust test tests/trace_ledger.rs drives real Ledgers (the public     *)
 (* API, no probe) with seeded calls and records one event per call in      *)
-(* ledger.ndjson: "new" starts a fresh ledger; "rx", "open" and "tx" are   *)
-(* on_receive, open and allow_send with the address (a small number the    *)
-(* test maps to a socket address), the size as four 16-bit limbs, the      *)
+(* ledger.ndjson: "new" starts a fresh ledger; "rx", "open", "valid" and   *)
+(* "tx" are on_receive, open, validate and allow_send with the address (a  *)
+(* small number the test maps to a socket address), the size as four      *)
+(* 16-bit limbs, the                                                       *)
 (* answer, the table's length after the call, the entry of the address     *)
 (* after it and the entry of a second address q the test picks (one it     *)
 (* used before, evicted or not). Every call must be the step of            *)
@@ -45,12 +46,13 @@ After(ev) ==
     IN IF ev.op = "new" THEN [tab |-> <<>>, res |-> FALSE]
        ELSE IF ev.op = "rx" THEN LET r == L!OnReceive(t, ev.a, n) IN [tab |-> r.tab, res |-> r.held]
        ELSE IF ev.op = "open" THEN [tab |-> L!Open(t, ev.a), res |-> FALSE]
-       ELSE LET r == L!AllowSend(t, ev.a, n) IN [tab |-> r.tab, res |-> r.ok]
+       ELSE IF ev.op = "valid" THEN [tab |-> L!Validate(t, ev.a), res |-> FALSE]
+       ELSE LET r == L!AllowSendBy(t, ev.a, n, TRUE) IN [tab |-> r.tab, res |-> r.ok]
 
 Init == i = 1 /\ t = <<>>
 Step == /\ i <= Len(Trace)
         /\ Ev0.t = "ledger"
-        /\ Ev0.op \in {"new", "rx", "open", "tx"}
+        /\ Ev0.op \in {"new", "rx", "open", "valid", "tx"}
         /\ LET r == After(Ev0)
            IN /\ t' = r.tab
               /\ Ev0.res = r.res

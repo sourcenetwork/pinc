@@ -138,6 +138,12 @@ macro_rules! define {
             pub(crate) fn set_prekey(&mut self, prekey: PrekeyInfo) {
                 match self { $(Self::$v(e) => e.set_prekey(prekey),)+ }
             }
+            pub(crate) fn host_received(&mut self, now: u64, remote: SocketAddr, len: usize) {
+                match self { $(Self::$v(e) => e.host_received(now, remote, len),)+ }
+            }
+            pub(crate) fn host_send(&mut self, now: u64, remote: SocketAddr, len: usize) -> bool {
+                match self { $(Self::$v(e) => e.host_send(now, remote, len),)+ }
+            }
             pub(crate) fn export_state(&self, now: u64, out: &mut [u8]) -> Result<usize, StateError> {
                 match self { $(Self::$v(e) => e.export_state(now, out),)+ }
             }

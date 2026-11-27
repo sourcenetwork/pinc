@@ -18,8 +18,9 @@
 (*    and nothing else; on a path not tracked it changes nothing.          *)
 (* PathHeld_drop is a reachability witness: a held path leaves its slot,   *)
 (* so HeldCount is checked where the count must fall.                      *)
-(* Not modelled: that the flag stops only the size probe (it is read by    *)
-(* conn/send.rs, outside this unit).                                       *)
+(* Not modelled: what the flag stops (conn/send.rs, outside this unit):   *)
+(* the size probe, and in a validated session a send past the path's own  *)
+(* budget (amp_room).                                                      *)
 (***************************************************************************)
 EXTENDS Integers, FiniteSets
 CONSTANTS NP, IDS

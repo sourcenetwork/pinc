@@ -47,6 +47,18 @@ fn deliver_on(net: &mut Net<'_, '_>, path: PathId, datagrams: &[Vec<u8>]) {
     net.a.service(now);
 }
 
+/// The view of the dialing side's slot of `path`.
+fn slot_of(net: &Net<'_, '_>, path: PathId) -> pinc_transport::conn::SlotView {
+    net.a
+        .conn
+        .trace_paths()
+        .slots
+        .into_iter()
+        .flatten()
+        .find(|s| s.id == path.0)
+        .unwrap()
+}
+
 /// No path id appears twice in the session's table.
 fn no_duplicate_paths(net: &Net<'_, '_>) {
     let ids: Vec<u64> = net.a.conn.path_list().map(|(id, _, _)| id.0).collect();
@@ -106,6 +118,7 @@ fn reply_on_unheld_path(mut w: World, ticket: bool) {
     } else {
         pinc_security::ClientTickets::new()
     };
+    let resumed = ticket;
     let ticket = ticket.then(|| tickets.take(&w.rp.id.node_id(), ALPN, T0).unwrap());
     let (mut sa, mut sb) = (Store::new(true), Store::new(false));
     let a = w.client(&mut sa, ticket, pinc_security::ClientTickets::new());
@@ -121,7 +134,22 @@ fn reply_on_unheld_path(mut w: World, ticket: bool) {
     );
     assert!(net.a.conn.has_path(OTHER), "the path of the Reply is not held");
     assert_eq!(net.a.conn.active_path(), Some(OTHER));
-    assert!(net.a.conn.path_validated(OTHER));
+    // Anyone can send a copy of the Reply from any source: a path the dial did not hold proves nothing, its budget
+    // counts the datagram and a challenge goes out on it.
+    assert!(!net.a.conn.path_validated(OTHER));
+    let slot = slot_of(&net, OTHER);
+    assert!(
+        slot.challenge.is_some() && slot.send_challenge,
+        "no challenge queued on the path"
+    );
+    // The datagram that completed the Reply counts on the path it arrived on (the first of a resume Reply, the last of
+    // a full one), and so does every datagram after it.
+    let from = if resumed { 0 } else { reply.len() - 1 };
+    assert_eq!(
+        slot.amp_received,
+        reply[from..].iter().map(|d| d.len() as u64).sum::<u64>(),
+        "the datagram that completed the Reply does not count"
+    );
     assert!(net.a.conn.rtt_estimate().has_sample());
     net.a.service(at);
     let _ = net.flush();
@@ -301,5 +329,204 @@ fn a_1rtt_packet_alone_on_a_held_path_adds_no_path() {
         let after: Vec<_> = net.a.conn.path_list().map(|(id, _, _)| id).collect();
         assert_eq!(before, after);
         no_duplicate_paths(&net);
+    });
+}
+
+#[test]
+fn a_reply_on_a_path_the_flight_went_to_validates_it() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let a = w.client(&mut sa, None, pinc_security::ClientTickets::new());
+        let b = w.server(&mut sb);
+        let mut net = Net::new(a, b, Link::new(79, Params::new(10 * MS)), &mut w.stores);
+        let now = net.now;
+        net.a
+            .with_env(now, |c, env| c.add_path(env, PathId(3), PathInfo::default()))
+            .unwrap();
+        let reply = reply_datagrams(&mut net);
+        deliver_on(&mut net, PathId(3), &reply);
+        assert!(net.a.conn.is_connected());
+        assert_eq!(net.a.conn.active_path(), Some(PathId(3)));
+        assert!(
+            net.a.conn.path_validated(PathId(3)),
+            "a path the dial held was not validated"
+        );
+    });
+}
+
+#[test]
+fn in_a_validated_session_a_held_path_is_limited_by_its_own_budget() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let mut net = setup(&mut w, &mut sa, &mut sb, Link::new(80, Params::new(10 * MS)));
+        assert!(net.connect(net.now + 5 * SEC));
+        // What the server sends next never reaches the dialing side over the link; the dialing side takes a copy of it
+        // from a new address, as a peer that moved.
+        net.link.route(PathId(1)).ba.p.loss_ppm = 1_000_000;
+        let sent: Rc<RefCell<Vec<Vec<u8>>>> = Rc::default();
+        let sink = Rc::clone(&sent);
+        net.on_tx = Some(Box::new(move |is_a, d, _| {
+            if !is_a {
+                sink.borrow_mut().push(d.to_vec());
+            }
+        }));
+        let id = net.b.conn.open_bi().unwrap();
+        net.b.conn.write(id, b"hello").unwrap();
+        let until = net.now + 100 * MS;
+        net.run(until, |_| false);
+        net.on_tx = None;
+        let got = sent.borrow().clone();
+        assert!(!got.is_empty(), "the server sent nothing");
+        deliver_on(&mut net, OTHER, &got[..1]);
+        assert!(net.a.conn.has_path(OTHER), "the copy did not teach the path");
+        let slot = slot_of(&net, OTHER);
+        assert_eq!(slot.amp_received, got[0].len() as u64);
+        assert!(!net.a.conn.path_validated(OTHER));
+        assert_eq!(
+            slot.amp_room,
+            usize::MAX,
+            "a path the ledger does not hold is not limited"
+        );
+        net.a.conn.set_path_held(OTHER, true);
+        let slot = slot_of(&net, OTHER);
+        let allowed = 3 * slot.amp_received;
+        assert_eq!(slot.amp_room as u64, allowed - slot.amp_sent - 48);
+        net.a.conn.set_path_held(OTHER, false);
+        assert_eq!(slot_of(&net, OTHER).amp_room, usize::MAX);
+    });
+}
+
+/// The view of the responder's slot of `path`.
+fn b_slot(net: &Net<'_, '_>, path: PathId) -> pinc_transport::conn::SlotView {
+    net.b
+        .conn
+        .trace_paths()
+        .slots
+        .into_iter()
+        .flatten()
+        .find(|s| s.id == path.0)
+        .unwrap()
+}
+
+/// A resumption Hello proves nothing about its source (anyone who saw it can send a copy from any address), and
+/// neither does any packet under the 0-RTT keys, which a copy of the Hello also opens. The Reply goes to one path;
+/// the dialer's first 1-RTT packet needs the Reply's fresh key share, so it proves the dialer received the Reply:
+/// it validates that path, with no challenge sent.
+#[test]
+fn a_resumed_responders_path_is_validated_by_the_first_1rtt_packet_and_not_by_early_data() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let mut tickets = first_session(&mut w);
+        let ticket = tickets.take(&w.rp.id.node_id(), ALPN, T0).unwrap();
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let a = w.client(&mut sa, Some(ticket), pinc_security::ClientTickets::new());
+        let b = w.server(&mut sb);
+        let mut net = Net::new(a, b, Link::new(81, Params::new(10 * MS)), &mut w.stores);
+        // Early data goes with the Hello; the Reply never reaches the dialer.
+        let id = net.a.conn.open_bi().unwrap();
+        net.a.conn.write(id, b"ping").unwrap();
+        net.link.route(PathId(1)).ba.p.loss_ppm = 1_000_000;
+        let until = net.now + 100 * MS;
+        net.run(until, |_| false);
+        assert!(
+            net.b.conn.is_connected(),
+            "the resumed responder was not established at the Hello"
+        );
+        assert_eq!(
+            net.b.read.get(&id).map(Vec::as_slice),
+            Some(&b"ping"[..]),
+            "the early data did not reach the responder"
+        );
+        let path = net.b.conn.active_path().unwrap();
+        assert!(
+            !net.b.conn.path_validated(path),
+            "the Hello or a 0-RTT packet validated its source"
+        );
+        assert!(
+            b_slot(&net, path).sent.iter().all(Option::is_none),
+            "a challenge went out on the path"
+        );
+        // The Reply (or its resend) now reaches the dialer; its first 1-RTT packet validates the path.
+        net.link.route(PathId(1)).ba.p.loss_ppm = 0;
+        let until = net.now + 5 * SEC;
+        assert!(
+            net.run(until, |n| n.b.conn.path_validated(path)),
+            "the dialer's first 1-RTT packet did not validate the path"
+        );
+        assert!(
+            b_slot(&net, path).sent.iter().all(Option::is_none),
+            "a challenge was needed to validate the path"
+        );
+    });
+}
+
+/// A copy of a resumption Hello from a source that never receives the Reply: the responder is established at it, but
+/// no packet under the 1-RTT keys ever comes, so the source stays unvalidated, gets at most three times what it sent
+/// and no challenge, and the session ends unconfirmed at the connect deadline.
+#[test]
+fn a_copied_hello_from_a_forged_source_never_validates_and_gets_at_most_three_times() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let mut tickets = first_session(&mut w);
+        let ticket = tickets.take(&w.rp.id.node_id(), ALPN, T0).unwrap();
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let a = w.client(&mut sa, Some(ticket), pinc_security::ClientTickets::new());
+        let b = w.server(&mut sb);
+        // The forged source is a route the dialer does not use (it names it 8, the responder 7): what the responder
+        // sends there never arrives, and what the dialer itself sends on its own route never reaches the responder.
+        let forged = PathId(7);
+        let mut link = Link::new(82, Params::new(10 * MS));
+        link.add_route(PathId(8), forged, Params::new(10 * MS), Params::new(10 * MS));
+        link.route(PathId(8)).ba.p.loss_ppm = 1_000_000;
+        link.route(PathId(1)).ab.p.loss_ppm = 1_000_000;
+        let mut net = Net::new(a, b, link, &mut w.stores);
+        let sent: Rc<RefCell<Vec<Vec<u8>>>> = Rc::default();
+        let sink = Rc::clone(&sent);
+        net.on_tx = Some(Box::new(move |is_a, d, _| {
+            if is_a {
+                sink.borrow_mut().push(d.to_vec());
+            }
+        }));
+        let until = net.now + 50 * MS;
+        net.run(until, |_| false);
+        net.on_tx = None;
+        let copy = sent.borrow().clone();
+        assert!(!copy.is_empty(), "the dialer sent no Hello");
+        let now = net.now;
+        // The endpoint holds the forged address in its ledger, as it does a source it did not dial.
+        net.b
+            .with_env(now, |c, env| c.add_path(env, forged, PathInfo::default()))
+            .unwrap();
+        net.b.conn.set_path_held(forged, true);
+        let mut heard = 0;
+        for d in &copy {
+            heard += d.len() as u64;
+            net.link.send_a(now, PathId(8), d);
+        }
+        net.run(net.now + SEC, |n| n.b.conn.is_connected());
+        assert!(
+            net.b.conn.is_connected(),
+            "the copied Hello did not establish the responder"
+        );
+        assert_eq!(net.b.conn.active_path(), Some(forged));
+        net.run(net.now + 70 * SEC, |n| n.b.closed().is_some());
+        assert!(!net.b.conn.path_validated(forged));
+        assert!(
+            b_slot(&net, forged).sent.iter().all(Option::is_none),
+            "a challenge went to the forged source"
+        );
+        let to_forged: u64 = net
+            .b
+            .tx_log
+            .iter()
+            .filter(|(_, _, p)| *p == forged)
+            .map(|(_, n, _)| *n as u64)
+            .sum();
+        assert!(
+            to_forged <= 3 * heard,
+            "{to_forged} bytes went to a source that sent {heard}"
+        );
     });
 }

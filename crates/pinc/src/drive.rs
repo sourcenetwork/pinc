@@ -570,7 +570,7 @@ impl<H: Hosted> Shared<H> {
                         buf = Some(b);
                         continue;
                     }
-                    next = next.or_else(|| self.role_outgoing(&mut b.v));
+                    next = next.or_else(|| self.role_outgoing(&mut core, now, &mut b.v));
                 }
                 if let Some((to, len, segment)) = next {
                     (to, len, segment, b)

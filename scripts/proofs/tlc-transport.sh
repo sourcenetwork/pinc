@@ -14,6 +14,14 @@ par run_tlc ledger_sat Ledger Ledger_sat
 par witness_tlc ledger_w_evict Ledger Ledger_w_evict NoEvictReady
 par witness_tlc ledger_w_held Ledger Ledger_w_held NotHeldAfterSending
 par witness_tlc ledger_w_sat Ledger Ledger_w_sat NotSaturated
+par witness_tlc ledger_w_fit Ledger Ledger_w_fit TxExact
+par run_tlc relay_amp RelayAmp RelayAmp
+par run_tlc relay_amp_served RelayAmp RelayAmp_served
+par run_tlc relay_amp_pad RelayAmp RelayAmp_pad
+par witness_tlc relay_amp_w_nogate RelayAmp RelayAmp_w_nogate AmpUnproved
+par run_tlc relay_amp_hub RelayAmp RelayAmp_hub
+par witness_tlc relay_amp_w_short RelayAmp RelayAmp_w_short PaddedPays
+par witness_tlc relay_amp_w_twice RelayAmp RelayAmp_w_twice ChargedOnce
 par run_tlc loss_estimate LossEstimate LossEstimate
 par run_tlc machines Machines Machines
 par witness_tlc machines_full Machines Machines_full NoneFreed
@@ -47,3 +55,5 @@ par witness_tlc stream_send_block_w StreamSend StreamSend_block_w NeverAtWindow
 par witness_tlc stream_send_final_w StreamSend StreamSend_final_w NeverResetAfterFin
 par run_tlc path_move_follow_gone PathMove PathMove_follow_gone
 par witness_tlc path_move_w_gonedata PathMove PathMove_w_gonedata NoGoneData
+par run_tlc path_move_retry PathMove PathMove_retry
+par witness_tlc path_move_w_once PathMove PathMove_w_once ValidationLive

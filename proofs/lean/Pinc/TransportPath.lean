@@ -17,15 +17,17 @@ What it proves:
   nothing else (`learn_bounded`, `learn_gives_up`, `learnNew_other`); with no such place no path is added
   (`learn_none_iff`); no learning makes a path held twice (`learn_unique`);
 - a dialing side takes a reply on any path, held or not (pinc#399): a message that authenticates establishes the
-  session on the path it came on, held, validated and active, unless that path is not held and the table has no
-  room, and then the table and the active path stay as they were (`rx_auth`, `follow_taken`, `follow_full`); a
+  session on the path it came on, held and active, and validated exactly when the dial held it (the flight went
+  there; a copy of the reply can come from any source, so a path only the reply named proves nothing and is
+  challenged), unless that path is not held and the table has no room, and then the table and the active path stay
+  as they were (`rx_auth`, `follow_taken`, `follow_full`); a
   Reply that passed its first checks waits for the key host with its path (`rx_pend`, `inv_rx`), and the key answer
   that establishes moves the session to it by the same rule (`key_taken`);
 - before the session is established, a datagram whose message does not authenticate and a key answer that does not
   establish change no path state, on any path (`rx_quiet`, `key_quiet`), and one that fails authentication is
   counted (`rx_bad`);
-- the invariant `Inv` (bounded, no path twice, the active path held and validated, a waiting Reply's path
-  remembered) holds after every step of a dialing side, a datagram with a 1-RTT packet behind its handshake packet
+- the invariant `Inv` (bounded, no path twice, the active path held, and validated until the establishment, a
+  waiting Reply's path remembered) holds after every step of a dialing side, a datagram with a 1-RTT packet behind its handshake packet
   included (`inv_rx`, `inv_key`, `inv_add`, `inv_remove`, `inv_app`);
 - the rule before #399 drops a dialing side's handshake packet on a path it does not hold, so a reply there never
   establishes the session (`rxOld_drops`, `rxOld_never`).
@@ -378,7 +380,8 @@ inductive KeyR where
   deriving DecidableEq, Repr
 
 /-- A connection: the table and the active slot, the handshake, `reply_from` (`rf`), the path of the Reply that
-waits for the key host (`pend`, a ghost the theorems read), whether the round trip has a sample, `handshake_dropped`. -/
+waits for the key host (`pend`, a ghost the theorems read), whether the round trip has a sample, `handshake_dropped`,
+and for a resumed responder the path its one Reply went to while the proof of receipt is owed (`rp`, `proof`). -/
 structure C where
   t : T
   act : Nat := 0
@@ -387,22 +390,25 @@ structure C where
   pend : Option Nat := none
   smp : Bool := false
   hd : Nat := 0
+  rp : Option Nat := none
 
 /-- The table of a dialing side when it dials on path `pid`: the path validated and active in slot 0. -/
 def dial (pid : Nat) : C := { t := fun j => if j = 0 then some ⟨pid, true⟩ else none }
 
-/-- `follow_reply`: the reply's path is found or learnt; the session moves to it, validated, and the path it leaves
-is no longer validated. With no room it stays on its path. -/
+/-- `follow_reply`: the reply's path is found or learnt; the session moves to it, and the path it leaves is no
+longer validated. The path is validated when the dial held it; a path the reply alone named stays unvalidated (it is
+challenged). With no room it stays on its path. -/
 def follow (np : Nat) (c : C) : C :=
   match c.rf with
   | none => c
   | some pid =>
+    let held := (find np c.t pid).isSome
     let r := learn np c.t c.act pid
     match r.2 with
     | none => { c with rf := none }
     | some i =>
       if i = c.act then { c with rf := none, t := r.1 }
-      else { c with rf := none, t := setV (setV r.1 c.act false) i true, act := i }
+      else { c with rf := none, t := setV (setV r.1 c.act false) i held, act := i }
 
 /-- `pump` at the establishment: `follow_reply`, and the round trip sample `feed` took (`s`). -/
 def establish (np : Nat) (c : C) (s : Bool) : C := follow np { c with hs := .done, pend := none, smp := c.smp || s }
@@ -454,14 +460,49 @@ def removePath (np : Nat) (c : C) (pid : Nat) : C × Nat :=
 def app (np : Nat) (c : C) (pid : Nat) : C :=
   if c.hs = .done ∧ find np c.t pid = none then { c with t := (learn np c.t c.act pid).1 } else c
 
+/-- What a responder's handshake datagram completes: nothing, a Finish that authenticated, or a resumption Hello whose
+binder verified. -/
+inductive RMsg where
+  | part
+  | finish
+  | resume
+  deriving DecidableEq, Repr
+
 /-- A responder's handshake datagram on path `pid` (`handle_inner`): it learns a path it does not hold while in its
-handshake or holding none; `est` establishes the session, which validates the active path. -/
-def respRx (np : Nat) (c : C) (pid : Nat) (est : Bool) : C :=
+handshake or holding none. A Finish establishes the session and validates the active path (the dialer answered the
+Reply sent there); a resumption Hello establishes it and validates nothing, since anyone who saw the Hello can send a
+copy of it from any source: the path its Reply goes to is recorded (`proof`). -/
+def respRx (np : Nat) (c : C) (pid : Nat) (m : RMsg) : C :=
   let empty := (List.range np).all fun j => (c.t j).isNone
   let c1 := if find np c.t pid = none ∧ (empty = true ∨ c.hs ≠ .done) then { c with t := (learn np c.t c.act pid).1 } else c
-  if est = true ∧ c1.hs ≠ .done ∧ (find np c1.t pid).isSome ∧ (c1.t c1.act).isSome then
-    { c1 with hs := .done, t := setV c1.t c1.act true }
+  if m ≠ .part ∧ c1.hs ≠ .done ∧ (find np c1.t pid).isSome ∧ (c1.t c1.act).isSome then
+    if m = .finish then { c1 with hs := .done, t := setV c1.t c1.act true }
+    else { c1 with hs := .done, rp := idOf c1.t c1.act }
   else c1
+
+/-- A resumed responder resends its Reply on the active path: on a path other than the one the proof names, the keys
+no longer say which path the dialer heard, and the proof is given up (`reply_left_on`; that path is challenged). -/
+def resend (c : C) : C := if c.rp.isSome ∧ c.rp ≠ idOf c.t c.act then { c with rp := none } else c
+
+/-- What authenticated after the establishment: a 1-RTT packet, or a 0-RTT one. -/
+inductive Pkt where
+  | app
+  | early
+  deriving DecidableEq, Repr
+
+/-- The confirmation point (`on_short`): the dialer's first 1-RTT packet needs the Reply's fresh key share, so it
+proves the Reply was received and validates the path the proof names, on whichever path it came. A 0-RTT packet opens
+under keys of the ticket and the Hello alone and proves nothing. -/
+def confirm (np : Nat) (c : C) (k : Pkt) : C :=
+  match k with
+  | .early => c
+  | .app =>
+    match c.rp with
+    | none => c
+    | some x =>
+      match find np c.t x with
+      | some i => { c with t := setV c.t i true, rp := none }
+      | none => { c with rp := none }
 
 /-! ## What a dialing side's steps do -/
 
@@ -473,14 +514,15 @@ structure Inv (np : Nat) (c : C) : Prop where
   bounded : Bounded np c.t
   unique : Unique c.t
   act_lt : c.act < np
-  active : ActiveV c
+  held : ∃ p, c.t c.act = some p
+  active : c.hs ≠ .done → ActiveV c
   waits : c.hs = .key → c.pend.isSome ∧ c.rf = c.pend
 
-/-- The session `c'` is on path `pid`: held, validated, in the active slot. -/
-def On (c' : C) (pid : Nat) : Prop := ∃ p, c'.t c'.act = some p ∧ p.id = pid ∧ p.v = true
+/-- The session `c'` is on path `pid`: held, in the active slot, validated exactly when `v`. -/
+def On (c' : C) (pid : Nat) (v : Bool) : Prop := ∃ p, c'.t c'.act = some p ∧ p.id = pid ∧ p.v = v
 
 theorem inv_dial (np pid : Nat) (h : 0 < np) : Inv np (dial pid) := by
-  refine ⟨?_, ?_, h, ⟨⟨pid, true⟩, by simp [dial], rfl⟩, by simp [dial]⟩
+  refine ⟨?_, ?_, h, ⟨⟨pid, true⟩, by simp [dial]⟩, fun _ => ⟨⟨pid, true⟩, by simp [dial], rfl⟩, by simp [dial]⟩
   · intro j hj; simp [dial]; omega
   · intro i j x hi hj
     simp [dial, idOf] at hi hj
@@ -494,17 +536,17 @@ theorem follow_none (np : Nat) (c : C) (h : c.rf = none) : follow np c = c := by
 theorem follow_found {np : Nat} {c : C} {pid i : Nat} (hrf : c.rf = some pid) (hf : find np c.t pid = some i) :
     follow np c = if i = c.act then { c with rf := none, t := c.t }
       else { c with rf := none, t := setV (setV c.t c.act false) i true, act := i } := by
-  unfold follow; rw [hrf]; dsimp only; rw [learn_found hf]
+  unfold follow; rw [hrf]; dsimp only; rw [learn_found hf, hf] <;> rfl
 
 theorem follow_learnt {np : Nat} {c : C} {pid i : Nat} (hrf : c.rf = some pid) (hf : find np c.t pid = none)
     (hl : (learnNew np c.t c.act pid).2 = some i) :
     follow np c = if i = c.act then { c with rf := none, t := (learnNew np c.t c.act pid).1 }
-      else { c with rf := none, t := setV (setV (learnNew np c.t c.act pid).1 c.act false) i true, act := i } := by
-  unfold follow; rw [hrf]; dsimp only; rw [learn_fresh hf, hl]
+      else { c with rf := none, t := setV (setV (learnNew np c.t c.act pid).1 c.act false) i false, act := i } := by
+  unfold follow; rw [hrf]; dsimp only; rw [learn_fresh hf, hl, hf] <;> rfl
 
 theorem follow_noroom {np : Nat} {c : C} {pid : Nat} (hrf : c.rf = some pid) (hf : find np c.t pid = none)
     (hl : (learnNew np c.t c.act pid).2 = none) : follow np c = { c with rf := none } := by
-  unfold follow; rw [hrf]; dsimp only; rw [learn_fresh hf, hl]
+  unfold follow; rw [hrf]; dsimp only; rw [learn_fresh hf, hl] <;> rfl
 
 /-- `follow` moves nothing but the table, the active slot and `reply_from`. -/
 theorem follow_keeps (np : Nat) (c : C) :
@@ -526,10 +568,12 @@ theorem slot_ne_act {np : Nat} {t : T} {act i : Nat} {pa : P} (hpa : t act = som
   · intro e; subst e; rw [hpa] at h; cases h
   · exact h
 
-/-- The reply's path is held or there is room for it: the session is on it afterwards. -/
-theorem follow_taken {np : Nat} {c : C} {pid : Nat} (hi : Inv np c) (hrf : c.rf = some pid)
-    (room : (find np c.t pid).isSome ∨ (slot np c.t c.act).isSome) : On (follow np c) pid := by
-  obtain ⟨pa, hpa, hva⟩ := hi.active
+/-- The reply's path is held or there is room for it: the session is on it afterwards, validated exactly when the
+dial held it. -/
+theorem follow_taken {np : Nat} {c : C} {pid : Nat} (hv : ActiveV c) (hrf : c.rf = some pid)
+    (room : (find np c.t pid).isSome ∨ (slot np c.t c.act).isSome) :
+    On (follow np c) pid (find np c.t pid).isSome := by
+  obtain ⟨pa, hpa, hva⟩ := hv
   cases hf : find np c.t pid with
   | some i =>
     obtain ⟨_, p, hp, hpid⟩ := find_some hf
@@ -552,8 +596,8 @@ theorem follow_taken {np : Nat} {c : C} {pid : Nat} (hi : Inv np c) (hrf : c.rf 
     have hia : i ≠ c.act := slot_ne_act hpa hs
     have hl : (learnNew np c.t c.act pid).2 = some i := by rw [learnNew_snd, hs]
     rw [follow_learnt hrf hf hl, ite_eq_right hia]
-    refine ⟨⟨pid, true⟩, ?_, rfl, rfl⟩
-    show setV (setV (learnNew np c.t c.act pid).1 c.act false) i true i = _
+    refine ⟨⟨pid, false⟩, ?_, rfl, rfl⟩
+    show setV (setV (learnNew np c.t c.act pid).1 c.act false) i false i = _
     rw [setV_at, setV_other _ _ _ hia, learnNew_at hl]
     rfl
 
@@ -564,10 +608,12 @@ theorem follow_full {np : Nat} {c : C} {pid : Nat} (hrf : c.rf = some pid) (hf :
   rw [follow_noroom hrf hf hl]
   exact ⟨rfl, rfl⟩
 
-theorem inv_follow {np : Nat} {c : C} (hi : Inv np c) (hhs : c.hs ≠ .key) : Inv np (follow np c) := by
-  obtain ⟨pa, hpa, hva⟩ := hi.active
+theorem inv_follow {np : Nat} {c : C} (hi : Inv np c) (hhs : c.hs = .done) : Inv np (follow np c) := by
+  obtain ⟨pa, hpa⟩ := hi.held
   have hw : (follow np c).hs = .key → (follow np c).pend.isSome ∧ (follow np c).rf = (follow np c).pend := by
-    intro h; rw [(follow_keeps np c).1] at h; exact absurd h hhs
+    intro h; rw [(follow_keeps np c).1, hhs] at h; cases h
+  have ha : (follow np c).hs ≠ .done → ActiveV (follow np c) := by
+    intro h; rw [(follow_keeps np c).1] at h; exact absurd hhs h
   cases hrf : c.rf with
   | none => rw [follow_none np c hrf]; exact hi
   | some pid =>
@@ -578,11 +624,11 @@ theorem inv_follow {np : Nat} {c : C} (hi : Inv np c) (hhs : c.hs ≠ .key) : In
       by_cases hia : i = c.act
       · rw [ite_eq_left hia] at he
         refine ⟨by rw [he]; exact hi.bounded, by rw [he]; exact hi.unique, by rw [he]; exact hi.act_lt,
-          by rw [he]; exact ⟨pa, hpa, hva⟩, hw⟩
+          by rw [he]; exact ⟨pa, hpa⟩, ha, hw⟩
       · rw [ite_eq_right hia] at he
         refine ⟨by rw [he]; exact bounded_setV (bounded_setV hi.bounded _ _) _ _,
           by rw [he]; exact unique_setV (unique_setV hi.unique _ _) _ _, by rw [he]; exact hil,
-          ⟨{ p with v := true }, ?_, rfl⟩, hw⟩
+          ⟨{ p with v := true }, ?_⟩, ha, hw⟩
         rw [he]
         show setV (setV c.t c.act false) i true i = _
         rw [setV_at, setV_other _ _ _ hia, hp]
@@ -592,7 +638,7 @@ theorem inv_follow {np : Nat} {c : C} (hi : Inv np c) (hhs : c.hs ≠ .key) : In
       | none =>
         have he := follow_noroom hrf hf hl
         exact ⟨by rw [he]; exact hi.bounded, by rw [he]; exact hi.unique, by rw [he]; exact hi.act_lt,
-          by rw [he]; exact ⟨pa, hpa, hva⟩, hw⟩
+          by rw [he]; exact ⟨pa, hpa⟩, ha, hw⟩
       | some i =>
         have hs : slot np c.t c.act = some i := by rw [← learnNew_snd, hl]
         have hil := (slot_spec hs).1
@@ -601,9 +647,9 @@ theorem inv_follow {np : Nat} {c : C} (hi : Inv np c) (hhs : c.hs ≠ .key) : In
         rw [ite_eq_right hia] at he
         refine ⟨by rw [he]; exact bounded_setV (bounded_setV (learnNew_bounded hi.bounded) _ _) _ _,
           by rw [he]; exact unique_setV (unique_setV (learnNew_unique hi.bounded hi.unique hf) _ _) _ _,
-          by rw [he]; exact hil, ⟨⟨pid, true⟩, ?_, rfl⟩, hw⟩
+          by rw [he]; exact hil, ⟨⟨pid, false⟩, ?_⟩, ha, hw⟩
         rw [he]
-        show setV (setV (learnNew np c.t c.act pid).1 c.act false) i true i = _
+        show setV (setV (learnNew np c.t c.act pid).1 c.act false) i false i = _
         rw [setV_at, setV_other _ _ _ hia, learnNew_at hl]
         rfl
 
@@ -624,13 +670,13 @@ theorem rx_plain (np : Nat) (c : C) (pid : Nat) (k : Kind) (s : Bool) :
 table has room for it, else on its own path with the table as it was. -/
 theorem rx_auth {np : Nat} {c : C} {pid : Nat} (hi : Inv np c) (hhs : c.hs ≠ .done) (s : Bool) :
     (rx false np c pid .auth false s).hs = .done ∧
-      (((find np c.t pid).isSome ∨ (slot np c.t c.act).isSome) → On (rx false np c pid .auth false s) pid) ∧
+      (((find np c.t pid).isSome ∨ (slot np c.t c.act).isSome) →
+        On (rx false np c pid .auth false s) pid (find np c.t pid).isSome) ∧
       (find np c.t pid = none → slot np c.t c.act = none →
         (rx false np c pid .auth false s).t = c.t ∧ (rx false np c pid .auth false s).act = c.act) := by
   rw [rx_plain, hsMsg_auth hhs]
-  have hi0 : Inv np { c with rf := some pid, hs := .done, pend := none, smp := c.smp || s } :=
-    ⟨hi.bounded, hi.unique, hi.act_lt, hi.active, fun h => by cases h⟩
-  refine ⟨(follow_keeps np _).1, fun room => follow_taken hi0 rfl room, fun hf hs => follow_full rfl hf hs⟩
+  have hv0 : ActiveV { c with rf := some pid, hs := .done, pend := none, smp := c.smp || s } := hi.active hhs
+  refine ⟨(follow_keeps np _).1, fun room => follow_taken hv0 rfl room, fun hf hs => follow_full rfl hf hs⟩
 
 /-- A Reply that passed its first checks, on any path, waits for the key host with its path. -/
 theorem rx_pend {np : Nat} {c : C} {pid : Nat} (hw : c.hs = .wait) (coal s : Bool) :
@@ -686,19 +732,18 @@ theorem rxOld_never {np : Nat} {c : C} {pid : Nat} (hf : find np c.t pid = none)
 /-- The key answer that establishes moves the session to the path of the Reply that waited, by the same rule. -/
 theorem key_taken {np : Nat} {c : C} (hi : Inv np c) (hk : c.hs = .key) (s : Bool) :
     ∃ pid, c.pend = some pid ∧ (key np c .ok s).hs = .done ∧
-      (((find np c.t pid).isSome ∨ (slot np c.t c.act).isSome) → On (key np c .ok s) pid) ∧
+      (((find np c.t pid).isSome ∨ (slot np c.t c.act).isSome) → On (key np c .ok s) pid (find np c.t pid).isSome) ∧
       (find np c.t pid = none → slot np c.t c.act = none →
         (key np c .ok s).t = c.t ∧ (key np c .ok s).act = c.act) := by
   obtain ⟨hps, hrf⟩ := hi.waits hk
   obtain ⟨pid, hpid⟩ := Option.isSome_iff_exists.mp hps
   have hkey : key np c .ok s = follow np { c with hs := .done, pend := none, smp := c.smp || s } := by
     unfold key; rw [hk]; rfl
-  have hi0 : Inv np { c with hs := .done, pend := none, smp := c.smp || s } :=
-    ⟨hi.bounded, hi.unique, hi.act_lt, hi.active, fun h => by cases h⟩
+  have hv0 : ActiveV { c with hs := .done, pend := none, smp := c.smp || s } := hi.active (by rw [hk]; decide)
   have hrf0 : ({ c with hs := .done, pend := none, smp := c.smp || s } : C).rf = some pid := by
     show c.rf = some pid; rw [hrf, hpid]
   rw [hkey]
-  exact ⟨pid, hpid, (follow_keeps np _).1, fun room => follow_taken hi0 hrf0 room,
+  exact ⟨pid, hpid, (follow_keeps np _).1, fun room => follow_taken hv0 hrf0 room,
     fun hf hs => follow_full hrf0 hf hs⟩
 
 /-- A key answer that does not establish changes no path state. -/
@@ -711,24 +756,26 @@ theorem key_quiet {np : Nat} {c : C} {r : KeyR} (hr : r ≠ .ok) (s : Bool) :
 
 /-- The establishment keeps the invariant: it needs only the table's part. -/
 theorem inv_establish {np : Nat} (c : C) (s : Bool) (hb : Bounded np c.t) (hu : Unique c.t) (ha : c.act < np)
-    (hv : ActiveV c) : Inv np (establish np c s) :=
-  inv_follow (c := { c with hs := .done, pend := none, smp := c.smp || s }) ⟨hb, hu, ha, hv, fun h => by cases h⟩
-    (by simp)
+    (hp : ∃ p, c.t c.act = some p) : Inv np (establish np c s) :=
+  inv_follow (c := { c with hs := .done, pend := none, smp := c.smp || s })
+    ⟨hb, hu, ha, hp, fun h => absurd rfl h, fun h => by cases h⟩ rfl
 
 theorem inv_hsMsg {np : Nat} {c : C} {pid : Nat} {k : Kind} (hi : Inv np c) (s : Bool) :
     Inv np (hsMsg np c pid k s) := by
   have hw := hi.waits
   cases hh : c.hs <;> cases k <;> simp only [hsMsg, hh]
   all_goals first
-    | exact inv_establish _ s hi.bounded hi.unique hi.act_lt hi.active
-    | exact ⟨hi.bounded, hi.unique, hi.act_lt, hi.active, fun h => by simp_all⟩
+    | exact inv_establish _ s hi.bounded hi.unique hi.act_lt hi.held
+    | exact hi
+    | exact ⟨hi.bounded, hi.unique, hi.act_lt, hi.held, fun _ => hi.active (by rw [hh]; decide), fun h => by simp_all⟩
 
 theorem inv_key {np : Nat} {c : C} {r : KeyR} (hi : Inv np c) (s : Bool) : Inv np (key np c r s) := by
   have hw := hi.waits
   cases hh : c.hs <;> cases r <;> simp only [key, hh]
   all_goals first
-    | exact inv_establish _ s hi.bounded hi.unique hi.act_lt hi.active
-    | exact ⟨hi.bounded, hi.unique, hi.act_lt, hi.active, fun h => by simp_all⟩
+    | exact inv_establish _ s hi.bounded hi.unique hi.act_lt hi.held
+    | exact hi
+    | exact ⟨hi.bounded, hi.unique, hi.act_lt, hi.held, fun _ => hi.active (by rw [hh]; decide), fun h => by simp_all⟩
 
 theorem learnNew_keeps_active {np : Nat} {t : T} {act pid : Nat} {pa : P} (hpa : t act = some pa) :
     (learnNew np t act pid).1 act = some pa := by
@@ -772,9 +819,11 @@ theorem learn_keeps_active {np : Nat} {t : T} {act pid : Nat} {pa : P} (hpa : t 
 
 theorem inv_learn {np : Nat} {c : C} {pid : Nat} (hi : Inv np c) :
     Inv np { c with t := (learn np c.t c.act pid).1 } := by
-  obtain ⟨pa, hpa, hva⟩ := hi.active
-  exact ⟨learn_bounded hi.bounded, learn_unique hi.bounded hi.unique, hi.act_lt,
-    ⟨pa, learn_keeps_active hpa, hva⟩, hi.waits⟩
+  obtain ⟨pa, hpa⟩ := hi.held
+  refine ⟨learn_bounded hi.bounded, learn_unique hi.bounded hi.unique, hi.act_lt,
+    ⟨pa, learn_keeps_active hpa⟩, fun h => ?_, hi.waits⟩
+  obtain ⟨pb, hpb, hvb⟩ := hi.active h
+  exact ⟨pb, learn_keeps_active hpb, hvb⟩
 
 /-- The 1-RTT packet behind the handshake packet keeps the invariant: learning looks the path up. -/
 theorem inv_tail {np : Nat} {c c1 : C} {pid : Nat} {coal : Bool} (h1 : Inv np c1) :
@@ -813,23 +862,25 @@ theorem inv_remove {np : Nat} {c : C} {pid : Nat} (hi : Inv np c) : Inv np (remo
     by_cases hia : i = c.act
     · rw [ite_eq_left hia]; exact hi
     · rw [ite_eq_right hia]
-      obtain ⟨pa, hpa, hva⟩ := hi.active
+      obtain ⟨pa, hpa⟩ := hi.held
+      have hkeep : ∀ q, c.t c.act = some q → set c.t i none c.act = some q := by
+        intro q hq; unfold set; rw [ite_eq_right (Ne.symm hia), hq]
       have hid : ∀ a x, idOf (set c.t i none) a = some x → idOf c.t a = some x := by
         intro a x ha
         unfold idOf set at ha
         by_cases h : a = i
         · rw [ite_eq_left h] at ha; cases ha
         · rw [ite_eq_right h] at ha; exact ha
-      refine ⟨?_, fun a b x ha hb => hi.unique a b x (hid a x ha) (hid b x hb), hi.act_lt, ⟨pa, ?_, hva⟩, hi.waits⟩
+      refine ⟨?_, fun a b x ha hb => hi.unique a b x (hid a x ha) (hid b x hb), hi.act_lt, ⟨pa, hkeep pa hpa⟩,
+        fun h => ?_, hi.waits⟩
       · intro j hj
         show set c.t i none j = none
         unfold set
         split
         · rfl
         · exact hi.bounded j hj
-      · show set c.t i none c.act = some pa
-        unfold set
-        rw [ite_eq_right (Ne.symm hia), hpa]
+      · obtain ⟨pb, hpb, hvb⟩ := hi.active h
+        exact ⟨pb, hkeep pb hpb, hvb⟩
 
 #audit_axioms learn_bounded
 #audit_axioms learn_gives_up

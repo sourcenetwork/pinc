@@ -41,7 +41,8 @@
 //! the member.
 //!
 //! Invariants: the active path index always names a live slot; an unvalidated path never sends past its
-//! amplification budget; a direct path is validated only by an answer to a challenge sent to it, or by another
+//! amplification budget; a direct path is validated only by an answer to a challenge sent to it, or, for a resumed responder, by
+//! the dialer's first 1-RTT packet, for the one path its Reply went to, or by another
 //! session to the same peer validating the same address again ([`Connection::path_returned`]); a path whose address
 //! is gone is never validated again, unless the endpoint adds its id again.
 
@@ -666,6 +667,22 @@ conn_impl! {
         }
     }
 
+    /// Start validating path `i` by a challenge: queue it, and retry it on the probe cadence (one probe per round
+    /// of the probe timeout, doubling) until it is answered or the probes are spent. A punch or re-join already
+    /// running on the path keeps its own cadence.
+    pub(super) fn challenge_path(&mut self, env: &mut Env<'_, P>, i: usize) {
+        self.queue_challenge(env, i);
+        let gap = self.rec.pto_duration();
+        if let Some(p) = self.paths.get_mut(i)
+            && p.probes_left == 0
+        {
+            p.probes_left = NAT_PROBES;
+            p.probe_gap = gap;
+            p.next_probe = env.now.saturating_add(gap);
+            p.rejoin = false;
+        }
+    }
+
     /// The peer challenged path `i`. If this end sends through a relay, and the path is a direct one it has not
     /// validated and has no challenge out on, its own challenge leaves with the response, in the same datagram, so
     /// both ends validate the direct path in the round trip of the peer's challenge and the session leaves the relay
@@ -687,7 +704,7 @@ conn_impl! {
                 .get(i)
                 .is_some_and(|p| p.info.kind == PathKind::Direct && !p.validated && p.challenge.is_none());
         if wanted {
-            self.queue_challenge(env, i);
+            self.challenge_path(env, i);
         }
     }
 

@@ -49,7 +49,15 @@
 (*                   rule; DocFallback is the doc's);                      *)
 (*  LostRule         after path_lost no gone path is held but the active  *)
 (*                   one, and the lost path, if still held, is that one,   *)
-(*                   gone and unvalidated.                                 *)
+(*                   gone and unvalidated;                                 *)
+(*  ValidationLive   a validation challenge_path starts on a path          *)
+(*                   (follow_peer, challenge_back) is never left with      *)
+(*                   nothing armed: until the path is validated, lost or   *)
+(*                   emptied, or its last probe has left, its challenge    *)
+(*                   waits to leave or a probe is left, so one lost        *)
+(*                   challenge or answer is sent again                     *)
+(*                   (PathMove_retry; PathMove_w_once, the rule before:    *)
+(*                   one challenge never repeated, TLC must violate it).   *)
 (* The doc's claim the code does not meet (witness config, TLC must        *)
 (* violate it): DocValid (T9, a doc fix). RelayValid, DocFallback,         *)
 (* GoneLeft and GoneNeverBack hold with fixes T7, T5, T4 and T6            *)
@@ -139,7 +147,8 @@ RespAct ==
                           !.rc = (held /\ tok \in c.t[j].ps /\ Cardinality({u \in c.t[j].ps : u > tok}) < CH)])
     /\ UNCHANGED wire
 ChalAct == /\ "chal" \in OPS
-           /\ \E id \in Ids : DoAny({Chal(Pre, id, cb, rn) : cb, rn \in BOOLEAN}, [E0 EXCEPT !.op = "chal", !.id = id])
+           /\ \E id \in Ids : DoAny({Chal(Pre, id, cb, rn, "once" \in OPS) : cb, rn \in BOOLEAN},
+                                    [E0 EXCEPT !.op = "chal", !.id = id])
            /\ UNCHANGED wire
 \* fol: follow_peer's rule says the active path moves to the packet's; sg: the packet's path was held and gone before
 \* the step (read before it, since a step that forgets the slot would leave nothing to read)
@@ -149,7 +158,7 @@ DataAct ==
          LET fol == hi /\ l.i # 0 /\ l.i # c.act
                     /\ ~l.c.t[l.i].gone
                     /\ (l.c.t[c.act].id = 0 \/ l.c.t[c.act].k = "r" \/ l.c.t[l.i].k = "d" \/ wake)
-         IN DoAny({Data(Pre, id, hi, wake, fresh, rn) : fresh, rn \in BOOLEAN},
+         IN DoAny({Data(Pre, id, hi, wake, fresh, rn, "once" \in OPS) : fresh, rn \in BOOLEAN},
                [E0 EXCEPT !.op = "data", !.id = id, !.s = l.i, !.hi = hi, !.fol = fol, !.pact = c.act,
                          !.wake = wake, !.sg = (l.i # 0 /\ l.c.t[l.i].gone)])
     /\ UNCHANGED wire
@@ -189,7 +198,7 @@ Bound == c.hi <= TMAX
 
 SlotOK(p) == /\ p.k \in {"d", "r"} /\ p.hd \in {"never", "fresh", "stale"} /\ p.nx \in 1..CH
              /\ p.ch \in 0..(TMAX + NP) /\ \A x \in 1..CH : p.sent[x] \in 0..(TMAX + NP)
-             /\ (p.sc => p.ch # 0)
+             /\ (p.sc => p.ch # 0) /\ p.vl \in BOOLEAN
 TypeOK == /\ c.act \in 1..NP
           /\ \A x \in 1..NP : SlotOK(c.t[x])
           /\ wire \subseteq 1..(TMAX + NP)
@@ -255,6 +264,12 @@ GoneNeverBack == ~c.t[c.act].lf
 \* module doc (restated by T11): "from a relay the connection moves at once, otherwise only when the cheaper path's
 \* round trip is more than 5 ms shorter" (dg: a move off a usable direct path for a round-trip gain of GAIN or less)
 DocGain == ~c.dg
+
+\* A validation challenge_path starts (follow_peer, challenge_back) is never left with nothing armed: until the path
+\* is validated, lost or emptied, or its last probe has left, its challenge waits to leave or a probe is left, so a
+\* lost challenge or a lost answer is sent again (bounded progress; "once" in OPS is the rule before, one challenge
+\* never repeated: PathMove_w_once)
+ValidationLive == \A x \in 1..NP : (c.t[x].vl /\ ~c.t[x].v) => (c.t[x].sc \/ c.t[x].pr)
 
 \* Reach witnesses: an answer to a replaced challenge validates a path; a table that dropped a challenge drawn since it
 \* was cleared; fail_over moving to a relayed path

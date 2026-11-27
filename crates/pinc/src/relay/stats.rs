@@ -184,6 +184,8 @@ pub struct Stats {
     pub datagrams_out: u64,
     /// Datagrams that could not be sent: the queue was full or the socket failed.
     pub datagrams_dropped: u64,
+    /// Datagrams not sent because their address proved nothing and they were over three times what it sent.
+    pub datagrams_held: u64,
     /// Packets and pulses for the relay's own endpoint, or from it, that had nowhere to go: no hub is configured, its
     /// queue was full, or the address names nobody now.
     pub hub_dropped: u64,
@@ -230,6 +232,7 @@ pub(crate) struct Counters {
     pub(crate) datagrams_in: u64,
     pub(crate) datagrams_out: u64,
     pub(crate) datagrams_dropped: u64,
+    pub(crate) datagrams_held: u64,
     pub(crate) hub_dropped: u64,
     pub(crate) store_errors: u64,
     pub(crate) events_dropped: u64,

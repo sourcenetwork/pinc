@@ -91,8 +91,8 @@ impl<C: Carriers, K: KeyStore, St: Store, A: Access> Part<C, K, St, A> {
         self.core.identity()
     }
 
-    pub(super) fn queue_udp(&mut self, to: SocketAddr, bytes: &[u8]) {
-        self.core.queue_udp(to, bytes);
+    pub(super) fn queue_charged(&mut self, to: SocketAddr, bytes: &[u8]) {
+        self.core.queue_charged(to, bytes);
     }
 
     /// The relay's node id.
@@ -200,10 +200,16 @@ impl<C: Carriers, K: KeyStore, St: Store, A: Access> Part<C, K, St, A> {
         self.core.on_heard(now, member);
     }
 
-    /// The next datagram the relay wants to send: its remote, and its length in `out`. A datagram longer than `out` is
-    /// dropped and counted.
-    pub fn poll_transmit(&mut self, out: &mut [u8]) -> Option<(SocketAddr, usize)> {
-        while let Some((to, buf)) = self.core.take_udp() {
+    /// The next datagram the relay wants to send: its remote, and its length in `out`. `allow` is asked of each
+    /// datagram with its remote and length (the ledger of the endpoint that owns the address). A datagram longer than
+    /// `out` is dropped and counted, and so is one that `allow` refuses.
+    pub fn poll_transmit(
+        &mut self,
+        out: &mut [u8],
+        allow: impl FnMut(SocketAddr, usize) -> bool,
+    ) -> Option<(SocketAddr, usize)> {
+        let mut allow = allow;
+        while let Some((to, buf)) = self.core.take_udp(&mut allow) {
             let n = buf.len();
             let fits = n <= out.len();
             if let Some(dst) = out.get_mut(..n) {
@@ -711,5 +717,40 @@ mod tests {
             1,
             "the record was removed from the store more than once"
         );
+    }
+
+    /// The answer to a padded lookup query from a fresh address passes the ledger the host keeps; the same answer,
+    /// with the source's budget already spent, is refused and counted.
+    #[test]
+    fn the_answer_to_a_padded_query_passes_a_real_ledger_and_one_over_the_budget_is_refused() {
+        use pinc_connect::relay::datagram::{DNSQ_LEN, Datagram};
+        use pinc_core::Ledger;
+
+        let from: SocketAddr = "198.51.100.7:40000".parse().unwrap();
+        let peer = NodeId {
+            alg: IdentityAlg::Ed25519,
+            bytes: [3; 32],
+        };
+        let mut query = [0u8; DNSQ_LEN];
+        let n = Datagram::DnsQuery { peer }.encode(&mut query).unwrap();
+        assert_eq!(n, DNSQ_LEN);
+        let mut out = [0u8; 1500];
+        for spent in [0, 1400] {
+            let (mut p, _) = part(Flaky::default());
+            let mut ledger = Ledger::new(1);
+            assert!(ledger.on_receive(from, n as u64));
+            if spent > 0 {
+                assert!(ledger.allow_send(from, spent), "the spent part fits the budget");
+            }
+            assert!(p.core.on_datagram(T0, from, None, &mut query.clone()));
+            let sent = p.poll_transmit(&mut out, |to, len| ledger.allow_send(to, len as u64));
+            if spent == 0 {
+                assert_eq!(sent.map(|(to, _)| to), Some(from), "the answer was held");
+                assert_eq!(p.stats().datagrams_held, 0);
+            } else {
+                assert!(sent.is_none(), "an answer over three times the query left");
+                assert_eq!(p.stats().datagrams_held, 1);
+            }
+        }
     }
 }

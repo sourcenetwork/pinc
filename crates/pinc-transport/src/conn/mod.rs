@@ -213,11 +213,15 @@ pub struct Connection<
     next_pn: u64,
     started: u64,
     odcid: ConnId,
-    /// Where the handshake message a dialing side's machine took last came from: the path and the arrival time of
-    /// the datagram that completed it. Acted on only once the session is established. The source id of the packet
-    /// header is never kept: the peer's id comes from the authenticated message.
-    reply_from: Option<(PathId, u64)>,
+    /// Where the handshake message a dialing side's machine took last came from: the path, and the arrival time and
+    /// length of the datagram that completed it. Acted on only once the session is established. The source id of the
+    /// packet header is never kept: the peer's id comes from the authenticated message.
+    reply_from: Option<(PathId, u64, usize)>,
     resumed: bool,
+    /// A resumed responder's path that its one Reply went to: the dialer's first 1-RTT packet proves the dialer
+    /// received that Reply, so it validates this path (a 0-RTT packet proves nothing). Cleared when the Reply leaves
+    /// on a second path, since the keys then prove receipt somewhere among them, not where.
+    proof: Option<PathId>,
     confirmed: bool,
     ext_release: bool,
     /// Kinds of stream (bit 0 unidirectional, bit 1 bidirectional) whose open was refused for want of credit or room.
@@ -327,6 +331,7 @@ where
             odcid,
             reply_from: None,
             resumed: false,
+            proof: None,
             confirmed: false,
             ext_release: false,
             open_wait: 0,

@@ -90,6 +90,9 @@ struct Fill {
     /// The packet re-carries the stream frames of this packet.
     repair: Option<u64>,
     min_total: usize,
+    /// How far the packet may be filled with stream and datagram frames, so the budget of an unvalidated path keeps
+    /// room for its challenge: a datagram size on entry to `build_packet`, then a payload size.
+    data_cap: usize,
 }
 
 /// What filling a packet found.
@@ -266,11 +269,39 @@ conn_impl! {
             usize::try_from(allowed.saturating_sub(b.sent()).saturating_sub(OVERHEAD as u64)).unwrap_or(usize::MAX)
         };
         match self.paths.get(ti) {
-            // Once the session is validated its peer is known to hold the keys, so a path it moved to is not limited by
-            // what arrived on it: the budget would be spent before the challenge that validates the path is answered.
-            Some(_) if self.sess_amp.is_validated() => usize::MAX,
+            // Once the session is validated its peer is known to hold the keys, so a path the endpoint does not hold
+            // is not limited by what arrived on it. A path whose address the ledger holds is limited by its own
+            // budget: the ledger would drop anything past it, and the challenge that validates the path must fit.
+            Some(p) if self.sess_amp.is_validated() && !p.held => usize::MAX,
+            Some(p) if self.sess_amp.is_validated() => left(&p.amp),
             Some(p) => left(&p.amp).min(left(&self.sess_amp)),
             None => 0,
+        }
+    }
+
+    /// What an unvalidated path with a challenge outstanding keeps back from stream and datagram frames: the smallest
+    /// datagram that carries a PATH_CHALLENGE, so the retry of the challenge always fits the amplification budget.
+    fn challenge_reserve(&self, ti: usize) -> usize {
+        if !self.paths.get(ti).is_some_and(|p| !p.validated && p.challenge.is_some()) {
+            return 0;
+        }
+        1 + self.cfg.cid_len + (self.pn_len + 9).max(crate::packet::SAMPLE_SKIP) + 16 + OVERHEAD
+    }
+
+    /// The Reply of a resumed responder (or a resend of it) left on path `ti`. Its first path is validated by the
+    /// dialer's first 1-RTT packet; a second path it leaves on is challenged instead, and the proof is dropped, since
+    /// the keys then prove receipt somewhere among the paths, not where.
+    fn reply_left_on(&mut self, env: &mut Env<'_, P>, ti: usize) {
+        if self.client || !self.resumed || self.confirmed {
+            return;
+        }
+        let Some(p) = self.paths.get(ti).copied() else { return };
+        if self.proof == Some(p.id) {
+            return;
+        }
+        self.proof = None;
+        if !p.validated && p.challenge.is_none() {
+            self.challenge_path(env, ti);
         }
     }
 
@@ -307,6 +338,9 @@ conn_impl! {
         if self.hs.has_tx() {
             hs_len = self.write_handshake(window);
             used = hs_len;
+            if hs_len > 0 {
+                self.reply_left_on(env, ti);
+            }
         }
         if hs_len == 0 && self.hs.padding_owed() > 0 {
             let n = self.hs.padding_owed().min(max_len);
@@ -318,9 +352,10 @@ conn_impl! {
         let can_app = self.can_build_app();
         // The packet behind the handshake ends at the path's datagram size; only an MTU probe is built larger.
         let app_end = probe.unwrap_or(usize::from(path_mtu)).min(max_len);
+        let data_total = self.amp_room(ti).saturating_sub(self.challenge_reserve(ti));
         if can_app
             && let Some(rest) = window.get_mut(used..app_end)
-            && let Some(n) = self.build_app(env, ti, rest, probe)
+            && let Some(n) = self.build_app(env, ti, rest, probe, data_total.saturating_sub(used))
         {
             used += n;
         }
@@ -432,7 +467,14 @@ conn_impl! {
     }
 
     /// Build an application packet (short, or ZeroRtt on an early client) at the start of `window`.
-    fn build_app(&mut self, env: &mut Env<'_, P>, ti: usize, window: &mut [u8], probe: Option<usize>) -> Option<usize> {
+    fn build_app(
+        &mut self,
+        env: &mut Env<'_, P>,
+        ti: usize,
+        window: &mut [u8],
+        probe: Option<usize>,
+        data_cap: usize,
+    ) -> Option<usize> {
         let now = env.now;
         let kind = if self.keys.send.is_some() { Kind::Short } else { Kind::ZeroRtt };
         let suspended_data = self.life.local_asleep.is_some();
@@ -456,6 +498,7 @@ conn_impl! {
             probe: probe.filter(|_| !probes),
             repair: None,
             min_total: 0,
+            data_cap,
         };
         // A probe packet carries only its PING: the repair stays pending for the next packet. The repair is taken
         // when its packet is sealed, or dropped by the fill when nothing is left to repair.
@@ -490,6 +533,7 @@ conn_impl! {
         }
         let payload_cap = size_cap - hdr_cap - 16;
         let mut fill = fill;
+        fill.data_cap = fill.data_cap.saturating_sub(hdr_cap + 16);
         if let Some(size) = fill.probe {
             fill.min_total = size;
         }
@@ -758,9 +802,11 @@ conn_impl! {
         // PATH frames.
         self.fill_path(payload, &mut pos, &mut out, ti);
         // Retransmissions and new stream data.
-        if fill.allow_cc {
-            self.fill_streams(payload, &mut pos, &mut out);
-            self.fill_datagrams(payload, &mut pos, &mut out);
+        if fill.allow_cc
+            && let Some(data) = payload.get_mut(..fill.data_cap.min(cap))
+        {
+            self.fill_streams(data, &mut pos, &mut out);
+            self.fill_datagrams(data, &mut pos, &mut out);
         }
         // A peer stream whose answer just left gave its place back: the credit it frees rides in the same packet, so
         // the peer has it when it reads the answer.

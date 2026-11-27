@@ -649,7 +649,12 @@ fn a_charge_near_the_top_of_the_range_saturates_instead_of_overflowing() {
     l.on_receive(v, u64::MAX);
     assert!(l.allow_send(v, u64::MAX - 28));
     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| l.allow_send(v, 0)));
-    assert_eq!(r.ok(), Some(true), "the second charge must not overflow the total");
+    // A charge past the end of the counter is held, not let through uncounted: the entry stays at its end.
+    assert_eq!(
+        r.ok(),
+        Some(false),
+        "the second charge must neither overflow nor pass uncounted"
+    );
     assert_eq!(l.get(&v).unwrap().tx, u64::MAX);
 }
 
@@ -869,6 +874,29 @@ fn one_address_is_answered_every_time_and_sent_at_most_three_times_what_it_sent(
             "{ns:?}"
         );
         assert!(tx > 0 && tx <= 3 * rx, "{from} was sent {tx} bytes for {rx}");
+    });
+}
+
+#[test]
+fn a_forged_source_that_was_sent_a_datagram_stays_held_when_it_sends_one_byte() {
+    big_stack(|| {
+        let mut d = Duo::new();
+        let (now, x): (u64, SocketAddr) = (d.net.now, "10.7.7.8:9".parse().unwrap());
+        let mut out = vec![0u8; 65_536];
+        let mut dg = first_datagram(1, &forged_hello(1), 0);
+        d.srv.handle_datagram(now, d.addr, x, &mut dg);
+        let mut sent = 0;
+        while let Some(t) = d.srv.poll_transmit(now, &mut out) {
+            assert_eq!(t.remote, x);
+            sent += 1;
+        }
+        assert!(sent > 0, "the forged source was sent nothing");
+        d.srv.handle_datagram(now, d.addr, x, &mut [0u8]);
+        let Answer::Ledger(e) = d.srv.query(Query::Ledger(x)) else {
+            panic!("no ledger answer")
+        };
+        assert!(!e.validated, "one byte from the source validated it: {e:?}");
+        assert!(e.tx > 0 && e.tx <= 3 * e.rx, "{e:?}");
     });
 }
 

@@ -415,6 +415,27 @@ fn a_second_run_hands_over_a_held_packet_once() {
     });
 }
 
+/// The hub endpoint's own datagrams are charged once, by its gate: a stranger's handshake to the hub completes and the
+/// run loop holds back nothing, so no datagram of the Reply was refused by a second charge.
+#[test]
+fn a_strangers_handshake_to_the_hub_is_charged_once() {
+    on_big_stack(|| {
+        within(60, async {
+            let r = start(0x7e, Limits::default(), MemStore::new()).await;
+            let ep = client().await;
+            let conn = ep
+                .connect(pinc::NodeAddr::new(r.id).with_direct(r.addr), HUB)
+                .await
+                .unwrap();
+            stats_where(&r, "the hub holds the session", |s| s.hub_sessions == 1).await;
+            let s = (r.stats)();
+            assert_eq!((s.datagrams_held, s.datagrams_dropped), (0, 0), "{s:?}");
+            assert!(s.datagrams_out >= 1, "the hub sent nothing: {s:?}");
+            conn.close(0).await;
+        })
+    });
+}
+
 #[test]
 fn a_member_with_a_udp_session_to_the_hub_is_counted_and_released() {
     on_big_stack(|| {

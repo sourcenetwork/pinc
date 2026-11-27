@@ -20,7 +20,10 @@
 (* rf, reply_from (the path of the last message the handshake took, 0 for  *)
 (* none); pend, the path of the Reply that waits for the key host (0 for   *)
 (* none), a ghost the properties read, not a field of the code; smp, the   *)
-(* round trip estimate has a sample; hd, the handshake_dropped count.      *)
+(* round trip estimate has a sample; hd, the handshake_dropped count; rp,  *)
+(* the path a resumed responder's Reply went to while its proof of receipt *)
+(* is owed (0 for none: not resumed, proved, or the Reply left on a second *)
+(* path).                                                                  *)
 (*                                                                         *)
 (* What a dialing side's handshake packet completes (Kinds), as its        *)
 (* machine answers it: "none" no message (a fragment of one, or no         *)
@@ -69,15 +72,18 @@ RemovePath(t, act, id) ==
        ELSE IF i = act THEN [t |-> t, r |-> "active"]
        ELSE [t |-> [t EXCEPT ![i] = Empty], r |-> "ok"]
 
-\* follow_reply: the reply's path is learnt (found when it is held); the session moves to it, which is validated, and
-\* the path it leaves is no longer validated. With no room for it the session stays on its path.
+\* follow_reply: the reply's path is learnt (found when it is held); the session moves to it and the path it leaves is
+\* no longer validated. The reply's path is validated only when the dial held it (an address the endpoint chose and
+\* sent the flight to): a path the reply taught it proves nothing, since anyone can send a copy of the reply from any
+\* source, so it stays unvalidated and is challenged (the challenge is not this model's). With no room for it the
+\* session stays on its path.
 FollowReply(c) ==
     LET id == c.rf
         l == Learn(c.t, c.act, id)
         c0 == [c EXCEPT !.rf = 0]
     IN IF id = 0 \/ l.i = 0 THEN c0
        ELSE IF l.i = c.act THEN [c0 EXCEPT !.t = l.t]
-       ELSE [c0 EXCEPT !.t = [l.t EXCEPT ![c.act].v = FALSE, ![l.i].v = TRUE], !.act = l.i]
+       ELSE [c0 EXCEPT !.t = [l.t EXCEPT ![c.act].v = FALSE, ![l.i].v = (Find(c.t, id) # 0)], !.act = l.i]
 
 \* pump at the establishment: follow_reply, and the round trip sample feed took if the first flight went unrepeated (s)
 Establish(c, s) == FollowReply([c EXCEPT !.hs = "done", !.pend = 0, !.smp = @ \/ s])
@@ -116,11 +122,32 @@ Key(c, r, s) ==
 App(c, id) == IF c.hs = "done" /\ Find(c.t, id) = 0 THEN [c EXCEPT !.t = Learn(c.t, c.act, id).t] ELSE c
 
 \* A responder's handshake datagram on path id (handle_inner): a path it does not hold is learnt while it is in its
-\* handshake or holds none (else the handshake packet is NoPath). est: the datagram establishes the session, which
-\* validates the active path.
-RRx(c, id, est) ==
+\* handshake or holds none (else the handshake packet is NoPath). m is what its message completes: "part" nothing,
+\* "finish" a Finish that authenticated (the dialer answered the Reply sent on the active path, which is validated), or
+\* "resume" a resumption Hello whose binder verified: the session is established and no path is validated, since
+\* anyone who saw the Hello can send a copy of it from any source (the challenge that goes out on the active path is
+\* not this model's): the Reply's path is recorded and the dialer's first 1-RTT packet proves it (Confirm). rv: the
+\* rule before that fix, a resumption Hello validates the active path.
+RRx(c, id, m, rv) ==
     LET empty == \A i \in 1..NP : c.t[i].id = 0
         c1 == IF Find(c.t, id) = 0 /\ (empty \/ c.hs # "done") THEN [c EXCEPT !.t = Learn(c.t, c.act, id).t] ELSE c
-    IN IF est /\ c1.hs # "done" /\ Find(c1.t, id) # 0 /\ c1.t[c1.act].id # 0
-       THEN [c1 EXCEPT !.hs = "done", !.t[c1.act].v = TRUE] ELSE c1
+    IN IF m # "part" /\ c1.hs # "done" /\ Find(c1.t, id) # 0 /\ c1.t[c1.act].id # 0
+       THEN IF m = "finish" \/ rv THEN [c1 EXCEPT !.hs = "done", !.t[c1.act].v = TRUE]
+            ELSE [c1 EXCEPT !.hs = "done", !.rp = c1.t[c1.act].id]
+       ELSE c1
+
+\* A resumed responder re-sends its Reply on the active path until it is confirmed: on a path other than the one it
+\* first went to, the keys no longer say which path the dialer heard, and the proof is given up (that path is
+\* challenged, PathMove's rule)
+Resend(c) == IF c.rp # 0 /\ c.t[c.act].id # c.rp THEN [c EXCEPT !.rp = 0] ELSE c
+
+\* A packet that authenticated after the establishment (k = "app" under the 1-RTT keys, on any path; "early" under the
+\* 0-RTT keys). The 1-RTT keys of a resumption mix the responder's fresh share, sent only in its Reply, so the first
+\* such packet proves the dialer received the Reply and validates the path it went to (recv.rs, the confirmation
+\* point). The 0-RTT keys come from the ticket and the Hello alone, which any copy of the Hello opens: they prove
+\* nothing.
+Confirm(c, k) ==
+    IF k = "app" /\ c.rp # 0
+    THEN LET i == Find(c.t, c.rp) IN IF i = 0 THEN [c EXCEPT !.rp = 0] ELSE [c EXCEPT !.t[i].v = TRUE, !.rp = 0]
+    ELSE c
 =============================================================================

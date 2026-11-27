@@ -1,9 +1,10 @@
 //! The amplification ledger: every outgoing datagram to an address passes one gate.
 //!
 //! Per remote address the ledger keeps `[rx, tx, validated]`. An address that wrote to us first is held to three times
-//! the bytes it sent until it answers something we sent it; an address we wrote to first (we dialed it) is validated
-//! from the start, and so is an address the host dials, even one that wrote first. Each sent datagram counts its size
-//! plus 28 bytes (the IP and UDP headers).
+//! the bytes it sent until it proves that it receives what we sent it ([`Ledger::validate`], which the endpoint calls on
+//! an authenticated packet on a path the transport validated); receiving alone never validates. An address we wrote to
+//! first (we dialed it) is validated from the start, and so is an address the host dials, even one that wrote first.
+//! Each sent datagram counts its size plus 28 bytes (the IP and UDP headers).
 //!
 //! Invariants (while an address's byte counts are below 2^64, where they saturate): the ledger holds at most
 //! [`LEDGER_ENTRIES`] addresses and evicts the one inserted first when full; for an address that is not validated the
@@ -29,7 +30,7 @@ pub struct LedgerEntry {
     pub rx: u64,
     /// Bytes charged for datagrams sent to it.
     pub tx: u64,
-    /// Whether the address answered something we sent, or was dialed by us.
+    /// Whether the address proved it receives what we send, or was dialed or written to first by us.
     pub validated: bool,
 }
 
@@ -64,14 +65,11 @@ impl Ledger {
         self.table.get(addr).copied()
     }
 
-    /// Count a datagram of `n` bytes received from `addr`. A first datagram creates the entry unvalidated; a later one
-    /// validates the address if we sent to it meanwhile. Returns whether the address is held after it (not validated).
+    /// Count a datagram of `n` bytes received from `addr`; a first datagram creates the entry unvalidated. Receiving
+    /// never validates. Returns whether the address is held (not validated).
     pub fn on_receive(&mut self, addr: SocketAddr, n: u64) -> bool {
         if let Some(e) = self.table.get_mut(&addr) {
             e.rx = e.rx.saturating_add(n);
-            if e.tx > 0 {
-                e.validated = true;
-            }
             return !e.validated;
         }
         self.table.insert(
@@ -83,6 +81,14 @@ impl Ledger {
             },
         );
         true
+    }
+
+    /// The address proved that it receives what was sent to it: an authenticated packet on a path the transport
+    /// validated.
+    pub fn validate(&mut self, addr: SocketAddr) {
+        if let Some(e) = self.table.get_mut(&addr) {
+            e.validated = true;
+        }
     }
 
     /// The host dials `addr`: the address counts as one we spoke to first, whatever it sent before. A peer that still
@@ -122,14 +128,14 @@ impl Ledger {
                 e.tx = e.tx.saturating_add(charge);
                 true
             }
-            Some(e) => {
-                if u128::from(e.tx) + u128::from(charge) > u128::from(e.rx) * u128::from(FACTOR) {
-                    false
-                } else {
-                    e.tx = e.tx.saturating_add(charge);
+            // A counter at its end refuses: a charge that saturated it would let every later one pass uncounted.
+            Some(e) => match e.tx.checked_add(charge) {
+                Some(tx) if u128::from(tx) <= u128::from(e.rx) * u128::from(FACTOR) => {
+                    e.tx = tx;
                     true
                 }
-            }
+                _ => false,
+            },
         }
     }
 }
@@ -157,6 +163,30 @@ mod tests {
     }
 
     #[test]
+    fn an_unvalidated_entry_is_never_charged_past_the_end_of_its_counter() {
+        let mut l = Ledger::new(1);
+        let entry = |tx| LedgerEntry {
+            rx: u64::MAX,
+            tx,
+            validated: false,
+        };
+        l.table.insert(a(9), entry(u64::MAX - 10));
+        assert!(!l.allow_send(a(9), 0), "28 bytes do not fit in 10");
+        assert_eq!(
+            l.get(&a(9)).map(|e| e.tx),
+            Some(u64::MAX - 10),
+            "a refusal leaves the entry as it was"
+        );
+        l.table.insert(a(9), entry(u64::MAX - DATAGRAM_OVERHEAD));
+        assert!(l.allow_send(a(9), 0));
+        assert_eq!(l.get(&a(9)).map(|e| e.tx), Some(u64::MAX), "charged exactly to the end");
+        assert!(
+            !l.allow_send(a(9), 0),
+            "nothing passes uncounted once the counter is full"
+        );
+    }
+
+    #[test]
     fn dialing_an_address_that_wrote_first_opens_it() {
         let mut l = Ledger::new(1);
         assert!(l.on_receive(a(4), 25));
@@ -169,17 +199,33 @@ mod tests {
     }
 
     #[test]
-    fn answering_validates() {
+    fn receiving_never_validates() {
         let mut l = Ledger::new(1);
         assert!(l.on_receive(a(3), 50));
         assert!(!l.allow_send(a(3), 1000));
         assert!(l.allow_send(a(3), 20));
-        assert!(
-            !l.on_receive(a(3), 50),
-            "after it answered what we sent, the address is not held"
-        );
-        assert_eq!(l.get(&a(3)).map(|e| e.validated), Some(true));
+        assert!(l.on_receive(a(3), 50), "receiving after a send leaves the address held");
+        assert_eq!(l.get(&a(3)).map(|e| e.validated), Some(false));
+        assert!(!l.allow_send(a(3), 60_000));
+        let before = l.get(&a(3)).map(|e| (e.rx, e.tx));
+        l.validate(a(3));
+        assert_eq!(l.get(&a(3)).map(|e| (e.rx, e.tx)), before);
+        assert!(!l.on_receive(a(3), 50));
         assert!(l.allow_send(a(3), 60_000));
+    }
+
+    #[test]
+    fn validate_of_an_absent_address_changes_nothing() {
+        let mut l = Ledger::new(1);
+        l.validate(a(1));
+        assert_eq!(l.len(), 0);
+        for i in 0..LEDGER_ENTRIES as u32 {
+            l.on_receive(SocketAddr::from((i.to_be_bytes(), 1)), 1);
+        }
+        l.validate(a(9));
+        assert_eq!(l.len(), LEDGER_ENTRIES);
+        assert!(l.get(&SocketAddr::from((0u32.to_be_bytes(), 1))).is_some());
+        assert!(l.get(&a(9)).is_none());
     }
 
     #[test]

@@ -250,13 +250,25 @@ DgramStrict ==
     /\ Dgram(<<>>) = Er("frame/trunc:1")
     /\ \A t \in {0, 5, 7, 10, 255} : Dgram(<<t, 1>>) = Er("type:" \o ToString(t))
     /\ Dgram(<<1, 1, 2, 3>>) = Er("frame/trunc:5")
-    /\ Dgram(<<1>> \o Rep(8, 1) \o <<0>>) = Er("trailing")
+    \* a query is padded with zeros to its length: the unpadded form, a short padding and one that is not zero are refused
+    /\ Dgram(<<1>> \o Rep(8, 1)) = Er("frame/trunc:10")
+    /\ Dgram(<<1>> \o Rep(8, 1) \o Zeros(9)) = Er("frame/trunc:1")
+    /\ Dgram(<<1>> \o Rep(8, 1) \o Zeros(9) \o <<1>>) = Er("padding")
+    /\ Dgram(<<1>> \o Rep(8, 1) \o Zeros(10) \o <<0>>) = Er("trailing")
+    /\ Dgram(<<1>> \o Rep(8, 1) \o Zeros(10)) = RdOk(Fr(1, <<Rep(8, 1)>>), <<>>)
     /\ Dgram(<<2>> \o Rep(8, 1) \o <<7>>) = Er("addr/addrtag:7")
     /\ Dgram(<<2>> \o Rep(8, 1) \o <<4, 1, 2>>) = Er("addr/trunc:2")
     /\ Dgram(<<2>> \o Rep(8, 1) \o Addr4 \o <<0>>) = Er("trailing")
     /\ Dgram(<<2>> \o Rep(8, 1)) = Er("addr/trunc:1")
-    /\ Dgram(<<3>> \o N1 \o <<0>>) = Er("trailing")
+    /\ Dgram(<<3>> \o N1) = Er("frame/trunc:450")
+    /\ Dgram(<<3>> \o N1 \o Zeros(449)) = Er("frame/trunc:1")
+    /\ Dgram(<<3>> \o N1 \o <<7>> \o Zeros(449)) = Er("padding")
+    /\ Dgram(<<3>> \o N1 \o Zeros(450) \o <<0>>) = Er("trailing")
     /\ Dgram(<<3>>) = Er("frame/trunc:1")
+    \* the padding pays for the longest answer: 3 * 19 >= 28 + 28 and 3 * 484 >= 1424 + 28, the least such lengths
+    /\ Len(DgBytes(Fr(1, <<Rep(8, 1)>>))) = 19 /\ Len(DgBytes(Fr(3, <<N1>>))) = 484
+    /\ 3 * 19 >= MaxQadr + 28 /\ 3 * 18 < MaxQadr + 28
+    /\ 3 * 484 >= MaxTunnel + 28 /\ 3 * 483 < MaxTunnel + 28
     /\ \A s \in {3, 9} : Dgram(<<4>> \o N1 \o <<s>>) = Er("frame/status:" \o ToString(s))
     /\ Dgram(<<4>> \o N1 \o <<1>>) = Er("frame/body")
     /\ Dgram(<<6>>) = Er("frame/body") /\ Dgram(<<6>> \o Rep(MaxNotice + 1, 1)) = Er("frame/body")

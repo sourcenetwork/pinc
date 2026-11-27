@@ -68,9 +68,13 @@ pub trait Role: sealed::Sealed + Sized {
         None
     }
 
-    /// The next datagram the relay wants to send: its remote and its length in `out`.
+    /// The next datagram the relay wants to send that `allow` passes: its remote and its length in `out`.
     #[doc(hidden)]
-    fn outgoing(&mut self, out: &mut [u8]) -> Option<(SocketAddr, usize)>;
+    fn outgoing<F: FnMut(SocketAddr, usize) -> bool>(
+        &mut self,
+        out: &mut [u8],
+        allow: F,
+    ) -> Option<(SocketAddr, usize)>;
 
     /// When the relay next needs [`Role::tick`], on the relay clock.
     #[doc(hidden)]
@@ -149,7 +153,7 @@ impl Role for () {
 
     fn lost(&mut self) {}
 
-    fn outgoing(&mut self, _: &mut [u8]) -> Option<(SocketAddr, usize)> {
+    fn outgoing<F: FnMut(SocketAddr, usize) -> bool>(&mut self, _: &mut [u8], _: F) -> Option<(SocketAddr, usize)> {
         None
     }
 
@@ -232,8 +236,12 @@ impl<C: Carriers, K: KeyStore, St: Store, A: Access> Role for Part<C, K, St, A> 
         Part::member_addr(self, node)
     }
 
-    fn outgoing(&mut self, out: &mut [u8]) -> Option<(SocketAddr, usize)> {
-        self.poll_transmit(out)
+    fn outgoing<F: FnMut(SocketAddr, usize) -> bool>(
+        &mut self,
+        out: &mut [u8],
+        allow: F,
+    ) -> Option<(SocketAddr, usize)> {
+        self.poll_transmit(out, allow)
     }
 
     fn due(&self, relay_now: u64) -> Option<u64> {

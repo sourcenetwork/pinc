@@ -74,6 +74,7 @@ pub fn dtag(e: DatagramError) -> String {
         DatagramError::Frame(f) => format!("frame/{}", ftag(f)),
         DatagramError::Addr(r) => format!("addr/{}", rtag(r)),
         DatagramError::Trailing => "trailing".into(),
+        DatagramError::Padding => "padding".into(),
         DatagramError::PacketSize => "packet".into(),
     }
 }

@@ -166,9 +166,14 @@ ep_impl! {
         }
     }
 
-    /// Pass `segments` datagrams totalling `len` bytes to `remote` through the ledger.
-    fn gate(&mut self, now: u64, remote: SocketAddr, len: usize, segments: usize) -> bool {
-        let n = (len + crate::ledger::DATAGRAM_OVERHEAD as usize * segments.saturating_sub(1)) as u64;
+    /// The host wants to send a datagram of `len` bytes to `remote` (the relay role): whether the ledger allows it; a
+    /// refused one must not be sent.
+    pub fn host_send(&mut self, now: u64, remote: SocketAddr, len: usize) -> bool {
+        self.charge(now, remote, len as u64)
+    }
+
+    /// Ask the ledger to send `n` bytes to `remote` and record the call.
+    pub(crate) fn charge(&mut self, now: u64, remote: SocketAddr, n: u64) -> bool {
         let allowed = self.ledger.allow_send(remote, n);
         trace!(self, now, LedgerTx {
             addr: crate::rx::addr_key(&remote),
@@ -176,6 +181,13 @@ ep_impl! {
             rx: self.ledger.get(&remote).map_or(0, |e| e.rx),
             tx: self.ledger.get(&remote).map_or(0, |e| e.tx),
         });
+        allowed
+    }
+
+    /// Pass `segments` datagrams totalling `len` bytes to `remote` through the ledger.
+    fn gate(&mut self, now: u64, remote: SocketAddr, len: usize, segments: usize) -> bool {
+        let n = (len + crate::ledger::DATAGRAM_OVERHEAD as usize * segments.saturating_sub(1)) as u64;
+        let allowed = self.charge(now, remote, n);
         trace!(self, now, TxGate {
             dest: crate::rx::addr_key(&remote),
             len: len as u64,

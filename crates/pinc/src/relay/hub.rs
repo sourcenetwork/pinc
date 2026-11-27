@@ -106,6 +106,11 @@ impl Hub {
         &self.ep
     }
 
+    /// The endpoint, for the calls that count what the relay role took and sent through its ledger.
+    pub(crate) const fn ep_mut(&mut self) -> &mut AnyEp {
+        &mut self.ep
+    }
+
     /// Work the part and the endpoint through until neither has anything left for the other.
     pub(crate) fn cycle<C, K, St, A>(&mut self, part: &mut Part<C, K, St, A>, now: u64)
     where
@@ -139,7 +144,7 @@ impl Hub {
                 did = true;
                 let bytes = buf.get(..t.len).unwrap_or_default();
                 if !part.tunnel(now, &t.remote, bytes) {
-                    part.queue_udp(t.remote, bytes);
+                    part.queue_charged(t.remote, bytes);
                 }
             }
             self.tx = buf;

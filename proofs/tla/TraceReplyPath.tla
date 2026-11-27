@@ -32,7 +32,7 @@ Ev0 == Trace[i]
 
 \* the dialing side on path id: the path validated and active in the first slot
 C0(id) == [t |-> [j \in 1..NP |-> IF j = 1 THEN [id |-> id, v |-> TRUE] ELSE Empty], act |-> 1, hs |-> "wait",
-           rf |-> 0, pend |-> 0, smp |-> FALSE, hd |-> 0]
+           rf |-> 0, pend |-> 0, smp |-> FALSE, hd |-> 0, rp |-> 0]
 
 \* the held paths in slot order, as path_list gives them
 RECURSIVE HeldFrom(_, _)
@@ -62,8 +62,10 @@ Finished == i > Len(Trace) /\ UNCHANGED vars
 TNext == Step \/ Finished
 TraceSpec == Init /\ [][TNext]_vars
 
-\* the active path is held and validated, and no path is held twice, throughout
-Inv == /\ c.t[c.act].id # 0 /\ c.t[c.act].v
+\* the active path is held throughout and validated until the establishment (after it, validated exactly when the dial
+\* held the reply's path: FollowReply computes it and Same compares it with the recorded flags), and no path is held
+\* twice, throughout (ReplyPath.tla ActiveHeld, ActiveValid, Unique)
+Inv == /\ c.t[c.act].id # 0 /\ (c.hs # "done" => c.t[c.act].v)
        /\ \A a, b \in 1..NP : (c.t[a].id # 0 /\ c.t[a].id = c.t[b].id) => a = b
 \* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
 ReplayAtEnd == ReplaySeen(i > Len(Trace))

@@ -59,6 +59,7 @@ inductive CErr where
   | flags (f : Nat)
   | text
   | tooLong
+  | padding
   | dframe (e : CErr)
   | daddr (e : CErr)
   | taddr (e : CErr)

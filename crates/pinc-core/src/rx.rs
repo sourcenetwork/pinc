@@ -118,6 +118,22 @@ fn later_part(buf: &[u8]) -> Option<(ConnId, u64)> {
 }
 
 ep_impl! {
+    /// A datagram of `len` bytes from `remote` that the host took itself (the relay role): counted as received, as
+    /// every datagram the endpoint reads.
+    pub fn host_received(&mut self, now: u64, remote: SocketAddr, len: usize) {
+        self.count_received(now, remote, len);
+    }
+
+    /// Count a datagram of `len` bytes from `remote` in the ledger; whether the address is held.
+    fn count_received(&mut self, now: u64, remote: SocketAddr, len: usize) -> bool {
+        let held = self.ledger.on_receive(remote, len as u64);
+        trace!(self, now, LedgerRx {
+            addr: addr_key(&remote),
+            rx: self.ledger.get(&remote).map_or(0, |e| e.rx),
+        });
+        held
+    }
+
     /// Process a datagram that arrived on `local` from `remote`. The bytes are changed in place. Nothing is returned:
     /// what the datagram caused shows in [`poll_transmit`](Self::poll_transmit), [`poll_event`](Self::poll_event) and
     /// [`poll_timeout`](Self::poll_timeout).
@@ -128,11 +144,7 @@ ep_impl! {
             self.counters.dropped_in += 1;
             return;
         }
-        self.rx_held = self.ledger.on_receive(remote, buf.len() as u64);
-        trace!(self, now, LedgerRx {
-            addr: addr_key(&remote),
-            rx: self.ledger.get(&remote).map_or(0, |e| e.rx),
-        });
+        self.rx_held = self.count_received(now, remote, buf.len());
         let Some((dcid, long)) = peek(buf) else {
             self.counters.dropped_in += 1;
             return;
@@ -296,6 +308,13 @@ ep_impl! {
             if conn.path_validated(pid) && !is_relay_addr(&remote) {
                 self.udp_heard = Some(now);
             }
+        }
+        // An address the ledger holds is validated by the transport's proof, never by receiving: an authenticated
+        // packet on a path the transport validated (an answered challenge, the server's establishment over its Reply,
+        // another session's validation of the address, a dial the endpoint chose).
+        if self.rx_held && r.is_ok() && conn.path_validated(pid) {
+            self.ledger.validate(remote);
+            self.rx_held = false;
         }
         // A source the ledger does not hold, on a session with no held path, has nothing to set: nothing is looked up.
         if self.rx_held || conn.has_held_paths() {

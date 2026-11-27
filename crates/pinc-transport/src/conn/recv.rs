@@ -286,7 +286,7 @@ conn_impl! {
         let r = self.hs.feed(&self.pool, env, stores, len);
         self.count_unauthentic(&r);
         if self.client && r.is_ok() {
-            self.reply_from = Some((ctx.path_id, ctx.now));
+            self.reply_from = Some((ctx.path_id, ctx.now, ctx.dlen));
         }
         self.pump(env);
         r.map_err(Drop::Handshake)
@@ -398,6 +398,12 @@ conn_impl! {
         if !self.client && !self.confirmed {
             self.confirmed = true;
             self.hs.confirm(&mut self.pool);
+            if let Some(i) = self.proof.take().and_then(|id| self.paths.find(id))
+                && let Some(p) = self.paths.get_mut(i)
+            {
+                p.validated = true;
+                p.amp.validate();
+            }
         }
         if let Some(dcid) = bytes.get(1..1 + self.cfg.cid_len).and_then(pinc_security::ConnId::new) {
             self.cids.on_authenticated(&dcid);
@@ -552,7 +558,7 @@ conn_impl! {
                 && p.challenge.is_some()
                 && now.saturating_sub(p.challenge_at) < RJ_THIN_GAP.max(node.saturating_mul(2));
             if !fresh {
-                self.queue_challenge(env, pi);
+                self.challenge_path(env, pi);
             }
         }
         let cur_relay = self.paths.active().is_none_or(|c| c.info.kind == PathKind::Relay);
