@@ -1,11 +1,13 @@
-//! What a relay keeps across a restart: the signed records it stores and the packets it holds for sleeping members.
+//! What a relay keeps across a restart: the signed records it stores, the packets it holds for sleeping members and
+//! their sleep marks.
 //!
 //! The relay's identity is the host's (the key store passed to the builder). Records are verified when they are stored
 //! and again when they are restored, so a store that was tampered with can hand back nothing the relay would not have
 //! accepted from a member. A record is written with the time it was received and comes back with it, so its remaining
 //! lifetime is the same after a restart; a record the relay dropped by lifetime is removed. A member's held packets
-//! are written whole each time they change (they are bounded by [`MAILBOX_BYTES`](super::MAILBOX_BYTES)) and are
-//! opaque to the store.
+//! and its sleep mark are written whole each time either changes (they are bounded by
+//! [`MAILBOX_BYTES`](super::MAILBOX_BYTES) and a trailer of 18 bytes) and are opaque to the store; a mark comes back
+//! with the time it was set, so it ends when it would have.
 
 use alloc::collections::BTreeMap;
 use alloc::rc::Rc;
@@ -30,7 +32,7 @@ pub struct KeptRecord {
 pub struct Kept {
     /// The records the store kept. The relay keeps at most [`RECORDS`](super::RECORDS) of them and removes the rest.
     pub records: Vec<KeptRecord>,
-    /// The packets held for sleeping members, as [`Store::put_mailbox`] was given them.
+    /// The packets held for sleeping members and their sleep marks, as [`Store::put_mailbox`] was given them.
     pub mailboxes: Vec<(NodeId, Vec<u8>)>,
 }
 

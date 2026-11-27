@@ -14,10 +14,16 @@
 (*              than the span                                              *)
 (*  SelectOK    the selection is a subsequence of the candidates, at most  *)
 (*              cap long, one on a thin try, and the carried relay is one  *)
-(*              of those selected                                          *)
+(*              of those selected; it is never empty while a candidate     *)
+(*              exists unless RLY_ONCE drops every kept relay              *)
+(*              (SelectNonEmpty: THIN_HS0 never leaves no path), and wherever the rules without that fallback        *)
+(*              chose something the choice is the same                     *)
 (*  ClassifyOK  the class is UDP blocked only with no UDP heard, no        *)
 (*              reflexive address and the watchdog passed; public wins     *)
 (*              over port-mapped over carrier-grade over behind NAT        *)
+(*  ClassifyCanon the class is the same with any IPv4 address of the       *)
+(*              observation written in its mapped form (::ffff:a.b.c.d),   *)
+(*              and a real IPv6 address is not rewritten                   *)
 (* Mode "pending", "lookups", "net": the table or the probe state under    *)
 (* every sequence of its calls:                                            *)
 (*  PendingOK   the table keeps its size, a peer is in at most one slot,   *)
@@ -30,7 +36,8 @@
 (*              first answers are 1..k, each once; a link change keeps     *)
 (*              the home, that order and the count of rounds without a     *)
 (*              home; a failover lands on a relay known to work (it        *)
-(*              answered a probe since it last failed, or its carrier is   *)
+(*              answered a probe since it last failed, the bit ok that an  *)
+(*              answer sets and a failure clears, or its carrier is        *)
 (*              open); a relay is unhealthy after three misses in a row    *)
 (*              and healthy again after an answer; at the third round      *)
 (*              without a home, counted across link changes, the relay     *)
@@ -44,6 +51,16 @@
 (* BUG = "nopin" (witness ConnectClient_net_w_nopin): an answer ignores    *)
 (* the pin, and AnswerOK fails: a closer relay keeps the home from the     *)
 (* deployment's own relay.                                                 *)
+(* BUG = "oldok" (ConnectClient_net_w_oldok): failover takes a relay with  *)
+(* no miss as answered since it failed, and NetOK fails: an opened carrier *)
+(* clears the misses of a relay that failed after its last answer.         *)
+(* BUG = "nocanon" (ConnectClient_w_nocanon): classify compares addresses  *)
+(* as they arrived, and ClassifyCanon fails. BUG = "nofallback"            *)
+(* (ConnectClient_w_nofallback): both economy rules always apply, and      *)
+(* SelectNonEmpty fails on a first flight with only UDP candidates.        *)
+(* The three were let through because the properties were stated with the *)
+(* code's own proxy (no miss, a reflexive address), over addresses in one  *)
+(* form only, and SelectOK bounded the selection from above only.         *)
 (* Witnesses of the rules the code had before (TLC must violate them):     *)
 (*  ConnectClient_w_homelower  HomeOnlyLower: the home moves only to a     *)
 (*              strictly lower round trip or away from an unhealthy relay  *)
@@ -98,20 +115,48 @@ SelectOK ==
     \A cs \in CandSets, views \in ViewSets, dialer \in BOOLEAN, tries \in 0..2, rtt \in {0, TGSLOW, 5 * SEC}, nr \in BOOLEAN, hs0 \in BOOLEAN,
        hl \in BOOLEAN, cap \in 1..3 :
        LET t == [now |-> 10 * SEC, dialer |-> dialer, tries |-> tries, rtt |-> rtt, nortt |-> nr, hs0 |-> hs0, haslast |-> hl, last |-> <<0, 0, 9 * SEC>>]
-           r == Select(cs, t, views, cap) IN
+           r == SelectBy(cs, t, views, cap, BUG # "nofallback") IN
        /\ Subseq(r.out, cs) /\ Len(r.out) <= cap
        /\ (dialer /\ Len(KeepAll(t, views, cs)) > 1 /\ (rtt >= TGSLOW \/ (tries >= 2 /\ nr)) => Len(r.out) <= 1)
        /\ (~dialer => r.out = SubSeq(cs, 1, Min(Len(cs), cap)))
        /\ (r.carried # <<>> => \E k \in 1..Len(r.out) : r.out[k] = <<"r", r.carried[1]>>)
+       \* where the rules without the fallback chose something, the choice is the same
+       /\ (SelectBy(cs, t, views, cap, FALSE).out # <<>> => r.out = SelectBy(cs, t, views, cap, FALSE).out)
+\* THIN_HS0 never leaves no path: a candidate and room for one give a nonempty selection, unless the only candidates
+\* THIN_HS0 leaves are relays that RLY_ONCE drops (the relay holds the flight)
+\* (NC = NC: a state-level formula, so TLC reports a violation as one, as for ClassifyCanon)
+SelectNonEmpty ==
+    NC = NC /\ \A cs \in CandSets, views \in ViewSets, dialer \in BOOLEAN, tries \in 0..2, rtt \in {0, TGSLOW, 5 * SEC}, nr \in BOOLEAN, hs0 \in BOOLEAN,
+       hl \in BOOLEAN, cap \in 1..3 :
+       LET t == [now |-> 10 * SEC, dialer |-> dialer, tries |-> tries, rtt |-> rtt, nortt |-> nr, hs0 |-> hs0, haslast |-> hl, last |-> <<0, 0, 9 * SEC>>]
+           w == SubSeq(cs, 1, Min(Len(cs), 16))
+           useH == ~(\A i \in 1..Len(w) : Hs0Drop(t, w[i]))
+           \* unless the only candidates THIN_HS0 leaves are relays that RLY_ONCE drops
+           left == \E i \in 1..Len(w) : ~(useH /\ Hs0Drop(t, w[i])) /\ ~OnceDrop(t, views, w[i])
+       IN (cs # <<>> /\ left) => SelectBy(cs, t, views, cap, BUG # "nofallback").out # <<>>
 
 Addr1 == <<<<10, 0, 0, 1>>, 1>>
 Addr2 == <<<<10, 0, 0, 2>>, 1>>
 Shared1 == <<<<100, 64, 0, 1>>, 1>>
 Shared2 == <<<<100, 128, 0, 1>>, 1>>
+\* the code's classify, or the planted bug's
+Cls(local, refl, mapped, heard, since, wd) == ClassifyBy(local, refl, mapped, heard, since, wd, BUG # "nocanon")
+\* an IPv4 address in its mapped form, and a real IPv6 address
+Mapped(a) == <<<<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255>> \o a[1], a[2]>>
+V6 == <<<<32, 1, 13, 184, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1>>, 1>>
+\* every way of writing the IPv4 addresses of s, each plain or mapped
+Forms(s) == {[i \in 1..Len(s) |-> IF i \in m /\ Len(s[i][1]) = 4 THEN Mapped(s[i]) ELSE s[i]] : m \in SUBSET (1..Len(s))}
+ReflSets == {<<>>, <<Addr1>>, <<Shared1>>, <<Shared2>>, <<Addr1, Addr2>>, <<Shared2, Shared2>>, <<V6>>, <<V6, Addr1>>}
+ClassifyCanon ==
+    /\ NC = NC
+    /\ \A refl \in ReflSets, local \in {<<>>, <<Addr1>>, <<V6>>}, mapped \in {<<>>, <<Addr2>>, <<Shared1>>} :
+         LET c == Cls(local, refl, mapped, TRUE, 0, 5 * SEC) IN
+         \A r2 \in Forms(refl), l2 \in Forms(local), m2 \in Forms(mapped) : Cls(l2, r2, m2, TRUE, 0, 5 * SEC) = c
+    /\ Canon(V6) = V6 /\ Canon(Mapped(Addr1)) = Addr1 /\ Canon(Addr1) = Addr1
 ClassifyOK ==
     /\ \A refl \in {<<>>, <<Addr1>>, <<Shared1>>, <<Shared2>>, <<Addr1, Addr2>>, <<Shared2, Shared2>>},
           local \in {<<>>, <<Addr1>>}, mapped \in {<<>>, <<Addr2>>}, heard \in BOOLEAN, since \in {0, 5 * SEC}, wd \in {5 * SEC} :
-         LET c == Classify(local, refl, mapped, heard, since, wd) IN
+         LET c == Cls(local, refl, mapped, heard, since, wd) IN
          /\ (c = 5 => ~heard /\ refl = <<>> /\ since >= wd)
          /\ (refl = <<>> => c \in {0, 5})
          /\ ((refl # <<>> /\ \E i \in 1..Len(refl) : refl[i] \in {local[j] : j \in 1..Len(local)}) => c = 1)
@@ -187,9 +232,9 @@ NetOK ==
     /\ NC.home \in -1..1
     /\ \A i \in 0..1 : Unhealthy(NC, i) = (NC.missed[i + 1] >= MISSLIMIT)
     /\ \A us \in {<<TRUE, TRUE>>, <<TRUE, FALSE>>}, op \in BOOLEAN \X BOOLEAN :
-         LET f == NFailover(NC, us, op) IN
+         LET f == NFailoverBy(NC, us, op, BUG # "oldok") IN
          f.res >= 0 => (f.res # NC.home /\ ~Unhealthy(NC, f.res) /\ us[f.res + 1] /\ f.N.home = f.res
-                        /\ ((NC.missed[f.res + 1] = 0 /\ NC.refl[f.res + 1] >= 0) \/ op[f.res + 1]))
+                        /\ (NC.ok[f.res + 1] \/ op[f.res + 1]))
     \* the relays that answered hold the places 1..k of the order of first answers, each once
     /\ LET A == {i \in 1..2 : NC.order[i] > 0} IN {NC.order[i] : i \in A} = 1..Cardinality(A)
     \* a link change forgets the round's answers and keeps the home, the order and the rounds without a home

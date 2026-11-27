@@ -19,8 +19,11 @@
 //!   with several paths, a try goes out on one path, rotating by try number, because parallel 1.2 kB copies queue
 //!   behind each other on the same slow link.
 //!
-//! Invariants: [`select`] returns a non-empty subset of the candidates whenever there are candidates, in candidate
-//! order; every table is bounded.
+//! THIN_HS0 never leaves no path: when it would drop every candidate it is not applied. RLY_ONCE may leave none while
+//! the relay holds the flight: the carrier's stream delivers it.
+//!
+//! Invariants: [`select`] returns an ordered subset of the candidates, non-empty whenever there are candidates unless
+//! RLY_ONCE drops every kept relay; every table is bounded.
 
 use pinc_crypto::NodeId;
 
@@ -123,24 +126,32 @@ pub fn select(
     let mut kept = [Cand::Relay(0); 16];
     let mut n = 0;
     let slow = t.link_rtt >= TG_SLOW;
-    for c in cands.iter().take(kept.len()) {
-        let drop = match c {
-            Cand::Udp(_) => t.hs0 && t.dialer,
-            Cand::Relay(r) => {
-                t.dialer
-                    && slow
-                    && relay(*r).is_some_and(|v| {
-                        v.live
-                            && t.last_relay.is_some_and(|(lr, gen_, at)| {
-                                lr == *r
-                                    && gen_ == v.generation
-                                    && t.now.saturating_sub(at)
-                                        < RLY_ONCE.min(RLY_ONCE_MIN.max(t.link_rtt.saturating_mul(3)))
-                            })
-                    })
-            }
-        };
-        if !drop && let Some(k) = kept.get_mut(n) {
+    let window = || cands.iter().take(kept.len());
+    let hs0_drop = |c: &Cand| matches!(c, Cand::Udp(_)) && t.hs0 && t.dialer;
+    let once_drop = |c: &Cand| match c {
+        Cand::Relay(r) => {
+            t.dialer
+                && slow
+                && relay(*r).is_some_and(|v| {
+                    v.live
+                        && t.last_relay.is_some_and(|(lr, gen_, at)| {
+                            lr == *r
+                                && gen_ == v.generation
+                                && t.now.saturating_sub(at)
+                                    < RLY_ONCE.min(RLY_ONCE_MIN.max(t.link_rtt.saturating_mul(3)))
+                        })
+                })
+        }
+        Cand::Udp(_) => false,
+    };
+    // THIN_HS0 never leaves no path: with no relay candidate the resend goes out on the UDP paths. RLY_ONCE always
+    // applies: the relay holds the flight, and a resend would put another full Initial on its stream.
+    let use_hs0 = !window().all(hs0_drop);
+    for c in window() {
+        if (use_hs0 && hs0_drop(c)) || once_drop(c) {
+            continue;
+        }
+        if let Some(k) = kept.get_mut(n) {
             *k = *c;
             n += 1;
         }
@@ -255,6 +266,116 @@ impl<T: Copy + PartialEq, const N: usize, const H: usize> Pending<T, N, H> {
             if e.waiting.iter().all(Option::is_none) {
                 dropped(&e.peer);
                 *s = None;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::indexing_slicing, reason = "tests assert")]
+mod tests {
+    use core::net::{Ipv4Addr, SocketAddr};
+
+    use super::*;
+
+    const NOW: u64 = 1_000_000_000_000;
+
+    fn u(port: u16) -> Cand {
+        Cand::Udp(SocketAddr::from((Ipv4Addr::new(198, 51, 100, 7), port)))
+    }
+
+    /// A try with the THIN_HS0 flag `hs0` and, when `once`, the flight of relay 1 just handed to its live carrier on a
+    /// slow link (RLY_ONCE); `tries` is 0 so no other rule thins the choice.
+    fn run<'a>(cands: &[Cand], hs0: bool, once: bool, out: &'a mut [Cand; 16]) -> &'a [Cand] {
+        let t = Try {
+            now: NOW,
+            dialer: true,
+            tries: 0,
+            link_rtt: if once { TG_SLOW } else { 0 },
+            no_rtt: false,
+            hs0,
+            last_relay: once.then_some((1, 7, NOW)),
+        };
+        let (n, _) = select(
+            cands,
+            &t,
+            |_| {
+                Some(RelayView {
+                    live: true,
+                    generation: 7,
+                })
+            },
+            out,
+        );
+        &out[..n]
+    }
+
+    /// What `run` returns, for the three combinations a test names.
+    fn got(cands: &[Cand], hs0: bool, once: bool) -> ([Cand; 16], usize) {
+        let mut out = [Cand::Relay(0); 16];
+        let n = run(cands, hs0, once, &mut out).len();
+        (out, n)
+    }
+
+    fn same(cands: &[Cand], hs0: bool, once: bool, want: &[Cand]) {
+        let (out, n) = got(cands, hs0, once);
+        assert_eq!(&out[..n], want, "{cands:?} hs0={hs0} once={once}");
+    }
+
+    #[test]
+    fn thin_hs0_that_would_drop_every_candidate_is_not_applied() {
+        same(&[u(1)], true, false, &[u(1)]);
+        // the slow link of `once` also thins the flight to one path, try 0 taking the first (THIN_HS)
+        same(&[u(1), u(2)], true, true, &[u(1)]);
+        same(&[u(1), u(2)], true, false, &[u(1), u(2)]);
+    }
+
+    #[test]
+    fn rly_once_drops_the_only_relay_candidate_while_the_relay_holds_the_flight() {
+        let r1 = Cand::Relay(1);
+        same(&[r1], false, true, &[]);
+        same(&[r1, r1], false, true, &[]);
+        // THIN_HS0 leaves the relay, which RLY_ONCE then drops: nothing is sent
+        same(&[u(1), r1], true, true, &[]);
+        // the window the relay holds the flight for ends: the same candidate is sent again
+        same(&[r1], false, false, &[r1]);
+    }
+
+    #[test]
+    fn a_rule_that_leaves_a_candidate_is_applied_as_before() {
+        let (ur, r1, r2) = (u(1), Cand::Relay(1), Cand::Relay(2));
+        same(&[ur, r1], true, false, &[r1]);
+        same(&[ur, r1], false, true, &[ur]);
+        same(&[r1, r2], false, true, &[r2]);
+        same(&[ur, u(2), r2], true, false, &[r2]);
+        same(&[ur, r2], false, false, &[ur, r2]);
+    }
+
+    #[test]
+    fn every_combination_of_rules_over_one_or_two_candidates_returns_a_subset_in_order() {
+        let kinds = [u(1), u(2), Cand::Relay(1), Cand::Relay(2)];
+        for hs0 in [false, true] {
+            for once in [false, true] {
+                for a in 0..kinds.len() {
+                    for b in a..kinds.len() {
+                        let pair = [kinds[a], kinds[b]];
+                        for cands in [core::slice::from_ref(&kinds[a]), &pair[..]] {
+                            let (out, n) = got(cands, hs0, once);
+                            // RLY_ONCE alone may leave none: every kept candidate is the relay holding the flight
+                            let held = |c: &Cand| *c == Cand::Relay(1) || (hs0 && matches!(c, Cand::Udp(_)));
+                            assert!(
+                                n > 0 || (once && cands.iter().all(held)),
+                                "{cands:?} hs0={hs0} once={once}"
+                            );
+                            let mut it = cands.iter();
+                            assert!(
+                                out[..n].iter().all(|g| it.any(|c| c == g)),
+                                "{:?} is not an ordered subset of {cands:?}",
+                                &out[..n]
+                            );
+                        }
+                    }
+                }
             }
         }
     }

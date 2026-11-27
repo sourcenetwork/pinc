@@ -31,11 +31,26 @@
 (* shows the residual that holds with TopFix: a restarted hub's floor is   *)
 (* its start time, so a message stamped ahead of it is not covered.        *)
 (*                                                                         *)
-(* Lean counterpart: proofs/lean/Pinc/BroadcastFloors.lean.                *)
+(* The FLOOR frame on the wire (floors.rs write and parse_floor), at the   *)
+(* token level: one token for the topic length, the timestamp, the        *)
+(* history byte, the list marker, the count, an origin key and an entry's *)
+(* timestamp. Checked: EncodeParses (the frame of every body a hub writes  *)
+(* is taken and re-encodes to itself) and, over every frame of at most    *)
+(* WireLen tokens drawn from WireTok, OnFloorStrict (on_floor records a   *)
+(* floor only for a frame that re-encodes to the same tokens: a refused   *)
+(* frame records nothing). The witness configs put the parsers back that  *)
+(* let the bug through: _w_lenient the old one (topic skipped, a list read *)
+(* only if it looks like one, trailing tokens ignored), _w_bare one that   *)
+(* also takes a frame ending after the history byte, which the encoder    *)
+(* never writes. Before the wire was modelled a hub's body reached the    *)
+(* member as a value, so no malformed frame could exist in the model.     *)
+(*                                                                         *)
+(* Lean counterpart: proofs/lean/Pinc/BroadcastFloors.lean (parse_strict,  *)
+(* parse_encode).                                                          *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC
 
-CONSTANTS Hubs, Members, Origins, Stamps, TableMax, OriginMax, MaxT, Future, TopFix, Drift, Restarts
+CONSTANTS Hubs, Members, Origins, Stamps, TableMax, OriginMax, MaxT, Future, TopFix, Drift, Restarts, Parser, WireTok, WireLen
 
 NoT == -1
 VARIABLES t, hs, taken, nrest
@@ -90,6 +105,54 @@ IsOld(F, origin, ts) ==
 
 Floors(M) == Settle([h \in Hubs |-> Body(hs[h], M, hs[h].born)])
 
+(* ---- the FLOOR frame ---- *)
+NO_LIST == 0
+LIST == 1
+\* the keys of a set in ascending order
+RECURSIVE Asc(_)
+Asc(S) == IF S = {} THEN <<>> ELSE LET m == CHOOSE x \in S : \A y \in S : x <= y IN <<m>> \o Asc(S \ {m})
+\* the entries of a per-origin list, as written: key, timestamp, ascending by key
+EntriesOf(l) == LET ks == Asc({o \in DOMAIN l : l[o] # NoT})
+                IN [i \in 1..(2 * Len(ks)) |-> IF i % 2 = 1 THEN ks[(i + 1) \div 2] ELSE l[ks[i \div 2]]]
+\* SentFloors::write behind an empty topic: topic length 0, the floor, the history byte, then the bare marker or the list
+Encode(b) == <<0, b.floor, IF b.hist THEN 1 ELSE 0>>
+             \o (IF b.haslist THEN <<LIST, Cardinality({o \in DOMAIN b.list : b.list[o] # NoT})>> \o EntriesOf(b.list)
+                 ELSE <<NO_LIST>>)
+Refused == [refused |-> TRUE]
+Drop(f, n) == IF n >= Len(f) THEN <<>> ELSE SubSeq(f, n + 1, Len(f))
+\* ok: es is exactly n entries with keys strictly ascending; l: the list they make
+ListOf(n, es) == [ok |-> Len(es) = 2 * n /\ \A i \in 1..(n - 1) : es[2 * i - 1] < es[2 * i + 1],
+                  l |-> [k \in {es[2 * i - 1] : i \in 1..Min2(n, Len(es) \div 2)} |->
+                           es[2 * (CHOOSE i \in 1..n : es[2 * i - 1] = k)]]]
+\* floors.rs parse_floor: a body only for exactly a frame the encoder writes (Parser "bare" also takes a frame that ends
+\* after the history byte, the empty tail floors.rs still accepts)
+ParseStrict(f) ==
+    IF Len(f) < 3 \/ f[1] # 0 \/ f[3] > 1 THEN Refused
+    ELSE LET tail == Drop(f, 3)
+             b0 == [floor |-> f[2], hist |-> f[3] = 1, list |-> NoT, haslist |-> FALSE]
+         IN IF tail = <<NO_LIST>> \/ (Parser = "bare" /\ tail = <<>>) THEN b0
+            ELSE IF Len(tail) >= 2 /\ tail[1] = LIST /\ tail[2] <= OriginMax /\ ListOf(tail[2], Drop(tail, 2)).ok
+            THEN [b0 EXCEPT !.list = ListOf(tail[2], Drop(tail, 2)).l, !.haslist = TRUE]
+            ELSE Refused
+\* the old on_floor: the topic skipped whatever it holds, the history byte taken as set only if 1, a list read only if
+\* it has at least its count of entries (the first n taken), and every token after it ignored
+ParseOld(f) ==
+    IF Len(f) < 1 THEN Refused
+    ELSE LET rest == Drop(f, 1 + f[1]) IN
+         IF Len(f) < 1 + f[1] \/ Len(rest) < 2 THEN Refused
+         ELSE LET tail == Drop(rest, 2)
+                  b0 == [floor |-> rest[1], hist |-> rest[2] = 1, list |-> NoT, haslist |-> FALSE]
+                  n == IF Len(tail) >= 2 THEN tail[2] ELSE 0
+                  es == SubSeq(tail, 3, 2 + 2 * n)
+              IN IF Len(tail) >= 2 /\ tail[1] = LIST /\ Len(tail) - 2 >= 2 * n
+                 THEN [b0 EXCEPT !.list = [k \in {es[2 * i - 1] : i \in 1..n} |->
+                                             es[2 * (CHOOSE i \in 1..n : es[2 * i - 1] = k)]], !.haslist = TRUE]
+                 ELSE b0
+Parse(f) == IF Parser = "old" THEN ParseOld(f) ELSE ParseStrict(f)
+\* on_floor: the body recorded for a hub (Refused: nothing is recorded, the gathering still waits for the hub)
+OnFloor(f) == Parse(f)
+Frames == UNION {[1..n -> WireTok] : n \in 0..WireLen}
+
 (* ---- environment ---- *)
 \* a hub takes a message of `origin` stamped `ts` for member p: it follows the stamp unless it is too far ahead
 \* (observe), then notes it
@@ -132,6 +195,12 @@ Caps == \A h \in Hubs : /\ Cardinality({p \in Members : hs[h].maxsent[p] # NoT})
 BareMarker == \A h \in Hubs, p \in Members : (hs[h].oOver \/ hs[h].msOver) => ~Body(hs[h], p, hs[h].born).haslist
 ListWithin == \A h \in Hubs, p \in Members : Body(hs[h], p, hs[h].born).haslist =>
                   Cardinality({o \in Origins : Body(hs[h], p, hs[h].born).list[o] # NoT}) <= OriginMax
+\* the frame of every body a hub writes is taken, and what is taken re-encodes to it
+EncodeParses == \A h \in Hubs, p \in Members : LET f == Encode(Body(hs[h], p, hs[h].born)) IN
+                    OnFloor(f) # Refused /\ Encode(OnFloor(f)) = f
+\* on_floor records a floor only for a frame that re-encodes to the same tokens
+\* (t >= 0: a state-level formula, so TLC reports a violation as one; a constant formula is reported otherwise)
+OnFloorStrict == t >= 0 /\ \A f \in Frames : OnFloor(f) # Refused => Encode(OnFloor(f)) = f
 ConservativeOverflow == \A h \in Hubs, p \in Members : (hs[h].msOver /\ nrest = 0 /\ TakenMax(h, p) # NoT) =>
     Body(hs[h], p, hs[h].born).floor >= TakenMax(h, p)
 =============================================================================

@@ -102,10 +102,23 @@ fn members() -> [NodeId; 3] {
     [m[0], m[1], m[2]]
 }
 
-/// The packets of a Mail blob as the test decodes them: (id, arrival time in ns), with no byte left over.
-fn decode(mut blob: &[u8]) -> Vec<(u32, u64)> {
+/// The packets of a Mail blob as the test decodes them: (id, arrival time in ns), with no byte left over but the
+/// 18-byte trailer of the sleep mark (it starts with a zero byte, which no packet does).
+fn decode(blob: &[u8]) -> Vec<(u32, u64)> {
+    parse(blob).0
+}
+
+/// The mark a Mail blob carries, its time in ns, read from the trailer (version 1: zero byte, 1, time, clock).
+fn mark_at(blob: &[u8]) -> Option<u64> {
+    let (_, trailer) = parse(blob);
+    let at = trailer.strip_prefix(&[0, 1])?.get(..8)?;
+    Some(u64::from_be_bytes(at.try_into().unwrap()))
+}
+
+/// The packets of a blob and the trailer after them.
+fn parse(mut blob: &[u8]) -> (Vec<(u32, u64)>, &[u8]) {
     let mut out = Vec::new();
-    while !blob.is_empty() {
+    while !blob.is_empty() && blob[0] != 0 {
         assert!(blob.len() >= 44, "a packet header is cut");
         let flag_at = 33;
         let at = u64::from_be_bytes(blob[flag_at + 1..flag_at + 9].try_into().unwrap());
@@ -115,7 +128,11 @@ fn decode(mut blob: &[u8]) -> Vec<(u32, u64)> {
         out.push((u32::from_be_bytes(body[..4].try_into().unwrap()), at));
         blob = &body[len..];
     }
-    out
+    assert!(
+        blob.is_empty() || blob.len() == 18,
+        "a blob ends with the trailer of the mark or nothing"
+    );
+    (out, blob)
 }
 
 fn list(ids: &[u32]) -> String {
@@ -189,6 +206,21 @@ impl Run {
         format!("[{}]", recs.join(","))
     }
 
+    /// Each member's sleep mark in seconds, -1 for none.
+    fn marks_view(&self) -> String {
+        let l: Vec<String> = self
+            .members
+            .iter()
+            .map(|m| {
+                self.probe
+                    .sleeper(m)
+                    .map_or(-1, |(at, _)| i64::try_from(at / U).unwrap())
+                    .to_string()
+            })
+            .collect();
+        format!("[{}]", l.join(","))
+    }
+
     /// What the probe holds must not be past its lifetime (called right after a restore).
     fn check_alive(&self) {
         let now = self.t * U;
@@ -207,11 +239,12 @@ impl Run {
     fn view_line(&mut self, op: &str, tear: Tear) {
         let _ = writeln!(
             self.out,
-            "{{\"op\":\"{op}\",\"t\":{},\"tear\":\"{}\",\"recs\":{},\"mail\":{},\"errs\":{}}}",
+            "{{\"op\":\"{op}\",\"t\":{},\"tear\":\"{}\",\"recs\":{},\"mail\":{},\"marks\":{},\"errs\":{}}}",
             self.t,
             tear.name(),
             self.recs_view(),
             self.mail_view(),
+            self.marks_view(),
             self.probe.store_errors()
         );
     }
@@ -396,6 +429,7 @@ impl Run {
     fn job(&mut self) {
         assert!(self.job.is_none(), "a job is out");
         self.job = self.probe.next_job();
+        let mut mk = String::new();
         let (k, n, seq, rcv, pk) = match &self.job {
             None => ("none", 0, 0, 0, String::new()),
             Some(KeepJob::Put { node, record, received }) => {
@@ -415,13 +449,15 @@ impl Run {
                         format!("{{\"id\":{id},\"at\":{}}}", at / U)
                     })
                     .collect();
+                let at = mark_at(blob).map_or(-1, |at| i64::try_from(at / U).unwrap());
+                mk = format!(",\"mk\":{at}");
                 ("mail", m, 0, 0, format!("[{}]", pk.join(",")))
             }
         };
         let pk = if pk.is_empty() { "[]".to_owned() } else { pk };
         let _ = writeln!(
             self.out,
-            "{{\"op\":\"job\",\"k\":\"{k}\",\"n\":{n},\"seq\":{seq},\"rcv\":{rcv},\"pk\":{pk}}}"
+            "{{\"op\":\"job\",\"k\":\"{k}\",\"n\":{n},\"seq\":{seq},\"rcv\":{rcv},\"pk\":{pk}{mk}}}"
         );
     }
 

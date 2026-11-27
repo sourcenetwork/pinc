@@ -1,10 +1,17 @@
-//! What the relay keeps across a restart, and the work of keeping it: the records of the store and the packets held
-//! for sleeping members.
+//! What the relay keeps across a restart, and the work of keeping it: the records of the store, the packets held for
+//! sleeping members and their sleep marks.
 //!
 //! Every change the machine reports (a record stored, a packet held or handed over) marks a node; the run loop takes
 //! one job at a time and writes it through the [`Store`](super::super::store::Store). A record the machine dropped by
 //! lifetime is removed from the store; a record and a packet come back with the time they arrived, so what is left of
 //! their lifetime is the same after a restart.
+//!
+//! A member's blob is its packets, then an optional trailer of 18 bytes: a zero byte (no [`IdentityAlg`] tag, and too
+//! short for a packet head, so a reader of the old form stops there and keeps the packets), the version 1, the time its
+//! sleep notice was taken and the notice's clock. A mark comes back with its time and ends when it would have, with
+//! the packets held under it; a blob with no trailer (the old form) restores its packets, which derive the mark from
+//! the oldest of them, and is written again with it; a remainder that is neither (a newer version, a torn trailer or a
+//! torn packet) keeps what parsed before it and is counted in the store errors once.
 //!
 //! A write that fails or is dropped with its run is marked again, and a failed one is tried again after `RETRY_NS`,
 //! behind the marks not tried yet and up to `MAX_TRIES` times; a failure of the store is counted and reported, a write
@@ -14,8 +21,8 @@
 //! owed or given up, and each of them is counted.
 //!
 //! Invariants: the nodes marked are at most twice the record table for records kept, twice for records removed, and
-//! four times the mailbox member table; a packet is written with its arrival time and restored oldest first; nothing
-//! past its lifetime is restored. A wall clock that goes back across a restart lengthens what the store kept by up to
+//! the carrier table and the mailbox member table together (every member that can hold a mark or mail once); a packet
+//! is written with its arrival time and restored oldest first; nothing past its lifetime is restored. A wall clock that goes back across a restart lengthens what the store kept by up to
 //! the step back: the node cannot know it.
 
 use alloc::collections::{BTreeMap, VecDeque};
@@ -24,12 +31,13 @@ use alloc::vec::Vec;
 use pinc_connect::carrier::NODE_ID_LEN;
 use pinc_connect::carrier::frame::MAX_PACKET_LEN;
 use pinc_connect::record::Record;
+use pinc_connect::relay::Reject;
 use pinc_connect::relay::rule::{RECORD_TTL_NS, SWEEP_NS};
 use pinc_crypto::{IdentityAlg, NodeId};
 
 use super::Core;
 use crate::relay::access::Access;
-use crate::relay::limits::{MAILBOX_MEMBERS, RECORDS};
+use crate::relay::limits::{CARRIERS, MAILBOX_MEMBERS, RECORDS};
 use crate::relay::store::{Kept, node_key};
 use pinc_keystore::KeyStore;
 
@@ -42,8 +50,9 @@ pub(super) struct Keep {
     held: BTreeMap<[u8; 33], NodeId>,
     /// Records to remove from the store: at most twice the record table, a mark past it is lost and counted.
     removed: BTreeMap<[u8; 33], NodeId>,
-    /// Members whose held packets changed.
-    mail: Vec<NodeId>,
+    /// Members whose held packets changed, oldest first: at most the carrier table and the mailbox member table
+    /// together, each member once.
+    mail: VecDeque<NodeId>,
     /// When `held` is next checked against the machine's records; `None` before the first check.
     next_sweep: Option<u64>,
     /// Not before this time is a failed write tried again; zero when none failed.
@@ -130,23 +139,55 @@ pub(super) fn encode(out: &mut Vec<u8>, src: &NodeId, flag: u8, at: u64, body: &
     out.extend_from_slice(body);
 }
 
-/// The packets of a blob, oldest first, up to the first one that does not parse.
-fn decode(mut blob: &[u8]) -> impl Iterator<Item = (NodeId, u8, u64, &[u8])> {
-    core::iter::from_fn(move || {
-        let (head, rest) = blob.split_at_checked(NODE_ID_LEN + 1 + 8 + 2)?;
+/// The first byte of the trailer of a blob: no [`IdentityAlg`] tag, so it never starts a packet.
+const TRAILER: u8 = 0;
+/// The version of the trailer.
+const TRAILER_V1: u8 = 1;
+
+/// Append the sleep mark of a member to its blob: the trailer byte, the version, the time the notice was taken and its
+/// clock. A reader of the old form stops at it (18 bytes are no packet head) and keeps the packets before it.
+pub(super) fn encode_mark(out: &mut Vec<u8>, at: u64, ts_ms: u64) {
+    out.extend_from_slice(&[TRAILER, TRAILER_V1]);
+    out.extend_from_slice(&at.to_be_bytes());
+    out.extend_from_slice(&ts_ms.to_be_bytes());
+}
+
+/// The mark of a trailer: its time and the notice's clock, if `rest` is exactly a version 1 trailer.
+fn decode_mark(rest: &[u8]) -> Option<(u64, u64)> {
+    let body = rest.strip_prefix(&[TRAILER, TRAILER_V1])?;
+    let (at, ts) = body.split_first_chunk::<8>()?;
+    let ts = <[u8; 8]>::try_from(ts).ok()?;
+    Some((u64::from_be_bytes(*at), u64::from_be_bytes(ts)))
+}
+
+/// The packets of a blob, oldest first, up to the first one that does not parse; what is left is [`Packets::rest`].
+struct Packets<'a>(&'a [u8]);
+
+impl<'a> Packets<'a> {
+    /// What the packets did not take: empty, a trailer, or bytes that parse as neither.
+    const fn rest(&self) -> &'a [u8] {
+        self.0
+    }
+}
+
+impl<'a> Iterator for Packets<'a> {
+    type Item = (NodeId, u8, u64, &'a [u8]);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let (head, rest) = self.0.split_at_checked(NODE_ID_LEN + 1 + 8 + 2)?;
         let (&tag, head) = head.split_first()?;
         let (bytes, head) = head.split_first_chunk::<32>()?;
         let (&flag, head) = head.split_first()?;
         let (at, head) = head.split_first_chunk::<8>()?;
         let len = usize::from(u16::from_be_bytes(*head.first_chunk::<2>()?));
         let (body, rest) = rest.split_at_checked(len)?;
-        blob = rest;
         let src = NodeId {
             alg: IdentityAlg::from_tag(tag)?,
             bytes: *bytes,
         };
+        self.0 = rest;
         Some((src, flag, u64::from_be_bytes(*at), body))
-    })
+    }
 }
 
 impl<S, K: KeyStore, A: Access> Core<S, K, A> {
@@ -163,6 +204,9 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
     /// A packet was held for `node` or handed to it: write what is held. A mark the table has no room for leaves the
     /// store behind: it is counted as a failed write.
     pub(super) fn note_mail(&mut self, node: NodeId) {
+        // vertexia: a node whose write is already queued keeps its older place, so its new mark can be written before
+        // the removal of the mark it evicted; a stop between the two leaves one mark too many, which the restore drops
+        // and counts (no mail is lost). Moving the node behind the removal would close it.
         if self.keep.restoring || self.keep.mail.contains(&node) {
             return;
         }
@@ -171,8 +215,9 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
 
     /// Mark `node` for a mailbox write; a mark past the table is counted as a failed write.
     fn push_mail(&mut self, node: NodeId) {
-        if self.keep.mail.len() < 4 * MAILBOX_MEMBERS {
-            self.keep.mail.push(node);
+        // every member that can hold a mark or mail fits once
+        if self.keep.mail.len() < CARRIERS + MAILBOX_MEMBERS {
+            self.keep.mail.push_back(node);
         } else {
             self.store_failed();
         }
@@ -305,7 +350,7 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
                 return Some(job);
             }
         }
-        if let Some(n) = self.keep.mail.pop() {
+        if let Some(n) = self.keep.mail.pop_front() {
             return Some(self.mail_job(n));
         }
         while let Some((mark, tries)) = self.keep.failed.pop_front() {
@@ -330,7 +375,8 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
         Some(Job::Put(n, rec.to_vec(), received))
     }
 
-    /// The write of the packets held for `n` now.
+    /// The write of the packets held for `n` now, and its sleep mark behind them: a member with a mark and no mail
+    /// writes the trailer alone, one with neither writes nothing.
     fn mail_job(&self, n: NodeId) -> Job {
         let mut blob = Vec::new();
         let mut buf = [0u8; MAX_PACKET_LEN];
@@ -338,6 +384,9 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
         while let Some((d, at)) = self.sm.held_packet(&n, i, &mut buf) {
             encode(&mut blob, &d.src, d.flag, at, buf.get(..d.len).unwrap_or_default());
             i += 1;
+        }
+        if let Some((at, ts_ms)) = self.sm.sleeper(&n) {
+            encode_mark(&mut blob, at, ts_ms);
         }
         Job::Mail(n, blob)
     }
@@ -365,16 +414,58 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
                 (_, None) => self.counters.store_errors += 1,
             }
         }
-        for (node, blob) in &kept.mailboxes {
-            let mut dropped = false;
-            for (src, flag, at, body) in decode(blob) {
-                dropped |= self.sm.restore_held(now, at, node, &src, flag, body).is_err();
-            }
-            if dropped || decode(blob).next().is_none() {
-                self.push_mail(*node);
+        // members with packets first, then the bare marks: no restore evicts, so when the store holds more marks than
+        // the table the ones that keep mail are the ones that fit, whatever the store's order
+        for with_mail in [true, false] {
+            for (node, blob) in &kept.mailboxes {
+                if Packets(blob).next().is_some() == with_mail {
+                    self.restore_mailbox(now, node, blob);
+                }
             }
         }
         self.keep.restoring = false;
+    }
+
+    /// Put back the packets and the mark of one member's blob; called with `restoring` set.
+    fn restore_mailbox(&mut self, now: u64, node: &NodeId, blob: &[u8]) {
+        let mut packets = Packets(blob);
+        let count = packets.by_ref().count();
+        let rest = packets.rest();
+        // a kept mark first: one that ended takes the blob's packets with it (they were held under it)
+        let kept_mark = decode_mark(rest);
+        if kept_mark.is_none() && !rest.is_empty() {
+            // a newer version of the trailer, a torn trailer or a torn packet: what parsed is kept
+            self.counters.store_errors += 1;
+        }
+        let mark = kept_mark.map(|(at, ts_ms)| self.sm.restore_sleep(now, node, at, ts_ms));
+        let ended = mark == Some(Err(Reject::MailboxRefused));
+        // the mark table has no room: the member keeps no mark and so no mail, the loss is counted once and the
+        // write below makes the store drop what it kept
+        let mut full = mark == Some(Err(Reject::SessionsFull));
+        let marked = mark == Some(Ok(()));
+        let mut dropped = ended || full;
+        let mut restored = false;
+        if !ended && !full {
+            for (src, flag, at, body) in Packets(blob) {
+                match self.sm.restore_held(now, at, node, &src, flag, body) {
+                    Ok(()) => restored = true,
+                    Err(e) => {
+                        dropped = true;
+                        full |= e == Reject::SessionsFull;
+                    }
+                }
+            }
+        }
+        if full {
+            self.counters.store_errors += 1;
+        }
+        // written again: a packet refused, nothing kept, packets with no kept mark (the old form or a torn trailer, so
+        // the mark derived from them is written), or a mark moved back to the clock (the store keeps no time ahead
+        // of it)
+        let clamped = marked && kept_mark.is_some_and(|(at, _)| at > now);
+        if dropped || (count == 0 && !marked) || (restored && !marked) || clamped {
+            self.push_mail(*node);
+        }
     }
 }
 
@@ -471,7 +562,7 @@ mod tests {
     #[test]
     fn a_mailbox_mark_past_the_table_is_counted() {
         let mut core = core();
-        for i in 0..=u16::try_from(4 * MAILBOX_MEMBERS).unwrap() {
+        for i in 0..=u16::try_from(CARRIERS + MAILBOX_MEMBERS).unwrap() {
             let mut bytes = [0u8; 32];
             bytes[..2].copy_from_slice(&i.to_be_bytes());
             core.note_mail(NodeId {
@@ -487,7 +578,7 @@ mod tests {
     #[test]
     fn the_restore_marks_mailboxes_up_to_the_table_and_counts_the_rest() {
         let mut core = core();
-        let over = 4 * MAILBOX_MEMBERS + 3;
+        let over = CARRIERS + MAILBOX_MEMBERS + 3;
         let kept = Kept {
             records: vec![],
             mailboxes: (0..over)
@@ -495,8 +586,390 @@ mod tests {
                 .collect(),
         };
         core.restore(T0, &kept);
-        assert_eq!(core.keep.mail.len(), 4 * MAILBOX_MEMBERS, "the marks passed the table");
+        assert_eq!(
+            core.keep.mail.len(),
+            CARRIERS + MAILBOX_MEMBERS,
+            "the marks passed the table"
+        );
         assert_eq!(core.counters.store_errors, 3, "the marks lost were not counted");
+    }
+
+    fn packet_blob(src: &NodeId, at: u64) -> Vec<u8> {
+        let mut blob = Vec::new();
+        encode(&mut blob, src, 3, at, b"held");
+        blob
+    }
+
+    fn kept_mail(m: NodeId, blob: Vec<u8>) -> Kept {
+        Kept {
+            records: vec![],
+            mailboxes: vec![(m, blob)],
+        }
+    }
+
+    /// A blob with a trailer comes back as it was written: the packet, the mark with its own time, no write owed.
+    #[test]
+    fn a_blob_with_a_mark_round_trips() {
+        let mut core = core();
+        let (m, src) = (nid(1), nid(2));
+        let (at, ts) = (T0 - 5 * SEC, 77);
+        let mut blob = packet_blob(&src, T0 - SEC);
+        encode_mark(&mut blob, at, ts);
+        core.restore(T0, &kept_mail(m, blob.clone()));
+        assert_eq!(core.sm.mailbox_pending(&m).0, 1);
+        assert_eq!(core.sm.sleeper(&m), Some((at, ts)));
+        assert!(core.next_job().is_none(), "a blob taken whole queues no write");
+        core.note_mail(m);
+        let Some(Job::Mail(n, again)) = core.next_job() else {
+            panic!("no write");
+        };
+        assert_eq!((n, again), (m, blob));
+        // a mark with no mail is the trailer alone
+        let k = nid(3);
+        let mut only = Vec::new();
+        encode_mark(&mut only, at, ts);
+        assert_eq!(only.len(), 18);
+        core.restore(T0, &kept_mail(k, only.clone()));
+        assert_eq!(core.sm.sleeper(&k), Some((at, ts)));
+        assert!(core.next_job().is_none());
+        core.note_mail(k);
+        assert!(matches!(core.next_job(), Some(Job::Mail(n, b)) if n == k && b == only));
+    }
+
+    /// The old form restores its packets, derives the mark from the oldest and queues one write that carries it.
+    #[test]
+    fn an_old_form_blob_derives_its_mark_and_is_written_once() {
+        let mut core = core();
+        let (m, src) = (nid(1), nid(2));
+        let mut blob = packet_blob(&src, T0 - 2 * SEC);
+        blob.extend(packet_blob(&src, T0 - SEC));
+        core.restore(T0, &kept_mail(m, blob));
+        assert_eq!(core.sm.mailbox_pending(&m).0, 2);
+        assert_eq!(core.sm.sleeper(&m), Some((T0 - 2 * SEC, u64::MAX)));
+        let Some(Job::Mail(n, b)) = core.next_job() else {
+            panic!("the upgrade write was not queued");
+        };
+        let mut want = packet_blob(&src, T0 - 2 * SEC);
+        want.extend(packet_blob(&src, T0 - SEC));
+        encode_mark(&mut want, T0 - 2 * SEC, u64::MAX);
+        assert_eq!((n, b), (m, want));
+        assert!(core.next_job().is_none(), "one write for the old blob");
+        assert_eq!(core.counters.store_errors, 0);
+    }
+
+    /// A kept mark that ended takes the packets of its blob with it, and the blob is written empty.
+    #[test]
+    fn an_ended_kept_mark_drops_the_packets_and_forgets_the_blob() {
+        let mut core = core();
+        let (m, src) = (nid(1), nid(2));
+        let day = Limits::default().mailbox_max_age_ns;
+        let now = T0 + day;
+        let mut blob = packet_blob(&src, now - SEC);
+        encode_mark(&mut blob, T0, 9);
+        core.restore(now, &kept_mail(m, blob));
+        assert_eq!(core.sm.mailbox_pending(&m).0, 0);
+        assert_eq!(core.sm.sleeper(&m), None);
+        assert!(matches!(core.next_job(), Some(Job::Mail(n, b)) if n == m && b.is_empty()));
+        assert_eq!(core.counters.store_errors, 0);
+    }
+
+    /// A remainder that is no trailer (a newer version, a torn trailer, a torn packet) is counted once, and the packets
+    /// before it are restored with a derived mark.
+    #[test]
+    fn a_garbled_remainder_is_counted_once_and_the_packets_before_it_are_kept() {
+        let src = nid(2);
+        let junk: [&[u8]; 3] = [&[0, 2, 1, 2, 3], &[0, 1, 1, 2, 3], &[1, 9, 9, 9]];
+        for (i, tail) in junk.iter().enumerate() {
+            let mut core = core();
+            let m = nid(10 + u16::try_from(i).unwrap());
+            let mut blob = packet_blob(&src, T0 - SEC);
+            blob.extend_from_slice(tail);
+            core.restore(T0, &kept_mail(m, blob));
+            assert_eq!(core.counters.store_errors, 1, "remainder {i}");
+            assert_eq!(core.sm.mailbox_pending(&m).0, 1, "remainder {i}");
+            assert_eq!(core.sm.sleeper(&m), Some((T0 - SEC, u64::MAX)), "remainder {i}");
+            assert!(
+                matches!(core.next_job(), Some(Job::Mail(..))),
+                "rewritten clean, remainder {i}"
+            );
+        }
+    }
+
+    /// A mark write the store refuses is tried again after the wait and counted; the blob it writes is the mark alone.
+    #[test]
+    fn a_failed_mark_write_is_retried_and_counted() {
+        let mut core = core();
+        let m = nid(1);
+        core.sm.restore_sleep(T0, &m, T0, 5).unwrap();
+        core.note_mail(m);
+        core.on_timeout(T0);
+        let Some(job) = core.next_write() else {
+            panic!("no write");
+        };
+        let Job::Mail(_, first) = &job else {
+            panic!("not a mail write");
+        };
+        assert_eq!(first.len(), 18);
+        core.written(false);
+        assert_eq!(core.counters.store_errors, 1);
+        assert!(core.next_write().is_none(), "not before the wait");
+        core.on_timeout(T0 + RETRY_NS + SEC);
+        assert!(matches!(core.next_write(), Some(Job::Mail(n, b)) if n == m && b.len() == 18));
+    }
+
+    /// An accepted notice and the return of the member each queue one write; a copy of the notice queues none.
+    #[test]
+    fn a_notice_and_a_return_queue_one_write_each_and_a_copy_none() {
+        use pinc_connect::relay::sleep;
+
+        let mut core = core();
+        let kp = Keypair::from_seed(IdentityAlg::Ed25519, &[5; 32]).unwrap();
+        let m = kp.node_id();
+        let now = T0 + SEC;
+        core.sm.carrier_opened(now, m, &mut core.fx).unwrap();
+        core.flush();
+        assert!(core.next_job().is_none());
+        let mut buf = [0u8; sleep::MAX_LEN];
+        let n = sleep::sign(&kp, &core.node_id(), now / 1_000_000, &mut buf).unwrap();
+        core.sm.sleep_notice(now, &buf[..n], None, &mut core.fx).unwrap();
+        core.flush();
+        assert!(matches!(core.next_job(), Some(Job::Mail(n, b)) if n == m && b.len() == 18));
+        assert!(core.next_job().is_none());
+        core.sm.sleep_notice(now + SEC, &buf[..n], None, &mut core.fx).unwrap();
+        core.flush();
+        assert!(core.next_job().is_none(), "a copy writes nothing");
+        core.sm.member_returned(now + 2 * SEC, &m, &mut core.fx);
+        core.flush();
+        assert!(matches!(core.next_job(), Some(Job::Mail(n, b)) if n == m && b.is_empty()));
+        assert!(core.next_job().is_none());
+    }
+
+    /// N sleeping clients cost N store writes (one 18-byte mark each), a repeat of every notice costs none, and the
+    /// return of all N costs N more.
+    #[test]
+    fn n_sleeping_clients_cost_n_writes_and_their_copies_none() {
+        use pinc_connect::relay::sleep;
+
+        let mut core = core();
+        let now = T0 + SEC;
+        let kps: Vec<_> = (1..=8u8)
+            .map(|i| Keypair::from_seed(IdentityAlg::Ed25519, &[i + 40; 32]).unwrap())
+            .collect();
+        let mut writes = 0;
+        for kp in &kps {
+            core.sm.carrier_opened(now, kp.node_id(), &mut core.fx).unwrap();
+            let mut buf = [0u8; sleep::MAX_LEN];
+            let n = sleep::sign(kp, &core.node_id(), now / 1_000_000, &mut buf).unwrap();
+            core.sm.sleep_notice(now, &buf[..n], None, &mut core.fx).unwrap();
+            core.flush();
+            while core.next_job().is_some() {
+                writes += 1;
+            }
+            // the copies come after the first write was drained: a copy that traced again would queue another
+            let mut copies = 0;
+            for _ in 0..2 {
+                core.sm.sleep_notice(now, &buf[..n], None, &mut core.fx).unwrap();
+            }
+            core.flush();
+            while core.next_job().is_some() {
+                copies += 1;
+            }
+            assert_eq!(copies, 0, "a copy of a notice wrote the store");
+        }
+        assert_eq!(writes, kps.len());
+        for kp in &kps {
+            core.sm.member_returned(now + SEC, &kp.node_id(), &mut core.fx);
+        }
+        core.flush();
+        while core.next_job().is_some() {
+            writes += 1;
+        }
+        assert_eq!(writes, 2 * kps.len());
+    }
+
+    type Disk = BTreeMap<[u8; 33], (NodeId, Vec<u8>)>;
+
+    /// The store as the writes leave it: the last blob written per member, an empty one removing the member.
+    fn apply(store: &mut Disk, core: &mut Core<(), SoftwareStore, AllowAll>) {
+        while let Some(Job::Mail(n, blob)) = core.next_job() {
+            if blob.is_empty() {
+                store.remove(&node_key(&n));
+            } else {
+                store.insert(node_key(&n), (n, blob));
+            }
+        }
+    }
+
+    fn kept_of(store: &Disk) -> Kept {
+        Kept {
+            records: vec![],
+            mailboxes: store.values().cloned().collect(),
+        }
+    }
+
+    /// A mark a new notice evicts leaves the store with it: after a restart the member is not asleep.
+    #[test]
+    fn an_evicted_mark_does_not_come_back_after_a_restart() {
+        let mut core = core();
+        let mut store = BTreeMap::new();
+        let now = T0 + 2000 * SEC;
+        let mut only = Vec::new();
+        for i in 0..CARRIERS {
+            only.clear();
+            encode_mark(&mut only, T0 + u64::try_from(i).unwrap() * SEC, 1);
+            store.insert(
+                node_key(&nid(u16::try_from(i).unwrap())),
+                (nid(u16::try_from(i).unwrap()), only.clone()),
+            );
+        }
+        core.restore(now, &kept_of(&store));
+        assert!(core.next_job().is_none(), "marks taken whole queue no write");
+        let kp = Keypair::from_seed(IdentityAlg::Ed25519, &[5; 32]).unwrap();
+        core.sm.carrier_opened(now, kp.node_id(), &mut core.fx).unwrap();
+        core.flush();
+        let mut buf = [0u8; pinc_connect::relay::sleep::MAX_LEN];
+        let n = pinc_connect::relay::sleep::sign(&kp, &core.node_id(), now / 1_000_000, &mut buf).unwrap();
+        core.sm.sleep_notice(now, &buf[..n], None, &mut core.fx).unwrap();
+        core.flush();
+        assert_eq!(core.sm.stats().marks_evicted, 1);
+        apply(&mut store, &mut core);
+        assert!(
+            !store.contains_key(&node_key(&nid(0))),
+            "the evicted mark is still in the store"
+        );
+        assert!(store.contains_key(&node_key(&kp.node_id())));
+        let mut again = self::core();
+        again.restore(now, &kept_of(&store));
+        assert_eq!(again.sm.sleeper(&nid(0)), None);
+        assert!(again.sm.sleeper(&nid(1)).is_some() && again.sm.sleeper(&kp.node_id()).is_some());
+        assert_eq!(again.counters.store_errors, 0);
+    }
+
+    /// A store with more live marks than the table has room for keeps the members that hold mail before the bare
+    /// marks, whatever the store's order: the bare marks left out are counted once each, and once the writes are done
+    /// the store keeps exactly the marks the table holds.
+    #[test]
+    fn a_store_with_more_marks_than_the_table_keeps_the_members_with_mail() {
+        let mut core = core();
+        let mut store = BTreeMap::new();
+        let src = nid(60_000);
+        let mut with_mail = packet_blob(&src, T0 - SEC);
+        with_mail.extend(packet_blob(&src, T0));
+        let extra = 2;
+        let last = nid(u16::try_from(CARRIERS + 1).unwrap());
+        for i in 0..CARRIERS + extra {
+            let m = nid(u16::try_from(i).unwrap());
+            let mut blob = Vec::new();
+            if m == last {
+                blob.clone_from(&with_mail);
+            } else {
+                encode_mark(&mut blob, T0 - SEC, 1);
+            }
+            store.insert(node_key(&m), (m, blob));
+        }
+        // the member with mail comes last in the store's order, and the bare marks fill the rest of the table
+        core.restore(T0, &kept_of(&store));
+        assert_eq!(core.counters.store_errors, 2, "each bare mark left out is counted once");
+        let held = (0..CARRIERS + extra)
+            .filter(|i| core.sm.sleeper(&nid(u16::try_from(*i).unwrap())).is_some())
+            .count();
+        assert_eq!(held, CARRIERS);
+        assert_eq!(
+            core.sm.mailbox_pending(&last).0,
+            2,
+            "the member with mail lost its packets"
+        );
+        assert!(core.sm.sleeper(&last).is_some(), "the member with mail lost its mark");
+        apply(&mut store, &mut core);
+        assert_eq!(store.len(), CARRIERS, "the store keeps what the table does not hold");
+        assert!(store.contains_key(&node_key(&last)));
+        let mut again = self::core();
+        again.restore(T0, &kept_of(&store));
+        assert_eq!(again.counters.store_errors, 0);
+        assert_eq!(again.sm.mailbox_pending(&last).0, 2);
+        assert!(again.next_job().is_none());
+    }
+
+    /// A mark the restore moved back to the clock is written again: the store does not keep a time ahead of it.
+    #[test]
+    fn a_mark_the_restore_clamped_is_written_back() {
+        let mut core = core();
+        let (m, src) = (nid(1), nid(2));
+        let (ahead, ts) = (T0 + 5 * SEC, 77);
+        let mut blob = packet_blob(&src, T0);
+        encode_mark(&mut blob, ahead, ts);
+        core.restore(T0, &kept_mail(m, blob));
+        assert_eq!(core.sm.sleeper(&m), Some((T0, ts)));
+        let Some(Job::Mail(n, written)) = core.next_job() else {
+            panic!("the clamped mark was not written back");
+        };
+        assert_eq!(n, m);
+        let mut tail = Vec::new();
+        encode_mark(&mut tail, T0, ts);
+        assert!(
+            written.ends_with(&tail),
+            "the store keeps the mark's time ahead of the clock"
+        );
+        assert!(core.next_job().is_none(), "one write");
+    }
+
+    /// N members' writes go out in the order they were marked, oldest first.
+    #[test]
+    fn mailbox_writes_go_out_in_the_order_they_were_queued() {
+        let mut core = core();
+        let members: Vec<NodeId> = (0..9).map(nid).collect();
+        for m in &members {
+            core.sm.restore_sleep(T0, m, T0, 5).unwrap();
+            core.note_mail(*m);
+        }
+        let mut out = Vec::new();
+        while let Some(Job::Mail(n, _)) = core.next_job() {
+            out.push(n);
+        }
+        assert_eq!(out, members);
+    }
+
+    /// A notice that evicts the oldest mark of a full table writes the evicted member's removal before its own mark,
+    /// so a crash between the two leaves the store no more live marks than the table holds.
+    #[test]
+    fn an_eviction_is_written_before_the_mark_that_caused_it() {
+        let mut core = core();
+        let mut store = BTreeMap::new();
+        let now = T0 + 2000 * SEC;
+        let mut only = Vec::new();
+        for i in 0..CARRIERS {
+            only.clear();
+            encode_mark(&mut only, T0 + u64::try_from(i).unwrap() * SEC, 1);
+            let m = nid(u16::try_from(i).unwrap());
+            store.insert(node_key(&m), (m, only.clone()));
+        }
+        core.restore(now, &kept_of(&store));
+        let kp = Keypair::from_seed(IdentityAlg::Ed25519, &[5; 32]).unwrap();
+        core.sm.carrier_opened(now, kp.node_id(), &mut core.fx).unwrap();
+        core.flush();
+        let mut buf = [0u8; pinc_connect::relay::sleep::MAX_LEN];
+        let n = pinc_connect::relay::sleep::sign(&kp, &core.node_id(), now / 1_000_000, &mut buf).unwrap();
+        core.sm.sleep_notice(now, &buf[..n], None, &mut core.fx).unwrap();
+        core.flush();
+        assert_eq!(core.sm.stats().marks_evicted, 1);
+        let Some(Job::Mail(first, blob)) = core.next_job() else {
+            panic!("no write");
+        };
+        assert_eq!(
+            (first, blob.is_empty()),
+            (nid(0), true),
+            "the evicted member's delete goes first"
+        );
+        assert!(matches!(core.next_job(), Some(Job::Mail(n, b)) if n == kp.node_id() && b.len() == 18));
+        // the crash: only the first write reached the store
+        store.remove(&node_key(&first));
+        let mut again = self::core();
+        again.restore(now, &kept_of(&store));
+        assert_eq!(
+            again.counters.store_errors, 0,
+            "the store held more marks than the table"
+        );
+        assert_eq!(store.len(), CARRIERS - 1);
     }
 
     /// The records to remove from the store never pass twice the record table, and the ones lost are counted.

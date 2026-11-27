@@ -78,7 +78,7 @@ impl<const C: usize, const R: usize, const MN: usize, const MB: usize> Relay<C, 
         if self.tunnel_down(now, dst, src, flag, packet, sink) {
             return Ok(());
         }
-        if self.sleeping.contains(dst) {
+        if self.mark_live(now, dst) {
             return self.hold(now, dst, src, flag, packet, sink);
         }
         if origin == Origin::Peer {
@@ -290,7 +290,9 @@ impl<const C: usize, const R: usize, const MN: usize, const MB: usize> Relay<C, 
     /// for the route, is not a refusal. The next packet heard from the member hands it over when the route is ready
     /// ([`Relay::udp_heard`]).
     pub fn member_returned<S: Sink>(&mut self, now: u64, node: &NodeId, sink: &mut S) {
-        self.sleeping.remove(node);
+        if self.sleeping.remove(node).is_some() {
+            sink.emit(Effect::Trace(Trace::SleepEnded { node: *node }));
+        }
         self.deliver_held(now, node, sink);
     }
 

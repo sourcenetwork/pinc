@@ -26,6 +26,7 @@ use super::hub::Hub;
 use super::io::Hosted;
 use super::part::Part;
 use super::store::Store;
+use crate::drive::wire;
 use crate::error::Result;
 
 /// The most passes one wake makes before the loop yields.
@@ -71,6 +72,22 @@ fn poll_opt<F: Future>(slot: &mut Option<Pin<Box<F>>>, cx: &mut Context<'_>) -> 
     }
 }
 
+/// Whether the socket is IPv6: a dual-stack one hands IPv4 senders over in mapped form and takes that form back.
+// vertexia: the family is learned from the first datagram received, so a send before any receive on a dual-stack
+// socket outside Linux goes out unmapped; pass the family at `relay::Udp::new` to know it from the start
+#[derive(Default)]
+struct Family(bool);
+
+impl Family {
+    fn heard(&mut self, from: SocketAddr) {
+        self.0 |= from.is_ipv6();
+    }
+
+    fn wire(&self, to: SocketAddr) -> SocketAddr {
+        wire(to, self.0)
+    }
+}
+
 /// Run the relay until it is stopped.
 #[allow(
     clippy::too_many_lines,
@@ -105,6 +122,7 @@ where
     let mut send = None;
     let mut persist: Option<Pin<Box<_>>> = None;
     let mut sleep: Option<(u64, Pin<Box<_>>)> = None;
+    let mut family = Family::default();
 
     poll_fn(|cx| {
         *inner.waker.borrow_mut() = Some(cx.waker().clone());
@@ -131,6 +149,8 @@ where
                 progressed = true;
                 let mut b = b;
                 if let Ok((n, from)) = r {
+                    family.heard(from);
+                    let from = pinc_connect::client::netcheck::canonical(from);
                     let dgram = b.get_mut(..n).unwrap_or_default();
                     if let Some(hub) = hub.as_mut() {
                         if part.datagram(hub.ep(), now, from, dgram) {
@@ -165,7 +185,7 @@ where
                     .and_then(|hub| part.core.take_udp(|to, n| hub.ep_mut().host_send(now, to, n))),
             };
             if let Some((to, buf)) = next {
-                send = Some(Box::pin(send_owned(h, buf, to)));
+                send = Some(Box::pin(send_owned(h, buf, family.wire(to))));
             }
             if let Some((r, buf)) = poll_opt(&mut send, cx) {
                 progressed = true;
@@ -222,4 +242,20 @@ where
         Poll::Pending
     })
     .await
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, reason = "tests assert")]
+mod tests {
+    use super::*;
+
+    /// After a mapped IPv4 source was received an IPv4 destination goes out mapped; before any receive it goes as given.
+    #[test]
+    fn an_ipv4_destination_is_mapped_once_an_ipv6_source_was_heard() {
+        let v4: SocketAddr = "192.0.2.7:9".parse().unwrap();
+        let mut f = Family::default();
+        assert_eq!(f.wire(v4), v4);
+        f.heard("[::ffff:192.0.2.1]:5".parse().unwrap());
+        assert_eq!(f.wire(v4), "[::ffff:192.0.2.7]:9".parse::<SocketAddr>().unwrap());
+    }
 }

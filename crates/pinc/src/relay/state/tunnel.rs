@@ -383,7 +383,7 @@ mod tests {
         }
     }
 
-    /// Mail restored from the store (it has no sleep mark) goes down the hub on the first packet heard from the member:
+    /// Mail restored from the store (kept with no mark: it is marked from its oldest packet) goes down the hub on the first packet heard from the member:
     /// the heard call stamps and releases, and its effects are applied and the store told in the same call.
     #[test]
     fn held_mail_restored_from_the_store_goes_down_the_hub_on_the_first_heard_packet() {
@@ -402,8 +402,19 @@ mod tests {
                 mailboxes: vec![(m, blob)],
             },
         );
-        assert!(core.next_job().is_none(), "a blob taken whole queues no write");
+        // the old form is written again, with the mark derived from its packet
+        let Some(Job::Mail(n, b)) = core.next_job() else {
+            panic!("the upgrade write was not queued");
+        };
+        assert_eq!(n, m);
+        let trailer = [&[0u8, 1][..], &T0.to_be_bytes(), &u64::MAX.to_be_bytes()].concat();
+        assert!(
+            b.ends_with(&trailer) && b.len() > trailer.len(),
+            "the mark is written behind the packet"
+        );
+        assert!(core.next_job().is_none(), "one write for the old blob");
         assert_eq!(core.sm.mailbox_pending(&m).0, 1);
+        assert_eq!(core.sm.sleeper(&m), Some((T0, u64::MAX)));
         let refused = core.counters.refused;
 
         core.on_heard(T0 + SEC, Some(m));
@@ -412,7 +423,9 @@ mod tests {
             panic!("the hand-over was not told to the store");
         };
         assert_eq!(n, m);
-        assert!(b.is_empty(), "nothing is held any more");
+        // a heard UDP session releases the mail and keeps the mark (only a carrier opening or the endpoint's
+        // PeerAwake ends it): the blob is the trailer alone
+        assert_eq!(b, trailer, "nothing is held any more, the mark is");
         let hub = core.hub.as_ref().unwrap();
         let [Work::Udp(to, s, e)] = hub.work.as_slice() else {
             panic!("expected one datagram for the member: {:?}", hub.work);

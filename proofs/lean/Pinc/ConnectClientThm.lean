@@ -10,13 +10,16 @@ For every instant, every view and every state:
   idle session only waits another interval (`idle_waits`);
 * tunnel: `decide` is `Carrier` without a tunnel and `Tunnel` without a carrier (`decide_no_tunnel`,
   `decide_carrier_closed`), stale carriers get both (`decide_stale`); `seen_length` (the tables keep their size; that a splice just seen has age 0 is not proved in Lean yet);
-* dial: the selection is a sublist of the candidates (`select_sublist`), at most `cap` (`select_cap`; at most one on a thin try
+* dial: the selection is a sublist of the candidates (`select_sublist`), never empty while a candidate exists
+  (`select_nonempty`, unless RLY_ONCE drops every candidate THIN_HS0 leaves), at most `cap` (`select_cap`; at most one on a thin try
   is not proved in Lean yet); `add_size` (the pending table keeps its size; that `take` clears the entry of the peer is
   not proved in Lean yet);
 * lookup: `ask_size` (the table keeps its size), `answered_removes`, `deadline_due`, and
   `verify_found`: an answer is accepted only if the record parses, its signature verifies and it names the peer asked
   about;
-* netcheck: `classify_blocked`, `failover_healthy`, `missing_fallback`; after an answer a pinned relay that ever
+* netcheck: `classify_blocked`, `classify_canon` (the class depends only on the canonical addresses, `canon_mapped`),
+  `failover_healthy` (to a relay answered since its last failure, `healthy_okf`, `failed_okf`, or an open carrier),
+  `missing_fallback`; after an answer a pinned relay that ever
   answered and is not unhealthy is the home (`answered_pin_home`, over `rehome_pin` and `rehome_only_home`), and
   otherwise (`answered_home_least`) the home is the relay with the lowest last round trip among those that ever answered
   and are not unhealthy, a tie to the one that answered first; `restart_keeps`: a link change keeps the home, that order
@@ -128,8 +131,8 @@ theorem select_sublist (cands : List Cand) (t : Try) (relay : Nat → Option Rel
     (select cands t relay cap).1.Sublist cands := by
   unfold select
   dsimp only
-  have hk : ((cands.take 16).filter (keepCand t relay)).Sublist cands :=
-    (List.filter_sublist).trans (List.take_sublist _ _)
+  have hk : (keepAll t relay (cands.take 16)).Sublist cands := by
+    unfold keepAll; exact (List.filter_sublist).trans (List.take_sublist _ _)
   split
   · exact (List.take_sublist _ _).trans ((List.take_sublist _ _).trans ((List.drop_sublist _ _).trans hk))
   · exact (List.take_sublist _ _).trans hk
@@ -138,6 +141,60 @@ theorem select_cap (cands : List Cand) (t : Try) (relay : Nat → Option RelayVi
     (select cands t relay cap).1.length ≤ cap := by
   unfold select; dsimp only
   exact List.length_take_le _ _
+
+/-- `l.all p = false` names an element `p` is false on. -/
+theorem all_false {α : Type} {p : α → Bool} : ∀ {l : List α}, l.all p = false → ∃ x ∈ l, p x = false
+  | [], h => by simp at h
+  | a :: t, h => by
+    cases hpa : p a with
+    | false => exact ⟨a, by simp, hpa⟩
+    | true =>
+      have ht : t.all p = false := by simpa [List.all_cons, hpa] using h
+      obtain ⟨x, hx, hp⟩ := all_false ht
+      exact ⟨x, by simp [hx], hp⟩
+
+/-- The rules leave some candidate whenever one is neither a THIN_HS0 drop (under its fallback) nor a RLY_ONCE drop. -/
+theorem econ_keeps {α : Type} (w : List α) (p q : α → Bool)
+    (h : ∃ c ∈ w, q c = false ∧ (p c = false ∨ w.all p = true)) :
+    ∃ c ∈ w, (!((!(w.all p) && p c) || q c)) = true := by
+  obtain ⟨c, hc, hq, hp⟩ := h
+  refine ⟨c, hc, ?_⟩
+  rcases hp with hp | hall
+  · simp [hq, hp]
+  · simp [hq, hall]
+
+/-- `select` never returns nothing while a candidate exists and there is room for one, unless RLY_ONCE drops every
+candidate THIN_HS0 leaves (the relay holds the flight): THIN_HS0 that would drop every candidate is not applied. -/
+theorem select_nonempty (cands : List Cand) (t : Try) (relay : Nat → Option RelayView) (cap : Nat)
+    (hex : ∃ c ∈ cands.take 16, onceDrop t relay c = false ∧
+      (hs0Drop t c = false ∨ (cands.take 16).all (hs0Drop t) = true))
+    (hcap : 0 < cap) : (select cands t relay cap).1 ≠ [] := by
+  obtain ⟨c, hc1, hk⟩ := econ_keeps (cands.take 16) (hs0Drop t) (onceDrop t relay) hex
+  have hne : keepAll t relay (cands.take 16) ≠ [] := by
+    unfold keepAll; exact List.ne_nil_of_mem (List.mem_filter.mpr ⟨hc1, hk⟩)
+  have take_ne : ∀ (l : List Cand) (k : Nat), l ≠ [] → 0 < k → l.take k ≠ [] := by
+    intro l k hl hk
+    cases l with
+    | nil => exact absurd rfl hl
+    | cons a l =>
+      cases k with
+      | zero => omega
+      | succ k => simp
+  unfold select
+  dsimp only
+  generalize keepAll t relay (cands.take 16) = K at hne ⊢
+  have hlen : 0 < K.length := by
+    cases K with
+    | nil => exact absurd rfl hne
+    | cons _ _ => simp
+  split
+  · apply take_ne _ _ _ hcap
+    apply take_ne _ _ _ (by omega)
+    intro h
+    rw [List.drop_eq_nil_iff] at h
+    have := Nat.mod_lt t.tries hlen
+    omega
+  · exact take_ne _ _ hne hcap
 
 theorem add_size (p : Pending) (peer s : Nat) : (p.add peer s).2.items.length = p.items.length := by
   unfold Pending.add
@@ -211,9 +268,9 @@ theorem verify_found (peer : List Nat) (a : Answer) (sig : Bool) (tg : Pinc.Conn
 
 /-! ## Netcheck -/
 
-theorem classify_blocked (o : Observed) (h : classify o = some 5) :
+theorem classifyRaw_blocked (o : Observed) (h : classifyRaw o = some 5) :
     o.udpHeard = false ∧ o.reflexive = [] ∧ o.watchdog ≤ o.sinceProbe := by
-  unfold classify at h
+  unfold classifyRaw at h
   split at h
   · rename_i hr
     by_cases hc : ¬ o.udpHeard = true ∧ o.sinceProbe ≥ o.watchdog
@@ -224,6 +281,26 @@ theorem classify_blocked (o : Observed) (h : classify o = some 5) :
     · split at h
       · simp at h
       · split at h <;> simp at h
+
+theorem classify_blocked (o : Observed) (h : classify o = some 5) :
+    o.udpHeard = false ∧ o.reflexive = [] ∧ o.watchdog ≤ o.sinceProbe := by
+  unfold classify at h
+  obtain ⟨h1, h2, h3⟩ := classifyRaw_blocked _ h
+  exact ⟨h1, by simpa using h2, h3⟩
+
+/-- The class depends only on the canonical form of the addresses: two observations whose addresses agree once each
+IPv4 address in its mapped form is written as the IPv4 address get the same class. -/
+theorem classify_canon (o o' : Observed) (hl : o.local_.map canon = o'.local_.map canon)
+    (hr : o.reflexive.map canon = o'.reflexive.map canon) (hm : o.mapped.map canon = o'.mapped.map canon)
+    (hu : o.udpHeard = o'.udpHeard) (hs : o.sinceProbe = o'.sinceProbe) (hd : o.watchdog = o'.watchdog) :
+    classify o = classify o' := by
+  unfold classify; rw [hl, hr, hm, hu, hs, hd]
+
+/-- `canonical` writes an IPv4 address in its mapped form as the IPv4 address, and leaves an IPv4 address as it is. -/
+theorem canon_mapped (a b c d port : Nat) :
+    canon ([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, a, b, c, d], port) = ([a, b, c, d], port) ∧
+    canon ([a, b, c, d], port) = ([a, b, c, d], port) := by
+  constructor <;> simp [canon, canonIp]
 
 theorem missing_fallback (n : Netcheck) (f : Nat) (hh : n.home = none) (ht : homeTries ≤ n.tries + 1) (htl : n.tries + 1 ≤ 255) :
     (n.homeMissing (some f)).1 = .fallback f := by
@@ -342,7 +419,7 @@ theorem failover_healthy (n n' : Netcheck) (usable isOpen : Nat → Bool) (x : N
     (h : n.failover usable isOpen = (some x, n')) :
     (∃ home, n.home = some home ∧ n.unhealthy home = true ∧ x ≠ home) ∧
     usable x = true ∧ n.unhealthy x = false ∧
-    ((n.missed.getD x 0 = 0 ∧ (n.refl.getD x none).isSome = true) ∨ isOpen x = true) ∧
+    ((n.okf.getD x false = true ∧ (n.refl.getD x none).isSome = true) ∨ isOpen x = true) ∧
     n' = { n with home := some x } := by
   unfold Netcheck.failover at h
   cases hh : n.home with
@@ -359,8 +436,8 @@ theorem failover_healthy (n n' : Netcheck) (usable isOpen : Nat → Bool) (x : N
           simp only [Prod.mk.injEq, Option.some.injEq] at h; exact h
         have hs := (argMin_spec _ _ _ hm).1
         simp only [List.mem_filter, Bool.and_eq_true, bne_iff_ne, ne_eq, beq_iff_eq] at hs
-        obtain ⟨_, ⟨⟨hne, hus⟩, hz⟩, hrf⟩ := hs
-        exact ⟨⟨home, rfl, hu, hne⟩, hus, unhealthy_zero n _ hz, Or.inl ⟨hz, hrf⟩, rfl⟩
+        obtain ⟨_, ⟨⟨⟨hne, hus⟩, hz⟩, hok⟩, hrf⟩ := hs
+        exact ⟨⟨home, rfl, hu, hne⟩, hus, unhealthy_zero n _ hz, Or.inl ⟨hok, hrf⟩, rfl⟩
       | none =>
         simp only [] at h
         cases hf : (((List.range' 1 (n.probes.length - 1)).map fun k => (home + k) % n.probes.length).find?
@@ -393,17 +470,31 @@ theorem failover_none (n n' : Netcheck) (usable isOpen : Nat → Bool)
       · simp at h
       · simp at h; exact h.symm
 
-/-- The measured candidate has the least round trip among the candidates: configured, not the home, with no miss since
-its last answer and a known reflexive address. -/
+/-- The measured candidate has the least round trip among the candidates: configured, not the home, with no miss, a
+probe answered since its last failure and a known reflexive address. -/
 theorem failover_measured_least (n : Netcheck) (usable : Nat → Bool) (home m : Nat)
     (h : argMin ((List.range n.probes.length).filter fun i =>
-        i != home && usable i && n.missed.getD i 0 == 0 && (n.refl.getD i none).isSome) (fun i => n.rtt.getD i 0) = some m) :
-    ∀ i, i < n.probes.length → i ≠ home → usable i = true → n.missed.getD i 0 = 0 →
+        i != home && usable i && n.missed.getD i 0 == 0 && n.okf.getD i false && (n.refl.getD i none).isSome)
+        (fun i => n.rtt.getD i 0) = some m) :
+    ∀ i, i < n.probes.length → i ≠ home → usable i = true → n.missed.getD i 0 = 0 → n.okf.getD i false = true →
       (n.refl.getD i none).isSome = true → n.rtt.getD m 0 ≤ n.rtt.getD i 0 := by
-  intro i hi hne hus hz hrf
+  intro i hi hne hus hz hok hrf
   apply (argMin_spec _ _ _ h).2
   simp only [List.mem_filter, List.mem_range, Bool.and_eq_true, bne_iff_ne, ne_eq, beq_iff_eq]
-  exact ⟨hi, ⟨⟨hne, hus⟩, hz⟩, hrf⟩
+  exact ⟨hi, ⟨⟨⟨hne, hus⟩, hz⟩, hok⟩, hrf⟩
+
+/-- An opened carrier clears the misses but not the bit "answered since the last failure"; a failure clears it. -/
+theorem healthy_okf (n : Netcheck) (i : Nat) : (n.healthy i).okf = n.okf := by
+  unfold Netcheck.healthy; split <;> rfl
+
+theorem failed_okf (n : Netcheck) (i : Nat) (hm : i < n.missed.length) : (n.failed i).okf.getD i false = false := by
+  unfold Netcheck.failed
+  rw [if_pos hm]
+  simp only [List.getD_eq_getElem?_getD]
+  by_cases hl : i < n.okf.length
+  · rw [List.getElem?_set_self hl]; rfl
+  · have hle : (n.okf.set i false).length ≤ i := by simp only [List.length_set]; omega
+    rw [List.getElem?_eq_none hle]; rfl
 
 /-! ## Netcheck: the home after an answer -/
 
@@ -554,6 +645,8 @@ end Pinc.ConnectClient
 
 #audit_axioms Pinc.ConnectClient.argMin_spec
 #audit_axioms Pinc.ConnectClient.failover_healthy
+#audit_axioms Pinc.ConnectClient.select_nonempty
+#audit_axioms Pinc.ConnectClient.classify_canon
 #audit_axioms Pinc.ConnectClient.failover_none
 #audit_axioms Pinc.ConnectClient.failover_measured_least
 #audit_axioms Pinc.ConnectClient.answered_home_least

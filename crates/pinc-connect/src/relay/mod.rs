@@ -27,6 +27,9 @@ pub mod route;
 pub mod sleep;
 pub mod table;
 
+#[cfg(test)]
+mod marks_tests;
+
 use core::net::SocketAddr;
 
 use pinc_crypto::NodeId;
@@ -339,9 +342,16 @@ pub enum Trace {
     },
     /// An address discovery query was answered.
     QadAnswered,
-    /// A sleep notice was accepted.
+    /// A sleep notice was accepted and set or moved the node's mark (a copy of the notice that set it changes nothing
+    /// and is not traced).
     SleepAccepted {
         /// The sleeping node.
+        node: NodeId,
+    },
+    /// A node's sleep mark ended because the node came back (a carrier opened or its UDP session woke) or because a
+    /// new notice took its slot in a full table. A mark that ends by age is not traced.
+    SleepEnded {
+        /// The node whose mark ended.
         node: NodeId,
     },
     /// A carrier keepalive probe arrived (evidence of life for the sessions riding this carrier).
@@ -395,6 +405,8 @@ pub struct Stats {
     pub lookups: u64,
     /// Address discovery queries answered.
     pub qad: u64,
+    /// Sleep marks dropped to make room for the mark of a new notice (the table was full of marks with no mail).
+    pub marks_evicted: u64,
 }
 
 #[derive(Debug)]
@@ -403,10 +415,20 @@ pub(crate) struct FwdBack {
     pub(crate) at: u64,
 }
 
+/// A member's sleep mark: set by the notice that moved it, `at` the relay's time and `ts_ms` the notice's clock
+/// (`u64::MAX`, a clock the skew check refuses, for a mark derived from restored mail).
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Sleeper {
     pub(crate) at: u64,
+    pub(crate) ts_ms: u64,
     pub(crate) woke: u64,
+}
+
+/// Whether the mark `s` is alive at `now`: a mark lasts `max_age` (the mailbox's maximum age) from the notice that set
+/// it, the life of a message held under it. The routing, the hold and the sweep all call this, so the rule is one
+/// expression.
+pub(crate) const fn live(now: u64, s: &Sleeper, max_age: u64) -> bool {
+    now.saturating_sub(s.at) < max_age
 }
 
 /// A relay with room for `C` member sessions, `R` stored records and a mailbox of `MN` members of `MB` bytes each.
@@ -488,10 +510,13 @@ impl<const C: usize, const R: usize, const MN: usize, const MB: usize> Relay<C, 
     }
 
     /// Put back a packet for `node` that arrived at `at` and was kept across a restart. Restore a member's packets
-    /// oldest first; one older than the mailbox's maximum age is refused.
+    /// oldest first; one older than the mailbox's maximum age is refused. A member restored with held mail and no mark is
+    /// asleep since the oldest of it: its mark is derived from `at` (a time ahead of `now` counts as `now`) and ends
+    /// with that packet. No mail is held for a node without a mark, and a restore evicts no mark.
     ///
     /// # Errors
-    /// [`Reject::MailboxRefused`] if the packet is expired, empty, too long, or no member slot is free.
+    /// [`Reject::MailboxRefused`] if the packet is expired, empty, too long, or no member slot is free, or
+    /// [`Reject::SessionsFull`] if the node has no mark and the mark table has no room for one.
     pub fn restore_held(
         &mut self,
         now: u64,
@@ -504,10 +529,82 @@ impl<const C: usize, const R: usize, const MN: usize, const MB: usize> Relay<C, 
         if now.saturating_sub(at) >= self.cfg.mailbox_max_age_ns {
             return Err(Reject::MailboxRefused);
         }
+        let derived = !self.sleeping.contains(node);
+        if derived {
+            let mark = Sleeper {
+                at: at.min(now),
+                ts_ms: u64::MAX,
+                woke: 0,
+            };
+            self.put_sleeper(node, mark, false)?;
+        }
         match self.mailbox.restore(now, at, node, src, flag, body) {
             mailbox::Push::Stored { .. } => Ok(()),
-            mailbox::Push::TooLarge | mailbox::Push::NoSlot => Err(Reject::MailboxRefused),
+            mailbox::Push::TooLarge | mailbox::Push::NoSlot => {
+                if derived {
+                    self.sleeping.remove(node);
+                }
+                Err(Reject::MailboxRefused)
+            }
         }
+    }
+
+    /// Put back the sleep mark of `node` that a notice set at `at` (with the notice's clock `ts_ms`) and that was kept
+    /// across a restart; an existing mark is replaced. The mark keeps its original time, so it ends when it would
+    /// have (a time ahead of `now` counts as `now`), and a message held under it expires with it. The next packet held
+    /// for the node asks for a wake-up. A restore evicts no mark.
+    ///
+    /// # Errors
+    /// [`Reject::MailboxRefused`] if the mark ended (`at` is at least the mailbox's maximum age before `now`), or
+    /// [`Reject::SessionsFull`] if the node is new and the mark table has no free slot.
+    pub fn restore_sleep(&mut self, now: u64, node: &NodeId, at: u64, ts_ms: u64) -> Result<(), Reject> {
+        let s = Sleeper {
+            at: at.min(now),
+            ts_ms,
+            woke: 0,
+        };
+        if !live(now, &s, self.cfg.mailbox_max_age_ns) {
+            return Err(Reject::MailboxRefused);
+        }
+        self.put_sleeper(node, s, false).map(|_| ())
+    }
+
+    /// The time `node`'s sleep mark was set and the clock of the notice that set it (`u64::MAX` for a mark derived from
+    /// mail),
+    /// if it has one. A host keeps these across a restart and gives them back with [`Relay::restore_sleep`].
+    pub fn sleeper(&self, node: &NodeId) -> Option<(u64, u64)> {
+        self.sleeping.get(node).map(|s| (s.at, s.ts_ms))
+    }
+
+    /// Whether `node` has a mark that is alive at `now`.
+    pub(crate) fn mark_live(&self, now: u64, node: &NodeId) -> bool {
+        self.sleeping
+            .get(node)
+            .is_some_and(|s| live(now, s, self.cfg.mailbox_max_age_ns))
+    }
+
+    /// Set the mark of `node`. With `evict`, a full table first drops the oldest mark whose member holds no mail (one
+    /// pass over the table, only when full and the node is new) and returns that member; without it a full table
+    /// refuses a new node.
+    ///
+    /// # Errors
+    /// [`Reject::SessionsFull`] if the table is full and no mark could be dropped.
+    pub(crate) fn put_sleeper(&mut self, node: &NodeId, s: Sleeper, evict: bool) -> Result<Option<NodeId>, Reject> {
+        let mut dropped = None;
+        if self.sleeping.is_full() && !self.sleeping.contains(node) {
+            let oldest = self
+                .sleeping
+                .iter()
+                .filter(|(n, _)| evict && self.mailbox.pending(n).0 == 0)
+                .min_by_key(|(_, m)| m.at)
+                .map(|(n, _)| *n)
+                .ok_or(Reject::SessionsFull)?;
+            self.sleeping.remove(&oldest);
+            self.stats.marks_evicted += 1;
+            dropped = Some(oldest);
+        }
+        self.sleeping.insert(*node, s).map_err(|_| Reject::SessionsFull)?;
+        Ok(dropped)
     }
 
     /// The time the stored record of `node` was received or last restored, if one is stored (it ends

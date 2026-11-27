@@ -17,6 +17,8 @@
 //! 5. **Behind NAT**: a reflexive address that differs from every local address and is the same at every relay that
 //!    answered. With one answer this is the best the node can say; a second relay may correct it to carrier-grade.
 //!
+//! An IPv4 address in its mapped IPv6 form is the IPv4 address in every rule ([`canonical`]).
+//!
 //! **Failover.** A relay that failed [`MISS_LIMIT`] times in a row (probes sent while the last was unanswered, or
 //! carrier dials that never opened) is unhealthy. When the home relay is unhealthy the home moves only to a relay
 //! known to work: the one with the lowest round trip among those that answered a probe since they last failed, else
@@ -43,9 +45,17 @@ pub const HOME_RETRY_NS: u64 = 2_000_000_000;
 /// Failures in a row after which a relay is unhealthy.
 pub const MISS_LIMIT: u8 = 3;
 
-/// Whether `ip` is in the shared address space of carrier-grade NAT (100.64.0.0/10).
+/// The address as the endpoint sees it: an IPv4-mapped IPv6 address (what a dual-stack socket reports for an IPv4
+/// peer) is the IPv4 address; every other address is unchanged. The one place that decides it: the hosts apply it to
+/// the source of every datagram, and [`classify`] and [`Netcheck`] to every address they compare or keep.
+pub const fn canonical(a: SocketAddr) -> SocketAddr {
+    SocketAddr::new(a.ip().to_canonical(), a.port())
+}
+
+/// Whether `ip` (in either form of an IPv4 address) is in the shared address space of carrier-grade NAT
+/// (100.64.0.0/10).
 pub const fn is_shared(ip: &IpAddr) -> bool {
-    match ip {
+    match ip.to_canonical() {
         IpAddr::V4(v) => {
             let o = v.octets();
             o[0] == 100 && o[1] & 0xc0 == 64
@@ -83,13 +93,17 @@ pub fn classify(o: &Observed<'_>) -> Option<Reach> {
     let Some(first) = o.reflexive.first() else {
         return (!o.udp_heard && o.since_probe >= o.watchdog).then_some(Reach::UdpBlocked);
     };
-    if o.reflexive.iter().any(|r| o.local.contains(r)) {
+    if o.reflexive
+        .iter()
+        .any(|r| o.local.iter().any(|l| canonical(*l) == canonical(*r)))
+    {
         return Some(Reach::Public);
     }
     if o.mapped.iter().any(|m| mapped_seen(o.reflexive, m)) {
         return Some(Reach::PortMapped);
     }
-    if o.reflexive.iter().any(|r| is_shared(&r.ip())) || o.reflexive.iter().any(|r| r != first) {
+    if o.reflexive.iter().any(|r| is_shared(&r.ip())) || o.reflexive.iter().any(|r| canonical(*r) != canonical(*first))
+    {
         return Some(Reach::Cgnat);
     }
     Some(Reach::Nat)
@@ -111,6 +125,8 @@ pub struct Netcheck<const R: usize> {
     reflexive: [Option<SocketAddr>; R],
     home: Option<usize>,
     missed: [u8; R],
+    /// Whether a probe was answered since the relay last failed ([`Netcheck::failover`]'s measured choice).
+    ok_since_fail: [bool; R],
     tries: u8,
     first_probe: Option<u64>,
     pin: Option<usize>,
@@ -132,6 +148,7 @@ impl<const R: usize> Netcheck<R> {
             reflexive: [None; R],
             home: None,
             missed: [0; R],
+            ok_since_fail: [false; R],
             tries: 0,
             first_probe: None,
             pin: None,
@@ -171,9 +188,12 @@ impl<const R: usize> Netcheck<R> {
         if let Some(m) = self.missed.get_mut(relay) {
             *m = 0;
         }
+        if let Some(ok) = self.ok_since_fail.get_mut(relay) {
+            *ok = true;
+        }
         let rtt = now.saturating_sub(sent);
         *self.rtt.get_mut(relay)? = rtt;
-        *self.reflexive.get_mut(relay)? = Some(addr);
+        *self.reflexive.get_mut(relay)? = Some(canonical(addr));
         if self.order.get(relay) == Some(&0) {
             let next = self.order.iter().max().map_or(1, |m| m.saturating_add(1));
             *self.order.get_mut(relay)? = next;
@@ -200,9 +220,12 @@ impl<const R: usize> Netcheck<R> {
         if let Some(m) = self.missed.get_mut(relay) {
             *m = m.saturating_add(1);
         }
+        if let Some(ok) = self.ok_since_fail.get_mut(relay) {
+            *ok = false;
+        }
     }
 
-    /// A carrier to `relay` opened: it is healthy.
+    /// A carrier to `relay` opened: it is healthy (it is not thereby known to answer probes).
     pub fn healthy(&mut self, relay: usize) {
         if let Some(m) = self.missed.get_mut(relay) {
             *m = 0;
@@ -227,6 +250,7 @@ impl<const R: usize> Netcheck<R> {
                 *i != home
                     && usable(*i)
                     && self.missed.get(*i) == Some(&0)
+                    && self.ok_since_fail.get(*i) == Some(&true)
                     && self.reflexive.get(*i).is_some_and(Option::is_some)
             })
             .min_by_key(|i| self.rtt.get(*i).copied().unwrap_or(u64::MAX));
@@ -319,4 +343,156 @@ pub enum HomeStep {
     Again,
     /// Three rounds went unanswered: this relay is the home.
     Fallback(usize),
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::cast_possible_truncation, reason = "tests assert")]
+mod tests {
+    use core::net::Ipv4Addr;
+
+    use super::*;
+
+    fn v4(a: u8, b: u8, c: u8, d: u8) -> SocketAddr {
+        SocketAddr::from((Ipv4Addr::new(a, b, c, d), 4000))
+    }
+
+    fn mapped(a: u8, b: u8, c: u8, d: u8) -> SocketAddr {
+        SocketAddr::new(Ipv4Addr::new(a, b, c, d).to_ipv6_mapped().into(), 4000)
+    }
+
+    fn class(local: &[SocketAddr], reflexive: &[SocketAddr], mapped: &[SocketAddr]) -> Option<Reach> {
+        classify(&Observed {
+            local,
+            reflexive,
+            mapped,
+            udp_heard: true,
+            since_probe: 0,
+            watchdog: 8_000_000_000,
+        })
+    }
+
+    #[test]
+    fn a_mapped_address_is_its_ipv4_address_and_nothing_else_changes() {
+        assert_eq!(canonical(mapped(1, 2, 3, 4)), v4(1, 2, 3, 4));
+        assert_eq!(canonical(v4(1, 2, 3, 4)), v4(1, 2, 3, 4));
+        let v6 = SocketAddr::new("2001:db8::1".parse().unwrap(), 9);
+        assert_eq!(canonical(v6), v6);
+    }
+
+    #[test]
+    fn each_rule_gives_the_same_class_in_either_form() {
+        let me = v4(198, 51, 100, 7);
+        let nat_local = v4(192, 168, 1, 2);
+        for (local, reflexive, mapped_ext, want) in [
+            // blocked: nothing reported
+            (nat_local, None, None, None),
+            // public
+            (me, Some([mapped(198, 51, 100, 7)]), None, Some(Reach::Public)),
+            (mapped(198, 51, 100, 7), Some([me]), None, Some(Reach::Public)),
+            // port-mapped
+            (
+                nat_local,
+                Some([mapped(203, 0, 113, 9)]),
+                Some(v4(203, 0, 113, 9)),
+                Some(Reach::PortMapped),
+            ),
+            (
+                nat_local,
+                Some([v4(203, 0, 113, 9)]),
+                Some(mapped(203, 0, 113, 9)),
+                Some(Reach::PortMapped),
+            ),
+            // shared range
+            (nat_local, Some([mapped(100, 64, 0, 1)]), None, Some(Reach::Cgnat)),
+            (nat_local, Some([v4(100, 64, 0, 1)]), None, Some(Reach::Cgnat)),
+            // behind NAT
+            (nat_local, Some([mapped(203, 0, 113, 9)]), None, Some(Reach::Nat)),
+        ] {
+            let reflexive: &[SocketAddr] = reflexive.as_ref().map_or(&[], |r| r);
+            let mapped_ext: &[SocketAddr] = mapped_ext.as_slice();
+            assert_eq!(class(&[local], reflexive, mapped_ext), want, "{local} {reflexive:?}");
+        }
+    }
+
+    #[test]
+    fn two_relays_that_report_one_address_in_two_forms_agree_and_two_addresses_do_not() {
+        let local = [v4(192, 168, 1, 2)];
+        assert_eq!(
+            class(&local, &[v4(203, 0, 113, 9), mapped(203, 0, 113, 9)], &[]),
+            Some(Reach::Nat)
+        );
+        assert_eq!(
+            class(&local, &[mapped(203, 0, 113, 9), v4(203, 0, 113, 8)], &[]),
+            Some(Reach::Cgnat)
+        );
+        let v6 = SocketAddr::new("2001:db8::1".parse().unwrap(), 4000);
+        assert_eq!(class(&[v6], &[v6], &[]), Some(Reach::Public));
+        assert_eq!(class(&local, &[v6, mapped(203, 0, 113, 9)], &[]), Some(Reach::Cgnat));
+    }
+
+    #[test]
+    fn the_table_keeps_the_canonical_address() {
+        let mut n = Netcheck::<2>::new();
+        n.probe_sent(0, 0, [1; 8], true);
+        n.probe_sent(0, 1, [2; 8], true);
+        n.answered(10, 0, [1; 8], mapped(203, 0, 113, 9)).unwrap();
+        n.answered(10, 1, [2; 8], v4(203, 0, 113, 9)).unwrap();
+        assert_eq!(n.reflexive_of(0), Some(v4(203, 0, 113, 9)));
+        let mut out = [v4(0, 0, 0, 0); 2];
+        assert_eq!(n.reflexive_into(&mut out), 1, "one address in two forms is listed once");
+    }
+    #[test]
+    fn a_relay_whose_carrier_opened_after_its_failure_is_not_a_measured_failover_target() {
+        let mut n = Netcheck::<3>::new();
+        for r in 0..3 {
+            n.probe_sent(0, r, [r as u8; 8], true);
+            n.answered(10 * (r as u64 + 1), r, [r as u8; 8], v4(203, 0, 113, 9))
+                .unwrap();
+        }
+        assert_eq!(n.home(), Some(0));
+        // relay 1 failed since its answer, then a carrier opened and closed: healthy, but no answer since the failure
+        n.failed(1);
+        n.healthy(1);
+        for _ in 0..MISS_LIMIT {
+            n.failed(0);
+        }
+        assert_eq!(
+            n.failover(|_| true, |_| false),
+            Some(2),
+            "only relay 2 answered since it last failed"
+        );
+    }
+
+    #[test]
+    fn an_answer_after_the_failure_makes_the_relay_a_target_and_the_lowest_round_trip_wins() {
+        let mut n = Netcheck::<3>::new();
+        for r in 0..3 {
+            n.probe_sent(0, r, [r as u8; 8], true);
+            n.answered(10 * (r as u64 + 1), r, [r as u8; 8], v4(203, 0, 113, 9))
+                .unwrap();
+        }
+        n.failed(1);
+        n.healthy(1);
+        n.probe_sent(100, 1, [9; 8], true);
+        n.answered(115, 1, [9; 8], v4(203, 0, 113, 9)).unwrap();
+        for _ in 0..MISS_LIMIT {
+            n.failed(0);
+        }
+        // relay 1 now has a round trip of 15, relay 2 of 30
+        assert_eq!(n.failover(|_| true, |_| false), Some(1));
+    }
+
+    #[test]
+    fn with_no_measured_relay_failover_takes_an_open_carrier_or_stays() {
+        let mut n = Netcheck::<2>::new();
+        n.probe_sent(0, 0, [1; 8], true);
+        n.answered(10, 0, [1; 8], v4(203, 0, 113, 9)).unwrap();
+        n.healthy(1);
+        for _ in 0..MISS_LIMIT {
+            n.failed(0);
+        }
+        assert_eq!(n.failover(|_| true, |_| false), None);
+        assert_eq!(n.home(), Some(0));
+        assert_eq!(n.failover(|_| true, |i| i == 1), Some(1));
+    }
 }

@@ -163,13 +163,8 @@ enum Step<T> {
 /// The I/O error of a host's platform.
 type HostErr<H> = <<H as Hosted>::Platform as Platform>::Error;
 
-/// The address as the endpoint sees it: a mapped IPv4 address on a dual-stack socket is IPv4.
-fn canon(a: SocketAddr) -> SocketAddr {
-    SocketAddr::new(a.ip().to_canonical(), a.port())
-}
-
 /// The address as the socket takes it.
-fn wire(a: SocketAddr, socket_v6: bool) -> SocketAddr {
+pub(crate) fn wire(a: SocketAddr, socket_v6: bool) -> SocketAddr {
     match (a.ip(), socket_v6) {
         (IpAddr::V4(v4), true) => SocketAddr::new(v4.to_ipv6_mapped().into(), a.port()),
         _ => a,
@@ -480,7 +475,7 @@ impl<H: Hosted> Shared<H> {
                             #[cfg(feature = "trace")]
                             crate::trace_turn::took();
                             let now = self.now();
-                            let from = canon(from);
+                            let from = pinc_connect::client::netcheck::canonical(from);
                             if let Some(mut core) = self.lock() {
                                 let batch = buf.v.get_mut(..n).unwrap_or_default();
                                 if H::Role::ON {

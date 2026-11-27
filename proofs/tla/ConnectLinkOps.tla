@@ -50,16 +50,23 @@ NewShared == [phone |-> FALSE, kfail |-> -1, lhi |-> 0, klearn |-> FALSE, kiv |-
 
 R(L, S, a) == [L |-> L, S |-> S, act |-> a]
 
+\* the restart defer holds the home carrier's dial at now: nothing queued and its end still ahead (S.du is fixed when
+\* the shared state is built, at the start of the node; -1: not a restart)
+Deferring(S, now, c) == S.restarted /\ ~c.queued /\ c.home /\ S.du >= 0 /\ now < S.du
+
+\* Link::dial_at: the retry time, held back to the end of the defer, brought forward to now by a frame queued during it
+DialAt(L, S, now, c) ==
+    IF Deferring(S, now, c) THEN Max(L.at, S.du)
+    ELSE IF S.restarted /\ c.queued /\ L.defer THEN Min(L.at, now) ELSE L.at
+
 WantDial(L, S, now, c) ==
     IF L.st # "down" THEN R(L, S, "none")
-    ELSE LET S1 == IF S.restarted /\ S.du < 0 THEN [S EXCEPT !.du = now + DEFER] ELSE S
-             untl == S1.du
-         IN IF S.restarted /\ ~c.queued /\ c.home /\ now < untl
-            THEN R([L EXCEPT !.at = Max(L.at, untl), !.defer = TRUE], S1, "none")
-            ELSE LET L1 == IF S.restarted /\ c.queued /\ L.defer THEN [L EXCEPT !.defer = FALSE, !.at = Min(L.at, now)] ELSE L
-                 IN IF L1.at <= now /\ (c.queued \/ c.home)
-                    THEN R([L1 EXCEPT !.st = "dialing", !.ds = now], S1, "dial")
-                    ELSE R(L1, S1, "none")
+    ELSE IF Deferring(S, now, c)
+         THEN R([L EXCEPT !.at = DialAt(L, S, now, c), !.defer = TRUE], S, "none")
+         ELSE LET L1 == IF S.restarted /\ c.queued /\ L.defer THEN [L EXCEPT !.defer = FALSE, !.at = Min(L.at, now)] ELSE L
+              IN IF DialAt(L1, S, now, c) <= now /\ (c.queued \/ c.home)
+                 THEN R([L1 EXCEPT !.st = "dialing", !.ds = now], S, "dial")
+                 ELSE R(L1, S, "none")
 
 Opened(L, now) == [was |-> L.was, L |-> [L EXCEPT !.st = "open", !.retry = RETRYMIN, !.chk = 0, !.ride = FALSE,
                                           !.lrx = now, !.hlt = now, !.was = TRUE]]
@@ -84,8 +91,13 @@ Pulse(L, now, c) ==
     ELSE LET k == Check(L, now, c, FALSE) IN [L |-> k.L, p |-> IF k.act = "none" THEN "waiting" ELSE "ping"]
 
 KeepAfter(S, now, c) ==
-    LET base == IF c.home /\ (S.phone \/ (S.kfail >= 0 /\ SatSub(now, S.kfail) < KEEPMEM)) THEN HOMEKEEP ELSE RELAYKEEP
+    LET base == IF c.home /\ (S.phone \/ (S.kfail >= 0 /\ SatSub(now, S.kfail) <= KEEPMEM)) THEN HOMEKEEP ELSE RELAYKEEP
     IN IF S.kiv = 0 THEN base ELSE Min(base, S.kiv)
+
+\* Link::keep_due: the last heard time plus the interval that holds at that instant (the interval only grows as the
+\* memory of a silent death ends, so reading it again at the first candidate is exact)
+KeepDue(L, S, now, c) ==
+    LET first == L.lrx + KeepAfter(S, now, c) IN L.lrx + KeepAfter(S, Max(first, now), c)
 
 TickOpen(L, S, now, c) ==
     LET lease == S.lhi # 0 /\ ~c.udp IN
@@ -102,7 +114,7 @@ TickOpen(L, S, now, c) ==
     ELSE IF L.chk # 0 THEN R(L, S, "none")
     ELSE IF lease /\ (c.home \/ c.rides) /\ SatSub(now, L.hlt) >= LeaseKeep(S.lhi)
          THEN LET k == Check(L, now, c, FALSE) IN R(k.L, S, k.act)
-    ELSE IF (c.home \/ c.rides) /\ SatSub(now, L.lrx) >= KeepAfter(S, now, c) THEN R(L, S, "check")
+    ELSE IF (c.home \/ c.rides) /\ now >= KeepDue(L, S, now, c) THEN R(L, S, "check")
     ELSE R(L, S, "none")
 
 Tick(L, S, now, c) ==
@@ -114,10 +126,10 @@ Tick(L, S, now, c) ==
 \* the first instant Tick can act, or -1 (the code's one nanosecond past the watchdog is rounded up to a microsecond)
 NextDeadline(L, S, now, c) ==
     CASE L.st = "dialing" -> L.ds + DialWait(c.rtt) + 1
-      [] L.st = "down" -> IF c.queued \/ c.home THEN (IF S.restarted /\ c.queued /\ L.defer THEN Min(L.at, now) ELSE L.at) ELSE -1
+      [] L.st = "down" -> IF c.queued \/ c.home THEN DialAt(L, S, now, c) ELSE -1
       [] L.st = "open" ->
            IF L.chk # 0 THEN L.chk
            ELSE IF ~(c.home \/ c.rides) THEN -1
-           ELSE LET silent == L.lrx + KeepAfter(S, now, c) IN
+           ELSE LET silent == KeepDue(L, S, now, c) IN
                 IF S.lhi # 0 /\ ~c.udp THEN Min(L.hlt + LeaseKeep(S.lhi), silent) ELSE silent
 =============================================================================

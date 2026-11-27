@@ -62,6 +62,10 @@ import Pinc.ConnectOwnThm
 #audit_axioms Pinc.ConnectRelay.sleep_spec
 #audit_axioms Pinc.ConnectRelay.close_asleep
 #audit_axioms Pinc.ConnectRelay.close_asleep_of
+#audit_axioms Pinc.ConnectRelay.sleep_copy
+#audit_axioms Pinc.ConnectRelay.held_while_live
+#audit_axioms Pinc.ConnectRelay.mark_life
+#audit_axioms Pinc.ConnectRelay.close_recorded
 #audit_axioms Pinc.ConnectRelay.stale_copy
 #audit_axioms Pinc.ConnCodec.decode_bytes
 #audit_axioms Pinc.ConnCodec.decode_inv

@@ -41,10 +41,10 @@
 mod connect_relay_model;
 
 use connect_relay_model::world::World;
-use connect_relay_model::{C, Op, Setup, case};
+use connect_relay_model::{Op, Setup, case};
 
-fn drive(setup: &Setup, ops: &[Op], gone_cap: Option<usize>) {
-    let mut w = World::new(setup, gone_cap);
+fn drive(setup: &Setup, ops: &[Op], skip_known: bool) {
+    let mut w = World::new(setup, skip_known);
     for (i, op) in ops.iter().enumerate() {
         w.step = i;
         w.op(op);
@@ -52,15 +52,16 @@ fn drive(setup: &Setup, ops: &[Op], gone_cap: Option<usize>) {
 }
 
 /// The relay role against the reference model of its rules, with the table of gone nodes as the module doc states
-/// it: "When a carrier closes the node becomes \"gone\" with the time".
+/// it: "When a carrier closes the node becomes \"gone\" with the time", and "when the gone table (capacity `C` ...)
+/// is full, the entry with the oldest time makes room".
 #[ephyra::test(gen = case(), tests = 1500)]
 fn the_relay_role_follows_its_rules_step_by_step(case: (Setup, Vec<Op>)) {
-    drive(&case.0, &case.1, None);
+    drive(&case.0, &case.1, false);
 }
 
-/// The same run with the table of gone nodes modelled as the code keeps it (capacity `C`, a close it has no room for
-/// is not recorded), so a run that reaches that finding goes on to check everything else.
+/// The same run, many closes within the gone table's lifetime included, past the known finding of the answers to
+/// unvalidated addresses (`World::skip_known`), so a run that reaches it goes on to check everything else.
 #[ephyra::test(gen = case(), tests = 1500)]
 fn the_relay_role_follows_its_rules_past_a_full_table_of_gone_nodes(case: (Setup, Vec<Op>)) {
-    drive(&case.0, &case.1, Some(C));
+    drive(&case.0, &case.1, true);
 }

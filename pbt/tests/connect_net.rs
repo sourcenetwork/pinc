@@ -35,7 +35,7 @@ use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
 use ephyra::prelude::*;
-use pinc_connect::client::dial::{Cand, Pending, RelayView, Try, select};
+use pinc_connect::client::dial::{Cand, Pending, RLY_ONCE, RLY_ONCE_MIN, RelayView, TG_SLOW, Try, select};
 use pinc_connect::client::netcheck::{HOME_TRIES, HomeStep, MISS_LIMIT, Netcheck, Observed, classify};
 use pinc_connect::client::tunnel::{HUB_TUNNEL_FRESH, HubSession, Rides, TUNNEL_STALE, Via, decide, hub_ok};
 use pinc_connect::record::Reach;
@@ -198,7 +198,8 @@ fn netcheck_follows_its_doc(ops: Vec<NOp>) {
                         m.missed[relay] = 0;
                         m.answered_since_fail[relay] = true;
                         m.rtt[relay] = Some(now - at);
-                        m.refl[relay] = Some(a);
+                        // the table keeps an IPv4 address in its IPv4 form, whatever form the relay reported it in
+                        m.refl[relay] = Some(canon(&a));
                         if m.order[relay].is_none() {
                             m.answers += 1;
                             m.order[relay] = Some(m.answers);
@@ -447,7 +448,10 @@ fn selections() -> impl Gen<Value = Sel> {
     })
 }
 
-/// `select` returns a non-empty subset of the candidates whenever there are some, in candidate order.
+/// `select` returns a non-empty subset of the candidates whenever there are some, in candidate order. The one
+/// exception is RLY_ONCE: a try whose every candidate THIN_HS0 leaves is a relay that RLY_ONCE drops (the relay of the
+/// last flight, same generation, its carrier live, inside the window, on a slow link) sends nothing. A `select` that
+/// returns nothing for candidates `[Relay(3)]` with no view of relay 3 fails it.
 #[ephyra::test(gen = selections(), tests = 20_000)]
 fn select_returns_a_nonempty_ordered_subset(s: Sel) {
     let mut out = [Cand::Relay(0); 16];
@@ -477,7 +481,27 @@ fn select_returns_a_nonempty_ordered_subset(s: Sel) {
             "the relay said to carry the flight was picked"
         );
     }
-    if k == 0 && !s.cands.is_empty() {
+    // the candidates THIN_HS0 leaves (it is not applied when it would drop them all), and which of those RLY_ONCE drops:
+    // a relay of the try's last flight, same generation, its carrier live, inside the window
+    let window = &s.cands[..s.cands.len().min(16)];
+    let hs0_drop = |c: &Cand| matches!(c, Cand::Udp(_)) && s.t.hs0 && s.t.dialer;
+    let use_hs0 = !window.iter().all(hs0_drop);
+    let once_drop = |c: &Cand| match c {
+        Cand::Relay(r) => {
+            s.t.dialer
+                && s.t.link_rtt >= TG_SLOW
+                && s.relays.get(usize::from(*r)).copied().flatten().is_some_and(|(live, generation)| {
+                    live && s.t.last_relay.is_some_and(|(lr, g, at)| {
+                        lr == *r
+                            && g == generation
+                            && s.t.now.saturating_sub(at) < RLY_ONCE.min(RLY_ONCE_MIN.max(s.t.link_rtt.saturating_mul(3)))
+                    })
+                })
+        }
+        Cand::Udp(_) => false,
+    };
+    let once_only = window.iter().filter(|c| !(use_hs0 && hs0_drop(c))).all(once_drop);
+    if k == 0 && !s.cands.is_empty() && !once_only {
         let udp_only = s.cands.iter().all(|c| matches!(c, Cand::Udp(_)));
         ephyra::signature(format!(
             "empty selection, hs0 {}, only UDP candidates {udp_only}",
@@ -485,7 +509,7 @@ fn select_returns_a_nonempty_ordered_subset(s: Sel) {
         ));
     }
     assert!(
-        s.cands.is_empty() || k > 0,
+        s.cands.is_empty() || k > 0 || once_only,
         "no path for a try with candidates {:?} under {:?}",
         s.cands,
         s.t

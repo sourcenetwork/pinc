@@ -808,7 +808,10 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
                 self.note_record(node);
                 self.event(Event::RecordStored { node, seq });
             }
-            Trace::MailboxStored { node, .. } | Trace::MailboxDelivered { node, .. } => self.note_mail(node),
+            Trace::MailboxStored { node, .. }
+            | Trace::MailboxDelivered { node, .. }
+            | Trace::SleepAccepted { node }
+            | Trace::SleepEnded { node } => self.note_mail(node),
             _ => {}
         }
     }

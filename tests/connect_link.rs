@@ -262,13 +262,15 @@ fn stale_send_resets_a_carrier_idle_both_ways_for_the_lease() {
 
 #[test]
 fn restart_defers_the_home_dial_600ms_unless_a_frame_waits() {
+    // the client anchors the defer where it is built: 600 ms after the instant the node started
+    let t0 = 5 * S;
     let mut sh = Shared {
         restarted: true,
+        defer_until: Some(t0 + rule::DEFER),
         ..Shared::default()
     };
     let mut l = Link::new();
     let c = ctx();
-    let t0 = 5 * S;
     assert_eq!(l.want_dial(t0, &mut sh, &c), None);
     assert_eq!(l.next_deadline(t0, &sh, &c), Some(t0 + rule::DEFER));
     assert_eq!(l.tick(t0 + rule::DEFER - 1, &mut sh, &c), None);
@@ -276,6 +278,7 @@ fn restart_defers_the_home_dial_600ms_unless_a_frame_waits() {
     // a frame to send cancels the wait
     let mut sh = Shared {
         restarted: true,
+        defer_until: Some(t0 + rule::DEFER),
         ..Shared::default()
     };
     let mut l = Link::new();
@@ -285,6 +288,7 @@ fn restart_defers_the_home_dial_600ms_unless_a_frame_waits() {
     // a relay that is not home is not deferred when a frame waits, and not dialed otherwise
     let mut sh = Shared {
         restarted: true,
+        defer_until: Some(t0 + rule::DEFER),
         ..Shared::default()
     };
     let mut l = Link::new();
@@ -391,6 +395,7 @@ fn a_send_at_an_earlier_instant_than_the_last_stamp_resets_nothing() {
 fn a_queued_frame_during_the_restart_defer_makes_the_deadline_now() {
     let mut sh = Shared {
         restarted: true,
+        defer_until: Some(rule::DEFER),
         ..Shared::default()
     };
     let mut c = ctx();
@@ -404,4 +409,106 @@ fn a_queued_frame_during_the_restart_defer_makes_the_deadline_now() {
         "a frame is waiting: the carrier dials now, not at {d}"
     );
     assert_eq!(l.tick(d.max(10 * 1_000_000), &mut sh, &c), Some(Act::Dial));
+}
+
+/// The defer is anchored where the node is built, so the deadline is known before any tick.
+#[test]
+fn the_restart_defer_ends_at_the_anchor_before_any_tick() {
+    let start = 7 * S;
+    let anchored = || Shared {
+        restarted: true,
+        defer_until: Some(start + rule::DEFER),
+        ..Shared::default()
+    };
+    let c = ctx();
+    let mut sh = anchored();
+    let mut l = Link::new();
+    assert_eq!(l.next_deadline(start, &sh, &c), Some(start + rule::DEFER));
+    assert_eq!(l.tick(start + rule::DEFER - 1, &mut sh, &c), None);
+    assert_eq!(l.tick(start + rule::DEFER, &mut sh, &c), Some(Act::Dial));
+    // a frame queued during the defer: due now, with and without a tick having run in the defer
+    let q = Ctx { queued: true, ..c };
+    for ticked in [false, true] {
+        let mut sh = anchored();
+        let mut l = Link::new();
+        if ticked {
+            assert_eq!(l.tick(start + 10, &mut sh, &c), None);
+        }
+        let now = start + 100;
+        assert_eq!(
+            l.next_deadline(now, &sh, &q),
+            Some(if ticked { now } else { 0 }),
+            "ticked={ticked}"
+        );
+        assert_eq!(l.tick(now, &mut sh, &q), Some(Act::Dial), "ticked={ticked}");
+    }
+    // after the defer the retry time rules alone
+    let mut l = Link::new();
+    let mut sh = anchored();
+    assert_eq!(l.tick(start + rule::DEFER, &mut sh, &c), Some(Act::Dial));
+    l.closed(start + rule::DEFER + 5);
+    assert_eq!(
+        l.next_deadline(start + rule::DEFER + 5, &sh, &c),
+        Some(start + rule::DEFER + 5 + rule::RETRY_MIN)
+    );
+    // no anchor: no defer runs
+    let mut sh = Shared {
+        restarted: true,
+        ..Shared::default()
+    };
+    let mut l = Link::new();
+    assert_eq!(l.next_deadline(0, &sh, &c), Some(0));
+    assert_eq!(l.tick(0, &mut sh, &c), Some(Act::Dial));
+}
+
+/// The keepalive deadline uses the interval that holds at the instant it names, so the tick there acts.
+#[test]
+fn the_keepalive_deadline_is_acted_on_where_the_short_memory_ends() {
+    let death = |heard: u64| {
+        let mut sh = Shared {
+            keep_fail: Some(0),
+            ..Shared::default()
+        };
+        let mut l = Link::new();
+        assert_eq!(l.want_dial(heard, &mut sh, &ctx()), Some(Act::Dial));
+        l.opened(heard);
+        (l, sh)
+    };
+    let c = ctx();
+    // heard 571 s after the death: the first candidate (601 s) is past the memory, so the interval is 65 s
+    let (mut l, mut sh) = death(571 * S);
+    let d = l.next_deadline(571 * S, &sh, &c).unwrap();
+    assert_eq!(d, 571 * S + rule::RELAY_KEEP);
+    assert_eq!(l.tick(601 * S, &mut sh, &c), None, "the candidate instant");
+    assert_eq!(l.tick(d - 1, &mut sh, &c), None);
+    assert_eq!(l.tick(d, &mut sh, &c), Some(Act::Check));
+    // heard 569 s after: the memory still holds at the candidate (599 s), 30 s
+    let (mut l, mut sh) = death(569 * S);
+    let d = l.next_deadline(569 * S, &sh, &c).unwrap();
+    assert_eq!(d, 569 * S + rule::HOME_KEEP);
+    assert_eq!(l.tick(d - 1, &mut sh, &c), None);
+    assert_eq!(l.tick(d, &mut sh, &c), Some(Act::Check));
+    // the memory is inclusive: exactly 600 s after the death is still within
+    let (l, sh) = death(570 * S);
+    assert_eq!(l.next_deadline(570 * S, &sh, &c), Some(600 * S));
+    // a phone keeps the short interval for ever
+    let mut sh = Shared {
+        phone: true,
+        ..Shared::default()
+    };
+    let mut l = Link::new();
+    l.want_dial(900 * S, &mut sh, &c);
+    l.opened(900 * S);
+    assert_eq!(l.next_deadline(900 * S, &sh, &c), Some(900 * S + rule::HOME_KEEP));
+    // a learned interval shorter than both wins
+    let (l, mut sh) = death(571 * S);
+    sh.keep_iv = 20 * S;
+    assert_eq!(l.next_deadline(571 * S, &sh, &c), Some(591 * S));
+    // with a lease bound the earlier of the two holds
+    let (l, mut sh) = death(571 * S);
+    sh.lease_hi = 40 * S;
+    assert_eq!(
+        l.next_deadline(571 * S, &sh, &c),
+        Some(571 * S + lease_keep(40 * S).min(rule::RELAY_KEEP))
+    );
 }

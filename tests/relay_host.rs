@@ -500,7 +500,7 @@ fn the_packets_held_for_a_sleeping_member_survive_a_restart() {
             stats_where(&r, "three packets held", |s| s.mailbox.stored == 3).await;
             let entry = 33 + 1 + 8 + 2 + 1000;
             eventually(10, "the held packets are kept", || async {
-                store.mailbox_bytes() == 3 * entry
+                store.mailbox_bytes() == 3 * entry + 18
             })
             .await;
 
@@ -527,6 +527,108 @@ fn the_packets_held_for_a_sleeping_member_survive_a_restart() {
                 store.mailboxes() == 0
             })
             .await;
+        })
+    });
+}
+
+/// The sleep mark is kept with the packets under it: after a restart the next packet is held and the member's wake is
+/// asked, a mark that ended while the relay was down is dropped with its packets, and a relay with no store knows no mark.
+#[test]
+fn a_sleep_mark_survives_a_restart_and_ends_with_its_mail() {
+    on_big_stack(|| {
+        within(60, async {
+            let store = MemStore::new();
+            let mut r = start(0x7b, Limits::default(), store.clone()).await;
+            let mut a = Member::connect(&r, 0x83, CarrierKind::Tcp).await;
+            let mut b = Member::connect(&r, 0x84, CarrierKind::Tcp).await;
+            a.publish(1).await;
+            b.publish(1).await;
+            let mut notice = [0u8; 512];
+            let n = sleep::sign(&b.kp, &r.id, wall_ns() / 1_000_000, &mut notice).unwrap();
+            b.send(&Frame::Sleep { notice: &notice[..n] }).await;
+            let (bid, aid) = (b.id, a.id);
+            drop(b);
+            stats_where(&r, "member b gone", |s| s.carriers == 1).await;
+            // the mark alone is kept: the trailer, no packet
+            eventually(10, "the mark is kept", || async { store.mailbox_bytes() == 18 }).await;
+            a.send(&Frame::Send {
+                dst: bid,
+                flag: 1,
+                packet: &[1; 100],
+            })
+            .await;
+            stats_where(&r, "one packet held", |s| s.mailbox.stored == 1).await;
+            let entry = 33 + 1 + 8 + 2 + 100;
+            eventually(10, "the packet is kept with the mark", || async {
+                store.mailbox_bytes() == entry + 18
+            })
+            .await;
+
+            drop(r.task.take());
+            assert!(a.recv().await.is_none());
+            let r2 = start(0x7b, Limits::default(), store.clone()).await;
+            let mut a2 = Member::connect(&r2, 0x83, CarrierKind::Tcp).await;
+            a2.send(&Frame::Send {
+                dst: bid,
+                flag: 2,
+                packet: &[2; 100],
+            })
+            .await;
+            eventually(10, "both packets are kept", || async {
+                store.mailbox_bytes() == 2 * entry + 18
+            })
+            .await;
+            let mut woke = false;
+            while let Some(e) = (r2.events)() {
+                woke |= matches!(e, Event::Wake { node } if node == bid);
+            }
+            assert!(woke, "a wake-up was requested after the restart");
+            let mut b2 = Member::connect(&r2, 0x84, CarrierKind::Tcp).await;
+            for want in [1u8, 2] {
+                match decode(&b2.recv().await.unwrap()) {
+                    Frame::Recv { src, flag, .. } | Frame::RecvNew { src, flag, .. } => {
+                        assert_eq!((src, flag), (aid, want));
+                    }
+                    Frame::RecvAlias { flag, .. } => assert_eq!(flag, want),
+                    other => panic!("{other:?}"),
+                }
+            }
+            eventually(10, "the mark and the mail leave the store", || async {
+                store.mailboxes() == 0
+            })
+            .await;
+
+            // a mark that ended while the relay was down goes with its packets
+            let ended = MemStore::new();
+            let mut blob = Vec::new();
+            blob.extend_from_slice(&[0, 1]);
+            blob.extend_from_slice(&(wall_ns() - 86_400_000_000_000 - 1_000_000_000).to_be_bytes());
+            blob.extend_from_slice(&0u64.to_be_bytes());
+            ended.put_mailbox(&bid, &blob).await.unwrap();
+            let r3 = start(0x7b, Limits::default(), ended.clone()).await;
+            eventually(10, "the ended mark leaves the store", || async {
+                ended.mailboxes() == 0
+            })
+            .await;
+            assert_eq!((r3.stats)().mailbox_members, 0);
+
+            // from the store with the ended mark nothing is held: a packet for the member is refused as for a member
+            // not asleep
+            let mut a3 = Member::connect(&r3, 0x83, CarrierKind::Tcp).await;
+            a3.send(&Frame::Send {
+                dst: bid,
+                flag: 3,
+                packet: &[3; 100],
+            })
+            .await;
+            a3.send(&Frame::Ping).await;
+            while decode(&a3.recv().await.unwrap()) != Frame::Pong {}
+            assert_eq!((r3.stats)().mailbox.stored, 0);
+            assert_eq!(
+                (r3.stats)().refused(Reason::NoRoute),
+                1,
+                "the packet was not refused as for an unknown member"
+            );
         })
     });
 }

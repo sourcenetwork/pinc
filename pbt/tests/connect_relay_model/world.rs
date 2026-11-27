@@ -36,11 +36,11 @@ pub struct World {
 }
 
 impl World {
-    pub fn new(setup: &Setup, gone_cap: Option<usize>) -> Self {
+    pub fn new(setup: &Setup, skip_known: bool) -> Self {
         let mut cfg = Config::new(id(ME), setup.seed);
         cfg.quota = Quota { bytes: setup.quota_bytes, window_ns: setup.window_ns, session_ns: setup.session_ns };
         cfg.mailbox_max_age_ns = setup.mailbox_age_ns;
-        let mut w = Self { relay: Box::new(R::new(cfg)), m: Model::new(cfg, gone_cap), sink: Collect::default(), next_packet: 0, step: 0, replies: Vec::new(), skip_known: gone_cap.is_some() };
+        let mut w = Self { relay: Box::new(R::new(cfg)), m: Model::new(cfg), sink: Collect::default(), next_packet: 0, step: 0, replies: Vec::new(), skip_known };
         // The host runs the timers once at start, as it does at every deadline.
         w.run(true, |r, now, s| {
             r.handle_timeout(now, s);
@@ -455,8 +455,8 @@ impl World {
                     m.sessions.insert(key, fresh);
                     let _ = m.order.insert(node, ());
                     m.next_session += 1;
-                    m.gone.remove(&key);
-                    m.sleeping.remove(&key);
+                    m.gone_remove(key);
+                    m.sleep_remove(key);
                     vec![P::Done(Ok(()))]
                 });
                 if let Some(s) = session {
@@ -540,7 +540,7 @@ impl World {
                     r.member_returned(now, &node, s);
                     Ok(())
                 }, |m, _| {
-                    m.sleeping.remove(&k(&node));
+                    m.sleep_remove(k(&node));
                     vec![P::Done(Ok(()))]
                 });
             },
@@ -712,7 +712,7 @@ impl World {
         }
         self.relay = Box::new(R::new(cfg));
         let peers = self.m.peers.clone();
-        let mut m = Model::new(cfg, self.m.gone_cap);
+        let mut m = Model::new(cfg);
         m.now = now;
         m.notices = std::mem::take(&mut self.m.notices);
         m.not_ready = std::mem::take(&mut self.m.not_ready);
@@ -733,11 +733,13 @@ impl World {
         }
         for (n, held) in &saved_mail {
             let mut kept = Vec::new();
+            let mut held_ats: Vec<u64> = Vec::new();
             for (src, flag, body, at) in held {
                 let r = self.relay.restore_held(now, *at, n, src, *flag, body);
                 if now.saturating_sub(*at) < cfg.mailbox_max_age_ns {
                     assert_eq!(r, Ok(()), "step {}: a held packet the relay saved, not expired, restores", self.step);
                     kept.push((*src, *flag, body.clone(), *at));
+                    held_ats.push(*at);
                 }
             }
             let mut again = Vec::new();
@@ -757,6 +759,9 @@ impl World {
                     (self.m.held_seq, k(&s), f, b)
                 })
                 .collect();
+            if let Some(oldest) = held_ats.iter().min() {
+                self.m.sleep_insert(k(n), Sleeper { at: *oldest, ts: u64::MAX });
+            }
             self.m.held.insert(k(n), held);
         }
         // The host runs the timers at start.

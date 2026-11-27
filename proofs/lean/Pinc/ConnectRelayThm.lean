@@ -22,7 +22,8 @@ for every state and every call.
   `spu_member` (an uploaded packet is accepted only from a validated member),
   `stale_copy` (the second copy goes out only if the carrier is silent for more than 15 s).
 * The sleep notice: `sleep_spec` (accepted only within 10 s of the relay's clock, for a node it knows, from its own
-  carrier), `close_asleep` (a close within 10 s after an accepted notice is a suspension).
+  carrier), `close_asleep` (a close within 10 s after an accepted notice is a suspension), `close_recorded` (a close
+  is recorded in the gone table with its time, full or not: a full table drops its oldest first).
 -/
 
 namespace Pinc.ConnectRelay
@@ -243,7 +244,7 @@ theorem heard_unready_quiet (cf : CF) (r : RS) (now node : Nat) (hn : cf.old = f
 and is homed at a peer relay (and did not come from one) is forwarded to that relay, whatever its mailbox holds. -/
 theorem forwarded (cf : CF) (r : RS) (now src dst flag len : Nat) (origin : Origin) (hd : dst ≠ cf.me)
     (hc : (deliverClient cf r now src dst flag len true).2.1 = false)
-    (ht : (tunnelDown r now dst src flag len).1 = false) (hs : (aget r.sl dst).isSome = false) (ho : origin ≠ .peer)
+    (ht : (tunnelDown r now dst src flag len).1 = false) (hs : live cf r now dst = false) (ho : origin ≠ .peer)
     (h0 : homeOf cf r now dst ≠ 0) (hm : homeOf cf r now dst ≠ cf.me) (hp : isPeer r (homeOf cf r now dst) = true) :
     route cf r now src dst flag len origin =
       okOut r [[.s "peer", .n (homeOf cf r now dst), .s "fwd", .n src, .n dst, .n flag, .n len],
@@ -275,6 +276,39 @@ theorem sleep_spec (cf : CF) (r : RS) (now k ts good sender : Nat) (h : (sleepNo
             | true => simpa [Bool.or_eq_true] using hh
           · simpa using h4
 
+/-- A copy of the notice that set a member's live mark (the same clock) changes nothing, whatever it is answered: the
+mark keeps its time, so a close more than 10 s after the first copy is no suspension. A mark past its life is no
+mark: a copy of its notice sets a new one. -/
+theorem sleep_copy (cf : CF) (r : RS) (now k ts good sender : Nat) (s : Sl) (hs : aget r.sl k = some s)
+    (ht : s.ts = ts) (hl : live cf r now k = true) : (sleepNotice cf r now k ts good sender).r = r := by
+  unfold sleepNotice
+  have hc : (live cf r now k && (aget r.sl k).any (·.ts == ts)) = true := by simp [hl, hs, ht]
+  by_cases h1 : (sender != 0 && sender != k) = true
+  · simp [h1, fail]
+  · by_cases h2 : skewed now ts = true
+    · simp [h1, h2, fail]
+    · by_cases h3 : (!(hasC cf r k || (aget r.gone k).isSome)) = true
+      · simp [h1, h2, h3, fail]
+      · by_cases h4 : (good == 0) = true
+        · simp [h1, h2, h3, h4, fail]
+        · simp only [h1, h2, h3, h4, hc, Bool.false_eq_true, ite_false, ite_true, okOut]
+
+/-- A packet for a member whose mark lives (younger than the mailbox age), that has no carrier and no ready route here,
+is held: the hold asks for a wake-up on the first one. -/
+theorem held_while_live (cf : CF) (r : RS) (now src dst flag len : Nat) (origin : Origin) (hd : dst ≠ cf.me)
+    (hc : (deliverClient cf r now src dst flag len true).2.1 = false)
+    (ht : (tunnelDown r now dst src flag len).1 = false) (hl : live cf r now dst = true) :
+    route cf r now src dst flag len origin = hold cf r now dst src flag len := by
+  unfold route
+  simp [hd, hc, ht, hl]
+
+/-- After a sweep no mark is older than the mailbox age: a mark lives as long as a held message, and no longer. -/
+theorem mark_life (cf : CF) (r : RS) (now : Nat) (hsw : sweepNs ≤ now - r.ls)
+    (n : Nat) (s : Sl) (hm : (n, s) ∈ (timeout cf r now).r.sl) : now - s.at_ < cf.age := by
+  unfold timeout at hm
+  have hlt : ¬ (now - r.ls < sweepNs) := by omega
+  by_cases hd : r.np ≤ now <;> simp [hd, hlt, okOut, List.mem_filter] at hm <;> first | exact hm.2 | omega
+
 /-- A close is reported as a suspension only after an accepted notice at most 10 s before it ... -/
 theorem close_asleep (cf : CF) (r : RS) (now node sid : Nat)
     (h : (carrierClosed cf r now node sid).ef = [[.s "t", .s "closed", .n node, .n 1]]) :
@@ -291,16 +325,27 @@ theorem close_asleep (cf : CF) (r : RS) (now node sid : Nat)
       · omega
       · simp [hs, hw] at h
 
-/-- ... and a close within 10 s after a notice, of a node whose gone mark fits, is one. -/
+/-- `record_gone` always records the node with its time, full table or not: the eviction makes room first. -/
+theorem recordGone_self (cf : CF) (r : RS) (node now : Nat) : aget (recordGone cf r node now).gone node = some now := by
+  unfold recordGone; exact aget_aput_self _ _ _
+
+/-- A close of the node's current session is recorded in the gone table with its time, whatever the table held. -/
+theorem close_recorded (cf : CF) (r : RS) (now node sid : Nat) (hc : hasC cf r node = true)
+    (hid : (cget r node).id = sid) : aget (carrierClosed cf r now node sid).r.gone node = some now := by
+  unfold carrierClosed
+  have h0 : ¬ ((!hasC cf r node || (cget r node).id != sid) = true) := by simp [hc, hid]
+  simp only [h0, ite_false, okOut]
+  exact recordGone_self _ _ _ _
+
+/-- ... and a close within 10 s after a notice is one, whatever the gone table held. -/
 theorem close_asleep_of (cf : CF) (r : RS) (now node sid : Nat) (s : Sl) (hc : hasC cf r node = true)
-    (hid : (cget r node).id = sid) (hg : acan r.gone node cf.C = true) (hs : aget r.sl node = some s)
+    (hid : (cget r node).id = sid) (hs : aget r.sl node = some s)
     (hw : now - sleepWin ≤ s.at_) :
     (carrierClosed cf r now node sid).ef = [[.s "t", .s "closed", .n node, .n 1]] := by
   unfold carrierClosed
   have h0 : ¬ ((!hasC cf r node || (cget r node).id != sid) = true) := by simp [hc, hid]
   simp only [h0, ite_false, okOut]
-  have hput : (aget (aput r.gone node now) node).isSome = true := by rw [aget_aput_self]; rfl
-  simp [hg, hs, hw, hput]
+  simp [recordGone_self, hs, hw]
 
 /-- The second copy of a packet goes down the UDP session only if the member's carrier was silent for more than 15 s. -/
 theorem stale_copy (cf : CF) (r : RS) (now src dst flag len : Nat) (sc : Bool)

@@ -10,12 +10,16 @@
 //! - A session older than the quota's time limit is closed by the sweep.
 //! - When a carrier closes the node becomes "gone" with the time; if its sleep notice came within
 //!   [`super::rule::SLEEP_WIN_NS`] before, the close is a suspension, not a crash ([`NodeState::Gone`]).
+//! - A close is always recorded: when the gone table (capacity `C`, entries kept [`super::rule::GONE_TTL_NS`]) is full,
+//!   the entry with the oldest time makes room. So when more than `C` nodes close within that time the oldest closes
+//!   are forgotten first, and a forgotten node is [`NodeState::Unknown`] (its later sleep notice is refused until it
+//!   opens a carrier again).
 //! - Aliases are per session and direction and reset with the session.
 
 use pinc_crypto::NodeId;
 
 use super::route::Pkt;
-use super::{CloseReason, Effect, Reject, Relay, Route, Sink, Trace, route, rule};
+use super::{CloseReason, Effect, Reject, Relay, Route, Sink, Table, Trace, live, route, rule};
 use crate::carrier::alias::AliasTable;
 use crate::carrier::frame::Frame;
 
@@ -49,6 +53,25 @@ pub enum NodeState {
     /// Nothing is known.
     Unknown,
 }
+
+/// Record that `node` closed at `now`. A full table first drops its entry with the oldest time (a node already in it
+/// only has its time refreshed), so the close is never lost and the table never holds more than `C` entries.
+///
+/// Cost: at most one pass over `C` entries, only when the table is full; no allocation. A node without the relay
+/// role has no table. An entry is 48 bytes (a 33-byte node id padded, and a `u64` time); `C` is 1024 on every node
+/// that carries the relay role, an ordinary node and a node deployed from the relay binary alike.
+fn record_gone<const C: usize>(gone: &mut Table<u64, C>, node: NodeId, now: u64) {
+    if gone.is_full() && !gone.contains(&node) {
+        let oldest = gone.iter().min_by_key(|(_, at)| **at).map(|(k, _)| *k);
+        if let Some(oldest) = oldest {
+            gone.remove(&oldest);
+        }
+    }
+    // Room was made above, so the insert cannot fail; an `Err` would only mean a full table, which the pass cleared.
+    let _ = gone.insert(node, now);
+}
+
+const _: () = assert!(core::mem::size_of::<(NodeId, u64)>() <= 48, "a gone entry is 48 bytes");
 
 impl<const C: usize, const R: usize, const MN: usize, const MB: usize> Relay<C, R, MN, MB> {
     /// What the relay knows about `node`'s carrier.
@@ -101,8 +124,11 @@ impl<const C: usize, const R: usize, const MN: usize, const MB: usize> Relay<C, 
         }
         self.next_session += 1;
         self.gone.remove(&node);
-        self.sleeping.remove(&node);
+        let slept = self.sleeping.remove(&node).is_some();
         sink.emit(Effect::Trace(Trace::CarrierOpened { node, session: id }));
+        if slept {
+            sink.emit(Effect::Trace(Trace::SleepEnded { node }));
+        }
         self.deliver_held(now, &node, sink);
         Ok(id)
     }
@@ -113,7 +139,7 @@ impl<const C: usize, const R: usize, const MN: usize, const MB: usize> Relay<C, 
             return;
         }
         self.clients.remove(node);
-        let _ = self.gone.insert(*node, now);
+        record_gone(&mut self.gone, *node, now);
         let asleep = matches!(self.node_state(node), NodeState::Gone { asleep: true, .. });
         sink.emit(Effect::Trace(Trace::CarrierClosed { node: *node, asleep }));
     }
@@ -335,7 +361,7 @@ impl<const C: usize, const R: usize, const MN: usize, const MB: usize> Relay<C, 
             if now.saturating_sub(c.opened) < limit {
                 return true;
             }
-            let _ = gone.insert(*node, now);
+            record_gone(gone, *node, now);
             sink.emit(Effect::Trace(Trace::SessionExpired { node: *node }));
             sink.emit(Effect::Close {
                 node: *node,
@@ -345,8 +371,16 @@ impl<const C: usize, const R: usize, const MN: usize, const MB: usize> Relay<C, 
             false
         });
         self.gone.retain(|_, at| now.saturating_sub(*at) < rule::GONE_TTL_NS);
-        self.sleeping
-            .retain(|_, s| now.saturating_sub(s.at) < rule::GONE_TTL_NS);
+        // a mark ends with the mail held under it: the mark's life is the mailbox's maximum age
+        let max_age = self.cfg.mailbox_max_age_ns;
+        let Self { sleeping, mailbox, .. } = self;
+        sleeping.retain(|node, s| {
+            let keep = live(now, s, max_age);
+            if !keep {
+                mailbox.clear(node);
+            }
+            keep
+        });
         self.records.sweep(now);
         self.mailbox.sweep(now);
     }
@@ -355,5 +389,133 @@ impl<const C: usize, const R: usize, const MN: usize, const MB: usize> Relay<C, 
     pub fn next_deadline(&self) -> Option<u64> {
         let sweep = self.last_sweep.saturating_add(rule::SWEEP_NS).min(self.next_ping);
         Some(self.next_publish.map_or(sweep, |p| sweep.min(p)))
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, reason = "tests assert")]
+mod tests {
+    use pinc_crypto::IdentityAlg;
+
+    use super::*;
+    use crate::relay::Config;
+
+    const SEC: u64 = 1_000_000_000;
+
+    struct Null;
+
+    impl Sink for Null {
+        fn emit(&mut self, _: Effect<'_>) {}
+    }
+
+    fn node(tag: u8) -> NodeId {
+        NodeId {
+            alg: IdentityAlg::Ed25519,
+            bytes: [tag; 32],
+        }
+    }
+
+    fn relay() -> Relay<2, 2, 2, 64> {
+        Relay::new(Config::new(node(99), 7))
+    }
+
+    fn open_close(r: &mut Relay<2, 2, 2, 64>, tag: u8, open_at: u64, close_at: u64) {
+        let sid = r.carrier_opened(open_at, node(tag), &mut Null).unwrap();
+        r.carrier_closed(close_at, &node(tag), sid, &mut Null);
+    }
+
+    #[test]
+    fn a_close_after_a_full_table_drops_the_oldest_and_keeps_the_newest() {
+        let mut r = relay();
+        open_close(&mut r, 1, 0, SEC);
+        open_close(&mut r, 2, 0, 2 * SEC);
+        open_close(&mut r, 3, 0, 3 * SEC);
+        assert_eq!(r.gone.len(), 2);
+        assert_eq!(r.node_state(&node(1)), NodeState::Unknown);
+        assert_eq!(
+            r.node_state(&node(2)),
+            NodeState::Gone {
+                since: 2 * SEC,
+                asleep: false
+            }
+        );
+        assert_eq!(
+            r.node_state(&node(3)),
+            NodeState::Gone {
+                since: 3 * SEC,
+                asleep: false
+            }
+        );
+    }
+
+    #[test]
+    fn a_tie_for_the_oldest_close_goes_to_the_first_in_slot_order() {
+        let mut r = relay();
+        open_close(&mut r, 1, 0, SEC);
+        open_close(&mut r, 2, 0, SEC);
+        let first = *r.gone.iter().next().map(|(k, _)| k).unwrap();
+        let other = if first == node(1) { node(2) } else { node(1) };
+        open_close(&mut r, 3, 0, 2 * SEC);
+        assert_eq!(r.gone.len(), 2);
+        assert_eq!(r.node_state(&first), NodeState::Unknown);
+        assert_eq!(
+            r.node_state(&other),
+            NodeState::Gone {
+                since: SEC,
+                asleep: false
+            }
+        );
+        assert!(matches!(r.node_state(&node(3)), NodeState::Gone { .. }));
+    }
+
+    #[test]
+    fn a_close_of_a_node_already_in_a_full_table_refreshes_it_and_evicts_nobody() {
+        let mut r = relay();
+        open_close(&mut r, 1, 0, SEC);
+        open_close(&mut r, 2, 0, 2 * SEC);
+        open_close(&mut r, 1, 3 * SEC, 4 * SEC);
+        assert_eq!(r.gone.len(), 2);
+        assert_eq!(
+            r.node_state(&node(1)),
+            NodeState::Gone {
+                since: 4 * SEC,
+                asleep: false
+            }
+        );
+        assert_eq!(
+            r.node_state(&node(2)),
+            NodeState::Gone {
+                since: 2 * SEC,
+                asleep: false
+            }
+        );
+    }
+
+    #[test]
+    fn a_session_expiry_after_a_full_table_drops_the_oldest_and_keeps_the_newest() {
+        let mut r = relay();
+        open_close(&mut r, 1, 0, SEC);
+        open_close(&mut r, 2, 0, 2 * SEC);
+        let limit = 100 * SEC;
+        r.cfg.quota.session_ns = limit;
+        let _ = r.carrier_opened(0, node(3), &mut Null).unwrap();
+        r.handle_timeout(limit, &mut Null);
+        assert_eq!(r.sessions(), 0);
+        assert_eq!(r.gone.len(), 2);
+        assert_eq!(r.node_state(&node(1)), NodeState::Unknown);
+        assert_eq!(
+            r.node_state(&node(2)),
+            NodeState::Gone {
+                since: 2 * SEC,
+                asleep: false
+            }
+        );
+        assert_eq!(
+            r.node_state(&node(3)),
+            NodeState::Gone {
+                since: limit,
+                asleep: false
+            }
+        );
     }
 }

@@ -128,6 +128,9 @@ struct Node {
     delivered: BTreeSet<[u8; 8]>,
     /// Every id delivered in this life, however long it is.
     got: BTreeSet<[u8; 8]>,
+    /// The highest wall time (ms) of a FLOOR frame a hub altered, laid out exactly as the encoder writes it, and sent
+    /// to this member within the floor wait of this life (0: none).
+    forged_floor: u64,
 }
 
 struct World {
@@ -144,6 +147,25 @@ struct World {
     /// Messages delivered so far, over every node: a schedule that delivers nothing checks nothing.
     deliveries: usize,
     restarted_deliveries: usize,
+    /// The wall time (ms) at which `calm` published the fresh messages.
+    fresh_wall: u64,
+}
+
+/// The floor wall time (ms) of a frame laid out exactly as `Topics::floor` writes a FLOOR body behind an empty topic
+/// (`floor12 hist1 [1 n (origin8 ts12)*n | 0]`, at most `ORIGIN_MAX` entries in ascending order, nothing after), or
+/// `None` for any other frame. Read past the length prefix, as `World::deliver` reads a frame.
+fn encoder_floor_wall(bytes: &[u8]) -> Option<u64> {
+    let (&FLOOR, &0) = (bytes.get(4)?, bytes.get(5)?) else { return None };
+    let rest = bytes.get(6..)?;
+    let (ts, tail) = (rest.get(..12)?, rest.get(12..)?);
+    let well_formed = match tail {
+        [0 | 1, 0] => true,
+        [0 | 1, 1, n, e @ ..] if usize::from(*n) <= pinc_broadcast::consts::ORIGIN_MAX && e.len() == usize::from(*n) * 20 => {
+            e.chunks(20).zip(e.chunks(20).skip(1)).all(|(x, y)| x[..8] < y[..8])
+        },
+        _ => false,
+    };
+    well_formed.then(|| u64::from_be_bytes(ts[..8].try_into().unwrap_or([0; 8])))
 }
 
 /// The small limits: a log ring that holds one largest message (so a few small ones), two topics of three, two
@@ -189,6 +211,7 @@ impl World {
                 subs: BTreeSet::new(),
                 delivered: BTreeSet::new(),
                 got: BTreeSet::new(),
+                forged_floor: 0,
             })
             .collect();
         let up = (0..NODES).flat_map(|a| (0..NODES).map(move |b| (a, b))).filter(|(a, b)| a != b).collect();
@@ -205,6 +228,7 @@ impl World {
             limits,
             deliveries: 0,
             restarted_deliveries: 0,
+            fresh_wall: 0,
         };
         for m in HUBS..NODES {
             w.attach(m, None);
@@ -391,6 +415,7 @@ impl World {
             self.step(&Op::Subscribe(m as u8, 0));
         }
         self.step(&Op::Advance(20_000));
+        self.fresh_wall = WALL0 + self.now / 1_000_000;
         let mut fresh = Vec::new();
         for m in HUBS..NODES {
             self.tag += 1;
@@ -472,6 +497,16 @@ impl World {
                                 bytes.remove(i);
                             }
                         },
+                    }
+                    // A FLOOR frame from a hub to a restarted member, still well formed after the change, is believed
+                    // (by design: see the liveness property); the world notes what it claims.
+                    if a < HUBS
+                        && b >= HUBS
+                        && self.now.saturating_sub(self.nodes[b].born) < pinc_broadcast::consts::FLOOR_WAIT
+                        && let Some(wall) = encoder_floor_wall(&bytes)
+                    {
+                        let n = &mut self.nodes[b];
+                        n.forged_floor = n.forged_floor.max(wall);
                     }
                     self.deliver(a, b, &bytes);
                 }
@@ -595,6 +630,7 @@ impl World {
                 self.nodes[m].life = life;
                 self.nodes[m].delivered.clear();
                 self.nodes[m].got.clear();
+                self.nodes[m].forged_floor = 0;
                 self.nodes[m].h.out.clear();
                 self.nodes[m].h.events.clear();
                 for j in 0..NODES {
@@ -707,6 +743,13 @@ fn broadcast_world_delivers_only_what_was_published_and_at_most_once(c: Case) {
 /// member gathers the replay floors of the hubs for up to 15 s and holds messages meanwhile", and "A hub keeps a
 /// member's subscriptions while it is held down and tells the member when they are live again". The default limits
 /// only: the small ones may refuse a subscription or a log entry by design.
+///
+/// One case is by design and not counted (operator, 2026-11-26: hubs stay authoritative for replay floors): a member
+/// a hub sent, within the floor wait of its life, an altered FLOOR frame that is still laid out exactly as the encoder
+/// writes one, with a floor at or past the fresh messages' time. Such a floor is believed and silences the member until
+/// it passes ("a hub that reports a floor ahead of every clock silences a restarted member until the floor passes",
+/// `floors.rs`). The world cannot see whether the member was still gathering when the frame came, so a frame that
+/// came after its gathering ended is excluded too. A frame the encoder never writes is still counted: it is refused.
 #[ephyra::test(gen = ephyra::any::<Case>(), tests = 300)]
 fn broadcast_world_delivers_a_fresh_message_to_every_subscriber_once_the_network_heals(c: Case) {
     let mut w = World::new(Limits::default());
@@ -716,6 +759,9 @@ fn broadcast_world_delivers_a_fresh_message_to_every_subscriber_once_the_network
     for (mid, origin) in w.calm() {
         for m in (HUBS..NODES).filter(|m| *m != origin) {
             let n = &w.nodes[m];
+            if n.forged_floor >= w.fresh_wall {
+                continue;
+            }
             assert!(n.got.contains(&mid), "member {m} (life {}) never delivered the message {mid:?} member {origin} published after the network healed", n.life);
         }
     }

@@ -113,8 +113,6 @@ struct Member {
     gone: Option<u64>,
     /// The held notice: when it was first accepted, and its clock.
     mark: Option<(u64, u64)>,
-    /// When a copy of the held notice was last accepted (what the relay does if a copy moves the mark).
-    mark_latest: u64,
     /// Packets held for it, in order.
     held: Vec<Vec<u8>>,
     /// The notices it sent: clock and bytes.
@@ -122,9 +120,7 @@ struct Member {
 }
 
 fn run(ops: &[Op]) {
-    // With PBT_EXCLUDE_KNOWN set the model takes the two causes `repro_connect2.rs` reproduces as the relay does
-    // them (a copy moves the mark; the mark lasts 600 s after it), so the search goes on past them.
-    let known = std::env::var_os("PBT_EXCLUDE_KNOWN").is_some();
+    let day = 86_400_000_000_000u64;
     let me = keypair(10);
     let members: Vec<Keypair> = (1..=N).map(|i| keypair(u8::try_from(i).unwrap_or(1))).collect();
     let ids: Vec<NodeId> = members.iter().map(Keypair::node_id).collect();
@@ -150,8 +146,9 @@ fn run(ops: &[Op]) {
                         if x.gone.is_some_and(|g| now - g >= rule::GONE_TTL_NS) {
                             x.gone = None;
                         }
-                        if known && x.mark.is_some() && now - x.mark_latest >= rule::GONE_TTL_NS {
+                        if x.mark.is_some_and(|(at, _)| now - at >= day) {
                             x.mark = None;
+                            x.held.clear();
                         }
                     }
                 }
@@ -182,16 +179,9 @@ fn run(ops: &[Op]) {
             Op::Close(i) => {
                 let Some(sid) = m[i].session else { continue };
                 relay.carrier_closed(now, &ids[i], sid, &mut seen);
-                let asleep = m[i].mark.is_some_and(|(at, _)| {
-                    (if known { m[i].mark_latest } else { at }) >= now.saturating_sub(rule::SLEEP_WIN_NS)
-                });
-                let got = seen.closes.first().map(|c| c.1);
-                if got != Some(asleep)
-                    && m[i].mark.is_some()
-                    && m[i].mark_latest >= now.saturating_sub(rule::SLEEP_WIN_NS)
-                {
-                    ephyra::signature("a copy of the notice moved the mark forward".to_owned());
-                }
+                let asleep = m[i]
+                    .mark
+                    .is_some_and(|(at, _)| at >= now.saturating_sub(rule::SLEEP_WIN_NS));
                 assert_eq!(
                     seen.closes,
                     vec![(ids[i], asleep)],
@@ -235,10 +225,9 @@ fn run(ops: &[Op]) {
                     "step {step}: the notice (replay {replay}) is taken: {r:?}"
                 );
                 if accept {
-                    if m[i].mark.is_none_or(|(_, t)| t != ts) {
+                    if m[i].mark.is_none_or(|(at, t)| t != ts || now - at >= day) {
                         m[i].mark = Some((now, ts));
                     }
-                    m[i].mark_latest = now;
                 }
             }
             Op::Send(i, len) => {
@@ -263,7 +252,7 @@ fn run(ops: &[Op]) {
                         vec![packet.clone()],
                         "step {step}: a packet to an open member is on its carrier"
                     );
-                } else if let Some((at, _)) = m[i].mark {
+                } else if let Some((at, _)) = m[i].mark.filter(|(at, _)| now - at < day) {
                     let held = relay.mailbox_pending(&ids[i]).0;
                     if held != m[i].held.len() + 1 {
                         let long = now - at >= rule::GONE_TTL_NS;

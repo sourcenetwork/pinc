@@ -136,17 +136,21 @@ fn a_member_back_on_an_unvalidated_route_gets_its_mail_when_it_validates() {
 }
 
 #[test]
-fn a_packet_for_a_member_holding_mail_is_forwarded_to_its_home_once_the_sleep_mark_is_gone() {
+fn a_packet_for_a_member_whose_sleep_mark_ended_is_forwarded_to_its_home() {
     let mut fx = Fx::new();
     let p1 = nid(0x91);
-    let (a, sa, m, _) = hold_for_sleeper(&mut fx, 2);
-    // 600 s on, the sweep drops the sleep mark; the mail is still held
-    fx.r.handle_timeout(T0 + 700 * SEC, &mut fx.s);
+    let (a, _, m, _) = hold_for_sleeper(&mut fx, 2);
+    // a day on, the sweep ends the sleep mark and the mail held under it
+    let day = 86_400;
+    fx.r.handle_timeout(T0 + (day + 1) * SEC, &mut fx.s);
+    // the sender's own session ended with the day too: it opens a new one
+    let sa = fx.open(T0 + (day + 1) * SEC, a);
     fx.r.add_peer(p1);
     let rec = record_bytes(&ed(0x61), p1, 1);
-    fx.peer(T0 + 700 * SEC, p1, &Frame::Sync { record: &rec }).unwrap();
+    fx.peer(T0 + (day + 1) * SEC, p1, &Frame::Sync { record: &rec })
+        .unwrap();
     fx.fx();
-    send_to(&mut fx, T0 + 701 * SEC, a, sa, m, 9).unwrap();
+    send_to(&mut fx, T0 + (day + 2) * SEC, a, sa, m, 9).unwrap();
     assert_eq!(
         fx.fx(),
         [Rec::Peer(
@@ -159,7 +163,7 @@ fn a_packet_for_a_member_holding_mail_is_forwarded_to_its_home_once_the_sleep_ma
             })
         )]
     );
-    assert_eq!(fx.r.mailbox_pending(&m).0, 2, "the held mail waits as before");
+    assert_eq!(fx.r.mailbox_pending(&m).0, 0, "the mail ended with the mark");
     assert_eq!(fx.r.mailbox_stats().delivered, 0);
 }
 

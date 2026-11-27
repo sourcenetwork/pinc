@@ -10,8 +10,8 @@
 //!   and stays at 2 s until a stream opens (which resets the wait to 1 s).
 //! - **Dial watchdog.** A dial that has not opened `max(8 s, 8 x rtt)` after it started (never more than 30 s) is
 //!   closed and tried again at once. `rtt` is the larger of the node's two round-trip figures.
-//! - **Keepalive (KEEP_SENSE).** A silent open carrier is checked after 30 s on a phone or within 10 minutes of a
-//!   carrier dying silently, and after 65 s otherwise. The home carrier is checked for its own sake; another
+//! - **Keepalive (KEEP_SENSE).** A silent open carrier is checked after 30 s on a phone or up to and including 10 minutes
+//!   after a carrier died silently, and after 65 s otherwise. The home carrier is checked for its own sake; another
 //!   carrier is checked while the node has any session.
 //! - **Learned keepalive (KEEP_LEARN).** When enabled, every carrier that dies silently sets `keep_iv` to half the
 //!   silence it had endured (at least 15 s, never rising above half of an earlier value); every keepalive wait is
@@ -24,8 +24,8 @@
 //!   fails, was not ridden and followed an idle gap of at least 15 s sets `lease_hi = min(lease_hi, gap)`. Once a
 //!   lease is known the keepalive gap is [`lease_keep`], and a send onto a carrier idle both ways for `lease_hi`
 //!   resets it first (STALE_SEND).
-//! - **Restart defer (CARRIER_DEFER).** After a restart the home carrier's own dial waits 600 ms; a frame to send
-//!   cancels the wait.
+//! - **Restart defer (CARRIER_DEFER).** After a restart the home carrier's own dial waits until 600 ms after the node
+//!   started (`Shared::defer_until`, set when the node is built); a frame to send cancels the wait.
 //!
 //! Invariants: `lease_hi` never rises; the retry wait is 1 s or 2 s; `Open` is reached only through
 //! [`Link::opened`]; every deadline returned by [`Link::next_deadline`] is the first instant [`Link::tick`] can act.
@@ -102,10 +102,11 @@ pub struct Shared {
     pub keep_learn: bool,
     /// The learned keepalive interval, 0 until a carrier died silently with KEEP_LEARN on.
     pub keep_iv: u64,
-    /// The node just restarted: the home carrier dial waits [`rule::DEFER`], and the flag is never cleared, so the
-    /// restart rules hold for the node's whole life.
+    /// The node just restarted: the home carrier dial waits until `defer_until`, and the flag is never cleared, so
+    /// the restart rules hold for the node's whole life.
     pub restarted: bool,
-    /// When the restart defer ends, set by the first dial attempt after a restart.
+    /// When the restart defer ends: set by whoever marks the restart, with the instant the node started plus
+    /// [`rule::DEFER`]. `None`: no defer runs.
     pub defer_until: Option<u64>,
 }
 
@@ -241,9 +242,8 @@ impl Link {
             return None;
         }
         if sh.restarted {
-            let until = *sh.defer_until.get_or_insert(now.saturating_add(rule::DEFER));
-            if !ctx.queued && ctx.home && now < until {
-                self.at = self.at.max(until);
+            if matches!(sh.defer_until, Some(until) if !ctx.queued && ctx.home && now < until) {
+                self.at = self.dial_at(now, sh, ctx);
                 self.defer = true;
                 return None;
             }
@@ -252,12 +252,22 @@ impl Link {
                 self.at = self.at.min(now);
             }
         }
-        if self.at <= now && (ctx.queued || ctx.home) {
+        if self.dial_at(now, sh, ctx) <= now && (ctx.queued || ctx.home) {
             self.state = State::Dialing;
             self.dial_start = now;
             return Some(Act::Dial);
         }
         None
+    }
+
+    /// When a dial wanted now may start: the retry time, held back to the end of the restart defer while nothing is
+    /// queued on the home carrier, and brought forward to `now` by a frame queued during the defer.
+    fn dial_at(&self, now: u64, sh: &Shared, ctx: &Ctx) -> u64 {
+        match sh.defer_until {
+            Some(until) if sh.restarted && !ctx.queued && ctx.home && now < until => self.at.max(until),
+            _ if sh.restarted && ctx.queued && self.defer => self.at.min(now),
+            _ => self.at,
+        }
     }
 
     /// The stream opened and the handshake completed. Returns whether the carrier was open before.
@@ -341,14 +351,24 @@ impl Link {
         Some(Act::Ping)
     }
 
+    /// The keepalive interval at `now`: short while a silent death is remembered (up to and including
+    /// [`rule::KEEP_MEMORY`] after it) on the home carrier or a phone, long otherwise.
     fn keep_after(now: u64, sh: &Shared, ctx: &Ctx) -> u64 {
-        let base = if ctx.home && (sh.phone || sh.keep_fail.is_some_and(|t| now.saturating_sub(t) < rule::KEEP_MEMORY))
+        let base = if ctx.home && (sh.phone || sh.keep_fail.is_some_and(|t| now.saturating_sub(t) <= rule::KEEP_MEMORY))
         {
             rule::HOME_KEEP
         } else {
             rule::RELAY_KEEP
         };
         if sh.keep_iv == 0 { base } else { base.min(sh.keep_iv) }
+    }
+
+    /// The instant the silent-carrier check is due: the last heard time plus the interval that holds at that instant.
+    /// The interval only grows as the memory of a silent death ends, so reading it again at the first candidate is
+    /// exact.
+    fn keep_due(&self, now: u64, sh: &Shared, ctx: &Ctx) -> u64 {
+        let first = self.lrx.saturating_add(Self::keep_after(now, sh, ctx));
+        self.lrx.saturating_add(Self::keep_after(first.max(now), sh, ctx))
     }
 
     /// Run the timers at `now`. Returns what the host must do, if anything; call again until it returns `None`.
@@ -399,7 +419,7 @@ impl Link {
         if lease && (ctx.home || ctx.rides) && now.saturating_sub(self.hlt) >= lease_keep(sh.lease_hi) {
             return self.check(now, ctx, false);
         }
-        if (ctx.home || ctx.rides) && now.saturating_sub(self.lrx) >= Self::keep_after(now, sh, ctx) {
+        if (ctx.home || ctx.rides) && now >= self.keep_due(now, sh, ctx) {
             return Some(Act::Check);
         }
         None
@@ -410,13 +430,7 @@ impl Link {
         match self.state {
             State::Dialing => Some(self.dial_start.saturating_add(dial_wait(ctx.rtt)).saturating_add(1)),
             // a frame queued during the restart defer cancels the wait: the carrier dials at once
-            State::Down => (ctx.queued || ctx.home).then(|| {
-                if sh.restarted && ctx.queued && self.defer {
-                    self.at.min(now)
-                } else {
-                    self.at
-                }
-            }),
+            State::Down => (ctx.queued || ctx.home).then(|| self.dial_at(now, sh, ctx)),
             State::Open => {
                 if self.chk != 0 {
                     return Some(self.chk);
@@ -424,12 +438,45 @@ impl Link {
                 if !(ctx.home || ctx.rides) {
                     return None;
                 }
-                let silent = self.lrx.saturating_add(Self::keep_after(now, sh, ctx));
+                let silent = self.keep_due(now, sh, ctx);
                 if sh.lease_hi != 0 && !ctx.udp_any {
                     return Some(self.hlt.saturating_add(lease_keep(sh.lease_hi)).min(silent));
                 }
                 Some(silent)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const CTX: Ctx = Ctx {
+        home: true,
+        rtt: 0,
+        udp_any: false,
+        rides: false,
+        queued: false,
+    };
+
+    /// At the end of the clock the dial deadline saturates at `u64::MAX`, and the tick there acts only if the
+    /// watchdog has passed.
+    #[test]
+    fn a_dial_deadline_at_the_end_of_the_clock_saturates_and_acts_only_past_the_watchdog() {
+        let sh = &mut Shared::default();
+        let wait = dial_wait(0);
+        // the dial started less than the watchdog before the end of the clock: the deadline is the end, nothing to do
+        let mut l = Link::new();
+        assert_eq!(l.want_dial(u64::MAX - 5, sh, &CTX), Some(Act::Dial));
+        assert_eq!(l.next_deadline(u64::MAX - 5, sh, &CTX), Some(u64::MAX));
+        assert_eq!(l.tick(u64::MAX, sh, &CTX), None);
+        assert_eq!(l.state(), State::Dialing);
+        // the watchdog passes exactly at the end of the clock: the tick there closes it
+        let mut l = Link::new();
+        assert_eq!(l.want_dial(u64::MAX - wait - 1, sh, &CTX), Some(Act::Dial));
+        assert_eq!(l.next_deadline(u64::MAX - wait - 1, sh, &CTX), Some(u64::MAX));
+        assert_eq!(l.tick(u64::MAX, sh, &CTX), Some(Act::Close));
+        assert_eq!(l.state(), State::Down);
     }
 }

@@ -17,7 +17,7 @@ use pinc_crypto::NodeId;
 use super::datagram::{Datagram, MAX_DNS_DATAGRAM};
 use super::route::Pkt;
 use super::sleep::{Notice, SKEW_MS, SleepError};
-use super::{Effect, Reject, Relay, Sink, Sleeper, Trace, UdpTarget, route};
+use super::{Effect, Reject, Relay, Sink, Sleeper, Trace, UdpTarget, live, route};
 
 impl<const C: usize, const R: usize, const MN: usize, const MB: usize> Relay<C, R, MN, MB> {
     /// A UDP datagram arrived from `src`. `from_member` is the node whose validated UDP session carried it, if the
@@ -109,9 +109,23 @@ impl<const C: usize, const R: usize, const MN: usize, const MB: usize> Relay<C, 
         }
         let me = self.cfg.me;
         n.verify(&me).map_err(|e| refuse(self, sink, e))?;
-        let woke = self.sleeping.get(&n.node).map_or(0, |s| s.woke);
-        if self.sleeping.insert(n.node, Sleeper { at: now, woke }).is_err() {
+        // a copy of the notice that set a live mark changes nothing: the mark keeps its time
+        let max_age = self.cfg.mailbox_max_age_ns;
+        let prev = self.sleeping.get(&n.node).copied().filter(|s| live(now, s, max_age));
+        if prev.is_some_and(|s| s.ts_ms == n.ts_ms) {
+            return Ok(());
+        }
+        let woke = prev.map_or(0, |s| s.woke);
+        let mark = Sleeper {
+            at: now,
+            ts_ms: n.ts_ms,
+            woke,
+        };
+        let Ok(evicted) = self.put_sleeper(&n.node, mark, true) else {
             return Err(self.reject(sink, Reject::SessionsFull, Some(n.node)));
+        };
+        if let Some(node) = evicted {
+            sink.emit(Effect::Trace(Trace::SleepEnded { node }));
         }
         sink.emit(Effect::Trace(Trace::SleepAccepted { node: n.node }));
         Ok(())

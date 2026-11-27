@@ -151,6 +151,52 @@ fn an_origin_is_judged_by_its_own_floor_not_by_the_local_clock() {
 }
 
 #[test]
+fn a_floor_frame_the_encoder_never_writes_is_refused() {
+    let mut net = world();
+    net.restart(3, 10 * SEC);
+    let hub = net.id(0);
+    let mut honest = vec![0u8; 12];
+    honest.extend_from_slice(&[1, 1, 1]);
+    honest.extend_from_slice(&[7; 8]);
+    honest.extend_from_slice(&[0; 12]);
+    let hist2 = {
+        let mut b = vec![0u8; 12];
+        b.push(2);
+        b
+    };
+    let mut trailing = honest.clone();
+    trailing.push(0);
+    while net.nodes[3].t.poll_trace().is_some() {}
+    for (topic, body) in [(&[0u8][..], &honest), (&[][..], &hist2), (&[][..], &trailing)] {
+        let now = net.now;
+        let n = &mut net.nodes[3];
+        n.t.frame(&mut n.h, now, &hub, ty::FLOOR, topic, body);
+    }
+    // Still gathering: nothing was recorded for the hub, so a message is held, not delivered.
+    net.set_primary(3, 0);
+    net.subscribe(3, T);
+    net.publish(2, T, b"x");
+    net.run_until(11 * SEC);
+    assert!(net.delivered(3).is_empty());
+    // Each frame was refused as a frame that did not parse, and none was taken as the hub's report.
+    let (mut bad_head, mut reported) = (0, 0);
+    while let Some(t) = net.nodes[3].t.poll_trace() {
+        match t {
+            Trace::Rejected {
+                why: Reject::BadHead, ..
+            } => bad_head += 1,
+            Trace::FloorReported { hub: h } if h == hub => reported += 1,
+            _ => {}
+        }
+    }
+    assert_eq!(
+        (bad_head, reported),
+        (3, 0),
+        "three refused frames, no report from the hub"
+    );
+}
+
+#[test]
 fn the_wait_for_the_floors_ends_15s_after_the_start_and_not_before() {
     let mut net = world();
     net.restart(3, 10 * SEC);

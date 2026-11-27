@@ -96,15 +96,29 @@ RLYMIN == 4 * SEC
 DirectFirst(first, hub, restarted, fd, started) == first /\ hub /\ (restarted \/ SatSub(fd, started) > LATESTART)
 
 \* a candidate is <<"u", addr>> or <<"r", relay>>; views is a sequence of [some, live, gen]
-KeepCand(t, views, c) ==
-    IF c[1] = "u" THEN ~(t.hs0 /\ t.dialer)
-    ELSE LET v == IF c[2] < Len(views) THEN views[c[2] + 1] ELSE [some |-> FALSE, live |-> FALSE, gen |-> 0] IN
-         ~(t.dialer /\ t.rtt >= TGSLOW /\ v.some /\ v.live /\ t.haslast /\ t.last[1] = c[2] /\ t.last[2] = v.gen
-           /\ SatSub(t.now, t.last[3]) < Min(RLYONCE, Max(RLYMIN, t.rtt * 3)))
+\* the economy rules: THIN_HS0 drops a UDP candidate of a dialer's first flight, RLY_ONCE a relay that holds the flight
+Hs0Drop(t, c) == c[1] = "u" /\ t.hs0 /\ t.dialer
+OnceDrop(t, views, c) ==
+    c[1] = "r" /\
+    LET v == IF c[2] < Len(views) THEN views[c[2] + 1] ELSE [some |-> FALSE, live |-> FALSE, gen |-> 0] IN
+    t.dialer /\ t.rtt >= TGSLOW /\ v.some /\ v.live /\ t.haslast /\ t.last[1] = c[2] /\ t.last[2] = v.gen
+    /\ SatSub(t.now, t.last[3]) < Min(RLYONCE, Max(RLYMIN, t.rtt * 3))
+KeepCand(t, views, c) == ~Hs0Drop(t, c) /\ ~OnceDrop(t, views, c)
 
-RECURSIVE KeepAll(_, _, _)
-KeepAll(t, views, cs) == IF cs = <<>> THEN <<>>
-                         ELSE (IF KeepCand(t, views, Head(cs)) THEN <<Head(cs)>> ELSE <<>>) \o KeepAll(t, views, Tail(cs))
+\* the candidates of cs that the rules in use keep, in their order
+RECURSIVE KeepIf(_, _, _, _, _)
+KeepIf(t, views, cs, useH, useO) ==
+    IF cs = <<>> THEN <<>>
+    ELSE (IF (useH /\ Hs0Drop(t, Head(cs))) \/ (useO /\ OnceDrop(t, views, Head(cs))) THEN <<>> ELSE <<Head(cs)>>)
+         \o KeepIf(t, views, Tail(cs), useH, useO)
+\* THIN_HS0 never leaves no path: a rule that would drop every candidate is not applied; RLY_ONCE always applies (the
+\* relay holds the flight, a resend would put another full Initial on its stream). Without fallback (a planted bug)
+\* THIN_HS0 always applies too
+KeepBy(t, views, cs, fallback) ==
+    LET useH == ~fallback \/ KeepIf(t, views, cs, TRUE, FALSE) # <<>>
+        useO == TRUE
+    IN KeepIf(t, views, cs, useH, useO)
+KeepAll(t, views, cs) == KeepBy(t, views, cs, TRUE)
 
 RECURSIVE Carried(_, _, _)
 Carried(views, out, acc) ==
@@ -113,14 +127,15 @@ Carried(views, out, acc) ==
          THEN Carried(views, Tail(out), <<Head(out)[2], IF Head(out)[2] < Len(views) /\ views[Head(out)[2] + 1].some THEN views[Head(out)[2] + 1].gen ELSE 0>>)
          ELSE Carried(views, Tail(out), acc)
 
-Select(cands, t, views, cap) ==
-    LET kept == KeepAll(t, views, SubSeq(cands, 1, Min(Len(cands), 16)))
+SelectBy(cands, t, views, cap, fallback) ==
+    LET kept == KeepBy(t, views, SubSeq(cands, 1, Min(Len(cands), 16)), fallback)
         n == Len(kept)
         slow == t.rtt >= TGSLOW
         thin == t.dialer /\ n > 1 /\ (slow \/ (t.tries >= 2 /\ t.nortt))
         picked == IF thin THEN <<kept[(t.tries % n) + 1]>> ELSE kept
         out == SubSeq(picked, 1, Min(Len(picked), cap))
     IN [out |-> out, carried |-> Carried(views, out, <<>>)]
+Select(cands, t, views, cap) == SelectBy(cands, t, views, cap, TRUE)
 
 \* pending dials: items is a sequence of [e, peer, ws] with ws a sequence of H sessions (-1 empty)
 NewPending(n, h) == [items |-> [i \in 1..n |-> [e |-> FALSE, peer |-> 0, ws |-> [k \in 1..h |-> -1]]], h |-> h]
@@ -193,22 +208,32 @@ MISSLIMIT == 3
 HOMETRIES == 3
 \* addresses are <<ip octets, port>>
 IsShared(ip) == Len(ip) = 4 /\ ip[1] = 100 /\ ip[2] >= 64 /\ ip[2] < 128
-Classify(local, refl, mapped, heard, since, wd) ==
+\* netcheck::canonical: an IPv4 address in its mapped form (::ffff:a.b.c.d, 16 octets) is the IPv4 address
+IsMapped(ip) == Len(ip) = 16 /\ (\A k \in 1..10 : ip[k] = 0) /\ ip[11] = 255 /\ ip[12] = 255
+Canon(a) == IF IsMapped(a[1]) THEN <<SubSeq(a[1], 13, 16), a[2]>> ELSE a
+CanonAll(s) == [i \in 1..Len(s) |-> Canon(s[i])]
+\* classify on the addresses as they arrived (canon FALSE, a planted bug) or in canonical form, as the code compares them
+ClassifyRaw(local, refl, mapped, heard, since, wd) ==
     IF refl = <<>> THEN (IF ~heard /\ since >= wd THEN 5 ELSE 0)
     ELSE IF \E i \in 1..Len(refl) : \E j \in 1..Len(local) : refl[i] = local[j] THEN 1
     \* port mapped: a mapping's external IP is one a relay saw (its port may differ from the reflexive one)
     ELSE IF \E i \in 1..Len(refl) : \E j \in 1..Len(mapped) : refl[i][1] = mapped[j][1] THEN 2
     ELSE IF (\E i \in 1..Len(refl) : IsShared(refl[i][1])) \/ (\E i \in 1..Len(refl) : refl[i] # refl[1]) THEN 4
     ELSE 3
+ClassifyBy(local, refl, mapped, heard, since, wd, canon) ==
+    IF canon THEN ClassifyRaw(CanonAll(local), CanonAll(refl), CanonAll(mapped), heard, since, wd)
+    ELSE ClassifyRaw(local, refl, mapped, heard, since, wd)
+Classify(local, refl, mapped, heard, since, wd) == ClassifyBy(local, refl, mapped, heard, since, wd, TRUE)
 
-\* order[i] is the place of relay i in the order of first answers (0: never answered); a restart keeps it
+\* order[i] is the place of relay i in the order of first answers (0: never answered); a restart keeps it. ok[i]: a
+\* probe of relay i was answered since its last recorded failure (an opened carrier does not set it)
 NewNet(r) == [probes |-> [i \in 1..r |-> [e |-> FALSE, nonce |-> <<>>, sent |-> 0]], rtt |-> [i \in 1..r |-> 0],
-              order |-> [i \in 1..r |-> 0],
+              order |-> [i \in 1..r |-> 0], ok |-> [i \in 1..r |-> FALSE],
               refl |-> [i \in 1..r |-> -1], home |-> -1, missed |-> [i \in 1..r |-> 0], tries |-> 0, fp |-> -1, pin |-> -1]
 \* Netcheck::pin: the deployment's own relay; a position past the table is ignored
 NPin(N, p) == IF p >= 0 /\ p < Len(N.probes) THEN [N EXCEPT !.pin = p] ELSE N
 Unhealthy(N, i) == N.missed[i + 1] >= MISSLIMIT
-NFailed(N, i) == IF i < Len(N.missed) THEN [N EXCEPT !.missed[i + 1] = Min(255, N.missed[i + 1] + 1)] ELSE N
+NFailed(N, i) == IF i < Len(N.missed) THEN [N EXCEPT !.missed[i + 1] = Min(255, N.missed[i + 1] + 1), !.ok[i + 1] = FALSE] ELSE N
 NHealthy(N, i) == IF i < Len(N.missed) THEN [N EXCEPT !.missed[i + 1] = 0] ELSE N
 NProbeSent(N, now, relay, nonce, works) ==
     LET N1 == IF works /\ relay < Len(N.probes) /\ N.probes[relay + 1].e THEN NFailed(N, relay) ELSE N IN
@@ -232,22 +257,27 @@ NAnsweredBy(N, now, relay, nonce, addr, usePin) ==
     ELSE LET rtt == SatSub(now, N.probes[relay + 1].sent)
              top == LET O == {N.order[i] : i \in 1..Len(N.order)} IN CHOOSE m \in O : \A x \in O : x <= m
              N1 == [N EXCEPT !.probes[relay + 1].e = FALSE, !.missed[relay + 1] = 0, !.rtt[relay + 1] = rtt, !.refl[relay + 1] = addr,
+                             !.ok[relay + 1] = TRUE,
                              !.order[relay + 1] = IF N.order[relay + 1] = 0 THEN top + 1 ELSE N.order[relay + 1]]
              pinned == IF usePin /\ N1.pin \in Answered(N1) THEN N1.pin ELSE -1
              best == IF pinned >= 0 THEN pinned ELSE ArgMin2(Answered(N1), N1.rtt, N1.order)
              N2 == IF best >= 0 THEN [N1 EXCEPT !.home = best] ELSE N1
          IN [res |-> rtt, N |-> N2]
 NAnswered(N, now, relay, nonce, addr) == NAnsweredBy(N, now, relay, nonce, addr, TRUE)
-NFailover(N, usable, open) ==
+\* Netcheck::failover; without okBit (a planted bug, the old rule) a relay with no miss counts as answered since it last
+\* failed, though an opened carrier also clears the misses
+NFailoverBy(N, usable, open, okBit) ==
     IF N.home < 0 \/ ~Unhealthy(N, N.home) THEN [res |-> -1, N |-> N]
     ELSE LET rn == Len(N.probes)
-             meas == ArgMin({i \in 0..(rn - 1) : i # N.home /\ usable[i + 1] /\ N.missed[i + 1] = 0 /\ N.refl[i + 1] >= 0}, N.rtt)
+             meas == ArgMin({i \in 0..(rn - 1) : i # N.home /\ usable[i + 1] /\ N.missed[i + 1] = 0 /\ (N.ok[i + 1] \/ ~okBit)
+                                                /\ N.refl[i + 1] >= 0}, N.rtt)
              ring == {(N.home + k) % rn : k \in 1..(rn - 1)}
              cand == {k \in 1..(rn - 1) : usable[((N.home + k) % rn) + 1] /\ open[((N.home + k) % rn) + 1] /\ ~Unhealthy(N, (N.home + k) % rn)}
              nxt == IF meas >= 0 THEN meas
                     ELSE IF cand = {} THEN -1
                     ELSE (N.home + (CHOOSE k \in cand : \A x \in cand : k <= x)) % rn
          IN IF nxt < 0 THEN [res |-> -1, N |-> N] ELSE [res |-> nxt, N |-> [N EXCEPT !.home = nxt]]
+NFailover(N, usable, open) == NFailoverBy(N, usable, open, TRUE)
 \* a link change forgets the answers of the round; the home, the order of first answers and the count of rounds
 \* without a home stay
 NRestart(N) == [N EXCEPT !.probes = [i \in 1..Len(N.probes) |-> [N.probes[i] EXCEPT !.e = FALSE]],

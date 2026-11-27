@@ -247,8 +247,10 @@ fn a_restarted_member_delivers_a_fresh_message_when_both_hubs_report_honest_floo
 /// lacking a list, `floor_settle` (`floors.rs:219-225`) takes the hub-wide floor as the maximum over the hubs, and
 /// `is_old` (`floors.rs:283`) drops every later message of every origin as already delivered, through the honest
 /// hub too. The message published 20 s after the restart is never delivered (the world test waited a further 60 s).
-/// Two faults combine: a FLOOR frame `Topics::floor` never writes (non-empty topic) is taken, and a floor beyond any
-/// clock in the network is not bounded by the member's own clock or by the other hub's report.
+/// Two faults combined: a FLOOR frame `Topics::floor` never writes (non-empty topic) was taken. It is now refused
+/// whole, and this test pins that. A well-formed floor from an authenticated hub is believed by design (hubs stay
+/// authoritative for replay floors), so a hub that reports a floor ahead of every clock still silences a restarted
+/// member until the floor passes; that is not what this test covers.
 ///
 /// Who can trigger it: one authenticated hub, by a FLOOR frame on its membership stream; it silences each member
 /// that restarts and attaches to it, for every origin and topic, despite the other hubs being honest.

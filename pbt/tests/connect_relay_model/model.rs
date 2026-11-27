@@ -109,6 +109,7 @@ pub struct Sess {
 #[derive(Clone, Copy)]
 pub struct Sleeper {
     pub at: u64,
+    pub ts: u64,
 }
 
 pub struct StoredRec {
@@ -140,16 +141,17 @@ pub struct Expect {
 
 pub struct Model {
     pub cfg: Config,
-    /// Model the table of gone nodes with the code's capacity (a full table forgets the close) instead of as the
-    /// module doc states it.
-    pub gone_cap: Option<usize>,
     pub now: u64,
     pub sessions: BTreeMap<K, Sess>,
     /// The sessions as the relay's table holds them, so the sweep visits them in the relay's order.
     pub order: Table<(), C>,
     pub next_session: u64,
     pub gone: BTreeMap<K, u64>,
+    /// The gone nodes as the relay's table holds them, so a full table drops the same oldest entry on a tie.
+    pub gone_slots: Table<(), C>,
     pub sleeping: BTreeMap<K, Sleeper>,
+    /// The marks as the relay's table holds them, so a full table drops the same oldest mark on a tie.
+    pub sleeping_slots: Table<(), C>,
     pub udp: BTreeMap<K, u64>,
     pub peers: Vec<K>,
     pub fwd_back: BTreeMap<usize, (K, K, u64)>,
@@ -168,16 +170,17 @@ pub struct Model {
 }
 
 impl Model {
-    pub fn new(cfg: Config, gone_cap: Option<usize>) -> Self {
+    pub fn new(cfg: Config) -> Self {
         Self {
             cfg,
-            gone_cap,
             now: T0,
             sessions: BTreeMap::new(),
             order: Table::new(cfg.seed),
             next_session: 0,
             gone: BTreeMap::new(),
+            gone_slots: Table::new(cfg.seed),
             sleeping: BTreeMap::new(),
+            sleeping_slots: Table::new(cfg.seed),
             udp: BTreeMap::new(),
             peers: Vec::new(),
             fwd_back: BTreeMap::new(),
@@ -199,11 +202,34 @@ impl Model {
         k(&self.cfg.me)
     }
 
+    /// The relay module doc: "When a carrier closes the node becomes \"gone\" with the time", and a full table of gone
+    /// nodes makes room by dropping the entry with the oldest time (the first such in the table's order), so the close
+    /// is never lost.
     pub fn gone_insert(&mut self, n: K, at: u64) {
-        let room = self.gone_cap.is_none_or(|cap| self.gone.len() < cap);
-        if self.gone.contains_key(&n) || room {
-            self.gone.insert(n, at);
+        let node = node_of(n);
+        if self.gone_slots.is_full() && !self.gone_slots.contains(&node) {
+            let oldest = self.gone_slots.iter().map(|(o, ())| k(o)).min_by_key(|o| self.gone.get(o).copied().unwrap_or(0));
+            if let Some(o) = oldest {
+                self.gone_remove(o);
+            }
         }
+        assert!(self.gone_slots.insert(node, ()).is_ok(), "the model's gone table has room after the eviction");
+        self.gone.insert(n, at);
+    }
+
+    pub fn gone_remove(&mut self, n: K) {
+        self.gone.remove(&n);
+        self.gone_slots.remove(&node_of(n));
+    }
+
+    pub fn sleep_insert(&mut self, n: K, s: Sleeper) {
+        assert!(self.sleeping_slots.insert(node_of(n), ()).is_ok(), "the model's mark table has room");
+        self.sleeping.insert(n, s);
+    }
+
+    pub fn sleep_remove(&mut self, n: K) {
+        self.sleeping.remove(&n);
+        self.sleeping_slots.remove(&node_of(n));
     }
 
     pub fn reject(&self, e: &mut Expect, r: Reject, n: Option<K>) -> P {
@@ -243,7 +269,8 @@ impl Model {
             e.fx.push(Fx::Spl { to: d, src: s, flag, body: packet.to_vec() });
             return P::Done(Ok(()));
         }
-        if self.sleeping.contains_key(&d) {
+        let age = self.cfg.mailbox_max_age_ns;
+        if self.sleeping.get(&d).is_some_and(|s| self.now.saturating_sub(s.at) < age) {
             e.mail.push((d, s, flag, packet.to_vec()));
             return P::Mail(e.mail.len() - 1);
         }
@@ -333,10 +360,28 @@ impl Model {
         if let Err(err) = n.verify(&self.cfg.me) {
             return self.reject(e, Reject::BadSleep(err), Some(node));
         }
-        if !self.sleeping.contains_key(&node) && self.sleeping.len() >= C {
-            return self.reject(e, Reject::SessionsFull, Some(node));
+        let age = self.cfg.mailbox_max_age_ns;
+        let now = self.now;
+        let live = self.sleeping.get(&node).is_some_and(|s| now.saturating_sub(s.at) < age);
+        if live && self.sleeping[&node].ts == n.ts_ms {
+            return P::Done(Ok(()));
         }
-        self.sleeping.insert(node, Sleeper { at: self.now });
+        if !self.sleeping.contains_key(&node) && self.sleeping.len() >= C {
+            // a full table makes room by ending the oldest mark that holds no mail (the first such in the table's order)
+            let held = &self.held;
+            let victim = self
+                .sleeping_slots
+                .iter()
+                .map(|(m, ())| k(m))
+                .filter(|m| held.get(m).is_none_or(Vec::is_empty))
+                .min_by_key(|m| self.sleeping[m].at);
+            match victim {
+                Some(v) => self.sleep_remove(v),
+                None => return self.reject(e, Reject::SessionsFull, Some(node)),
+            }
+        }
+        let at = self.now;
+        self.sleep_insert(node, Sleeper { at, ts: n.ts_ms });
         P::Done(Ok(()))
     }
 
@@ -473,7 +518,19 @@ impl Model {
             e.fx.push(Fx::Close { node: n, session: s, replaced: false });
         }
         self.gone.retain(|_, at| now.saturating_sub(*at) < rule::GONE_TTL_NS);
-        self.sleeping.retain(|_, s| now.saturating_sub(s.at) < rule::GONE_TTL_NS);
+        let gone = &self.gone;
+        self.gone_slots.retain(|n, ()| gone.contains_key(&k(n)));
+        let age = self.cfg.mailbox_max_age_ns;
+        let held = &mut self.held;
+        self.sleeping.retain(|m, s| {
+            let keep = now.saturating_sub(s.at) < age;
+            if !keep {
+                held.remove(m);
+            }
+            keep
+        });
+        let sleeping = &self.sleeping;
+        self.sleeping_slots.retain(|n, ()| sleeping.contains_key(&k(n)));
         self.records.retain(|_, r| now.saturating_sub(r.received) < rule::RECORD_TTL_NS);
     }
 

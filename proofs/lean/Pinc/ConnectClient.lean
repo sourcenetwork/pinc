@@ -185,24 +185,35 @@ structure Try where
   lastRelay : Option (Nat × Nat × Nat)
   deriving DecidableEq, Repr
 
-/-- Whether a try keeps a candidate (the first 16 are looked at). -/
-def keepCand (t : Try) (relay : Nat → Option RelayView) : Cand → Bool
-  | .udp _ => !(t.hs0 && t.dialer)
+/-- THIN_HS0: a dialer's first flight drops its UDP candidates. -/
+def hs0Drop (t : Try) : Cand → Bool
+  | .udp _ => t.hs0 && t.dialer
+  | .relay _ => false
+
+/-- RLY_ONCE: a slow link does not hand the flight again to the relay that holds it. -/
+def onceDrop (t : Try) (relay : Nat → Option RelayView) : Cand → Bool
+  | .udp _ => false
   | .relay r =>
-    !(t.dialer && decide (t.linkRtt ≥ tgSlow) &&
+    t.dialer && decide (t.linkRtt ≥ tgSlow) &&
       (match relay r with
        | some v => v.live &&
          (match t.lastRelay with
           | some (lr, g, at_) =>
             lr == r && g == v.gen && decide (satSub t.now at_ < min rlyOnce (max rlyOnceMin (t.linkRtt * 3)))
           | none => false)
-       | none => false))
+       | none => false)
+
+/-- The candidates of `w` that the rules in use keep: THIN_HS0 never leaves none, so it is not applied when it would
+drop every candidate; RLY_ONCE always applies (the relay holds the flight). -/
+def keepAll (t : Try) (relay : Nat → Option RelayView) (w : List Cand) : List Cand :=
+  let useH := !(w.all (hs0Drop t))
+  w.filter fun c => !((useH && hs0Drop t c) || onceDrop t relay c)
 
 /-- `select`: the candidates this try is sent on (at most `cap`), and the relay and generation that now carry the
 flight. -/
 def select (cands : List Cand) (t : Try) (relay : Nat → Option RelayView) (cap : Nat) :
     List Cand × Option (Nat × Nat) :=
-  let kept := (cands.take 16).filter (keepCand t relay)
+  let kept := keepAll t relay (cands.take 16)
   let n := kept.length
   let slow := t.linkRtt ≥ tgSlow
   let thin := t.dialer ∧ n > 1 ∧ (slow ∨ (t.tries ≥ 2 ∧ t.noRtt))
@@ -353,6 +364,8 @@ structure Netcheck where
   refl : List (Option Nat)
   home : Option Nat
   missed : List Nat
+  -- per relay: a probe was answered since its last recorded failure (an opened carrier does not set it)
+  okf : List Bool
   tries : Nat
   firstProbe : Option Nat
   -- the relay the deployment pinned as the home, if any
@@ -360,8 +373,8 @@ structure Netcheck where
   deriving DecidableEq, Repr
 
 def Netcheck.new (r : Nat) : Netcheck :=
-  ⟨List.replicate r none, List.replicate r 0, List.replicate r 0, List.replicate r none, none, List.replicate r 0, 0, none,
-    none⟩
+  ⟨List.replicate r none, List.replicate r 0, List.replicate r 0, List.replicate r none, none, List.replicate r 0,
+    List.replicate r false, 0, none, none⟩
 
 /-- `Netcheck::pin`: a position past the table is ignored. -/
 def Netcheck.setPin (n : Netcheck) (relay : Nat) : Netcheck :=
@@ -370,7 +383,9 @@ def Netcheck.setPin (n : Netcheck) (relay : Nat) : Netcheck :=
 def Netcheck.unhealthy (n : Netcheck) (i : Nat) : Bool := decide (n.missed.getD i 0 ≥ missLimit)
 
 def Netcheck.failed (n : Netcheck) (i : Nat) : Netcheck :=
-  if i < n.missed.length then { n with missed := n.missed.set i (min 255 (n.missed.getD i 0 + 1)) } else n
+  if i < n.missed.length then
+    { n with missed := n.missed.set i (min 255 (n.missed.getD i 0 + 1)), okf := n.okf.set i false }
+  else n
 
 def Netcheck.healthy (n : Netcheck) (i : Nat) : Netcheck :=
   if i < n.missed.length then { n with missed := n.missed.set i 0 } else n
@@ -429,7 +444,7 @@ def Netcheck.answered (n : Netcheck) (now relay : Nat) (nonce : List Nat) (addr 
     else
       let rtt := satSub now sent
       let place := if n.order.getD relay 0 = 0 then n.order.foldl max 0 + 1 else n.order.getD relay 0
-      let n1 := { n with probes := n.probes.set relay none, missed := n.missed.set relay 0,
+      let n1 := { n with probes := n.probes.set relay none, missed := n.missed.set relay 0, okf := n.okf.set relay true,
                          rtt := n.rtt.set relay rtt, order := n.order.set relay place, refl := n.refl.set relay (some addr) }
       (some rtt, n1.rehome)
   | none => (none, n)
@@ -445,7 +460,8 @@ def Netcheck.failover (n : Netcheck) (usable isOpen : Nat → Bool) : Option Nat
     else
       let rn := n.probes.length
       let measured := argMin ((List.range rn).filter fun i =>
-        i != home && usable i && n.missed.getD i 0 == 0 && (n.refl.getD i none).isSome) fun i => n.rtt.getD i 0
+        i != home && usable i && n.missed.getD i 0 == 0 && n.okf.getD i false && (n.refl.getD i none).isSome)
+        fun i => n.rtt.getD i 0
       let next := match measured with
         | some m => some m
         | none => ((List.range' 1 (rn - 1)).map fun k => (home + k) % rn).find? fun i => usable i && isOpen i && !n.unhealthy i
@@ -491,8 +507,14 @@ structure Observed where
   sinceProbe : Nat
   watchdog : Nat
 
-/-- `classify`: the reachability class (1 public, 2 port mapped, 3 behind NAT, 4 carrier-grade NAT, 5 UDP blocked). -/
-def classify (o : Observed) : Option Nat :=
+/-- `netcheck::canonical`: an IPv4 address in its mapped form (`::ffff:a.b.c.d`) is the IPv4 address. -/
+def canonIp (ip : List Nat) : List Nat :=
+  if ip.length = 16 ∧ ip.take 12 = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255] then ip.drop 12 else ip
+
+def canon (a : Addr) : Addr := (canonIp a.1, a.2)
+
+/-- `classify` over the addresses as given. -/
+def classifyRaw (o : Observed) : Option Nat :=
   match o.reflexive with
   | [] => if ¬ o.udpHeard ∧ o.sinceProbe ≥ o.watchdog then some 5 else none
   | first :: _ =>
@@ -501,6 +523,11 @@ def classify (o : Observed) : Option Nat :=
     else if o.reflexive.any (fun r => o.mapped.any (fun m => m.1 == r.1)) then some 2
     else if o.reflexive.any (fun r => isShared r.1) ∨ o.reflexive.any (fun r => r != first) then some 4
     else some 3
+
+/-- `classify`: the reachability class (1 public, 2 port mapped, 3 behind NAT, 4 carrier-grade NAT, 5 UDP blocked), the
+addresses compared in canonical form. -/
+def classify (o : Observed) : Option Nat :=
+  classifyRaw { o with local_ := o.local_.map canon, reflexive := o.reflexive.map canon, mapped := o.mapped.map canon }
 
 /-- What a lookup answer is (`DnsAnswer`). -/
 inductive Answer where
