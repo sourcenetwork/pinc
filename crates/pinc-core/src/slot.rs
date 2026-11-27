@@ -213,7 +213,8 @@ pub(crate) struct PathStamp {
     pub(crate) rx: u64,
 }
 
-/// What the endpoint knows about a session.
+/// What the endpoint knows about a session. On a 64-bit target at `NP` = 4 it is 2832 bytes, `pair_ids` 64 of them
+/// (16 per path); `pair_tests` pins the size.
 #[derive(Debug)]
 pub(crate) struct Meta<const NP: usize> {
     pub(crate) generation: u32,

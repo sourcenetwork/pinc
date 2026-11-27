@@ -62,6 +62,8 @@ mod iface;
 mod keepalive;
 mod ledger;
 mod orphan;
+#[cfg(test)]
+mod pair_tests;
 mod queue;
 mod reach;
 mod relay_net;

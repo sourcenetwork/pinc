@@ -144,12 +144,11 @@ ep_impl! {
         .take(K)
     }
 
-    /// The datagram kept for the next call: the remote of its path (None when the path has no address any more), its
-    /// length and its segment size.
+    /// The datagram kept for the next call: the remote of its path, its length and its segment size.
     #[cfg(feature = "trace")]
-    pub fn trace_stash(&self) -> Option<(Option<SocketAddr>, usize, usize)> {
+    pub fn trace_stash(&self) -> Option<(SocketAddr, usize, usize)> {
         let m = self.stash_meta.as_ref()?;
-        Some((Some(m.remote), m.len, m.segment))
+        Some((m.remote, m.len, m.segment))
     }
 
     /// Whether slot `i` is a broadcast session (its `gossip` flag), or None for a slot out of range.

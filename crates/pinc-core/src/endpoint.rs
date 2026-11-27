@@ -40,7 +40,8 @@
 //!   `NP`, until it is replaced or the session ends. A pair's generation is 32 bits and advances once per pair a
 //!   session takes from no holder, so it wraps after 2^32 such pairs (about 71 minutes of one authenticated peer
 //!   learning a new path every microsecond); only then can the id of a gone active path name a new pair. That is
-//!   accepted.
+//!   accepted. A session that holds or lets go of an id that names no pair (an evicted pair, or one a wrap gave to
+//!   another) is counted in `pair_refs_unbalanced`, so that failure is seen.
 //! - **Amplification ledger.** Every outgoing datagram passes the [`Ledger`].
 //! - **Half-open cap.** A first Initial creates state only in a datagram of at least 1200 bytes (464 for a short
 //!   one), and only while fewer than 256 sessions are unauthenticated; a resumption Hello is exempt from the count.
@@ -301,7 +302,8 @@ pub(crate) struct StashMeta {
 
 /// One entry of the table of address pairs: the generation its path id carries and how many sessions hold the pair
 /// (`Meta::held`). `u32` holds the most sessions an endpoint has (`K` below 2^32), so the count cannot overflow
-/// without a bug, which is counted, never wrapped.
+/// without a bug, which is counted, never wrapped. With its two addresses and the links of the table an entry is 84
+/// bytes on a 64-bit target (`table.rs` pins the size).
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PairRef {
     pub(crate) generation: u32,
@@ -773,25 +775,28 @@ ep_impl! {
         let generation = self.next_path_gen;
         // The table holds at most `NP * K + NP` pairs (checked at construction), so this never evicts; the counter
         // shows it if it ever does.
-        if self.paths.insert(key, PairRef { generation, refs: 0 }).is_some() {
+        let (at, evicted) = self.paths.insert_at(key, PairRef { generation, refs: 0 });
+        if evicted.is_some() {
             self.counters.pair_evictions += 1;
         }
-        let i = self.paths.index_of(&key).unwrap_or(0);
-        (path_id_at(generation, i), true)
+        (path_id_at(generation, at.unwrap_or(0)), true)
     }
 
     /// Take the pair of `id` off the table if no session holds it: what a call that minted a pair does when it ends
     /// without any session keeping it (a datagram that did not authenticate, a dial or command that failed).
     pub(crate) fn drop_unheld_pair(&mut self, id: PathId) {
-        let Some(key) = self.path_addrs(id) else { return };
-        if self.paths.get(&key).is_some_and(|p| p.refs == 0) {
-            self.paths.remove(&key);
+        let Some(i) = self.path_index(id) else { return };
+        if self.paths.at_index(i).is_some_and(|(_, p)| p.refs == 0) {
+            self.paths.remove_index(i);
         }
     }
 
     /// A session now holds the pair of `id`.
     pub(crate) fn retain_pair(&mut self, id: PathId) {
-        let Some(key) = self.path_addrs(id) else { return };
+        let Some(key) = self.path_addrs(id) else {
+            self.counters.pair_refs_unbalanced += 1;
+            return;
+        };
         let Some(p) = self.paths.get_mut(&key) else { return };
         let Some(refs) = p.refs.checked_add(1) else {
             self.counters.pair_refs_unbalanced += 1;
@@ -805,7 +810,10 @@ ep_impl! {
 
     /// A session no longer holds the pair of `id`; the last one to let go removes it.
     pub(crate) fn release_pair(&mut self, id: PathId) {
-        let Some(key) = self.path_addrs(id) else { return };
+        let Some(key) = self.path_addrs(id) else {
+            self.counters.pair_refs_unbalanced += 1;
+            return;
+        };
         let Some(p) = self.paths.get_mut(&key) else { return };
         let Some(refs) = p.refs.checked_sub(1) else {
             self.counters.pair_refs_unbalanced += 1;
@@ -819,9 +827,15 @@ ep_impl! {
 
     /// The addresses a path id names.
     pub(crate) fn path_addrs(&self, id: PathId) -> Option<(SocketAddr, SocketAddr)> {
+        let i = self.path_index(id)?;
+        self.paths.at_index(i).map(|(key, _)| *key)
+    }
+
+    /// The table entry a path id names, if the entry still holds the generation the id carries.
+    fn path_index(&self, id: PathId) -> Option<usize> {
         let i = usize::try_from(id.0 & 0xFFFF_FFFF).ok()?;
-        let (key, pair) = self.paths.at_index(i)?;
-        (u64::from(pair.generation) == id.0 >> 32).then_some(*key)
+        let (_, pair) = self.paths.at_index(i)?;
+        (u64::from(pair.generation) == id.0 >> 32).then_some(i)
     }
 
     // ---- the slot table ----

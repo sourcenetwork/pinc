@@ -795,7 +795,8 @@ pub struct NodeStats {
     /// Address pairs a full table pushed out. The table holds the pairs sessions hold and the `NP` a command mints
     /// for one (`NP * (K + 1)` entries at most, checked at construction), so it stays 0.
     pub pair_evictions: u64,
-    /// Times a session's count of an address pair would have gone below 0 or past its type: the pair stays. It stays 0.
+    /// Times a session's count of an address pair would have gone below 0 or past its type (the pair stays), or a
+    /// session held or let go of an id that names no pair (an evicted one, or a generation that wrapped). It stays 0.
     pub pair_refs_unbalanced: u64,
     /// Events waiting for the host now.
     pub events_queued: usize,

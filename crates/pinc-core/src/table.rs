@@ -269,13 +269,22 @@ impl<K: Hash + Eq + Copy, V: Copy, const CAP: usize> Table<K, V, CAP> {
     /// Store `v` under `k`: an existing key keeps its place in the order and takes the value; a new key is added
     /// and, when the table is full, the oldest entry is evicted and returned.
     pub fn insert(&mut self, k: K, v: V) -> Option<(K, V)> {
-        if let Some(slot) = self.get_mut(&k) {
-            *slot = v;
-            return None;
+        self.insert_at(k, v).1
+    }
+
+    /// [`insert`](Self::insert), and the array position the entry under `k` has afterwards (None only if nothing could
+    /// be stored, which a table of at least one entry never meets), so a caller that needs the position does not look
+    /// the key up again.
+    pub fn insert_at(&mut self, k: K, v: V) -> (Option<usize>, Option<(K, V)>) {
+        if let Some(i) = self.find(&k) {
+            if let Some((_, slot)) = self.entries.get_mut(i as usize).and_then(|e| e.kv.as_mut()) {
+                *slot = v;
+            }
+            return (Some(i as usize), None);
         }
         let evicted = if self.len == CAP { self.pop(self.oldest) } else { None };
-        self.push(k, v);
-        evicted
+        let at = self.free as usize;
+        (self.push(k, v).then_some(at), evicted)
     }
 
     /// Store `v` under `k` like [`insert`](Self::insert), but a new key is refused (false) when the table is full.
@@ -367,6 +376,11 @@ impl<K: Hash + Eq + Copy, V: Copy, const CAP: usize> Table<K, V, CAP> {
         self.find(k).map(|i| i as usize)
     }
 
+    /// Remove the entry at array position `i` and return its value.
+    pub fn remove_index(&mut self, i: usize) -> Option<V> {
+        self.pop(u32::try_from(i).ok()?).map(|(_, v)| v)
+    }
+
     /// The entries from the oldest to the newest, as pairs.
     pub fn iter(&self) -> impl Iterator<Item = (&K, &V)> {
         let mut cur = self.oldest;
@@ -401,6 +415,34 @@ mod tests {
         t.touch(&1);
         assert_eq!(t.insert(10, 100), Some((2, 20)));
         assert_eq!(t.iter().map(|(k, _)| *k).collect::<std::vec::Vec<_>>(), [3, 9, 1, 10]);
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn the_entry_of_the_pair_table_has_the_documented_size() {
+        use core::net::SocketAddr;
+        assert_eq!(
+            core::mem::size_of::<Entry<(SocketAddr, SocketAddr), crate::endpoint::PairRef>>(),
+            84
+        );
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used, reason = "test assertions")]
+    fn insert_at_names_the_entry_it_wrote_and_remove_index_takes_it_off() {
+        let mut t: Table<u32, u32, 2> = Table::new(7);
+        let (a, none) = t.insert_at(1, 10);
+        assert!(none.is_none());
+        let (b, _) = t.insert_at(2, 20);
+        assert_eq!((a, b), (t.index_of(&1), t.index_of(&2)));
+        // a replaced value keeps its entry; a full table evicts the oldest and its entry is the one written
+        assert_eq!(t.insert_at(1, 11), (a, None));
+        let (c, evicted) = t.insert_at(3, 30);
+        assert_eq!(evicted, Some((1, 11)));
+        assert_eq!(c, t.index_of(&3));
+        assert_eq!(t.at_index(c.unwrap()), Some((&3, &30)));
+        assert_eq!(t.remove_index(c.unwrap()), Some(30));
+        assert!(!t.contains(&3) && t.remove_index(c.unwrap()).is_none() && t.remove_index(99).is_none());
     }
 
     #[test]

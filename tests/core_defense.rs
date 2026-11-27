@@ -1596,3 +1596,63 @@ fn a_command_that_mints_every_path_anew_evicts_no_held_pair() {
         assert_eq!(ep.node_stats().dropped_out, 0, "a datagram of the session had no path");
     });
 }
+
+/// A dial that fails after its paths were minted (the pool has no chunk for the handshake) leaves the table of address
+/// pairs as it was: it mints a pair for each of its two addresses and gives both back.
+#[test]
+fn a_dial_that_fails_leaves_no_pair_behind() {
+    big_stack(|| {
+        let now = 100 * SEC_NS;
+        let kp = Keypair::from_seed(IdentityAlg::Ed25519, &[7u8; 32]).unwrap();
+        let id = LocalIdentity::from_keypair(&kp, KeyHandle(1)).unwrap();
+        let peer = LocalIdentity::from_keypair(
+            &Keypair::from_seed(IdentityAlg::Ed25519, &[8u8; 32]).unwrap(),
+            KeyHandle(1),
+        )
+        .unwrap()
+        .node_id();
+        let pool = BufferPool::new_boxed(0);
+        let streams: &'static mut Streams<NoSource, 1, 2> =
+            Box::leak(Box::new(Streams::new(&stream::Config::new(false), &pool)));
+        let memory = Resources {
+            pool,
+            streams: streams.into(),
+            loss: (&*Box::leak(Box::new(LossEstimate::new()))).into(),
+            tables: Tables::new(),
+        };
+        let slots: Box<[TinySlot; 1]> = vec![Slot::new(memory)].into_boxed_slice().try_into().ok().unwrap();
+        let prov = Caps(Software, true);
+        let mut ep: Box<TinyEp> = Box::new(Endpoint::new(
+            now,
+            prov,
+            Drbg::new(&[3; 32]),
+            id,
+            EndpointConfig::new(5),
+            Box::leak(slots),
+        ));
+        let mut drbg = Drbg::new(&[4; 32]);
+        let mut env = Env {
+            provider: &prov,
+            now,
+            drbg: &mut drbg,
+        };
+        let mut prekeys = SoftPrekeys::new(&mut env, PrekeyPolicy::default()).unwrap();
+        ep.set_prekey(prekeys.acquire(&mut env).unwrap());
+        assert!(ep.register_alpn(ALPN_A));
+        ep.add_iface("10.0.0.1:4433".parse().unwrap()).unwrap();
+        let addrs: [SocketAddr; 2] = ["203.0.113.1:4433".parse().unwrap(), "203.0.113.2:4433".parse().unwrap()];
+        let before = ep.trace_path_count();
+        let r = ep.command(
+            now,
+            Command::Connect {
+                node: peer,
+                alpn: ALPN_A,
+                addrs: &addrs,
+                role: Role::Other,
+            },
+        );
+        assert!(r.is_err(), "a dial with no memory for its handshake went through");
+        assert_eq!(ep.trace_path_count(), before, "the failed dial left a pair");
+        assert_eq!(ep.node_stats().pair_refs_unbalanced, 0);
+    });
+}
