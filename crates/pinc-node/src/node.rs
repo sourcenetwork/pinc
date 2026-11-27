@@ -282,7 +282,7 @@ where
         let dtn = on.dtn.then(|| {
             let policy = apps.dtn().policy();
             let budget = apps.dtn().budget();
-            Box::new(Dtn::new(policy, budget, cfg.wall_ms))
+            Box::new(Dtn::new(policy, budget, cfg.wall_ms, ident))
         });
         let mut node = Self {
             io,
@@ -519,6 +519,10 @@ where
     }
 
     /// Time passed. Safe to call at any time.
+    ///
+    /// Host contract: before a call that serves a due timer, the host hands over the input it already holds (frames,
+    /// session events, transport evidence). A hub confirms a member down on the call that finds the deadline due, so
+    /// an answer the host holds but has not handed over does not count.
     pub fn handle_timeout(&mut self, now: Nanos) {
         self.begin(now);
         self.io.ep.handle_timeout(now);

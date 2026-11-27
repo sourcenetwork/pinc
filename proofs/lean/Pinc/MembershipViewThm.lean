@@ -38,7 +38,7 @@ theorem removeFromView_keeps (e : Env) (n : N) (now m : Nat) (cur : Option ViewE
 
 /-- The arm for a member the view already lists. -/
 def rcKnown (e : Env) (n : N) (m : Nat) (best : Rec) (c : ViewEntry) : N × Bool × Bool :=
-  if best.inc / 65536 ≤ c.rc.inc / 65536 then
+  if best.inc / 65536 = c.rc.inc / 65536 then
     if best.inc / 65536 == c.rc.inc / 65536 && decide (c.rc.inc ≤ best.inc) then
       let n := { n with members := n.members.modify m (fun x => { x with rc := { x.rc with inc := best.inc } }) }
       let (n, ch1) := if best.ver != c.rc.ver then
@@ -96,7 +96,7 @@ theorem recomputeOne_eq_v (e : Env) (n : N) (now m : Nat) :
 
 theorem rcKnown_keeps (e : Env) (n : N) (m : Nat) (best : Rec) (c : ViewEntry) : Keeps n (rcKnown e n m best c).1 := by
   unfold rcKnown
-  by_cases h1 : best.inc / 65536 ≤ c.rc.inc / 65536 <;> by_cases h2 : (best.inc / 65536 == c.rc.inc / 65536 && decide (c.rc.inc ≤ best.inc)) = true <;>
+  by_cases h1 : best.inc / 65536 = c.rc.inc / 65536 <;> by_cases h2 : (best.inc / 65536 == c.rc.inc / 65536 && decide (c.rc.inc ≤ best.inc)) = true <;>
     by_cases h3 : (best.ver != c.rc.ver) = true <;> by_cases h4 : (best.th != c.rc.th) = true <;>
     by_cases h5 : (match (some (c.rc.ver, c.rc.th)).orElse (fun _ => (n.emit (.joined m)).goneVer.get? m) with | some (ver, th) => ver != best.ver | none => false) = true <;>
     simp [Keeps, h1, h2, h3, h4, h5] <;> split <;> simp_all
@@ -132,7 +132,7 @@ theorem rcKnown_keeps2 (e : Env) (n : N) (m : Nat) (best : Rec) (c : ViewEntry) 
   refine ⟨rcKnown_keeps e n m best c, ?_⟩
   intro k hk
   unfold rcKnown
-  by_cases h1 : best.inc / 65536 ≤ c.rc.inc / 65536 <;> by_cases h2 : (best.inc / 65536 == c.rc.inc / 65536 && decide (c.rc.inc ≤ best.inc)) = true <;>
+  by_cases h1 : best.inc / 65536 = c.rc.inc / 65536 <;> by_cases h2 : (best.inc / 65536 == c.rc.inc / 65536 && decide (c.rc.inc ≤ best.inc)) = true <;>
     by_cases h3 : (best.ver != c.rc.ver) = true <;> by_cases h4 : (best.th != c.rc.th) = true <;>
     by_cases h5 : (match (some (c.rc.ver, c.rc.th)).orElse (fun _ => (n.emit (.joined m)).goneVer.get? m) with | some (ver, th) => ver != best.ver | none => false) = true <;>
     simp [h1, h2, h3, h4, h5, AMap.get?_modify_ne _ _ _ _ hk, AMap.get?_insert_ne _ _ _ _ hk] <;> split <;> simp_all [AMap.get?_modify_ne _ _ _ _ hk, AMap.get?_insert_ne _ _ _ _ hk]

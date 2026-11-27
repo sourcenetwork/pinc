@@ -39,8 +39,8 @@ fn an_ack_addressed_to_another_offerer_relieves_custody() {
     let (s, b, a) = (keypair(0), keypair(1), keypair(2));
     let x = BundleId([9; 32]);
     let now = 10;
-    let mut book_b: CustodyBook<4> = CustodyBook::new();
-    let mut book_a: CustodyBook<4> = CustodyBook::new();
+    let mut book_b: CustodyBook<4> = CustodyBook::new(b.node_id());
+    let mut book_a: CustodyBook<4> = CustodyBook::new(a.node_id());
     let (mut led_b, mut led_a) = (Ledger::<8>::new(1 << 20), Ledger::<8>::new(1 << 20));
     // S's offer 0 to B; B accepts and owes S an ack for it.
     let due_b = book_b

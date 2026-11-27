@@ -193,7 +193,7 @@ def N.rcSame (n : N) (m : Nat) (best : Rec) (c : ViewEntry) : N × Bool × Bool 
   let (n, ch2) := n.rcTh m best c
   (n, ch1 || ch2, false)
 
-/-- A known member reincarnated in a newer epoch. -/
+/-- A known member whose best record is of another epoch, newer or older: the best copy's record replaces it. -/
 def N.rcNewer (n : N) (m : Nat) (best : Rec) (c : ViewEntry) : N × Bool × Bool :=
   let n := { n with members := n.members.insert m ⟨best⟩ }
   let n := n.emit (.joined m)
@@ -217,7 +217,7 @@ def N.rcFresh (n : N) (m : Nat) (best : Rec) : N × Bool × Bool :=
 def N.rcArm (n : N) (m : Nat) (best : Rec) (cur : Option ViewEntry) : N × Bool × Bool :=
   match cur with
   | some c =>
-    if best.inc / 65536 ≤ c.rc.inc / 65536 then
+    if best.inc / 65536 = c.rc.inc / 65536 then
       if best.inc / 65536 == c.rc.inc / 65536 && c.rc.inc ≤ best.inc then n.rcSame m best c
       else (n, false, false)
     else n.rcNewer m best c

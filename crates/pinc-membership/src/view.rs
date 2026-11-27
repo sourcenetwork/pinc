@@ -19,7 +19,7 @@
 use crate::codec::{Alive, Entry, Hello, NodeId, Record, Snap};
 use crate::consts::{HYST_ABS, LEASE, PULSE_FRESH, RECHECK_GAP, RENEW};
 use crate::event::{Event, Removal, Trace};
-use crate::node::{CopyEntry, HubCopy, Membership, ViewEntry, next_key};
+use crate::node::{CopyEntry, HubCopy, Membership, Recheck, ViewEntry, next_key};
 use crate::session::{Host, Nanos, Route};
 use alloc::collections::BTreeSet;
 
@@ -313,10 +313,6 @@ impl Membership {
             }
             round = c.round;
         }
-        if !self.is_hub && self.primary.as_ref() == Some(hub) {
-            self.home_ok = Some(*hub);
-            self.home_seen = true;
-        }
         let mut changed = false;
         let mut n = 0u32;
         for e in s.entries() {
@@ -353,12 +349,19 @@ impl Membership {
             if let Some(c) = self.hv.get_mut(hub) {
                 c.open = false;
             }
-            if !s.partial {
-                self.drop_gone(hub, round);
-                changed |= self.mark_absent(h, now, hub, round);
-                if !self.is_hub && self.primary.as_ref() == Some(hub) {
-                    changed |= self.mark_view_absent(h, now, hub, round);
-                }
+            let home = !self.is_hub && self.primary.as_ref() == Some(hub);
+            if home {
+                // The last frame confirms the home, before the omissions are aged: from here the home's copy is the
+                // only source, and mark_view_absent gives it an entry for every view member it lacks.
+                self.home_ok = Some(*hub);
+                self.home_seen = true;
+            }
+            // Every completed snapshot ages what it omits, partial or not: a hub younger than a lease learns its
+            // live members within the lease the omission clock gives them, and a delta that lists one clears it.
+            self.drop_gone(hub, round);
+            changed |= self.mark_absent(h, now, hub, round);
+            if home {
+                changed |= self.mark_view_absent(h, now, hub, round);
             }
             if self.primary.as_ref() == Some(hub) {
                 // A snapshot means a fresh attachment: the hub forgot our subscriptions with the old session.
@@ -383,7 +386,9 @@ impl Membership {
     }
 
     /// A complete snapshot of `hub` listed round `round`: everything else in its copy is omitted, which starts that
-    /// member's lease clock without removing it.
+    /// member's lease clock without removing it. A member whose removal a window deferred, and that the copy of a
+    /// newly confirmed home still lists, is aged here like any other: one lease at most, where skipping would leave
+    /// a listed entry that nothing ends.
     fn mark_absent<H: Host>(&mut self, h: &mut H, now: Nanos, hub: &NodeId, round: u32) -> bool {
         let mut changed = false;
         let mut cur: Option<NodeId> = None;
@@ -400,6 +405,7 @@ impl Membership {
                 marked = true;
             }
             if marked {
+                self.note_absent(now);
                 self.trace(Trace::Absent { member: m });
                 changed |= self.recompute_one(h, now, &m);
             }
@@ -407,10 +413,13 @@ impl Membership {
         changed
     }
 
-    /// A complete snapshot of the confirmed home listed round `round`: it is the whole view, so every view member it
-    /// does not list gets the omission lease clock, whichever hub's copy it came from. A member the home's copy never
-    /// held gets an entry in it, carrying the view's record, that only the clock gives life to; `sweep_absent` ends
-    /// it. With the copy full there is no room for the clock and the member is recomputed at once.
+    /// A complete snapshot of the confirmed home listed round `round`: it is the whole view, and the frames were
+    /// applied under the union of the copies, so every view member is recomputed under the home alone. A member the
+    /// home's copy never held gets an entry in it, carrying the view's record, that only the omission clock gives life
+    /// to; `sweep_absent` ends it. With the copy full there is no room for the clock and the member is recomputed at
+    /// once. A member whose removal already waits is given no entry when a window deferred it (its own instant ends
+    /// it, not another lease) or when it was held and no copy lists it; a held member that some other copy still
+    /// lists gets the entry, as that copy is stale until aged.
     fn mark_view_absent<H: Host>(&mut self, h: &mut H, now: Nanos, hub: &NodeId, round: u32) -> bool {
         let mut changed = false;
         let mut cur: Option<NodeId> = None;
@@ -419,12 +428,18 @@ impl Membership {
             let Some(rec) = self.members.get(&m).map(|e| e.rec) else {
                 continue;
             };
-            let Some(c) = self.hv.get_mut(hub) else { break };
-            if !c.entries.contains_key(&m) {
-                if c.entries.len() >= MAX_TABLE {
-                    changed |= self.recompute_one(h, now, &m);
-                    continue;
-                }
+            let Some(c) = self.hv.get(hub) else { break };
+            let listed = c.entries.contains_key(&m);
+            let full = c.entries.len() >= MAX_TABLE;
+            let skip = self
+                .recheck
+                .get(&m)
+                .is_some_and(|r| !r.held || !self.hv.values().any(|x| x.entries.contains_key(&m)));
+            if listed || full || skip {
+                changed |= self.recompute_one(h, now, &m);
+                continue;
+            }
+            if let Some(c) = self.hv.get_mut(hub) {
                 c.entries.insert(
                     m,
                     CopyEntry {
@@ -433,16 +448,25 @@ impl Membership {
                         absent_since: Some(now),
                     },
                 );
-                self.trace(Trace::Absent { member: m });
-                changed |= self.recompute_one(h, now, &m);
             }
+            self.note_absent(now);
+            self.trace(Trace::Absent { member: m });
+            changed |= self.recompute_one(h, now, &m);
         }
         changed
     }
 
-    /// Drop copy entries whose omission has lasted a full lease, and recompute those members.
+    /// An omission clock started at `since`: the sweep is due a lease later.
+    fn note_absent(&mut self, since: Nanos) {
+        let due = since.saturating_add(LEASE);
+        self.next_absent = Some(self.next_absent.map_or(due, |t| t.min(due)));
+    }
+
+    /// Drop copy entries whose omission has lasted a full lease, and recompute those members. Leaves `next_absent`
+    /// at the earliest expiry that remains.
     pub(crate) fn sweep_absent<H: Host>(&mut self, h: &mut H, now: Nanos) {
         let mut changed = false;
+        self.next_absent = None;
         let mut hcur: Option<NodeId> = None;
         while let Some(hub) = next_key(&self.hv, hcur.as_ref()) {
             hcur = Some(hub);
@@ -451,12 +475,15 @@ impl Membership {
                 let next = self.hv.get(&hub).and_then(|c| next_key(&c.entries, cur.as_ref()));
                 let Some(m) = next else { break };
                 cur = Some(m);
-                let expired = self
+                let since = self
                     .hv
                     .get(&hub)
                     .and_then(|c| c.entries.get(&m))
-                    .and_then(|e| e.absent_since)
-                    .is_some_and(|t| now.saturating_sub(t) >= LEASE);
+                    .and_then(|e| e.absent_since);
+                let expired = since.is_some_and(|t| now.saturating_sub(t) >= LEASE);
+                if let Some(t) = since.filter(|_| !expired) {
+                    self.note_absent(t);
+                }
                 if expired {
                     // Kept until recomputed: the removal reason is "lease expired".
                     changed |= self.recompute_one(h, now, &m);
@@ -502,9 +529,10 @@ impl Membership {
             self.home_delta(h, now, m, best, Alive::Alive);
         }
         match cur {
-            Some(c) if (best.inc >> 16) <= (c.rec.inc >> 16) => {
-                if (best.inc >> 16) == (c.rec.inc >> 16)
-                    && best.inc >= c.rec.inc
+            // The view keeps its record within one epoch (a higher sequence of the same life stays); another epoch,
+            // newer or older, is the best eligible copy's: a copy that no longer holds the later life takes it away.
+            Some(c) if (best.inc >> 16) == (c.rec.inc >> 16) => {
+                if best.inc >= c.rec.inc
                     && let Some(e) = self.members.get_mut(m)
                 {
                     e.rec.inc = best.inc;
@@ -565,12 +593,20 @@ impl Membership {
         if src.hold {
             // Held until a home view is confirmed: look again then, no hub copy lists the member to bring it back.
             if self.recheck.len() < MAX_TABLE {
-                self.recheck.entry(*m).or_insert((self.quiet_until, self.regrace));
+                self.recheck.entry(*m).or_insert(Recheck {
+                    due: self.quiet_until,
+                    grace: self.regrace,
+                    held: true,
+                });
             }
             return false;
         }
         if now < self.quiet_until && self.recheck.len() < MAX_TABLE {
-            self.recheck.entry(*m).or_insert((self.quiet_until, self.regrace));
+            self.recheck.entry(*m).or_insert(Recheck {
+                due: self.quiet_until,
+                grace: self.regrace,
+                held: false,
+            });
             self.trace(Trace::Deferred { member: *m });
             return false;
         }
@@ -604,13 +640,14 @@ impl Membership {
         let mut ready = BTreeSet::new();
         let mut regrace = false;
         for (m, e) in &mut self.recheck {
-            if e.0 > now {
+            if e.due > now {
                 continue;
             }
-            if e.1 {
+            if e.grace {
                 ready.insert(*m);
             } else {
-                *e = (now.saturating_add(RECHECK_GAP), true);
+                e.due = now.saturating_add(RECHECK_GAP);
+                e.grace = true;
                 regrace = true;
             }
         }

@@ -77,11 +77,12 @@ theorem newSusp_cw2 (e : Env) (n : N) (now m since : Nat) (ev : Option Evid) : C
       else
         let wait := max PROBE_WAIT_MIN (match ev with | some x => min (x.srtt * 3) U64MAX | none => 0)
         let n1 := N.nsFirst e n m
+        let srttB := N.srttFor e n1 now m ev
         let (n2, probeB) := N.nsSecond e n1 now m ev
-        let sp : Susp := ⟨since, now, probeB, wait⟩
+        let sp : Susp := ⟨since, now, probeB, wait, srttB⟩
         let n3 := ({ n2 with susp := n2.susp.insert m sp }).scheduleConfirm now (now + wait)
         match probeB with
-        | some (tb, _) => n3.scheduleConfirm now (max (max (since + CONFIRM) (now + wait)) (tb + wait))
+        | some (tb, _) => n3.scheduleConfirm now (max (max (since + CONFIRM) (now + wait)) (tb + waitB wait srttB))
         | none => n3.trace (.noIndependentPath m) := by
     unfold N.newSusp N.nsFirst N.nsSecond
     rfl
@@ -96,7 +97,8 @@ theorem newSusp_cw2 (e : Env) (n : N) (now m since : Nat) (ev : Option Evid) : C
     obtain ⟨n2, pb⟩ := q
     simp only [] at s1 s2 s3 ⊢
     clear hq h
-    have hok : ∀ x : N, x.susp = n2.susp.insert m ⟨since, now, pb, max PROBE_WAIT_MIN (match ev with | some x => min (x.srtt * 3) U64MAX | none => 0)⟩ →
+    have hok : ∀ x : N, x.susp = n2.susp.insert m ⟨since, now, pb, max PROBE_WAIT_MIN (match ev with | some x => min (x.srtt * 3) U64MAX | none => 0),
+        N.srttFor e (N.nsFirst e n m) now m ev⟩ →
         x.outBc = n.outBc → CW2 n x := fun x hx hb =>
       ⟨SuspOk.insert m _ (by rw [hx, s1, f1]) (fun tb path hp => s3 tb path hp), ⟨[], by rw [hb]; simp⟩⟩
     cases pb with
@@ -195,12 +197,12 @@ theorem cwMain_cw2 (e : Env) (n : N) (now m since : Nat) (l : Lease) (ev : Optio
         | some rp =>
           obtain ⟨route, path⟩ := rp
           simp only []
-          have key : ∀ x : N, x.susp = n1.susp.insert m { sp0 with probeB := some (now, path) } →
+          have key : ∀ x : N, x.susp = n1.susp.insert m { sp0 with probeB := some (now, path), srttB := N.relaySrtt e route } →
               x.outBc = n1.outBc → CW2 n1 x := by
             intro x hx hb'
             refine ⟨fun hok => SuspOk.insert m _ hx ?_ hok, ⟨[], by rw [hb']; simp⟩⟩
             intro tb p h; simp at h; obtain ⟨-, rfl⟩ := h; exact independentRoute_path e n now m ev route path hr
-          by_cases hdl : max (max (sp0.since + CONFIRM) (sp0.probeA + sp0.wait)) (now + sp0.wait) ≤ now
+          by_cases hdl : max (max (sp0.since + CONFIRM) (sp0.probeA + sp0.wait)) (now + waitB sp0.wait (N.relaySrtt e route)) ≤ now
           · simp only [hind, hr, hdl, ite_true, hb]
             refine CW2.trans ?_ (confirm_cw2 ..)
             exact key _ (by simp) (by simp)
@@ -209,7 +211,7 @@ theorem cwMain_cw2 (e : Env) (n : N) (now m since : Nat) (l : Lease) (ev : Optio
       | some tbp =>
         obtain ⟨tb, path⟩ := tbp
         simp only [hb, Option.isNone_some, Bool.false_eq_true, ite_false]
-        by_cases hdl : max (max (sp0.since + CONFIRM) (sp0.probeA + sp0.wait)) (tb + sp0.wait) ≤ now
+        by_cases hdl : max (max (sp0.since + CONFIRM) (sp0.probeA + sp0.wait)) (tb + waitB sp0.wait sp0.srttB) ≤ now
         · rw [if_pos hdl]; exact confirm_cw2 ..
         · rw [if_neg hdl]; exact CW2.of_eq (by simp [N.scheduleConfirm]) (by simp [N.scheduleConfirm])
     · simp only [show (sp0.since == since) = false by simpa using hsi]

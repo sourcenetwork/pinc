@@ -47,6 +47,12 @@ pub(crate) enum Cause {
     Left,
 }
 
+/// How long the second probe waits: the first's wait, and three round trips of the hub whose relay carries it. The
+/// relay's leg to the member is assumed no slower than the member's own session: the hub has no measure of it.
+fn wait_b(wait: Nanos, relay_srtt: Nanos) -> Nanos {
+    wait.saturating_add(relay_srtt.saturating_mul(3))
+}
+
 fn ms(d: Nanos) -> u32 {
     u32::try_from(d / 1_000_000).unwrap_or(u32::MAX)
 }
@@ -198,6 +204,17 @@ impl Membership {
                 l.renewed = now;
             }
             self.delta_to(h, peer, peer, held.rec, Alive::Alive);
+            return;
+        }
+        if let Some(seen) = self.members.get(peer).map(|e| e.rec)
+            && hello.rec.inc >> 16 < seen.inc >> 16
+        {
+            // The view holds a later life of the node than it announces and no roster here does (its clock went back
+            // while the hub that held its last life went away): tell it, as above, and wait for its HELLO from above.
+            if let Some(l) = self.roster.get_mut(peer) {
+                l.renewed = now;
+            }
+            self.delta_to(h, peer, peer, seen, Alive::Alive);
             return;
         }
         let unchanged = self.roster.get(peer).is_some_and(|l| l.rec == hello.rec);
@@ -400,8 +417,9 @@ impl Membership {
     }
 
     /// Send the second probe of a suspicion through the relay of the first live hub (not this one, not the member)
-    /// whose relay the host took it for. Returns the path it took, or `None` when no probe left.
-    fn probe_second<H: Host>(&mut self, h: &mut H, now: Nanos, m: &NodeId) -> Option<Path> {
+    /// whose relay the host took it for. Returns the path it took and the smoothed round trip to that hub (0 when the
+    /// host has none), or `None` when no probe left.
+    fn probe_second<H: Host>(&mut self, h: &mut H, now: Nanos, m: &NodeId) -> Option<(Path, Nanos)> {
         for i in 0..self.boot.len() {
             let Some(x) = self.boot.get(i).copied() else {
                 continue;
@@ -411,7 +429,7 @@ impl Membership {
                     member: *m,
                     path: Path::Relay,
                 });
-                return Some(Path::Relay);
+                return Some((Path::Relay, h.evidence(&x).map_or(0, |e| e.srtt)));
             }
         }
         None
@@ -422,7 +440,9 @@ impl Membership {
         self.next_conf = Some(self.next_conf.map_or(at, |c| c.min(at)));
     }
 
-    /// Confirm or clear a dropped carrier. See the module docs for the rule.
+    /// Confirm or clear a dropped carrier. See the module docs for the rule. The second probe waits three round
+    /// trips of the hub whose relay carries it on top of the first probe's wait; the relay's leg to the member is
+    /// assumed no slower than the member's own session, as the hub has no measure of it.
     pub(crate) fn carrier_watch<H: Host>(&mut self, h: &mut H, now: Nanos, m: &NodeId) {
         let Some(l) = self.roster.get(m).copied() else {
             self.susp.remove(m);
@@ -450,13 +470,15 @@ impl Membership {
                     self.schedule_confirm(now, at);
                 }
                 if sp.probe_b.is_none()
-                    && let Some(path) = self.probe_second(h, now, m)
+                    && let Some((path, srtt)) = self.probe_second(h, now, m)
                 {
-                    sp.probe_b = Some((now, path));
+                    sp.probe_b = Some((now, path, srtt));
                     self.susp.insert(*m, sp);
                 }
-                if let Some((tb, _)) = sp.probe_b {
-                    let dl = (sp.since + CONFIRM).max(sp.probe_a + sp.wait).max(tb + sp.wait);
+                if let Some((tb, _, srtt)) = sp.probe_b {
+                    let dl = (sp.since + CONFIRM)
+                        .max(sp.probe_a + sp.wait)
+                        .max(tb + wait_b(sp.wait, srtt));
                     if now >= dl {
                         self.confirm(h, now, m, sp, l);
                     } else {
@@ -474,7 +496,7 @@ impl Membership {
                     member: *m,
                     path: Path::Session,
                 });
-                let probe_b = self.probe_second(h, now, m).map(|path| (now, path));
+                let probe_b = self.probe_second(h, now, m).map(|(path, srtt)| (now, path, srtt));
                 let sp = Susp {
                     since,
                     probe_a: now,
@@ -483,8 +505,8 @@ impl Membership {
                 };
                 self.susp.insert(*m, sp);
                 self.schedule_confirm(now, now.saturating_add(wait));
-                if let Some((tb, _)) = probe_b {
-                    let dl = (since + CONFIRM).max(now + wait).max(tb + wait);
+                if let Some((tb, _, srtt)) = probe_b {
+                    let dl = (since + CONFIRM).max(now + wait).max(tb + wait_b(wait, srtt));
                     self.schedule_confirm(now, dl);
                 } else {
                     self.trace(Trace::NoIndependentPath { member: *m });
@@ -506,7 +528,7 @@ impl Membership {
             };
         }
         n += 1;
-        if let Some((tb, path)) = sp.probe_b
+        if let Some((tb, path, _)) = sp.probe_b
             && let Some(p) = probes.get_mut(n)
         {
             *p = Probe {

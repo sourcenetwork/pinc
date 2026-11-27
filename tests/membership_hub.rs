@@ -259,6 +259,59 @@ fn a_member_that_answers_the_probe_after_its_carrier_closed_is_kept_and_nothing_
 }
 
 #[test]
+fn a_hub_handed_the_answers_before_the_due_call_keeps_the_member() {
+    let mut w = started(2, 1);
+    w.run(40 * SEC);
+    // The member's carrier closed and both probes left; the hub's host sleeps (1.5 s, under WAKE_GAP) across the
+    // confirmation deadline, and the member's answers reach its socket meanwhile.
+    w.set_carrier_gone(0, 2);
+    w.jump(1500 * MS);
+    // Host contract: the host hands over what arrived before the call that serves the due timer. That the host
+    // loops do so is the host-loop test of S3 and S4; this pins the machine's half: evidence handed over counts.
+    w.nodes[0].h.ev.get_mut(&id(2)).unwrap().last_rx = w.now;
+    w.with(0, |m, h, now| m.on_timeout(h, now));
+    w.run(10 * SEC);
+    assert_eq!(
+        traces(&w, 0, |t| matches!(t, Trace::Confirmed { .. })),
+        0,
+        "a live member confirmed down on answers that waited unread"
+    );
+    assert_eq!(w.nodes[0].m.roster_len(), 2, "the member is kept");
+}
+
+#[test]
+fn a_due_confirmation_with_nothing_heard_is_acted_on_at_the_call_that_finds_it_due() {
+    let mut w = started(2, 1);
+    w.run(40 * SEC);
+    w.cut.insert((1, 2)); // the relay path is dead too: nothing answers either probe
+    w.set_carrier_gone(0, 2);
+    let dl = w.nodes[0].m.poll_timeout();
+    w.jump(1500 * MS);
+    assert!(dl <= w.now, "the deadline is due at the first call after the jump");
+    w.with(0, |m, h, now| m.on_timeout(h, now));
+    assert_eq!(traces(&w, 0, |t| matches!(t, Trace::Confirmed { .. })), 1);
+}
+
+#[test]
+fn the_second_probe_waits_the_relay_round_trip() {
+    let mut w = World::new(2, 1, START);
+    w.set_rtt(0, 1, 800 * MS); // the relay hub is far from the hub: three round trips are 2.4 s
+    w.set_rtt(0, 2, 20 * MS);
+    w.attach_all();
+    w.run(40 * SEC);
+    w.cut.insert((1, 2));
+    let t = w.now;
+    w.set_carrier_gone(0, 2);
+    assert!(w.run_until(20 * SEC, |w| w.nodes[0].m.roster_len() == 1));
+    let took = w.now - t;
+    assert!(
+        took >= 250 * MS + 3 * 800 * MS,
+        "confirmed {} ms after the drop, before the relayed answer could be in",
+        took / MS
+    );
+}
+
+#[test]
 fn a_single_lost_probe_does_not_confirm() {
     let mut w = started(2, 1);
     w.run(40 * SEC);
@@ -916,4 +969,99 @@ fn answers_and_pushes_take_the_reply_route_and_a_hello_the_session_route() {
         hellos > 0 && answers > 0,
         "the run sent {hellos} hellos and {answers} answers"
     );
+}
+
+fn rec_of(epoch: u64, seq: u16) -> Record {
+    Record {
+        inc: (epoch << 16) | u64::from(seq),
+        ver: 1,
+        thash: [9; 8],
+    }
+}
+
+/// The bytes of a delta frame about `m`, as a hub sends them.
+fn delta_bytes(m: usize, r: Record) -> Vec<u8> {
+    let member = id(m);
+    let mut buf = [0u8; 256];
+    Frame::Delta(Entry {
+        member: &member,
+        rec: r,
+        alive: Alive::Alive,
+    })
+    .encode(&mut buf)
+    .unwrap()
+    .to_vec()
+}
+
+fn hello_of(r: Record) -> Frame<'static> {
+    Frame::Hello(Hello {
+        rec: r,
+        snap: false,
+        homed: false,
+    })
+}
+
+#[test]
+fn a_hub_tells_a_node_whose_hello_is_below_its_view() {
+    // The two hubs are attached to each other; the members 2 and 3 are not attached to anyone.
+    let mut w = World::new(2, 2, START);
+    w.connect(1, 0);
+    w.run(3 * SEC);
+    let x = 3;
+    // Hub 0's view holds x at epoch 9, from the other hub's copy; no roster here holds x.
+    w.inject(
+        0,
+        1,
+        &Frame::Delta(Entry {
+            member: &id(x),
+            rec: rec_of(9, 0),
+            alive: Alive::Alive,
+        }),
+    );
+    assert!(w.nodes[0].m.lease_of(&id(x)).is_none());
+    // The sessions are up, so a frame the hub sends is seen.
+    w.sessions.extend([(1, 0), (x, 0)]);
+    let pushed = |w: &World| count_ty(w, 0, 1, ty::DELTA);
+    let before = pushed(&w);
+    // x announces epoch 5 (its clock went back): the hub tells it the later life and registers nothing.
+    w.inject(0, x, &hello_of(rec_of(5, 0)));
+    let told = delta_bytes(x, rec_of(9, 0));
+    assert!(
+        w.frames.iter().any(|f| f.1 == 0 && f.2 == x && f.3 == told),
+        "x was told its record of epoch 9"
+    );
+    assert!(
+        w.nodes[0].m.lease_of(&id(x)).is_none(),
+        "the lower life is not registered"
+    );
+    assert_eq!(pushed(&w), before, "nothing is pushed to the other hubs");
+    // Its next HELLO, above both records, is registered.
+    w.inject(0, x, &hello_of(rec_of(10, 0)));
+    assert!(w.nodes[0].m.lease_of(&id(x)).is_some());
+}
+
+#[test]
+fn a_same_epoch_hello_below_the_view_is_registered() {
+    // The two hubs are attached to each other; the members 2 and 3 are not attached to anyone.
+    let mut w = World::new(2, 2, START);
+    w.connect(1, 0);
+    w.run(3 * SEC);
+    let x = 3;
+    w.inject(
+        0,
+        1,
+        &Frame::Delta(Entry {
+            member: &id(x),
+            rec: rec_of(9, 3),
+            alive: Alive::Alive,
+        }),
+    );
+    w.sessions.extend([(1, 0), (x, 0)]);
+    w.inject(0, x, &hello_of(rec_of(9, 0)));
+    let told = delta_bytes(x, rec_of(9, 3));
+    assert!(
+        !w.frames.iter().any(|f| f.1 == 0 && f.2 == x && f.3 == told),
+        "a stale record of the same life is not a later life"
+    );
+    assert!(w.nodes[0].m.lease_of(&id(x)).is_some(), "registered as before");
 }

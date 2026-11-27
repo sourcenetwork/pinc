@@ -8,8 +8,8 @@
 //! clocks of 0 to 6. A run mixes, in a seeded order: acceptances (also of a bundle already held, which is a hand-back or
 //! a repeated offer, of one already kept as transit, of one that is already expired, with a full book, with a full
 //! ledger), offers (also of an unknown bundle, and repeated offers that replace the outstanding one), acknowledgements
-//! (valid from the node custody was offered to under the offer id outstanding, stale ones naming the right node and
-//! another id or an offer a hand-back cancelled, from another node, for an unknown bundle, with a signature that does
+//! (valid and addressed to the book's node from the node custody was offered to under the offer id outstanding, stale ones naming the right node and
+//! another id or an offer a hand-back cancelled, from another node, addressed to another node, for an unknown bundle, with a signature that does
 //! not verify),
 //! deliveries, the book's expiry, and the host's own calls on the ledger: admissions of transit bundles and mailbox
 //! items, expiry and release. The host never admits or releases a key the book holds a record of.
@@ -154,14 +154,14 @@ impl Tracker {
         Some(id)
     }
 
-    fn on_ack(&mut self, b: u8, c: u8, o: u64, valid: bool) -> &'static str {
+    fn on_ack(&mut self, b: u8, p: u8, c: u8, o: u64, valid: bool) -> &'static str {
         if !valid {
             return "ack";
         }
         let Some(slot) = self.rec.iter().position(|s| s.is_some_and(|r| r.0 == b)) else {
             return "unknown";
         };
-        if self.rec[slot].and_then(|r| r.2) != Some((c, o)) {
+        if p != 1 || self.rec[slot].and_then(|r| r.2) != Some((c, o)) {
             return "notoffered";
         }
         self.rec[slot] = None;
@@ -196,11 +196,18 @@ fn cname(e: &CustodyError) -> &'static str {
     }
 }
 
-/// The acknowledgement of `bundle` that names offer `o`, claimed by custodian `c` and made out to node 1: signed by
-/// `c` when `valid`, else signed by another node under `c`'s name (the signature does not verify).
-fn ack(nodes: &[(Keypair, NodeId)], b: u8, c: u8, o: u64, valid: bool) -> CustodyAck {
+/// The acknowledgement of `bundle` that names offer `o`, claimed by custodian `c` and made out to node `p` (the book's
+/// node is 1): signed by `c` when `valid`, else signed by another node under `c`'s name (the signature does not verify).
+fn ack(nodes: &[(Keypair, NodeId)], b: u8, p: u8, c: u8, o: u64, valid: bool) -> CustodyAck {
     let from = if valid { c } else { c % NODES + 1 };
-    let mut a = CustodyAck::sign(bundle(b), nodes[1].1, o, Hlc::new(1, 0), &nodes[usize::from(from)].0).unwrap();
+    let mut a = CustodyAck::sign(
+        bundle(b),
+        nodes[usize::from(p)].1,
+        o,
+        Hlc::new(1, 0),
+        &nodes[usize::from(from)].0,
+    )
+    .unwrap();
     a.custodian = nodes[usize::from(c)].1;
     assert_eq!(a.verify().is_ok(), valid);
     a
@@ -228,7 +235,7 @@ fn run<const NB: usize, const NL: usize>(
     let mut pick = |v: &[u64]| v[(rng.next_u64() % v.len() as u64) as usize];
     let budget = 10;
     let mut ledger = Ledger::<NL>::new(budget);
-    let mut book = CustodyBook::<NB>::new();
+    let mut book = CustodyBook::<NB>::new(nodes[1].1);
     let mut model = Tracker {
         led: Oracle::new(NL, budget),
         rec: vec![None; NB],
@@ -378,13 +385,17 @@ fn run<const NB: usize, const NL: usize>(
                     _ => (pick(&[1, 2, 3]) as u8, pick(&[0, 1, 2])),
                 };
                 let valid = pick(&[0, 0, 0, 1]) != 1;
+                // The node the ack is addressed to: usually the book's own (node 1), sometimes another offerer.
+                let p = pick(&[1, 1, 1, 2, 3]) as u8;
                 let rec_before = model.rec.iter().flatten().find(|r| r.0 == b).copied();
-                let r = book.on_ack(&mut ledger, &ack(nodes, b, c, o, valid));
-                let merr = model.on_ack(b, c, o, valid);
+                let r = book.on_ack(&mut ledger, &ack(nodes, b, p, c, o, valid));
+                let merr = model.on_ack(b, p, c, o, valid);
                 let err = r.as_ref().err().map_or("ok", cname);
                 assert_eq!(err, merr, "on_ack");
                 seen.hit(&format!("ack {err}"));
-                if valid && err == "notoffered" {
+                if valid && err == "notoffered" && p != 1 {
+                    seen.hit("ack stale: addressed to another node");
+                } else if valid && err == "notoffered" {
                     match rec_before.and_then(|r| r.2) {
                         Some((n, id)) if n == c && id != o => seen.hit("ack stale: right node, wrong id"),
                         Some(_) => seen.hit("ack stale: other node"),
@@ -392,7 +403,7 @@ fn run<const NB: usize, const NL: usize>(
                     }
                 }
                 out.push(format!(
-                    r#"{{"t":"cu_ack","b":{b},"c":{c},"o":{o},"v":{valid},"err":"{err}",{}}}"#,
+                    r#"{{"t":"cu_ack","b":{b},"p":{p},"c":{c},"o":{o},"v":{valid},"err":"{err}",{}}}"#,
                     state(&ledger, &book, &model)
                 ));
             }
@@ -545,6 +556,7 @@ fn custody_runs_match_the_tracker_and_are_recorded() {
         "ack notoffered",
         "ack stale: right node, wrong id",
         "ack stale: other node",
+        "ack stale: addressed to another node",
         "ack stale: offer cancelled or none",
         "ack storeunknown",
         "delivered ok",

@@ -148,7 +148,7 @@ impl Sim {
             .map(|(i, kp)| Node {
                 kp,
                 fwd: Fwd::new(policy(), 0),
-                book: Book::new(),
+                book: Book::new(ids[i]),
                 led: Led::new(if i == TIGHT { 0 } else { LEDGER_BUDGET }),
                 last_offer: [0; N],
             })

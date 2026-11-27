@@ -269,6 +269,9 @@ structure Susp where
   probeA : Nat
   probeB : Option (Nat × Nat)
   wait : Nat
+  /-- The smoothed round trip of the hub whose relay carried the second probe (0 when the host has none): the third
+  field of the code's `probe_b`, read only while `probeB` is `some`. -/
+  srttB : Nat
   deriving DecidableEq, Repr
 
 /-- One `Membership` node with the effects of the current call appended. -/
@@ -303,6 +306,13 @@ structure N where
   quietUntil : Nat
   /-- Whether the extra look of the current window has begun: a removal found during it is due when it ends. -/
   regrace : Bool
+  /-- The `held` flag of the `recheck` entries (`Recheck::held`), kept as the members whose entry a hold made (no
+  confirmed home) rather than a window: the hold path adds the member and the window path removes it, each only when
+  it makes the entry, so for a member of `recheck` this is the code's flag (a mark left after the entry is gone is
+  never read). -/
+  held : ASet
+  /-- `next_absent`: the earliest instant an omission clock runs out, early but never late. -/
+  nextAbsent : Option Nat
   goneVer : AMap (Nat × List Nat)
   left : ASet
   nextRenew : Nat

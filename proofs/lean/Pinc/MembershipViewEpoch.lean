@@ -303,12 +303,9 @@ def snapFin (e : Env) (now hub : Nat) (partial_ more : Bool) (round : Nat) (a : 
       let n := match n.hv.get? hub with
         | some c => { n with hv := n.hv.insert hub { c with open_ := false } }
         | none => n
-      let (n, changed) := if !partial_ then
-          let (n', ch) := N.snapAbsent e (n.dropGone hub round) now hub round
-          (n', changed || ch)
-        else (n, changed)
+      let (n, ch) := N.snapAbsent e ((n.confirmHome hub).dropGone hub round) now hub round
       let n := if n.primary == some hub then n.bc (.resub hub) else n
-      (n, changed)
+      (n, changed || ch)
     else (n, changed)
   if changed then n.bump else n
 
@@ -318,7 +315,6 @@ theorem applySnap_eq (e : Env) (n : N) (now hub : Nat) (partial_ more : Bool) (e
        if !ok then n
        else
          let (n, round) := snapRound n hub
-         let n := if !n.isHub && n.primary == some hub then { n with homeOk := some hub, homeSeen := true } else n
          snapFin e now hub partial_ more round (es.foldl (snapStep e now hub round) (n, false, 0))) := rfl
 
 theorem snapRound_ep (n : N) (hub : Nat) : (snapRound n hub).1.epoch = n.epoch := by
@@ -371,9 +367,8 @@ theorem applySnap_epoch (e : Env) (n : N) (now hub : Nat) (partial_ more : Bool)
     rw [hR] at h3
     change n2.epoch = n1.epoch at h3
     simp only []
-    generalize hn3 : (if (!n2.isHub && n2.primary == some hub) = true then
-        ({ n2 with homeOk := some hub, homeSeen := true } : N) else n2) = n3
-    have h4 : n3.epoch = n2.epoch := by rw [← hn3]; split <;> rfl
+    generalize hn3 : n2 = n3
+    have h4 : n3.epoch = n2.epoch := by rw [← hn3]
     have h5 : EpGe n3 (List.foldl (snapStep e now hub round) (n3, false, 0) es).1 := by
       have := foldl_inv (fun (a : N × Bool × Nat) => EpGe n3 a.1) (snapStep e now hub round) es (n3, false, 0)
         (fun b a hb => hb.trans (snapStep_ep e now hub round b a)) (EpGe.refl n3)
@@ -390,7 +385,8 @@ theorem sweepAbsent_epoch (e : Env) (n : N) (now : Nat) : EpGe n (N.sweepAbsent 
   dsimp only
   apply ite_ge_bump
   unfold EpGe
-  refine Nat.le_of_eq (Eq.symm (foldl_inv (fun (a : N × Bool) => a.1.epoch = n.epoch) _ n.hv.keys (n, false) ?_ rfl))
+  refine Nat.le_of_eq (Eq.symm (foldl_inv (fun (a : N × Bool) => a.1.epoch = n.epoch) _ n.hv.keys
+    ({ n with nextAbsent := none }, false) ?_ rfl))
   · intro a hub ha
     refine foldl_inv (fun (a : N × Bool) => a.1.epoch = n.epoch) _ _ a ?_ ha
     intro b m hb

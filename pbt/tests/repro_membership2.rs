@@ -5,11 +5,12 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use pinc_membership::codec::{Alive, Snap, entry_bytes};
-use pinc_membership::consts::{AWARENESS_BOUND, LEASE};
+use pinc_membership::codec::{Alive, Hello, Snap, entry_bytes};
+use pinc_membership::consts::{AWARENESS_BOUND, HEAL_SILENCE, LEASE, NODE_TICK};
 use pinc_membership::session::StoreError;
 use pinc_membership::{
     Broadcast, Carrier, CloseReason, Config, Event, Evidence, Frame, Local, Membership, NodeId, Record, Route, Session,
+    Trace,
 };
 
 const MS: u64 = 1_000_000;
@@ -27,6 +28,8 @@ struct Host {
     out: Vec<(NodeId, Vec<u8>)>,
     persistent: bool,
     sealed: Option<u64>,
+    /// Members whose relay carrier closed, with the instant it did.
+    gone: BTreeMap<NodeId, u64>,
 }
 
 impl Session for Host {
@@ -40,8 +43,8 @@ impl Session for Host {
     fn evidence(&self, peer: &NodeId) -> Option<Evidence> {
         self.ev.get(peer).copied()
     }
-    fn carrier(&self, _member: &NodeId) -> Carrier {
-        Carrier::Unknown
+    fn carrier(&self, member: &NodeId) -> Carrier {
+        self.gone.get(member).map_or(Carrier::Unknown, |&since| Carrier::Gone { since, sleep: None })
     }
     fn close(&mut self, _peer: &NodeId, _reason: CloseReason) {}
 }
@@ -173,6 +176,15 @@ impl Net {
     }
 }
 
+/// Runs until `b` no longer lists `x` or `since + within` has passed, and returns the time from `since` to the removal
+/// (`None` when `b` still lists `x` at the end).
+fn removed_after(n: &mut Net, b: usize, x: usize, since: u64, within: u64) -> Option<u64> {
+    while n.m[b].in_view(&id(x)) && n.now < since + within {
+        n.run(100 * MS);
+    }
+    (!n.m[b].in_view(&id(x))).then(|| n.now - since)
+}
+
 /// properties.md, membership, completeness: "a failed member leaves every live view within the awareness bound"
 /// (`consts::AWARENESS_BOUND`, 145 s: "The longest a change of the group (a join, a leave or a crash) takes to reach
 /// every live member").
@@ -220,14 +232,19 @@ fn a_member_that_crashed_while_its_only_hub_restarted_stays_in_views_for_good() 
     let (m, h) = (&mut n.m[b], &mut n.h[b]);
     m.session_down(h, n.now, &id(hub), 0);
     n.connect(b);
-    n.run(AWARENESS_BOUND + 200 * SEC);
+    // The removal is measured from the crash: the transport's give-up (HEAL_SILENCE), one lease of the new hub on the
+    // omission clock, and a member tick.
+    let bound = HEAL_SILENCE + LEASE + NODE_TICK + SEC;
+    let took = removed_after(&mut n, b, x, crash, bound);
     let events: Vec<Event> = std::iter::from_fn(|| n.m[b].poll_event()).collect();
     assert!(!n.m[hub].in_view(&id(x)), "the hub does not list X");
     assert!(
-        !n.m[b].in_view(&id(x)),
-        "X crashed {} s ago and B still lists it; B's events: {events:?}",
-        (n.now - crash) / SEC
+        took.is_some(),
+        "X crashed {} s ago and B still lists it (bound {} s); B's events: {events:?}",
+        (n.now - crash) / SEC,
+        bound / SEC
     );
+    println!("restart case: X removed from B's view {} ms after the crash", took.unwrap_or(0) / MS);
 }
 
 /// The same fault with no restart, on a network younger than a lease. properties.md, membership: "leave reported as
@@ -268,13 +285,15 @@ fn a_leave_missed_while_the_hub_is_young_is_never_learned() {
     assert!(!n.m[hub].in_view(&id(x)), "the hub dropped X as left");
     n.run(2 * SEC);
     n.connect(b);
-    n.run(AWARENESS_BOUND + 200 * SEC);
+    let took = removed_after(&mut n, b, x, left, AWARENESS_BOUND);
     let events: Vec<Event> = std::iter::from_fn(|| n.m[b].poll_event()).collect();
     assert!(
-        !n.m[b].in_view(&id(x)),
-        "X left {} s ago and B still lists it; B's events: {events:?}",
-        (n.now - left) / SEC
+        took.is_some(),
+        "X left {} s ago and B still lists it (bound {} s); B's events: {events:?}",
+        (n.now - left) / SEC,
+        AWARENESS_BOUND / SEC
     );
+    println!("leave case: X removed from B's view {} ms after the leave", took.unwrap_or(0) / MS);
 }
 
 /// Hubs H0 and H1, member X homed at H0 and member W homed at H1. X restarts with its wall clock `back_ms` behind
@@ -414,4 +433,58 @@ fn a_suspension_before_the_first_tick_reports_a_live_member_down() {
     assert!(!down && kept, "control: a late tick after an on-time one: reported down {down}, kept {kept}");
     let (down, kept) = suspended_right_after_start(false);
     assert!(!down, "a late first tick let a DOWN read at the wake remove X at once (in the view 30 s later: {kept})");
+}
+
+/// hub.rs, `carrier_watch`, and the accuracy row of properties.md: "each probe waits three round trips of the member's
+/// own session (at least `PROBE_WAIT_MIN`, 250 ms) and the confirmation comes at least `CONFIRM` after the drop, so a
+/// relayed path slower than that does not answer in time", and a live member is never confirmed down by a slow member.
+///
+/// Actual: hub H (the member's hub, 20 ms from it) probes member M after its carrier closed; the second probe goes
+/// through hub X, whose round trip to H is 400 ms and whose leg to M is as slow, so the relayed answer needs 1.2 s.
+/// H waits `CONFIRM` (1 s) and confirms M down 1 s after the drop, 0.2 s before the answer M sent in time. M is alive
+/// and its lease is renewed by that answer.
+///
+/// Suspected fault: the second probe waits `sp.wait`, three round trips of the member's own session, though the route
+/// is H -> X -> M (hub.rs `carrier_watch`, `tb + sp.wait`); the round trip to X is not in the wait. Who can trigger it:
+/// no one in particular; a member behind a relay on a slow link, whose carrier to H closes.
+#[test]
+fn a_second_probe_through_a_slow_relay_is_waited_for() {
+    let (hub, other, member) = (id(0), id(1), id(2));
+    let hubs = [hub, other];
+    let cfg = Config { me: hub, is_hub: true, hubs: &hubs, trace: true };
+    let mut h = Host { persistent: true, ..Host::default() };
+    let mut m = Membership::start(&cfg, &mut h, T0, 1_700_000_000_000, 0).unwrap();
+    for p in [other, member] {
+        h.sessions.insert(p);
+        m.session_up(&mut h, T0, &p, true);
+    }
+    // H is attached to X (a frame from it), and M holds a lease at H.
+    hub_delta(&mut m, &mut h, T0, other, &id(7), Alive::Alive);
+    let rec = Record { inc: 5 << 16, ver: 7, thash: [1; 8] };
+    let mut out = vec![0u8; 256];
+    let hello = Frame::Hello(Hello { rec, snap: false, homed: false }).encode(&mut out).unwrap().to_vec();
+    assert_eq!(m.on_bytes(&mut h, T0, &member, &hello), Ok(hello.len()));
+    let t = T0 + 10 * SEC;
+    h.ev.insert(member, Evidence { last_rx: T0, srtt: 20 * MS, pto: 0, inflight: 0, direct: true });
+    h.ev.insert(other, Evidence { last_rx: t, srtt: 400 * MS, pto: 0, inflight: 0, direct: true });
+    h.gone.insert(member, t);
+    m.carrier_gone(&mut h, t, &member);
+    // M answers the relayed probe 1.2 s after the drop; the host serves the timers that fall before it.
+    let answer = t + 1200 * MS;
+    let mut now = t;
+    let mut answered = false;
+    while now < t + 5 * SEC {
+        let due = m.poll_timeout().max(now + 1);
+        if !answered && due >= answer {
+            now = answer;
+            h.ev.insert(member, Evidence { last_rx: now, srtt: 20 * MS, pto: 0, inflight: 0, direct: true });
+            assert_eq!(m.on_bytes(&mut h, now, &member, &hello), Ok(hello.len()));
+            answered = true;
+        } else {
+            now = due;
+        }
+        m.on_timeout(&mut h, now);
+    }
+    let confirmed = std::iter::from_fn(|| m.poll_trace()).filter(|t| matches!(t, Trace::Confirmed { .. })).count();
+    assert_eq!(confirmed, 0, "a live member was confirmed down before its relayed answer could arrive");
 }

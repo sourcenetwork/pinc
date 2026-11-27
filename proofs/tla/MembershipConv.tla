@@ -9,7 +9,9 @@
 (* (RecomputeOne of Membership.tla, the operator the trace check validates) *)
 (* with no quiet window. ViewAgree: afterwards they list exactly the same   *)
 (* members. ViewIsUnion: the members they list are those some hub copy      *)
-(* lists. The two starting views are taken once per unordered pair (Ord):  *)
+(* lists. ViewRecAgree and ViewIsMax: they hold the same records, the     *)
+(* highest epoch among the copies. The two starting views are taken once    *)
+(* per unordered pair (Ord):                                                *)
 (* 81 x 45 initial states, not 81 x 81.                                    *)
 (*                                                                         *)
 (* Lean counterpart: Pinc/MembershipConvAll.lean (recomputeAll_view_agree). *)
@@ -58,4 +60,11 @@ N1 == Fold(Mk(v1, c1, c2))
 N2 == Fold(Mk(v2, c1, c2))
 ViewAgree == done => DOMAIN N1.members = DOMAIN N2.members
 ViewIsUnion == done => DOMAIN N1.members = {m \in {3, 4} : c1[m] # 0 \/ c2[m] # 0}
+\* the records too: both views hold the same record of every member, and it is the one of the highest epoch among the
+\* copies, whatever epoch the view started at (a view that started above every copy, the last life of a node whose
+\* clock went back, follows the copies down: repro_membership2.rs). The witness MembershipConv_w_epoch.cfg (the rule
+\* before, KnownArm <- OldKnownArm) breaks ViewIsMax
+Top(m) == IF c1[m] >= c2[m] THEN c1[m] ELSE c2[m]
+ViewRecAgree == done => N1.members = N2.members
+ViewIsMax == done => \A m \in DOMAIN N1.members : N1.members[m].rec = Rec(Top(m))
 =============================================================================

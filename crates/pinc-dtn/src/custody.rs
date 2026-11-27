@@ -8,13 +8,16 @@
 //!
 //! Every offer gets a fresh offer id from a counter of the book; the id travels with the bundle, the custodian signs
 //! it into its ack, and the ack relieves the offerer only if it names the offer currently outstanding to that node.
+//! Offer ids count per book from 0, so the ack also names the node it is addressed to (`previous`), and the book
+//! takes only those addressed to its own node.
 //! A node that takes custody of a bundle it already holds (a hand-back) cancels its outstanding offer: the offer is
 //! superseded, so a late ack of it cannot relieve a node that is the custodian again.
 //!
 //! Invariants: an ack is valid only if its signature verifies under the custodian's node id; custody is relieved
-//! only by a valid ack from exactly the node it was offered to, for exactly the offer outstanding; a custody item leaves the ledger only through
-//! delivery ([`CustodyBook::delivered`]), expiry or relief (which keeps the bytes as transit); the book never holds
-//! a record for an item the ledger no longer holds ([`CustodyBook::sync`]). All tables are fixed-size arrays.
+//! only by a valid ack addressed to this node, from exactly the node it was offered to, for exactly the offer
+//! outstanding; a custody item leaves the ledger only through delivery ([`CustodyBook::delivered`]), expiry or relief
+//! (which keeps the bytes as transit); the book never holds a record for an item the ledger no longer holds
+//! ([`CustodyBook::sync`]). All tables are fixed-size arrays.
 
 use core::fmt;
 
@@ -165,7 +168,8 @@ pub enum CustodyError {
     Capacity,
     /// No such bundle is in custody here.
     Unknown,
-    /// The ack is not from the node custody was offered to, or not for the offer currently outstanding.
+    /// The ack is addressed to another node, is not from the node custody was offered to, or is not for the offer
+    /// currently outstanding.
     NotOffered,
 }
 
@@ -242,24 +246,25 @@ struct Record {
 /// The custody records of one node, at most `N` bundles.
 #[derive(Debug, Clone)]
 pub struct CustodyBook<const N: usize> {
+    me: NodeId,
     records: [Option<Record>; N],
     // vertexia: a u64 counter that saturates; 2^64 offers cannot happen, and the models count in the naturals.
     next_offer: u64,
 }
 
-impl<const N: usize> Default for CustodyBook<N> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl<const N: usize> CustodyBook<N> {
-    /// An empty book.
-    pub const fn new() -> Self {
+    /// An empty book of node `me`: only acks addressed to `me` relieve it.
+    pub const fn new(me: NodeId) -> Self {
         Self {
+            me,
             records: [None; N],
             next_offer: 0,
         }
+    }
+
+    /// Whether `ack` is addressed to this book's node.
+    pub fn addressed(&self, ack: &CustodyAck) -> bool {
+        ack.previous == self.me
     }
 
     /// The number of bundles in custody.
@@ -373,27 +378,29 @@ impl<const N: usize> CustodyBook<N> {
         Ok(id)
     }
 
-    /// Process an ack. If it verifies and comes from the node custody was offered to, for the offer currently
-    /// outstanding to it, this node is relieved: the bundle stays in the ledger as transit and the record is
-    /// dropped.
+    /// Process an ack. If it verifies, is addressed to this node and comes from the node custody was offered to, for
+    /// the offer currently outstanding to it, this node is relieved: the bundle stays in the ledger as transit and the
+    /// record is dropped.
     ///
     /// # Errors
     /// [`CustodyError::Ack`] for a bad signature; [`CustodyError::Unknown`] if the bundle is not in custody here;
-    /// [`CustodyError::NotOffered`] if the ack is not from the node it was offered to or names another offer (a
-    /// stale ack); [`CustodyError::Store`] with [`StoreError::Unknown`] if the ledger no longer holds the item (the
-    /// record is dropped all the same).
+    /// [`CustodyError::NotOffered`] if the ack is addressed to another node, is not from the node it was offered
+    /// to or names another offer (a stale ack); [`CustodyError::Store`] with [`StoreError::Unknown`] if the ledger no
+    /// longer holds the item (the record is dropped all the same).
     pub fn on_ack<const L: usize>(&mut self, ledger: &mut Ledger<L>, ack: &CustodyAck) -> Result<(), CustodyError> {
         ack.verify().map_err(CustodyError::Ack)?;
+        let addressed = self.addressed(ack);
         let slot = self
             .records
             .iter_mut()
             .find(|s| s.is_some_and(|r| r.bundle == ack.bundle))
             .ok_or(CustodyError::Unknown)?;
-        if slot.and_then(|r| r.offered)
-            != Some(Offered {
-                to: ack.custodian,
-                id: ack.offer,
-            })
+        if !addressed
+            || slot.and_then(|r| r.offered)
+                != Some(Offered {
+                    to: ack.custodian,
+                    id: ack.offer,
+                })
         {
             return Err(CustodyError::NotOffered);
         }

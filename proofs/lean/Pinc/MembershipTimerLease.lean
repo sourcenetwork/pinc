@@ -164,9 +164,8 @@ macro "rs_tac" : tactic => `(tactic| first
     rcases hR : snapRound n1 hub with ⟨n2, round⟩
     rw [hR] at h3
     simp only [] at h3 ⊢
-    generalize hn3 : (if (!n2.isHub && n2.primary == some hub) = true then
-        ({ n2 with homeOk := some hub, homeSeen := true } : N) else n2) = n3
-    have h4 : RS[n2, n3] := by rw [← hn3]; split <;> simp
+    generalize hn3 : n2 = n3
+    have h4 : RS[n2, n3] := by rw [← hn3] <;> simp
     have h5 : RS[n3, (List.foldl (snapStep e now hub round) (n3, false, 0) es).1] :=
       foldl_rs3 (snapStep e now hub round) es (n3, false, 0) (fun b x => by
         obtain ⟨b1, c, k⟩ := b; unfold snapStep; dsimp only; repeat' split
@@ -182,7 +181,7 @@ macro "rs_tac" : tactic => `(tactic| first
     exact h2
 @[simp] theorem sweepAbsent_rs (e : Env) (n : N) (now : Nat) : RS[n, N.sweepAbsent e n now] := by
   rw [sweepAbsent_eq]
-  have h : RS[n, (n.hv.keys.foldl (swOut e now) (n, false)).1] := by
+  have h : RS[n, (n.hv.keys.foldl (swOut e now) ({ n with nextAbsent := none }, false)).1] := by
     apply foldl_rs2
     intro b hub
     unfold swOut
@@ -193,7 +192,8 @@ macro "rs_tac" : tactic => `(tactic| first
     dsimp only
     repeat' split
     all_goals simp
-  generalize n.hv.keys.foldl (swOut e now) (n, false) = F at h ⊢
+  dsimp only
+  generalize n.hv.keys.foldl (swOut e now) ({ n with nextAbsent := none }, false) = F at h ⊢
   obtain ⟨f1, f2⟩ := F
   dsimp only at h ⊢
   split <;> simp [h]

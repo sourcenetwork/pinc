@@ -866,4 +866,31 @@ theorem accept_expired_refused {B : Recs} {L : Ledger} (hI : Inv L) (bundle byte
   rw [hr]
   simp [hid.1, hid.2]
 
+/-- An ack addressed to the book's own node is `onAck`. -/
+theorem onAckTo_self (me : Nat) (B : Recs) (L : Ledger) (b c o : Nat) (v : Bool) :
+    onAckTo me me B L b c o v = onAck B L b c o v := by
+  simp [onAckTo]
+
+/-- **An ack addressed to another node moves nothing and is an error**, whatever its custodian and offer id. -/
+theorem onAckTo_other {me p : Nat} (h : p ≠ me) (B : Recs) (L : Ledger) (b c o : Nat) (v : Bool) :
+    (onAckTo me p B L b c o v).B = B ∧ (onAckTo me p B L b c o v).L = L ∧
+      (onAckTo me p B L b c o v).err ≠ none := by
+  unfold onAckTo
+  rw [if_neg h]
+  cases v
+  · simp
+  · cases hs : slotOf B b <;> simp
+
+/-- **Relief exactly by a valid ack addressed to this node, from the node offered to, for the offer outstanding.** -/
+theorem onAckTo_ok_iff {B : Recs} {L : Ledger} (hn : NodupB B) (me p b c o : Nat) (v : Bool) :
+    (onAckTo me p B L b c o v).err = none ↔
+      p = me ∧ v = true ∧ (∃ r ∈ recs B, r.bundle = b ∧ r.offered = some c ∧ r.oid = o) ∧
+        L.contains (bkey b) = true := by
+  by_cases h : p = me
+  · subst h
+    rw [onAckTo_self, onAck_ok_iff hn]
+    simp
+  · simp only [h, false_and, iff_false]
+    exact (onAckTo_other h B L b c o v).2.2
+
 end Pinc.DtnStore

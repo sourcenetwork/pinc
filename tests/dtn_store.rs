@@ -270,7 +270,7 @@ fn custody_hand_over_relieves_the_previous_custodian() {
     let id = BundleId([7; 32]);
     let mut la = Ledger::<4>::new(100);
     let mut lb = Ledger::<4>::new(100);
-    let (mut ba, mut bb) = (CustodyBook::<4>::new(), CustodyBook::<4>::new());
+    let (mut ba, mut bb) = (CustodyBook::<4>::new(a), CustodyBook::<4>::new(b));
 
     // A holds custody from the source; offers it to B.
     ba.accept(
@@ -350,7 +350,7 @@ fn custody_hand_over_relieves_the_previous_custodian() {
 fn custody_is_refused_when_the_store_cannot_keep_it() {
     let (_, a) = node(1);
     let mut l = Ledger::<4>::new(100);
-    let mut book = CustodyBook::<4>::new();
+    let mut book = CustodyBook::<4>::new(a);
     let one = |n: u8, bytes| Incoming {
         bundle: BundleId([n; 32]),
         bytes,
@@ -365,7 +365,7 @@ fn custody_is_refused_when_the_store_cannot_keep_it() {
     );
     assert!(!book.holds(&BundleId([2; 32])) && book.len() == 1);
     // The book is bounded too.
-    let mut small = CustodyBook::<1>::new();
+    let mut small = CustodyBook::<1>::new(a);
     let mut l2 = Ledger::<4>::new(100);
     small.accept(&mut l2, one(1, 1), 0, |_| {}).unwrap();
     assert_eq!(
@@ -385,7 +385,7 @@ fn custody_of_a_real_bundle_is_charged_at_its_sealed_size() {
     let head = s.signed.head();
     let layout = head.layout().unwrap();
     let mut l = Ledger::<4>::new(layout.total_len());
-    let mut book = CustodyBook::<4>::new();
+    let mut book = CustodyBook::<4>::new(head.source);
     let inc = Incoming {
         bundle: head.id,
         bytes: layout.total_len(),
@@ -403,7 +403,7 @@ fn a_stale_ack_cannot_relieve_a_node_that_is_the_custodian_again() {
     let (b_key, b) = node(2);
     let id = BundleId([7; 32]);
     let (mut la, mut lb) = (Ledger::<4>::new(100), Ledger::<4>::new(100));
-    let (mut ba, mut bb) = (CustodyBook::<4>::new(), CustodyBook::<4>::new());
+    let (mut ba, mut bb) = (CustodyBook::<4>::new(a), CustodyBook::<4>::new(b));
     let inc = |previous, offer| Incoming {
         bundle: id,
         bytes: 10,
@@ -441,6 +441,60 @@ fn a_stale_ack_cannot_relieve_a_node_that_is_the_custodian_again() {
 }
 
 #[test]
+fn an_ack_addressed_to_another_node_is_not_offered() {
+    let (_, s) = node(1);
+    let (b_key, b) = node(2);
+    let (a_key, a) = node(3);
+    let id = BundleId([7; 32]);
+    let (mut lb, mut la) = (Ledger::<4>::new(100), Ledger::<4>::new(100));
+    let (mut bb, mut ba) = (CustodyBook::<4>::new(b), CustodyBook::<4>::new(a));
+    let inc = |previous, offer| Incoming {
+        bundle: id,
+        bytes: 10,
+        expires: 1_000,
+        previous,
+        offer,
+    };
+    // S offers X to B (offer 0); B owes S an ack. B offers it to A (offer 0 of B's book); A's ack relieves B.
+    let to_s = bb
+        .accept(&mut lb, inc(s, 0), 0, |_| {})
+        .unwrap()
+        .sign(Hlc::new(1, 0), &b_key)
+        .unwrap();
+    let to_a = bb.offer(&id, a).unwrap();
+    let from_a = ba
+        .accept(&mut la, inc(b, to_a), 0, |_| {})
+        .unwrap()
+        .sign(Hlc::new(2, 0), &a_key)
+        .unwrap();
+    bb.on_ack(&mut lb, &from_a).unwrap();
+    // A offers X back to B with the same id 0; B's old ack to S, replayed to A, must not relieve A.
+    let back = ba.offer(&id, b).unwrap();
+    assert_eq!((back, to_s.offer), (0, 0));
+    assert_eq!(ba.on_ack(&mut la, &to_s).err(), Some(CustodyError::NotOffered));
+    assert_eq!(la.get(&id.store_key()).map(|e| e.class), Some(Class::Custody));
+    // B takes custody again; its ack addressed to A relieves A.
+    let to_a_again = bb
+        .accept(&mut lb, inc(a, back), 3, |_| {})
+        .unwrap()
+        .sign(Hlc::new(3, 0), &b_key)
+        .unwrap();
+    ba.on_ack(&mut la, &to_a_again).unwrap();
+    assert!(!ba.holds(&id));
+}
+
+#[test]
+fn addressed_reads_the_ack_previous() {
+    let (_, a) = node(1);
+    let (_, b) = node(2);
+    let c = keypair(IdentityAlg::Ed25519, 40);
+    let book = CustodyBook::<4>::new(a);
+    let ack = |previous| CustodyAck::sign(BundleId([9; 32]), previous, 0, Hlc::new(1, 0), &c).unwrap();
+    assert!(book.addressed(&ack(a)));
+    assert!(!book.addressed(&ack(b)));
+}
+
+#[test]
 fn the_ack_offer_id_is_signed_and_part_of_the_encoding() {
     let (_, prev) = node(1);
     let custodian = keypair(IdentityAlg::Ed25519, 40);
@@ -463,7 +517,7 @@ fn an_ack_for_a_dropped_item_reports_the_store_unknown_and_an_expired_bundle_is_
     let (b_key, b) = node(2);
     let id = BundleId([7; 32]);
     let mut la = Ledger::<4>::new(100);
-    let mut ba = CustodyBook::<4>::new();
+    let mut ba = CustodyBook::<4>::new(a);
     let inc = |expires| Incoming {
         bundle: id,
         bytes: 10,

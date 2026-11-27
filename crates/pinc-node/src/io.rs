@@ -173,6 +173,9 @@ pub(crate) struct Io<E: Ep, St: Store> {
     pub(crate) sess: BTreeMap<SessionId, Sess>,
     pub(crate) links: BTreeMap<NodeId, Link>,
     pub(crate) strm: BTreeMap<(SessionId, StreamId), Strm>,
+    /// Per peer, the stream its membership frames were last handed from: the one whose end closes the peer's
+    /// snapshot copy. At most one per peer, so the table is as bounded as `links`.
+    pub(crate) mem_rx: BTreeMap<NodeId, (SessionId, StreamId)>,
     pub(crate) failed: BTreeMap<NodeId, (Nanos, Nanos)>,
     pub(crate) connecting: BTreeMap<NodeId, Nanos>,
     queue: BTreeMap<NodeId, (VecDeque<Vec<u8>>, usize)>,
@@ -242,6 +245,7 @@ impl<E: Ep, St: Store> Io<E, St> {
             sess: BTreeMap::new(),
             links: BTreeMap::new(),
             strm: BTreeMap::new(),
+            mem_rx: BTreeMap::new(),
             failed: BTreeMap::new(),
             connecting: BTreeMap::new(),
             queue: BTreeMap::new(),

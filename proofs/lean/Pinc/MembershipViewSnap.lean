@@ -202,7 +202,7 @@ theorem markAbsent_mono (e : Env) (n : N) (now hub round : Nat) : HvMono n.hv (N
           hvMono_insert _ _ _ (fun c' hc' m' hm' => by
             rw [hh] at hc'; cases hc'; simp [AMap.has_modify, hm'])
         simp only [hh]
-        have := (recomputeOne_keeps2 e ((({ n1 with hv := n1.hv.insert hub { c with entries := c.entries.modify m (fun x => { x with absentSince := some now }) } }) : N).trace (.absent m)) now m).1.1
+        have := (recomputeOne_keeps2 e (((({ n1 with hv := n1.hv.insert hub { c with entries := c.entries.modify m (fun x => { x with absentSince := some now }) } }) : N).noteAbsent now).trace (.absent m)) now m).1.1
         simp only [trace_hv] at this
         refine ha.trans (hm.trans ?_)
         rw [this]; exact HvMono.refl _
@@ -222,22 +222,16 @@ theorem markViewAbsent_mono (e : Env) (n : N) (now hub round : Nat) :
     | none => simpa [hv, hh] using ha
     | some c =>
       simp only []
-      by_cases h1 : c.entries.has m = true
-      · simp only [h1, if_true]; exact ha
-      · by_cases h2 : (decide (MAX_TABLE ≤ c.entries.len) && !c.entries.has m) = true
-        · rw [if_neg h1, if_pos h2]
-          simp only []
-          have := (recomputeOne_keeps2 e n1 now m).1.1
-          rw [this]; exact ha
-        · rw [if_neg h1, if_neg h2]
-          simp only []
-          have hm : HvMono n1.hv (n1.hv.insert hub { c with entries := c.entries.insert m ⟨v.rc, round - 1, some now⟩ }) :=
-            hvMono_insert _ _ _ (fun c' hc' m' hm' => by
-              rw [hh] at hc'; cases hc'; exact AMap.has_insert_mono _ _ _ _ hm')
-          have := (recomputeOne_keeps2 e ((({ n1 with hv := n1.hv.insert hub { c with entries := c.entries.insert m ⟨v.rc, round - 1, some now⟩ } }) : N).trace (.absent m)) now m).1.1
-          simp only [trace_hv] at this
-          refine ha.trans (hm.trans ?_)
-          rw [this]; exact HvMono.refl _
+      split
+      · have := (recomputeOne_keeps2 e n1 now m).1.1
+        rw [this]; exact ha
+      · have hm : HvMono n1.hv (n1.hv.insert hub { c with entries := c.entries.insert m ⟨v.rc, round - 1, some now⟩ }) :=
+          hvMono_insert _ _ _ (fun c' hc' m' hm' => by
+            rw [hh] at hc'; cases hc'; exact AMap.has_insert_mono _ _ _ _ hm')
+        have := (recomputeOne_keeps2 e (((({ n1 with hv := n1.hv.insert hub { c with entries := c.entries.insert m ⟨v.rc, round - 1, some now⟩ } }) : N).noteAbsent now).trace (.absent m)) now m).1.1
+        simp only [trace_hv] at this
+        refine ha.trans (hm.trans ?_)
+        rw [this]; exact HvMono.refl _
 
 theorem snapAbsent_mono (e : Env) (n : N) (now hub round : Nat) : HvMono n.hv (N.snapAbsent e n now hub round).1.hv := by
   simp only [N.snapAbsent]
@@ -298,14 +292,12 @@ def sfClose (n : N) (hub : Nat) : N :=
   | some c => { n with hv := n.hv.insert hub { c with open_ := false } }
   | none => n
 
+theorem confirmHome_hv (n : N) (hub : Nat) : (n.confirmHome hub).hv = n.hv := by unfold N.confirmHome; split <;> rfl
+
 def sfMid (e : Env) (now hub : Nat) (partial_ : Bool) (round : Nat) (n : N) (changed : Bool) : N × Bool :=
-  let n := sfClose n hub
-  let (n, changed) := if !partial_ then
-      let (n', ch) := N.snapAbsent e (n.dropGone hub round) now hub round
-      (n', changed || ch)
-    else (n, changed)
+  let (n, ch) := N.snapAbsent e (((sfClose n hub).confirmHome hub).dropGone hub round) now hub round
   let n := if n.primary == some hub then n.bc (.resub hub) else n
-  (n, changed)
+  (n, changed || ch)
 
 theorem snapFin_eq (e : Env) (now hub : Nat) (partial_ more : Bool) (round : Nat) (a : N × Bool × Nat) :
     snapFin e now hub partial_ more round a =
@@ -324,20 +316,16 @@ theorem sfMid_mono (e : Env) (now hub : Nat) (partial_ : Bool) (round : Nat) (n 
     HvMonoX hub n.hv (sfMid e now hub partial_ round n changed).1.hv := by
   unfold sfMid
   dsimp only
-  have h1 := (sfClose_mono n hub).x hub
-  by_cases hp : (!partial_) = true
-  · simp only [hp, if_true]
-    have h2 := (dropGone_monoX (sfClose n hub) hub round).trans
-      ((snapAbsent_mono e ((sfClose n hub).dropGone hub round) now hub round).x hub)
-    by_cases hq : ((N.snapAbsent e ((sfClose n hub).dropGone hub round) now hub round).1.primary == some hub) = true
-    · simp only [hq, if_true]
-      rw [bc_hv]; exact h1.trans h2
-    · simp only [hq, Bool.false_eq_true, if_false]; exact h1.trans h2
-  · simp only [hp, Bool.false_eq_true, if_false]
-    by_cases hq : ((sfClose n hub).primary == some hub) = true
-    · simp only [hq, if_true]
-      rw [bc_hv]; exact h1
-    · simp only [hq, Bool.false_eq_true, if_false]; exact h1
+  have h1 : HvMonoX hub n.hv ((sfClose n hub).confirmHome hub).hv := by
+    rw [confirmHome_hv]; exact (sfClose_mono n hub).x hub
+  have h2 := (dropGone_monoX ((sfClose n hub).confirmHome hub) hub round).trans
+    ((snapAbsent_mono e (((sfClose n hub).confirmHome hub).dropGone hub round) now hub round).x hub)
+  rcases hS : N.snapAbsent e (((sfClose n hub).confirmHome hub).dropGone hub round) now hub round with ⟨n', ch⟩
+  rw [hS] at h2
+  dsimp only at h2 ⊢
+  split
+  · rw [bc_hv]; exact h1.trans h2
+  · exact h1.trans h2
 
 theorem snapFin_mono (e : Env) (now hub : Nat) (partial_ more : Bool) (round : Nat) (a : N × Bool × Nat) :
     HvMonoX hub a.1.hv (snapFin e now hub partial_ more round a).hv := by
@@ -374,9 +362,8 @@ theorem applySnap_copies_mono (e : Env) (n : N) (now hub : Nat) (partial_ more :
     have h2 := snapRound_mono n1 hub
     rw [hR] at h2
     change HvMono n1.hv n2.hv at h2
-    generalize hn3 : (if (!n2.isHub && n2.primary == some hub) = true then
-        ({ n2 with homeOk := some hub, homeSeen := true } : N) else n2) = n3
-    have h3 : n3.hv = n2.hv := by rw [← hn3]; split <;> rfl
+    generalize hn3 : n2 = n3
+    have h3 : n3.hv = n2.hv := by rw [← hn3]
     have h4 : HvMono n3.hv (List.foldl (snapStep e now hub round) (n3, false, 0) es).1.hv := by
       refine foldl_inv (fun (a : N × Bool × Nat) => HvMono n3.hv a.1.hv) _ _ _ ?_ (HvMono.refl _)
       intro b a hb

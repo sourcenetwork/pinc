@@ -93,11 +93,12 @@ struct Net {
 impl Net {
     fn new() -> Self {
         let keys: Vec<Keypair> = (0..NODES).map(keypair).collect();
-        let ids = keys.iter().map(Keypair::node_id).collect();
+        let ids: Vec<NodeId> = keys.iter().map(Keypair::node_id).collect();
+        let books = ids.iter().map(|id| CustodyBook::new(*id)).collect();
         Self {
             keys,
             ids,
-            books: (0..NODES).map(|_| CustodyBook::new()).collect(),
+            books,
             ledgers: (0..NODES).map(|_| Ledger::new(1 << 20)).collect(),
             model: (0..NODES).map(|_| MNode::default()).collect(),
             owed: Vec::new(),
@@ -166,12 +167,10 @@ impl Net {
                 let m = &mut self.model[to];
                 let want = match m.recs.get(&b) {
                     None => Err(CustodyError::Unknown),
-                    // The offer outstanding at `to`, named by its offerer (the ack's `previous`), custodian and id.
-                    // `addressed == to` is what the docs ask; an ack addressed to another offerer that matches the
-                    // custodian and the id relieves all the same (`repro_dtn.rs`,
-                    // `an_ack_addressed_to_another_offerer_relieves_custody`): the model follows the code there only,
-                    // so the property keeps looking for other faults.
-                    Some((_, Some((c, id)))) if *c == signer && *id == due.offer => {
+                    // The offer outstanding at `to`, named by its offerer (the ack's `previous`), custodian and id: an ack
+                    // addressed to another offerer is not offered (`repro_dtn.rs`,
+                    // `an_ack_addressed_to_another_offerer_relieves_custody`).
+                    Some((_, Some((c, id)))) if addressed == to && *c == signer && *id == due.offer => {
                         m.recs.remove(&b);
                         if let Some(e) = m.kept.get_mut(&b) {
                             e.0 = Class::Transit;

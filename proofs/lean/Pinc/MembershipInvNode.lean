@@ -20,6 +20,11 @@ open Pinc.MemInc
 
 variable {B : List Nat}
 
+theorem inv_streamReset {n : N} (hx : Inv B n) (peer : Nat) : Inv B (n.streamReset peer) := by
+  unfold N.streamReset
+  inv_go
+macro_rules | `(tactic| inv_apply) => `(tactic| apply inv_streamReset)
+
 theorem inv_dropPeer {e : Env} {n : N} (hx : Inv B n) (now peer : Nat) : Inv B (N.dropPeer e n now peer) := by
   unfold N.dropPeer
   inv_go

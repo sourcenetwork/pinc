@@ -127,7 +127,7 @@ Done(x, n, S1, now) ==
         late == \E t \in TrS(S1) : t.k = "quiet" /\ t.cause = 0
         waitOK == late \/ \A m \in DOMAIN S0.recheck \cap DOMAIN S1.recheck :
                     LET a == S0.recheck[m] b == S1.recheck[m]
-                    IN b = a \/ (Le(a.due, now) /\ (a.grace \/ b = [due |-> SatAdd(now, RECHECK_GAP), grace |-> TRUE]))
+                    IN b = a \/ (Le(a.due, now) /\ (a.grace \/ b = [a EXCEPT !.due = SatAdd(now, RECHECK_GAP), !.grace = TRUE]))
         \* a heal at a node while a removal waits for a later instant
         healWait == (\E t \in TrS(S1) : t.k = "quiet" /\ t.cause = 1) /\ \E m \in DOMAIN S0.recheck : Lt(now, S0.recheck[m].due)
         words == INC!Word(S1.inc)
@@ -212,10 +212,16 @@ ProcessStep(x) ==
        ELSE CallAt(x1, n, LAMBDA S, e : CallBytes(S, e, x1.now, it.from, <<it.f>>, FALSE))
 
 \* a timer call moves the node's deadline past now: otherwise the host would call again at once, forever
+\* a member's tick that comes more than WAKE_GAP after it was due (the first one is due at birth) opens a quiet window
+\* (okQuiet); DueLate is stated here, apart from the operators of the code, so a witness that overrides those does not
+\* weaken it
+DueLate(S, now) == ~S.isHub /\ ~S.leaving /\ Ge(now, Get(S.nextTick, Z)) /\ Gt(SatSub(now, Get(S.nextTick, S.born)), WAKE_GAP)
 FireStep(x) ==
     LET n == CHOOSE n \in TimerDue(x) : \A m \in TimerDue(x) : n <= m
+        late == DueLate(x.nodes[n], x.now)
         x1 == CallAt(x, n, LAMBDA S, e : CallTimeout(S, e, x.now))
-    IN [x1 EXCEPT !.hist.okTimer = @ /\ Lt(x.now, PollTimeout(x1.nodes[n]))]
+    IN [x1 EXCEPT !.hist.okTimer = @ /\ Lt(x.now, PollTimeout(x1.nodes[n])),
+                  !.hist.okQuiet = @ /\ (late => Lt(x.now, x1.nodes[n].quietUntil))]
 
 KaStep(x) ==
     [x EXCEPT !.nextKA = SatAdd(x.now, SecW(30)),
@@ -296,7 +302,7 @@ ScriptStep(x) ==
 (* ---- the specification ---- *)
 HistInit == [down |-> {}, left |-> {}, susp |-> {}, conf |-> {}, acc |-> {}, rest |-> {}, resub |-> {}, rel |-> {},
              hold |-> {}, restore |-> {}, revcl |-> {}, lvcl |-> {}, lostProbes |-> 0, primN |-> [n \in Nodes |-> 0], supp |-> {}, restarts |-> 0,
-             okDown |-> TRUE, okInc |-> TRUE, okBounds |-> TRUE, okWait |-> TRUE, okTimer |-> TRUE, healWait |-> FALSE,
+             okDown |-> TRUE, okInc |-> TRUE, okBounds |-> TRUE, okWait |-> TRUE, okTimer |-> TRUE, okQuiet |-> TRUE, healWait |-> FALSE,
              lastInc |-> [n \in Nodes |-> Z], crashAt |-> [n \in Nodes |-> <<>>]]
 
 StartAll ==
@@ -413,6 +419,23 @@ TimerMoves == w.hist.okTimer
 \* ScrHealWait: the removal hub 1 reports at 76 s, deferred by the window of the heal at 75 s, is applied at the tick after
 \* that window's end and the extra look (75 + 10 + 5 s, ticks every 0.5 s), whatever window the heal at 79 s opened
 HealGone == SecsSince(w, 91) => 5 \notin DOMAIN w.nodes[4].members
+\* a late tick, the first one included, opens a quiet window (timers.rs on_timeout; repro_membership2.rs)
+LateOpensQuiet == w.hist.okQuiet
+\* while a member's confirmed home is its only source, the home's copy holds an entry (listed, or absent with its
+\* omission clock) for every view member, unless that member waits in the recheck table or the copy is full: a member
+\* only another hub's copy listed is never removed at once by the switch to the home (repro_membership.rs)
+HomeCovers == \A n \in w.alive \ Hubs :
+    LET S == w.nodes[n]
+        src == Source(S, w.now)
+    IN src.only # <<>> =>
+         \A m \in DOMAIN S.members : m \in DOMAIN S.hv[src.only[1]].entries \/ m \in DOMAIN S.recheck
+                                     \/ Cardinality(DOMAIN S.hv[src.only[1]].entries) >= MAX_TABLE
+\* ScrClockHome: 4 restarted below its last life while the only hub that held that life crashed; 150 s later every live
+\* node holds 4's current record, not its last life's (repro_membership2.rs)
+RecAgree4 == SecsSince(w, 190) /\ 4 \in w.alive =>
+    \A o \in w.alive \ {4} : 4 \in DOMAIN w.nodes[o].members /\ w.nodes[o].members[4].rec.inc = RecOf(w.nodes[4]).inc
+\* the multi-frame snapshot shape: one entry per frame
+SnapChunkOne == 1
 \* witnesses (TLC must find a violation of each)
 NeverSuppressed == w.hist.supp = {}
 NeverSwitched == \A n \in Members : w.hist.primN[n] <= 1
@@ -479,4 +502,25 @@ ScrStaleView == <<<<"cut", 0, 1, 2>>, <<"cut", 0, 2, 4>>, <<"rtt", 0, 3, 1, 100>
 \* that window and the removal waits, and hub 3 is heard again at 79 s (a second heal) while it waits.
 ScrHealWait == <<<<"rtt", 0, 4, 2, 100>>, <<"rtt", 0, 4, 3, 100>>, <<"cut", 10, 2, 4>>, <<"cut", 10, 3, 4>>,
                  <<"heal", 75, 2, 4>>, <<"revoke", 76, 1, 5>>, <<"heal", 79, 3, 4>>>>
+\* repro_membership.rs, the partial shape: hub 2 is cut from hub 1 and from member 4 from the start, so it never hears of
+\* 4; member 3 homes on hub 1 (10 ms against 100 ms) and lists 4. At 30 s 3's session to hub 1 is cut and at 31 s it
+\* heals (closed and redialled): 3 homes on hub 2 for a while, whose snapshot is partial (younger than a lease) and
+\* omits 4, then back on hub 1. The hubs' cut heals at 60 s, inside the lease the young home's snapshots start (a cut
+\* longer than a lease drops hub 2 from 3's view, as a complete snapshot of an old home does). 4 is alive throughout:
+\* no node reports it down
+ScrHomeYoung == <<<<"cut", 0, 1, 2>>, <<"cut", 0, 2, 4>>, <<"rtt", 0, 3, 1, 10>>, <<"rtt", 0, 3, 2, 100>>,
+                  <<"cut", 30, 1, 3>>, <<"heal", 31, 1, 3>>, <<"heal", 60, 1, 2>>>>
+\* the same with hub 2 hearing of 4 (only hub 1 and hub 2 cut): its snapshot lists 4, in several frames with SnapChunkOne
+ScrHomeYoungChunk == <<<<"cut", 0, 1, 2>>, <<"rtt", 0, 3, 1, 10>>, <<"rtt", 0, 3, 2, 100>>,
+                       <<"cut", 30, 1, 3>>, <<"heal", 31, 1, 3>>, <<"heal", 60, 1, 2>>>>
+\* repro_membership2.rs, a member that crashed while its only hub restarted (Hubs = {1}): hub 1 and member 4 crash at
+\* 40 s, hub 1 restarts at 41 s on its store; its snapshots are partial for a lease and never list 4
+ScrHubRestart == <<<<"crash", 40, 1>>, <<"crash", 40, 4>>, <<"restart", 41, 1, 1000041>>>>
+\* repro_membership2.rs, a clock that went back while the home died: member 4 is cut from hub 2 from the start, so
+\* only hub 1's roster holds its life; at 40 s 4 is cut from hub 1 and restarts with its wall clock far back (no
+\* store), at 41 s it reaches hub 2, whose view holds 4's last life from hub 1's copy, and at 45 s hub 1 crashes
+ScrClockHome == <<<<"cut", 0, 2, 4>>, <<"cut", 40, 1, 4>>, <<"crash", 40, 4>>, <<"restart", 40, 4, 5>>,
+                  <<"heal", 41, 2, 4>>, <<"crash", 45, 1>>>>
+\* repro_membership2.rs, a suspension before the first tick: time jumps 30 s at the start, before any timer ran
+ScrFirstTick == <<<<"jump", 0, 30>>>>
 =============================================================================

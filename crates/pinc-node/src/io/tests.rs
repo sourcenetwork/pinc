@@ -49,6 +49,10 @@ pub(crate) struct Stub {
     pub(crate) fail_urgency: bool,
     /// The packets the endpoint has to send, by destination: each goes as one byte.
     pub(crate) transmits: alloc::collections::VecDeque<SocketAddr>,
+    /// The bytes each stream has received and not yet consumed.
+    pub(crate) chunks: BTreeMap<(SessionId, StreamId), Vec<u8>>,
+    /// Opening a stream is refused, as when the session has no room for one.
+    pub(crate) fail_open: bool,
 }
 
 impl Port for Stub {
@@ -63,6 +67,13 @@ impl Port for Stub {
             Command::Connect { node, alpn, .. } => {
                 self.dials.push((node, alpn.to_vec()));
                 Value::Session(SessionId(DIALED + self.dials.len() as u64 - 1))
+            }
+            Command::OpenStream { .. } if self.fail_open => return Err(CommandError::NoSession),
+            Command::Consume { session, stream, n } => {
+                if let Some(c) = self.chunks.get_mut(&(session, stream)) {
+                    c.drain(..n.min(c.len()));
+                }
+                Value::None
             }
             Command::OpenStream { .. } => {
                 self.opens += 1;
@@ -123,8 +134,8 @@ impl Ep for Stub {
     fn register_alpn(&mut self, _alpn: &[u8]) -> bool {
         true
     }
-    fn read_chunk(&self, _session: SessionId, _stream: StreamId) -> Option<&[u8]> {
-        None
+    fn read_chunk(&self, session: SessionId, stream: StreamId) -> Option<&[u8]> {
+        self.chunks.get(&(session, stream)).map(Vec::as_slice)
     }
     fn read_at(&self, _session: SessionId, _stream: StreamId, _offset: u64) -> Option<&[u8]> {
         None

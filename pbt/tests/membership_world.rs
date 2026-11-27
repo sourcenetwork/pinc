@@ -31,17 +31,17 @@
 //!   across lives for the nodes with a persistent store); `node.rs`: "every table is bounded".
 //! - properties.md, membership: "every timer call the host makes moves the deadline past now".
 //!
-//! The known bug of `repro_membership.rs` (a live member leaves the view at once when the home hub's snapshot is
-//! multi-frame or partial) is excluded narrowly: a removal of a protected member made while the machine reads a
-//! partial or multi-frame snapshot from its primary is counted, not failed. Most networks start their members a
-//! lease after their hubs, so hubs send complete snapshots.
+//! One narrow exclusion remains, a documented limit of the machine that the properties row states as a hypothesis: a
+//! relayed probe whose leg from the relay hub to the member is slower than the hub can measure does not answer in
+//! time (see the comment at its place below). The world, as host, hands a node the frames that arrived before it
+//! serves its next timer, which a hub's confirmation relies on.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing, clippy::cast_possible_truncation)]
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use ephyra::prelude::*;
-use pinc_membership::consts::{AWARENESS_BOUND, CONFIRM, LEASE, MAX_TABLE, RENEW};
+use pinc_membership::consts::{AWARENESS_BOUND, CONFIRM, LEASE, MAX_TABLE, PROBE_WAIT_MIN, RENEW};
 use pinc_membership::event::Removal;
 use pinc_membership::session::{DENIED_CODE, LEAVE_CODE, StoreError};
 use pinc_membership::{
@@ -201,8 +201,6 @@ enum Sched {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Ctx {
     Other,
-    /// Bytes from a peer; whether they held a partial or multi-frame snapshot.
-    Bytes { peer: usize, odd_snap: bool },
     Revoke(usize),
 }
 
@@ -218,6 +216,8 @@ struct World {
     cut: BTreeMap<(usize, usize), u32>,
     cut_end: BTreeMap<(usize, usize), u64>,
     slow: BTreeMap<(usize, usize), u64>,
+    /// When a `Slow` op last raised a pair's latency, and the one-way latency the pair had before it.
+    slowed: BTreeMap<(usize, usize), (u64, u64)>,
     sched: BTreeMap<(u64, u64), Sched>,
     seq: u64,
     next_sid: u64,
@@ -230,11 +230,8 @@ struct World {
     carrier_down: BTreeMap<(usize, usize), u64>,
     /// Members some hub confirmed down, with the life confirmed.
     confirmed: BTreeSet<(usize, u32)>,
-    known_bug: u32,
-    /// (hub, member) -> the hub whose relay carried the hub's last relayed probe of the member.
-    probe_via: BTreeMap<(usize, usize), usize>,
-    /// (receiver, hub) -> whether the last snapshot the receiver read from the hub was complete, with both lives.
-    last_snap: BTreeMap<(usize, usize), (bool, u32, u32)>,
+    /// (hub, member) -> the hub whose relay carried the hub's last relayed probe of the member, and the instant it left.
+    probe_via: BTreeMap<(usize, usize), (usize, u64)>,
     steps: u64,
 }
 
@@ -298,6 +295,7 @@ impl World {
             cut: BTreeMap::new(),
             cut_end: BTreeMap::new(),
             slow: BTreeMap::new(),
+            slowed: BTreeMap::new(),
             sched: BTreeMap::new(),
             seq: 0,
             next_sid: 1,
@@ -308,9 +306,7 @@ impl World {
             revoked: BTreeSet::new(),
             carrier_down: BTreeMap::new(),
             confirmed: BTreeSet::new(),
-            known_bug: 0,
             probe_via: BTreeMap::new(),
-            last_snap: BTreeMap::new(),
             steps: 0,
         };
         if net.late_members {
@@ -362,11 +358,13 @@ impl World {
     fn probed_paths_broken(&self, i: usize, x: usize, since: u64) -> bool {
         let broke = |a: usize, b: usize| self.is_cut(a, b) || self.cut_end.get(&norm(a, b)).is_some_and(|e| *e >= since);
         broke(i, x)
-            && self.probe_via.get(&(i, x)).is_none_or(|&r| {
-                // The hub waits CONFIRM or three session round trips (hub.rs `carrier_watch`) for either probe; a
-                // relay leg slower than that cannot answer in time, and no doc promises a longer wait for it.
+            && self.probe_via.get(&(i, x)).is_none_or(|&(r, _)| {
+                // The hub waits CONFIRM or three session round trips of the member for the first probe, and for the
+                // second three more of the relay hub's own (hub.rs `carrier_watch`, `wait_b`); a relay leg to the
+                // member slower than that cannot answer in time. The hypothesis sentence of the accuracy row of
+                // properties.md: the relay's leg to the member is assumed no slower than the member's own session.
                 let relay_rtt = 2 * (self.one_way(i, r) + self.one_way(r, x));
-                let wait = CONFIRM.max(6 * self.one_way(i, x));
+                let wait = CONFIRM.max(6 * self.one_way(i, x) + 6 * self.one_way(i, r));
                 !self.n[x].link.contains_key(&r)
                     || !self.n[r].link.contains_key(&x)
                     || broke(r, x)
@@ -377,6 +375,31 @@ impl World {
 
     fn one_way(&self, a: usize, b: usize) -> u64 {
         self.lat + self.slow.get(&norm(a, b)).copied().unwrap_or(0)
+    }
+
+    /// The accuracy row of properties.md: "each probe waits three round trips of the member's own session (at least
+    /// `PROBE_WAIT_MIN`, 250 ms) and the confirmation comes at least `CONFIRM` after the drop, so an answer on either
+    /// path slower than that (both come back on the member's session) does not arrive in time". Excused: no frame
+    /// from the member reached the hub since the drop, and the pair's latency rose at or after the drop so that the
+    /// session answer lands past the real deadline (the later of the first wait and the relayed probe's instant plus
+    /// the second wait), and so does the relayed path's when one was sent.
+    fn slowed_past_the_wait(&self, i: usize, x: usize, since: u64) -> bool {
+        let Some(&(at, before)) = self.slowed.get(&norm(i, x)) else {
+            return false;
+        };
+        // A frame from the member after the drop is an answer that arrived: nothing slowed it past the wait.
+        if self.n[i].last_frame.get(&x).is_some_and(|&l| l >= since + self.n[i].off) {
+            return false;
+        }
+        let w_a = CONFIRM.max(PROBE_WAIT_MIN.max(6 * before));
+        let relayed = self.probe_via.get(&(i, x)).copied();
+        let dl = relayed.map_or(since + w_a, |(r, probe_at)| {
+            let w_b = w_a.max(PROBE_WAIT_MIN.max(6 * before) + 6 * self.one_way(i, r));
+            (since + w_a).max(probe_at + w_b)
+        });
+        at >= since
+            && since + 2 * self.one_way(i, x) > dl
+            && relayed.is_none_or(|(r, probe_at)| probe_at + self.one_way(i, r) + self.one_way(r, x) + self.one_way(x, i) > dl)
     }
 
     // ----------------------------------------------------------------------------------- calls into a machine
@@ -401,21 +424,15 @@ impl World {
         let total = self.n.len();
         let roster_before: Vec<usize> =
             if self.n[i].hub { (0..total).filter(|&j| self.n[i].m.lease_of(&id(j)).is_some()).collect() } else { Vec::new() };
-        let primary_before = self.n[i].m.primary().map(ix);
         let nd = &mut self.n[i];
         let r = f(&mut nd.m, &mut nd.h, now_i);
-        self.after(i, now_i, ctx, &roster_before, primary_before);
+        self.after(i, now_i, ctx, &roster_before);
         r
     }
 
     /// The checks of one call, then its sends and closes. The checks come first: a close reports back into the same
     /// machine, and that nested call must not take this call's traces.
-    fn after(&mut self, i: usize, now_i: u64, ctx: Ctx, roster_before: &[usize], primary_before: Option<usize>) {
-        let primary_after = self.n[i].m.primary().map(ix);
-        let odd_primary_snap = match ctx {
-            Ctx::Bytes { peer, odd_snap } => odd_snap && (primary_before == Some(peer) || primary_after == Some(peer)),
-            _ => false,
-        };
+    fn after(&mut self, i: usize, now_i: u64, ctx: Ctx, roster_before: &[usize]) {
         let mut causes: BTreeSet<usize> = BTreeSet::new();
         let traces: Vec<Trace> = std::iter::from_fn(|| self.n[i].m.poll_trace()).collect();
         if std::env::var_os("WORLD_DEBUG").is_some() {
@@ -427,11 +444,11 @@ impl World {
             }
         }
         for t in &traces {
-            self.check_trace(i, now_i, t, odd_primary_snap, &mut causes);
+            self.check_trace(i, now_i, t, &mut causes);
         }
         let events: Vec<Event> = std::iter::from_fn(|| self.n[i].m.poll_event()).collect();
         for e in &events {
-            self.check_event(i, e, odd_primary_snap);
+            self.check_event(i, e);
         }
         if let Ctx::Revoke(x) = ctx {
             causes.insert(x);
@@ -459,7 +476,7 @@ impl World {
         for (peer, route, bytes) in out {
             assert_ne!(peer, id(i), "node {i} sent to itself");
             if let Route::Via(r) = route {
-                self.probe_via.insert((i, ix(&peer)), ix(&r));
+                self.probe_via.insert((i, ix(&peer)), (ix(&r), self.now));
             }
             self.route(i, ix(&peer), route, bytes);
         }
@@ -479,7 +496,7 @@ impl World {
         !self.sched.values().any(|s| matches!(s, Sched::Revoke { at, x: y, .. } if *at == i && *y == x))
     }
 
-    fn check_trace(&mut self, i: usize, now_i: u64, t: &Trace, odd: bool, causes: &mut BTreeSet<usize>) {
+    fn check_trace(&mut self, i: usize, now_i: u64, t: &Trace, causes: &mut BTreeSet<usize>) {
         match *t {
             Trace::LeaseExpired { member } => {
                 let x = ix(&member);
@@ -503,14 +520,11 @@ impl World {
                 let gone = self.n[x].life != Life::Alive
                     || !self.n[x].link.contains_key(&i)
                     || self.n[x].unreach_end >= since
-                    // The hub itself was suspended since the drop: the answers wait unread while its confirm deadline
-                    // passes, and a hub opens no quiet window for a late tick (timers.rs, `!self.is_hub`). No doc
-                    // promises more for a suspended hub; see the report.
-                    || self.n[i].unreach_end >= since
                     || self.probed_paths_broken(i, x, since)
                     || !self.awake(x)
                     || !self.dir_ok(x, i)
-                    || self.cut_end.get(&norm(i, x)).is_some_and(|e| *e >= since);
+                    || self.cut_end.get(&norm(i, x)).is_some_and(|e| *e >= since)
+                    || self.slowed_past_the_wait(i, x, since);
                 assert!(gone, "hub {i} confirmed {x} down while it was reachable since its carrier dropped");
             },
             Trace::DownAccepted { member } => {
@@ -531,13 +545,7 @@ impl World {
                     Removal::Left => assert_eq!(self.n[x].life, Life::Left, "node {i} removed {x} as left"),
                     Removal::Revoked => assert!(self.revoked.contains(&x), "node {i} removed {x} as revoked"),
                     Removal::Reported | Removal::LeaseExpired => {
-                        if self.protected(x) {
-                            if odd {
-                                self.known_bug += 1;
-                            } else {
-                                panic!("node {i} removed the live, attached member {x} ({why:?})");
-                            }
-                        }
+                        assert!(!self.protected(x), "node {i} removed the live, attached member {x} ({why:?})");
                     },
                 }
             },
@@ -545,13 +553,11 @@ impl World {
         }
     }
 
-    fn check_event(&mut self, i: usize, e: &Event, odd: bool) {
+    fn check_event(&mut self, i: usize, e: &Event) {
         match *e {
             Event::MemberConfirmedDown { member } => {
                 let x = ix(&member);
-                if self.protected(x) && !odd {
-                    panic!("node {i} reported the live, attached member {x} down");
-                }
+                assert!(!self.protected(x), "node {i} reported the live, attached member {x} down");
             },
             Event::MemberLeft { member } => {
                 assert_eq!(self.n[ix(&member)].life, Life::Left, "node {i} reported {} left", ix(&member));
@@ -748,24 +754,13 @@ impl World {
                 e.last_rx = now_from;
             }
         }
-        let mut odd_snap = false;
-        let mut at = 0;
-        while let Ok(Some((f, n))) = Frame::read(&bytes[at..]) {
-            if let Frame::Snap(s) = f {
-                odd_snap |= s.partial || s.more;
-                if !s.more && self.n[from].hub {
-                    self.last_snap.insert((to, from), (!s.partial, self.n[from].lno, self.n[to].lno));
-                }
-            }
-            at += n;
-        }
         self.n[to].last_frame.insert(from, now_to);
         let pid = id(from);
         // A call parses at most MAX_FRAMES_PER_CALL frames; the host calls again with the rest.
         let mut at = 0;
         while at < bytes.len() && self.awake(to) {
             let rest = &bytes[at..];
-            let used = self.call(to, Ctx::Bytes { peer: from, odd_snap }, |m, h, now| m.on_bytes(h, now, &pid, rest));
+            let used = self.call(to, Ctx::Other, |m, h, now| m.on_bytes(h, now, &pid, rest));
             assert!(used.is_ok_and(|u| u > 0), "node {to} did not read the frames from {from}: {used:?}");
             at += used.unwrap_or(bytes.len());
         }
@@ -893,7 +888,9 @@ impl World {
                 for (p, code, sid) in std::mem::take(&mut self.n[i].pending) {
                     self.report_down(i, p, code, sid);
                 }
-                if timer_first && self.serve_at(i) <= self.now_of(i) {
+                // Host contract (Membership::on_timeout): before a call that serves a due timer, the host hands over
+                // the input it already holds. A hub's world host does; a member's may serve the timer first.
+                if timer_first && !self.n[i].hub && self.serve_at(i) <= self.now_of(i) {
                     self.call(i, Ctx::Other, |m, h, now| m.on_timeout(h, now));
                 }
                 let hubs: Vec<usize> = (0..self.nh).filter(|&h| self.n[h].link.contains_key(&i)).collect();
@@ -1087,6 +1084,10 @@ impl World {
             },
             WOp::Slow(a, b, ms) => {
                 if let Some((x, y)) = self.pair(a, b) {
+                    let (before, after) = (self.one_way(x, y), self.lat + u64::from(ms) * MS);
+                    if after > before {
+                        self.slowed.insert(norm(x, y), (self.now, before));
+                    }
                     self.slow.insert(norm(x, y), u64::from(ms) * MS);
                 }
             },
@@ -1227,22 +1228,6 @@ impl World {
         }
     }
 
-    /// Whether the last snapshot node `j` read from some live hub was partial (that hub was younger than a lease):
-    /// a partial snapshot never ages the entries the copy already held, and no complete one is asked for later, so a
-    /// node that left or crashed while `j` missed the delta stays listed (`repro_membership2.rs`). A member is also
-    /// prone when any hub is, since a hub serves its view to its members.
-    fn ghost_prone(&self, j: usize) -> bool {
-        let stale_copy = |b: usize| {
-            (0..self.nh).any(|p| {
-                p != b
-                    && self.alive(p)
-                    && self.n[b].link.contains_key(&p)
-                    && self.last_snap.get(&(b, p)) != Some(&(true, self.n[p].lno, self.n[b].lno))
-            })
-        };
-        stale_copy(j) || (!self.n[j].hub && (0..self.nh).any(|b| self.alive(b) && stale_copy(b)))
-    }
-
     /// Whether node `k` is part of the group as node `j` should see it: alive and attached to a live hub.
     fn expected_in(&self, k: usize) -> bool {
         self.alive(k) && (self.n[k].hub || self.n[k].want.iter().any(|&h| self.alive(h) && self.n[k].link.contains_key(&h)))
@@ -1351,20 +1336,12 @@ fn views_converge_after_the_heal(case: (Net, Vec<WOp>)) {
         let want: BTreeSet<usize> = (0..w.n.len()).filter(|&k| k != j && w.expected_in(k)).collect();
         let got: BTreeSet<usize> = w.n[j].m.members().map(|(k, _)| ix(k)).collect();
         let missing: Vec<usize> = want.difference(&got).copied().collect();
-        // The ghost of `repro_membership2.rs`: a node gone while a hub restarted stays listed by every node whose copy
-        // of that hub came only from partial snapshots since its restart. Excluded for those nodes, nowhere else.
-        let ghost_ok = w.ghost_prone(j);
-        let extra: Vec<usize> = got.difference(&want).copied().filter(|&k| !(ghost_ok && !w.alive(k))).collect();
+        let extra: Vec<usize> = got.difference(&want).copied().collect();
         assert!(missing.is_empty(), "node {j} misses live attached nodes {missing:?} after the heal");
         assert!(extra.is_empty(), "node {j} still lists {extra:?}, which are gone, after the heal");
         for (k, r) in w.n[j].m.members() {
             let k = ix(k);
-            // The same ghost, for a node whose clock went back on restart: the stale entry of its earlier life holds
-            // the higher incarnation and so wins the merge; excluded under the same condition.
-            // `a_member_whose_clock_went_back_is_never_told_when_its_home_hub_died`: a node that restarted below its
-            // last life's incarnation may never be told; excluded only for such a node and a higher, stale record.
-            let behind = w.n[k].prev_lives_inc > w.n[k].m.incarnation();
-            if w.alive(k) && !((ghost_ok || behind) && r.inc > w.n[k].m.incarnation()) {
+            if w.alive(k) {
                 assert_eq!(
                     r.inc,
                     w.n[k].m.incarnation(),
@@ -1374,5 +1351,57 @@ fn views_converge_after_the_heal(case: (Net, Vec<WOp>)) {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod excuse {
+    use super::*;
+
+    /// Hubs 0 and 1 (the relay), members 2 and 3, one-way latency 50 ms, no clock offsets.
+    fn world() -> World {
+        let net = Net {
+            hubs: 2,
+            members: 2,
+            dedicated: false,
+            calm: false,
+            late_members: false,
+            want: vec![3; 5],
+            steady: 0,
+            keepalive_s: 5,
+            lat_ms: 50,
+            off_ms: vec![0; 8],
+        };
+        World::new(&net)
+    }
+
+    const SINCE: u64 = 100 * SEC;
+
+    #[test]
+    fn a_frame_from_the_member_after_the_drop_is_never_excused() {
+        let mut w = world();
+        w.carrier_down.insert((0, 2), SINCE);
+        // The answer to probe A reached the hub 100 ms after the drop; at 500 ms the pair slowed to 600 ms one way.
+        w.n[0].last_frame.insert(2, SINCE + 100 * MS);
+        w.slowed.insert(norm(0, 2), (SINCE + 500 * MS, 50 * MS));
+        w.slow.insert(norm(0, 2), 550 * MS);
+        assert!(!w.slowed_past_the_wait(0, 2, SINCE), "an answer that was in is excused by a later slowdown");
+        // The same slowdown with nothing heard is the hypothesis.
+        w.n[0].last_frame.clear();
+        assert!(w.slowed_past_the_wait(0, 2, SINCE), "a session slower than the wait, nothing heard, is excused");
+    }
+
+    #[test]
+    fn a_session_answer_inside_the_relayed_probes_wait_is_not_excused() {
+        let mut w = world();
+        w.carrier_down.insert((0, 2), SINCE);
+        // One-way: (0,1) 200 ms, (0,2) 600 ms after the drop, (1,2) 750 ms. The second probe left at the first wait
+        // (1 s) and waits 1.45 s, so the answer at 1.2 s still counts.
+        w.slowed.insert(norm(0, 2), (SINCE + 500 * MS, 50 * MS));
+        w.slow.insert(norm(0, 2), 550 * MS);
+        w.slow.insert(norm(0, 1), 150 * MS);
+        w.slow.insert(norm(1, 2), 700 * MS);
+        w.probe_via.insert((0, 2), (1, SINCE + SEC));
+        assert!(!w.slowed_past_the_wait(0, 2, SINCE), "an answer inside the second wait is excused");
     }
 }

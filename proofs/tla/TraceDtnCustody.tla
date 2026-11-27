@@ -19,11 +19,17 @@
 (* later acknowledgements is what checks it.                                 *)
 (*                                                                          *)
 (* The signature check of an acknowledgement is the recorded boolean (the    *)
-(* signature scheme is assumed, as in the Lean model). Needs the TLA+       *)
+(* signature scheme is assumed, as in the Lean model). The book is node    *)
+(* Me (node 1 of the test); an ack names its addressee `p`, which the test  *)
+(* draws from every node, so acks addressed to another node are replayed.   *)
+(* Needs the TLA+                                                           *)
 (* CommunityModules (Json, IOUtils) and the environment variable            *)
 (* PINC_TRACE_DIR, the directory that holds dtn_custody.ndjson.            *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils, TraceEnd
+
+\* the book's node: node 1 of tests/trace_dtn_custody.rs
+Me == 1
 
 VARIABLES i, B, L, nx
 vars == <<i, B, L, nx>>
@@ -78,7 +84,7 @@ COff == /\ Trace[i].t = "cu_off"
         /\ UNCHANGED L /\ i' = i + 1
 
 CAck == /\ Trace[i].t = "cu_ack"
-        /\ \A r \in {C!OnAck(B, L, Trace[i].b, Trace[i].c, Trace[i].o, Trace[i].v)} :
+        /\ \A r \in {C!OnAck(B, L, Me, Trace[i].b, Trace[i].c, Trace[i].p, Trace[i].o, Trace[i].v)} :
               /\ r.err = ErrOf(Trace[i].err)
               /\ Seen(r.B, r.L, Trace[i])
               /\ B' = r.B /\ L' = r.L

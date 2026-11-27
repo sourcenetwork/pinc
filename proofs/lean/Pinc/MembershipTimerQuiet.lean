@@ -204,14 +204,16 @@ theorem renew_recheck_member (e : Env) (n : N) (now : Nat) (fs p : Bool) (hm : n
 comes later than `WAKE_GAP` after its deadline reads it as a suspension: the window opens, `QUIET` from the call, the
 window's grace is dropped, and every waiting removal is due at the window's end with its extra look not begun (the
 reference model's rule, kept by #284). So a host slack above `WAKE_GAP` at every tick keeps a member's removals
-waiting (`recheckDue_waits`): the late-host hypothesis of the awareness bound. -/
-theorem late_tick_reopens (e : Env) (n : N) (now t : Nat) (hm : n.isHub = false) (ht : n.nextTick = some t)
-    (hlate : WAKE_GAP < now - t) :
+waiting (`recheckDue_waits`): the late-host hypothesis of the awareness bound. Before the first tick the deadline is
+the start (`born`, what `poll_timeout` gave), so a first tick later than `WAKE_GAP` after the start opens the window
+too. -/
+theorem late_tick_reopens (e : Env) (n : N) (now : Nat) (hm : n.isHub = false)
+    (hlate : WAKE_GAP < now - n.nextTick.getD n.born) :
     (N.otTickPre e n now).quietUntil = satAdd now QUIET ∧ (N.otTickPre e n now).regrace = false ∧
     (N.otTickPre e n now).recheck =
       n.recheck.map (fun (p : Nat × (Nat × Bool)) => (p.1, (satAdd now QUIET, false))) := by
   unfold N.otTickPre
-  simp only [ht, hm, Bool.not_false, decide_true, Bool.true_and, hlate, if_true]
+  simp only [hm,Bool.not_false, decide_true, Bool.true_and, hlate, if_true]
   have h := renew_qu e (n.beginQuiet now 0) now true false
   have hr := renew_recheck_member e (n.beginQuiet now 0) now true false ((beginQuiet_tm n now 0).2.1.trans hm)
   refine ⟨?_, ?_, ?_⟩

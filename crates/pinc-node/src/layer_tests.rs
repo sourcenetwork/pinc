@@ -88,7 +88,7 @@ impl Apps<Software> for TApps {
 pub(crate) type TNode = Node<Stub, Software, (), 4, 32, TApps>;
 
 /// The peer the node lists as its relay: a dial to it always has a way to go.
-fn hub() -> pinc_crypto::NodeId {
+pub(crate) fn hub() -> pinc_crypto::NodeId {
     Keypair::from_seed(IdentityAlg::Ed25519, &[0x41; 32]).unwrap().node_id()
 }
 
@@ -101,7 +101,7 @@ pub(crate) fn node_with(is_hub: bool) -> Box<TNode> {
 }
 
 /// A node that is a hub or not, with the values layer on or off, and its trace on or off.
-fn node_cfg(is_hub: bool, values_on: bool, trace: bool) -> Box<TNode> {
+pub(crate) fn node_cfg(is_hub: bool, values_on: bool, trace: bool) -> Box<TNode> {
     let kp = Keypair::from_seed(IdentityAlg::Ed25519, &[0x11; 32]).unwrap();
     let identity = LocalIdentity::from_keypair(&kp, KeyHandle(1)).unwrap();
     let prov = Software;

@@ -11,7 +11,8 @@
 //! The rules, in short:
 //! - A hub's lease on a member lasts 80 s from its last renewal; transport evidence renews it as a frame does.
 //! - A dropped carrier is probed, and the member is confirmed down only when it also stays silent on an independent
-//!   path, so one lost probe or a slow member never confirms a live node down.
+//!   path, so one lost probe or a slow member does not confirm a live node down. A member whose round trip rises above
+//!   about 1 s right after a carrier drop can be confirmed down, and rejoins when its answer arrives.
 //! - Another hub's DOWN is accepted only while this hub's own lease for the member is stale.
 //! - A returning carrier restores the entry, the held subscriptions and tells the member about itself.
 //! - A member view takes snapshots as additions: a snapshot never removes a member on its own.

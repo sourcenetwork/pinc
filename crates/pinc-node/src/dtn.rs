@@ -233,10 +233,10 @@ pub(crate) fn redial_due(cur: Option<Nanos>, now: Nanos) -> bool {
 }
 
 impl Dtn {
-    pub(crate) fn new(policy: Policy, budget: u64, wall_ms: u64) -> Self {
+    pub(crate) fn new(policy: Policy, budget: u64, wall_ms: u64, me: pinc_crypto::NodeId) -> Self {
         Self {
             fwd: Fwd::new(policy, wall_ms),
-            book: Book::new(),
+            book: Book::new(me),
             led: Led::new(budget),
             hlc: Hlc::new(wall_ms, 0),
             heads: BTreeMap::new(),
@@ -919,18 +919,13 @@ where
     /// The holder's side of an ACK: the receiver took the bundle.
     fn dtn_acked(&mut self, bundle: &BundleId, peer: &NodeId, body: &[u8]) -> Result<(), Stop> {
         let wall = self.io.wall_ms();
-        let me = self.ident;
         let Some(d) = self.dtn.as_deref_mut() else {
             return Err(Stop::Break);
         };
         let Ok(ack) = CustodyAck::decode(body) else {
             return Err(Stop::Break);
         };
-        if ack.verify().is_err()
-            || ack.bundle != *bundle
-            || ack.custodian.bytes != *peer
-            || ack.previous.bytes != me.bytes
-        {
+        if ack.verify().is_err() || ack.bundle != *bundle || ack.custodian.bytes != *peer || !d.book.addressed(&ack) {
             return Err(Stop::Break);
         }
         let _ = d.fwd.step(

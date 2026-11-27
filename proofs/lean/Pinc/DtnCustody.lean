@@ -144,6 +144,17 @@ def onAck (B : Recs) (L : Ledger) (b custodian offer : Nat) (valid : Bool) : COu
       | _ => ⟨some .notOffered, B, L, []⟩
   else ⟨some .ack, B, L, []⟩
 
+/-- `CustodyBook::on_ack` of the book of node `me`, for an ack addressed to `previous`. Offer ids count per book, so
+an ack addressed to another node is refused like a stale one, after the signature and the holding checks
+(`notOffered`), and moves nothing; an ack addressed to `me` is `onAck`. -/
+def onAckTo (me previous : Nat) (B : Recs) (L : Ledger) (b custodian offer : Nat) (valid : Bool) : COut :=
+  if previous = me then onAck B L b custodian offer valid
+  else if valid then
+    match slotOf B b with
+    | none => ⟨some .unknown, B, L, []⟩
+    | some _ => ⟨some .notOffered, B, L, []⟩
+  else ⟨some .ack, B, L, []⟩
+
 /-- `CustodyBook::delivered`. -/
 def delivered (B : Recs) (L : Ledger) (b : Nat) : COut :=
   match slotOf B b with

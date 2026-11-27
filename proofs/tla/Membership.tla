@@ -49,20 +49,22 @@ HubUp(S, now, x) ==
     x = S.me \/ (x \in DOMAIN S.up /\ x \in DOMAIN S.heard /\ Lt(SatSub(now, S.heard[x]), HUB_STALE))
 
 \* recheck holds, per member whose removal a quiet window deferred, [due |-> the instant it is re-checked,
-\* grace |-> whether its extra look has begun]. WaitOnQuiet is the rule of the code (begin_quiet, #284): a late timer
-\* (cause 0) defers every waiting removal to the new window's end with its extra look not begun, a heal (cause 1)
+\* grace |-> whether its extra look has begun, held |-> whether a hold (no confirmed home) put it there rather than a
+\* window; set when the entry is made, kept after]. WaitOnQuiet is the rule of the code (begin_quiet, #284): a late
+\* timer (cause 0) defers every waiting removal to the new window's end with its extra look not begun, a heal (cause 1)
 \* leaves each at its own instant and grace state. A witness config overrides it with OldWaitOnQuiet, the rule before
 \* #284, under which a heal defers every waiting removal again as well.
-WaitOnQuiet(rc, until, cause) == IF cause = 0 THEN [m \in DOMAIN rc |-> [due |-> until, grace |-> FALSE]] ELSE rc
-OldWaitOnQuiet(rc, until, cause) == [m \in DOMAIN rc |-> [due |-> until, grace |-> FALSE]]
+WaitOnQuiet(rc, until, cause) == IF cause = 0 THEN [m \in DOMAIN rc |-> [rc[m] EXCEPT !.due = until, !.grace = FALSE]] ELSE rc
+OldWaitOnQuiet(rc, until, cause) == [m \in DOMAIN rc |-> [rc[m] EXCEPT !.due = until, !.grace = FALSE]]
 
 BeginQuiet(S, now, cause) ==
     LET until == SatAdd(now, QUIET)
     IN Trace([S EXCEPT !.quietUntil = until, !.regrace = FALSE, !.recheck = WaitOnQuiet(S.recheck, until, cause)],
              [k |-> "quiet", cause |-> cause])
 
-\* recheck.entry(m).or_insert((quiet_until, regrace)): a member already waiting keeps its instant and grace state
-Defer(S, m) == IF m \in DOMAIN S.recheck THEN S.recheck ELSE Put(S.recheck, m, [due |-> S.quietUntil, grace |-> S.regrace])
+\* recheck.entry(m).or_insert(..): a member already waiting keeps its instant, grace state and cause
+Defer(S, m, held) ==
+    IF m \in DOMAIN S.recheck THEN S.recheck ELSE Put(S.recheck, m, [due |-> S.quietUntil, grace |-> S.regrace, held |-> held])
 
 (* ---- view.rs: hello, record, renew ---- *)
 HelloTo(S, env, peer, snap) ==
@@ -199,9 +201,9 @@ RemoveFromView(S, env, now, m, cur, src, expired) ==
     IF cur = <<>> THEN [S |-> S, ch |-> FALSE]
     ELSE LET c == cur[1] IN
          IF src.hold
-         THEN [S |-> IF Cardinality(DOMAIN S.recheck) < MAX_TABLE THEN [S EXCEPT !.recheck = Defer(S, m)] ELSE S, ch |-> FALSE]
+         THEN [S |-> IF Cardinality(DOMAIN S.recheck) < MAX_TABLE THEN [S EXCEPT !.recheck = Defer(S, m, TRUE)] ELSE S, ch |-> FALSE]
          ELSE IF Lt(now, S.quietUntil) /\ Cardinality(DOMAIN S.recheck) < MAX_TABLE
-              THEN [S |-> Trace([S EXCEPT !.recheck = Defer(S, m)], [k |-> "deferred", member |-> m]), ch |-> FALSE]
+              THEN [S |-> Trace([S EXCEPT !.recheck = Defer(S, m, FALSE)], [k |-> "deferred", member |-> m]), ch |-> FALSE]
               ELSE LET s1 == [S EXCEPT !.members = Del(@, m),
                                        !.goneVer = IF Cardinality(DOMAIN @) < MAX_TABLE \/ m \in DOMAIN @
                                                    THEN Put(@, m, <<c.rec.ver, c.rec.th>>) ELSE @]
@@ -214,6 +216,11 @@ RemoveFromView(S, env, now, m, cur, src, expired) ==
                        s5 == IF s4.isHub THEN HomeDelta(s4, env, m, c.rec, alive) ELSE s4
                    IN [S |-> s5, ch |-> TRUE]
 
+\* the view keeps its record of a member only within one epoch; a best record of another epoch, newer or older, takes
+\* its place, so the view's record is the best eligible copy's (view.rs recompute_one)
+KnownArm(b, c) == Epoch(b) = Epoch(c)
+OldKnownArm(b, c) == Le(Epoch(b), Epoch(c))
+
 RecomputeOne(S, env, now, m) ==
     LET src == Source(S, now)
         pb == PickBest(S, now, m, src, NONE, <<>>, FALSE)
@@ -223,8 +230,9 @@ RecomputeOne(S, env, now, m) ==
                 absent == pb.best[1][2]
                 s1 == IF S.isHub /\ (cur = <<>> \/ cur[1].rec # best) THEN HomeDelta(S, env, m, best, 1) ELSE S
                 c == IF cur = <<>> THEN <<>> ELSE cur[1]
-                \* the arm for a known member whose best record is not of a newer epoch
-                known == cur # <<>> /\ Le(Epoch(best.inc), Epoch(c.rec.inc))
+                \* the arm for a known member whose best record is of the same epoch (KnownArm; OldKnownArm, the rule
+                \* before, also took a best record of an older epoch here and so kept a record no eligible copy holds)
+                known == cur # <<>> /\ KnownArm(best.inc, c.rec.inc)
                 upd == known /\ Epoch(best.inc) = Epoch(c.rec.inc) /\ Ge(best.inc, c.rec.inc)
                 sA == IF ~upd THEN [S |-> s1, ch |-> FALSE]
                       ELSE LET e1 == [s1.members[m] EXCEPT !.rec.inc = best.inc]
@@ -305,6 +313,12 @@ SendFloor(S, env, peer) ==
        ELSE SendS(S, env, peer, RSession, [k |-> "other", ty |-> 14, topic |-> <<>>, rest |-> SubSeq(body, 1, n)])
 
 (* ---- hub.rs: a HELLO ---- *)
+\* the view holds a later life of the node than its HELLO announces, in an epoch above it (a clock that went back while
+\* the only hub that held its last life went away): the hub tells the node, which moves above it, and waits for its
+\* HELLO from above (renewing a roster lease it holds); NoViewAhead is the rule before, which told it only from the roster
+ViewAhead(seen, hello) == seen # <<>> /\ Gt(Epoch(seen[1].rec.inc), Epoch(hello.rec.inc))
+NoViewAhead(seen, hello) == FALSE
+
 OnHello(S, env, now, peer, hello) ==
     LET s1 == IF hello.homed /\ ~IsBoot(S, peer)
               THEN (IF Cardinality(S.homed) < MAX_TABLE THEN [S EXCEPT !.homed = @ \cup {peer}] ELSE S)
@@ -316,8 +330,11 @@ OnHello(S, env, now, peer, hello) ==
         s5 == IF hello.snap \/ newAttach THEN SendSnapshot(s4, env, now, peer)
               ELSE SendS(s4, env, peer, RSession, [k |-> "ack"])
         held == Lookup(s5.roster, peer)
+        seen == Lookup(s5.members, peer)
     IN IF held # <<>> /\ Lt(hello.rec.inc, held[1].rec.inc)
        THEN DeltaTo([s5 EXCEPT !.roster[peer].renewed = now], env, peer, peer, held[1].rec, 1)
+       ELSE IF ViewAhead(seen, hello)
+       THEN DeltaTo(IF held # <<>> THEN [s5 EXCEPT !.roster[peer].renewed = now] ELSE s5, env, peer, peer, seen[1].rec, 1)
        ELSE IF held # <<>> /\ held[1].rec = hello.rec
        THEN [s5 EXCEPT !.roster[peer].renewed = now]
        ELSE IF held = <<>> /\ Cardinality(DOMAIN s5.roster) >= MAX_TABLE THEN s5
@@ -378,6 +395,16 @@ OnLeft(S, env, now, d) ==
        ELSE HubDown(Trace(S, [k |-> "leave_seen", member |-> m]), env, now, m, [c |-> "left"])
 
 (* ---- hub.rs: carrier events ---- *)
+\* the round trip of the hub whose relay carried the second probe (0 when the host has none): the probe's wait covers it
+\* on top of the session's (WaitB). The leg from that hub to the member is not known here: that it is no slower than
+\* the member's own session is a hypothesis. OldWaitB, the rule before, waited the session's round trips only
+RelaySrtt(env, x) == LET ev == Evidence(env, x) IN IF ev = <<>> THEN Z ELSE ev[1].srtt
+WaitB(sp) == SatAdd(sp.wait, SatMul3(sp.probeB[1].rtt))
+OldWaitB(sp) == sp.wait
+\* a due confirmation is decided on the call that finds it due: the host hands over the input it already holds before
+\* it serves a timer (the host contract of on_timeout), so answers that waited while a hub's host was suspended are
+\* read first. The scheduler of MembershipSys delivers before it serves a timer, which is that contract
+
 \* The second probe of a suspicion never takes the path of the first, the session: it goes through the relay of the
 \* first live hub, not this node and not the member, whose relay the host took it for. A probe the host refused is not
 \* a sent probe: the next hub is tried, and with none left no second probe is recorded.
@@ -386,7 +413,8 @@ SecondProbe(S, env, now, m) ==
         RECURSIVE Try(_, _)
         Try(s, i) == IF i > Len(F) THEN [S |-> s, p |-> <<>>]
                      ELSE LET t == Tx(s, env, m, RVia(F[i]), [k |-> "probe"])
-                          IN IF t.ok THEN [S |-> Trace(t.S, [k |-> "probe_sent", member |-> m, path |-> 2]), p |-> <<[t |-> now, path |-> 2]>>]
+                          IN IF t.ok THEN [S |-> Trace(t.S, [k |-> "probe_sent", member |-> m, path |-> 2]),
+                                             p |-> <<[t |-> now, path |-> 2, rtt |-> RelaySrtt(env, F[i])]>>]
                              ELSE Try(t.S, i + 1)
     IN Try(S, 1)
 
@@ -410,7 +438,7 @@ OldSecondProbe(S, env, now, m) ==
               ELSE IF F = <<>> THEN <<>> ELSE <<[route |-> RVia(F[1]), path |-> 2]>>
     IN IF rt = <<>> THEN [S |-> S, p |-> <<>>]
        ELSE [S |-> Trace(SendS(S, env, m, rt[1].route, [k |-> "probe"]), [k |-> "probe_sent", member |-> m, path |-> rt[1].path]),
-             p |-> <<[t |-> now, path |-> rt[1].path]>>]
+             p |-> <<[t |-> now, path |-> rt[1].path, rtt |-> Z]>>]
 
 \* The rule before the leave notice: a hub told by another hub that a member left does nothing. Witness configs override
 \* OnLeft with it.
@@ -440,7 +468,7 @@ CarrierWatch(S, env, now, m) ==
                                 s1 == IF needB THEN [sb.S EXCEPT !.susp = Put(@, m, spB)] ELSE sb.S
                             IN IF spB.probeB = <<>> THEN s1
                                ELSE LET tb == spB.probeB[1].t
-                                        dl == Max2(Max2(U!Add64(spB.since, CONFIRM), U!Add64(spB.probeA, spB.wait)), U!Add64(tb, spB.wait))
+                                        dl == Max2(Max2(U!Add64(spB.since, CONFIRM), U!Add64(spB.probeA, spB.wait)), U!Add64(tb, WaitB(spB)))
                                     IN IF Ge(now, dl) THEN Confirm(s1, env, now, m, spB, lease) ELSE ScheduleConfirm(s1, now, dl)
                        ELSE IF Cardinality(DOMAIN S.susp) >= MAX_TABLE THEN S
                        ELSE LET wait == Max2(PROBE_WAIT_MIN, IF ev = <<>> THEN Z ELSE SatMul3(ev[1].srtt))
@@ -453,7 +481,7 @@ CarrierWatch(S, env, now, m) ==
                                 t5 == [t4 EXCEPT !.susp = Put(@, m, sp)]
                                 t6 == ScheduleConfirm(t5, now, U!Add64(now, wait))
                             IN IF pB # <<>>
-                               THEN ScheduleConfirm(t6, now, Max2(Max2(U!Add64(since, CONFIRM), U!Add64(now, wait)), U!Add64(now, wait)))
+                               THEN ScheduleConfirm(t6, now, Max2(Max2(U!Add64(since, CONFIRM), U!Add64(now, wait)), U!Add64(now, WaitB(sp))))
                                ELSE Trace(t6, [k |-> "no_independent_path", member |-> m])
 
 CarrierGone(S, env, now, member) ==
@@ -530,6 +558,12 @@ DropGone(S, hub, round) ==
          IN [S EXCEPT !.hv[hub].entries =
                 [m \in {k \in DOMAIN es : es[k].round = round \/ k \in DOMAIN S.members} |-> es[m]]]
 
+\* an omission clock started at `since`: the sweep is due a lease later; nextAbsent holds the earliest such instant,
+\* early (an entry it counted may have left since) but never late (view.rs note_absent, next_absent)
+NoteAbsent(S, since) ==
+    LET due == SatAdd(since, LEASE)
+    IN [S EXCEPT !.nextAbsent = IF @ = <<>> THEN <<due>> ELSE <<Min2(@[1], due)>>]
+
 \* a complete snapshot of hub listed round `round`: everything else in its copy is absent, which starts that member's
 \* lease clock without removing it
 RECURSIVE MarkAbsent(_, _, _, _, _, _, _)
@@ -539,7 +573,7 @@ MarkAbsent(S, env, now, hub, round, cur, ch) ==
        ELSE LET ce == S.hv[hub].entries[m]
                 marked == ce.round # round /\ ce.absentSince = <<>>
             IN IF ~marked THEN MarkAbsent(S, env, now, hub, round, m, ch)
-               ELSE LET s1 == Trace([S EXCEPT !.hv[hub].entries[m].absentSince = <<now>>], [k |-> "absent", member |-> m])
+               ELSE LET s1 == Trace(NoteAbsent([S EXCEPT !.hv[hub].entries[m].absentSince = <<now>>], now), [k |-> "absent", member |-> m])
                         r == RecomputeOne(s1, env, now, m)
                     IN MarkAbsent(r.S, env, now, hub, round, m, ch \/ r.ch)
 
@@ -549,16 +583,30 @@ RoundBefore(round) == U!Low(U!Sub(U!Add(round, U!Pw(32)), One), 32)
 \* a complete snapshot of the confirmed home listed round `round`: it is the whole view, so every view member the home's
 \* copy does not hold, whichever hub's copy listed it, gets an entry there carrying the view's record, one round before
 \* `round`, with the omission clock started; with the copy full there is no room and the member is recomputed at once
-\* (view.rs mark_view_absent)
+\* (view.rs mark_view_absent). Every view member is recomputed under the home: the frames were applied before the home
+\* was confirmed, under the union of the copies, so a record only a stale copy holds would otherwise stay (ViewRecompute;
+\* OldViewRecompute, the rule before, recomputed only the members it gave an entry). A member that waits in the recheck
+\* table gets no entry when a window deferred it, or when a hold put it there and no copy holds it: its removal was
+\* already decided or nothing lists it, and a fresh omission clock would keep it a further lease (ViewSkip; NoViewSkip
+\* is the rule before, AnyViewSkip a rejected rule that skips a held member another hub's copy still lists)
+ViewRecompute == TRUE
+OldViewRecompute == FALSE
+ViewSkip(S, m) == m \in DOMAIN S.recheck /\ (~S.recheck[m].held \/ \A k \in DOMAIN S.hv : m \notin DOMAIN S.hv[k].entries)
+NoViewSkip(S, m) == FALSE
+AnyViewSkip(S, m) == m \in DOMAIN S.recheck
+
 RECURSIVE MarkViewAbsent(_, _, _, _, _, _, _)
 MarkViewAbsent(S, env, now, hub, round, cur, ch) ==
     LET m == NextKey(DOMAIN S.members, cur)
     IN IF m = NONE \/ hub \notin DOMAIN S.hv THEN [S |-> S, ch |-> ch]
-       ELSE IF m \in DOMAIN S.hv[hub].entries THEN MarkViewAbsent(S, env, now, hub, round, m, ch)
-       ELSE IF Cardinality(DOMAIN S.hv[hub].entries) >= MAX_TABLE
+       ELSE IF m \in DOMAIN S.hv[hub].entries
+            THEN IF ViewRecompute
+                 THEN LET r == RecomputeOne(S, env, now, m) IN MarkViewAbsent(r.S, env, now, hub, round, m, ch \/ r.ch)
+                 ELSE MarkViewAbsent(S, env, now, hub, round, m, ch)
+       ELSE IF Cardinality(DOMAIN S.hv[hub].entries) >= MAX_TABLE \/ ViewSkip(S, m)
             THEN LET r == RecomputeOne(S, env, now, m) IN MarkViewAbsent(r.S, env, now, hub, round, m, ch \/ r.ch)
-       ELSE LET s1 == Trace([S EXCEPT !.hv[hub].entries = Put(@, m, [rec |-> S.members[m].rec, round |-> RoundBefore(round),
-                                                                      absentSince |-> <<now>>])],
+       ELSE LET s1 == Trace(NoteAbsent([S EXCEPT !.hv[hub].entries = Put(@, m, [rec |-> S.members[m].rec, round |-> RoundBefore(round),
+                                                                                 absentSince |-> <<now>>])], now),
                             [k |-> "absent", member |-> m])
                 r == RecomputeOne(s1, env, now, m)
             IN MarkViewAbsent(r.S, env, now, hub, round, m, ch \/ r.ch)
@@ -570,18 +618,30 @@ ViewAbsent(S, env, now, hub, round, ch) ==
     IF ~S.isHub /\ S.primary = <<hub>> THEN MarkViewAbsent(S, env, now, hub, round, NONE, ch) ELSE [S |-> S, ch |-> ch]
 OldViewAbsent(S, env, now, hub, round, ch) == [S |-> S, ch |-> ch]
 
+\* the home is confirmed by the LAST frame of a snapshot from the primary, partial or not, before the omissions are
+\* aged: from then on the home's copy is the only source, and it holds an entry (listed, or absent with its clock) for
+\* every view member (HomeCovers in MembershipSys.tla). Every completed snapshot ages what it omits: a hub younger than
+\* a lease (partial) learns its live members within the lease, and a delta clears the clock. The rule before:
+\* OldFrameHome confirmed the home on ANY frame, and OldAges aged only a snapshot that was not partial (view.rs
+\* apply_snap; repro_membership.rs, repro_membership2.rs)
+HomeAt(S, hub) == IF ~S.isHub /\ S.primary = <<hub>> THEN [S EXCEPT !.homeOk = <<hub>>, !.homeSeen = TRUE] ELSE S
+FrameHome(S, hub) == S
+OldFrameHome(S, hub) == HomeAt(S, hub)
+Ages(sn) == TRUE
+OldAges(sn) == ~sn.partial
+
 ApplySnap(S, env, now, hub, sn) ==
     IF hub \notin DOMAIN S.hv /\ Cardinality(DOMAIN S.hv) >= MAX_HUBS THEN S
     ELSE LET s0 == IF hub \in DOMAIN S.hv THEN S ELSE [S EXCEPT !.hv = Put(@, hub, NewCopy)]
              c == s0.hv[hub]
              round == IF c.open THEN c.round ELSE U!Low(U!Add(c.round, One), 32)
              s1 == [s0 EXCEPT !.hv[hub].round = round, !.hv[hub].open = TRUE]
-             s2 == IF ~s1.isHub /\ s1.primary = <<hub>> THEN [s1 EXCEPT !.homeOk = <<hub>>, !.homeSeen = TRUE] ELSE s1
+             s2 == FrameHome(s1, hub)
              r == SnapLoop(s2, env, now, hub, round, sn.es, 1, FALSE)
              s3 == Trace(r.S, [k |-> "snap_applied", hub |-> hub, entries |-> Len(sn.es), more |-> sn.more])
          IN IF sn.more THEN (IF r.ch THEN Bump(s3) ELSE s3)
-            ELSE LET s4 == IF hub \in DOMAIN s3.hv THEN [s3 EXCEPT !.hv[hub].open = FALSE] ELSE s3
-                     m == IF ~sn.partial
+            ELSE LET s4 == HomeAt(IF hub \in DOMAIN s3.hv THEN [s3 EXCEPT !.hv[hub].open = FALSE] ELSE s3, hub)
+                     m == IF Ages(sn)
                           THEN LET a == MarkAbsent(DropGone(s4, hub, round), env, now, hub, round, NONE, r.ch)
                                IN ViewAbsent(a.S, env, now, hub, round, a.ch)
                           ELSE [S |-> s4, ch |-> r.ch]
@@ -594,7 +654,7 @@ SweepEntries(S, env, now, hub, cur, ch) ==
     IN IF m = NONE THEN [S |-> S, ch |-> ch]
        ELSE LET ce == S.hv[hub].entries[m]
                 expired == ce.absentSince # <<>> /\ Ge(SatSub(now, ce.absentSince[1]), LEASE)
-            IN IF ~expired THEN SweepEntries(S, env, now, hub, m, ch)
+            IN IF ~expired THEN SweepEntries(IF ce.absentSince # <<>> THEN NoteAbsent(S, ce.absentSince[1]) ELSE S, env, now, hub, m, ch)
                ELSE LET r == RecomputeOne(S, env, now, m)
                         s1 == IF hub \in DOMAIN r.S.hv THEN [r.S EXCEPT !.hv[hub].entries = Del(@, m)] ELSE r.S
                     IN SweepEntries(s1, env, now, hub, m, ch \/ r.ch)
@@ -605,7 +665,8 @@ SweepHubs(S, env, now, hcur, ch) ==
     IN IF hub = NONE THEN [S |-> S, ch |-> ch]
        ELSE LET r == SweepEntries(S, env, now, hub, NONE, ch) IN SweepHubs(r.S, env, now, hub, r.ch)
 
-SweepAbsent(S, env, now) == LET r == SweepHubs(S, env, now, NONE, FALSE) IN IF r.ch THEN Bump(r.S) ELSE r.S
+\* the sweep leaves nextAbsent at the earliest expiry that remains (view.rs sweep_absent)
+SweepAbsent(S, env, now) == LET r == SweepHubs([S EXCEPT !.nextAbsent = <<>>], env, now, NONE, FALSE) IN IF r.ch THEN Bump(r.S) ELSE r.S
 
 RECURSIVE RecheckLoop(_, _, _, _, _, _)
 RecheckLoop(S, env, now, set, cur, ch) ==
@@ -622,7 +683,7 @@ RecheckDue(S, env, now) ==
         ready == {m \in due : S.recheck[m].grace}
         look == due \ ready
         s1 == [S EXCEPT !.recheck = [m \in DOMAIN S.recheck \ ready |->
-                                       IF m \in look THEN [due |-> SatAdd(now, RECHECK_GAP), grace |-> TRUE]
+                                       IF m \in look THEN [S.recheck[m] EXCEPT !.due = SatAdd(now, RECHECK_GAP), !.grace = TRUE]
                                        ELSE S.recheck[m]]]
         s2 == IF look # {} THEN [s1 EXCEPT !.regrace = TRUE, !.quietUntil = Max2(@, SatAdd(now, RECHECK_GAP))] ELSE s1
     IN IF ready = {} THEN s2

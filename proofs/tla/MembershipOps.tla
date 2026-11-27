@@ -37,7 +37,7 @@ StartOp(cfg, env, now, wall, floor) ==
                hv |-> IF cfg.isHub THEN [x \in {cfg.me} |-> NewCopy] ELSE EmptyFn,
                members |-> EmptyFn, epoch |-> Z, hrtt |-> EmptyFn, hsent |-> EmptyFn, helloAt |-> EmptyFn,
                primary |-> IF cfg.isHub THEN <<cfg.me>> ELSE <<>>, homeOk |-> <<>>, homeSeen |-> FALSE,
-               recheck |-> EmptyFn, quietUntil |-> Z, regrace |-> FALSE, goneVer |-> EmptyFn, left |-> {},
+               recheck |-> EmptyFn, quietUntil |-> Z, regrace |-> FALSE, nextAbsent |-> <<>>, goneVer |-> EmptyFn, left |-> {},
                nextRenew |-> now, nextTick |-> <<>>, nextSlow |-> now,
                own |-> rec0, roster |-> EmptyFn, attached |-> {}, homed |-> {}, susp |-> EmptyFn, downed |-> EmptyFn,
                nextConf |-> <<>>, tracing |-> TRUE, loc |-> r.loc,
@@ -47,10 +47,17 @@ StartOp(cfg, env, now, wall, floor) ==
        ELSE [err |-> "ok", S |-> Drain(Trace(S0, [k |-> "started", inc |-> INC!Word(r.inc)]))]
 
 (* ---- node.rs: sessions, leave, revoke, address ---- *)
+\* a snapshot cut short with its session ends there: the next one from that hub is a new round, so what the cut one
+\* listed is aged by it like any earlier entry (CloseOpen, in drop_peer and session_up). OldCloseOpen, the rule
+\* before, left the copy open, and the next snapshot took the cut one's round: what only the cut one listed was never
+\* aged (a ghost)
+CloseOpen(hv, peer) == IF peer \in DOMAIN hv THEN [hv EXCEPT ![peer].open = FALSE] ELSE hv
+OldCloseOpen(hv, peer) == hv
+
 DropPeer(S, env, now, peer) ==
     LET s1 == [S EXCEPT !.up = IF peer \in DOMAIN @ THEN Del(@, peer) ELSE @,
                         !.attached = @ \ {peer}, !.homed = @ \ {peer},
-                        !.helloAt = Unset(@, peer), !.hsent = Unset(@, peer)]
+                        !.helloAt = Unset(@, peer), !.hsent = Unset(@, peer), !.hv = CloseOpen(@, peer)]
         s2 == IF ~s1.isHub /\ s1.homeOk = <<peer>> THEN [s1 EXCEPT !.homeOk = <<>>] ELSE s1
         s3 == IF peer \notin DOMAIN s2.downed THEN Bc(s2, [k |-> "release", m |-> peer]) ELSE s2
     IN IF IsBoot(s3, peer) /\ s3.primary = <<peer>> THEN Reselect(s3, env, now) ELSE s3
@@ -61,7 +68,8 @@ SessionUp(S, env, now, peer, incoming) ==
     ELSE LET silent == peer \in DOMAIN S.heard /\ Gt(SatSub(now, S.heard[peer]), GiveUp(env, peer))
              s1 == IF ~S.isHub /\ IsBoot(S, peer) /\ silent THEN BeginQuiet(S, now, 1) ELSE S
          IN IF Cardinality(DOMAIN s1.up) >= MAX_TABLE /\ peer \notin DOMAIN s1.up THEN Close(s1, peer, "stale")
-            ELSE LET s2 == [s1 EXCEPT !.up = Put(@, peer, now), !.attached = IF incoming THEN @ \ {peer} ELSE @]
+            ELSE LET s2 == [s1 EXCEPT !.up = Put(@, peer, now), !.attached = IF incoming THEN @ \ {peer} ELSE @,
+                                      !.hv = CloseOpen(@, peer)]
                  IN IF IsBoot(s2, peer) /\ (~incoming \/ s2.isHub)
                     THEN LET s3 == IF ~s2.isHub /\ s2.primary = <<peer>> THEN Bc(s2, [k |-> "resub", hub |-> peer]) ELSE s2
                          IN HelloTo(s3, env, peer, TRUE)
@@ -224,8 +232,13 @@ SlowTick(S, env, now) ==
         down == s3.primary = <<>> \/ ~HubUp(s3, now, s3.primary[1])
     IN IF down THEN Reselect(s3, env, now) ELSE s3
 
+\* an omission clock that ran out is swept at the tick that finds it due (timers.rs tick, next_absent), not at the next
+\* slow tick (the rule before, which the trace check of the code refuses)
+SweepDue(S, now) == S.nextAbsent # <<>> /\ Ge(now, S.nextAbsent[1])
+
 Tick(S, env, now) ==
-    LET s1 == RecheckDue(S, env, now)
+    LET s0 == RecheckDue(S, env, now)
+        s1 == IF SweepDue(s0, now) THEN SweepAbsent(s0, env, now) ELSE s0
         s2 == IF s1.sentRec # <<<<s1.ver, s1.th>>>> THEN Renew(s1, env, now, FALSE, FALSE) ELSE s1
         s3 == IF s2.isHub \/ Ge(now, s2.nextSlow)
               THEN SlowTick(IF ~s2.isHub THEN [s2 EXCEPT !.nextSlow = SatAdd(now, SLOW_TICK)] ELSE s2, env, now)
@@ -241,6 +254,12 @@ ConfLoop(S, env, now, cur) ==
     LET m == NextKey(DOMAIN S.susp, cur)
     IN IF m = NONE THEN S ELSE ConfLoop(CarrierWatch(S, env, now, m), env, now, m)
 
+\* a tick is late when it comes more than WAKE_GAP after it was due; the first tick is due at birth, the deadline
+\* poll_timeout gives before any tick (timers.rs on_timeout); OldTickLate, the rule before, never found the first
+\* tick late (repro_membership2.rs, a suspension before the first tick)
+TickLate(S, now) == Gt(SatSub(now, Get(S.nextTick, S.born)), WAKE_GAP)
+OldTickLate(S, now) == S.nextTick # <<>> /\ Gt(SatSub(now, S.nextTick[1]), WAKE_GAP)
+
 OnTimeout(S, env, now) ==
     IF S.leaving THEN S
     ELSE LET s1 == RefreshLocal(PulseRefresh(S, env, now), env, now)
@@ -249,7 +268,7 @@ OnTimeout(S, env, now) ==
                    THEN (IF s2.isHub THEN ConfLoop([s2 EXCEPT !.nextConf = <<>>], env, now, NONE) ELSE [s2 EXCEPT !.nextConf = <<>>])
                    ELSE s2
          IN IF Ge(now, Get(s3.nextTick, Z))
-            THEN LET s4 == IF ~s3.isHub /\ s3.nextTick # <<>> /\ Gt(SatSub(now, s3.nextTick[1]), WAKE_GAP)
+            THEN LET s4 == IF ~s3.isHub /\ TickLate(s3, now)
                            THEN Renew(BeginQuiet(s3, now, 0), env, now, TRUE, FALSE) ELSE s3
                      s5 == [s4 EXCEPT !.nextTick = <<SatAdd(now, IF s4.isHub THEN HUB_TICK ELSE NODE_TICK)>>]
                  IN Tick(s5, env, now)
