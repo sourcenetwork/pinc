@@ -1622,6 +1622,10 @@ name = "mbt_endpoint"
 path = "mbt_endpoint.rs"
 
 [[test]]
+name = "node_sets_stream"
+path = "node_sets_stream.rs"
+
+[[test]]
 name = "mbt_node_sets"
 path = "mbt_node_sets.rs"
 

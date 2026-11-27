@@ -322,11 +322,7 @@ impl PortMap {
     pub fn handle_timeout(&mut self, now: u64) {
         self.now = self.now.max(now);
         let now = self.now;
-        if self.held.is_some_and(|l| now >= l.expiry) {
-            self.held = None;
-            self.renewing = false;
-            let first = self.first();
-            self.enter(first, now);
+        if self.expire(now) {
             return;
         }
         if self.step == Step::Held
@@ -354,6 +350,25 @@ impl PortMap {
                 self.fail(now);
             }
         }
+    }
+
+    /// Ends the held lease when `now` is at or past its end and starts over; whether it did. Every call that can
+    /// report or keep a mapping calls it first, so [`mapped`](Self::mapped) never reports a lease the clock has
+    /// passed; [`stop`](Self::stop) and [`restart`](Self::restart) release the mapping themselves, whatever its end.
+    fn expire(&mut self, now: u64) -> bool {
+        if self.held.is_none_or(|l| now < l.expiry) {
+            return false;
+        }
+        self.held = None;
+        self.renewing = false;
+        let (first, step, started) = (self.first(), self.step, self.started);
+        self.enter(first, now);
+        // The renewal in flight is the same request (same nonce) as the one re-sent now, and either may be answered:
+        // the lease ends no later than the earlier one allows.
+        if step == Step::Pcp && first == Step::Pcp {
+            self.started = started;
+        }
+        true
     }
 
     fn renew(&mut self, proto: Proto, now: u64) {
@@ -389,11 +404,21 @@ impl PortMap {
     fn grant(&mut self, proto: Proto, ext: SocketAddr, lifetime: u32, now: u64) {
         // A gateway may grant more than was asked: the lease is the shorter, so a restart is noticed at the renewal.
         let lifetime = lifetime.min(self.cfg.lifetime.max(1));
+        let expiry = lease::expiry(self.started, lifetime);
+        // a grant already over on our clock is not a mapping, and it ends the lease it renews (the gateway's mapping
+        // now runs for the granted time only): it is a failed request, so the next waits as after any failure instead
+        // of asking again at once, one request per round trip
+        if expiry <= now {
+            self.held = None;
+            self.renewing = false;
+            self.fail(now);
+            return;
+        }
         self.held = Some(Lease {
             proto,
             ext,
             renew: lease::renew_at(self.started, lifetime),
-            expiry: lease::expiry(self.started, lifetime),
+            expiry,
         });
         self.renewing = false;
         if let Some(start) = self.announce_next.take() {
@@ -433,6 +458,7 @@ impl PortMap {
     pub fn handle_datagram(&mut self, now: u64, from: SocketAddr, b: &[u8]) {
         self.now = self.now.max(now);
         let now = self.now;
+        self.expire(now);
         if !self.owns(from, b) {
             bump(&mut self.stats.wrong_source);
             return;
@@ -505,15 +531,16 @@ impl PortMap {
                     _ => self.fail(now),
                 }
             }
-            Ok(pcp::Response::Header {
-                opcode, result, epoch, ..
-            }) => {
+            Ok(pcp::Response::Header { opcode, result, .. }) => {
                 if opcode == pcp::OP_ANNOUNCE {
                     self.announce(now);
+                } else if self.step == Step::Pcp && self.held.is_some() {
+                    // no nonce ties it to a request of ours, so during a renewal anyone on the link could forge it:
+                    // it changes nothing, and the renewal's own retry timers decide
+                    bump(&mut self.stats.unexpected);
                 } else if self.step == Step::Pcp {
-                    // an answer to the request in flight (the form has no nonce); in any other step it answers nothing
-                    self.note_epoch(now, epoch);
-                    if result == pcp::UNSUPP_VERSION && !self.renewing {
+                    // the first request of the protocol was refused in the header form; its epoch is not believed
+                    if result == pcp::UNSUPP_VERSION {
                         self.enter(Step::NatAddr, now);
                     } else {
                         self.fail(now);
@@ -734,6 +761,7 @@ impl PortMap {
     pub fn handle_http(&mut self, now: u64, resp: Option<&[u8]>) {
         self.now = self.now.max(now);
         let now = self.now;
+        self.expire(now);
         if self.http != Http::Sent {
             return;
         }
@@ -942,5 +970,244 @@ impl PortMap {
             floor_end: self.floor_end,
             announce_next: self.announce_next,
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
+mod tests {
+    use core::net::Ipv4Addr;
+
+    use super::*;
+
+    const GW: Ipv4Addr = Ipv4Addr::new(192, 168, 1, 1);
+    const T0: u64 = 1_000 * SEC;
+    const NONCE: [u8; 12] = [0x5a; 12];
+
+    fn gw() -> SocketAddr {
+        SocketAddr::new(IpAddr::V4(GW), PORT)
+    }
+
+    fn client() -> PortMap {
+        let mut pm = PortMap::new(
+            Config::new(Some(IpAddr::V4(GW)), "192.168.1.10:4433".parse().unwrap(), NONCE),
+            T0,
+        );
+        drain(&mut pm);
+        pm
+    }
+
+    fn drain(pm: &mut PortMap) -> usize {
+        let mut b = [0u8; crate::MAX_DATAGRAM];
+        let mut n = 0;
+        while n < 8 && pm.poll_datagram(&mut b).is_some() {
+            n += 1;
+        }
+        n
+    }
+
+    fn map(nonce: [u8; 12], epoch: u32, lifetime: u32, buf: &mut [u8; 60]) -> usize {
+        let r = pcp::Response::Map {
+            result: pcp::SUCCESS,
+            lifetime,
+            epoch,
+            nonce,
+            protocol: pcp::UDP,
+            internal_port: 4433,
+            external_port: 4433,
+            external_ip: IpAddr::V4(Ipv4Addr::new(203, 0, 113, 9)),
+        };
+        pcp::encode_response(&r, buf).unwrap()
+    }
+
+    fn header_error(epoch: u32, buf: &mut [u8; 24]) -> usize {
+        let r = pcp::Response::Header {
+            opcode: pcp::OP_MAP,
+            result: 2,
+            lifetime: 0,
+            epoch,
+        };
+        pcp::encode_response(&r, buf).unwrap()
+    }
+
+    fn granted(lifetime: u32) -> PortMap {
+        let mut pm = client();
+        let mut b = [0u8; 60];
+        let n = map(NONCE, 5000, lifetime, &mut b);
+        pm.handle_datagram(T0, gw(), &b[..n]);
+        assert!(pm.mapped().is_some());
+        pm
+    }
+
+    #[test]
+    fn a_header_error_during_a_renewal_changes_nothing() {
+        let mut pm = granted(7200);
+        let held = pm.mapped();
+        let renew = pm.poll_timeout().unwrap();
+        pm.handle_timeout(renew);
+        assert_eq!(drain(&mut pm), 1);
+        let (epoch, next, expiry) = (pm.epoch, pm.poll_timeout(), pm.held.map(|l| l.expiry));
+        let mut b = [0u8; 24];
+        let n = header_error(0, &mut b);
+        pm.handle_datagram(renew + SEC / 100, gw(), &b[..n]);
+        assert_eq!(pm.mapped(), held);
+        assert_eq!(
+            (pm.epoch, pm.poll_timeout(), pm.held.map(|l| l.expiry)),
+            (epoch, next, expiry)
+        );
+        assert_eq!(drain(&mut pm), 0);
+    }
+
+    #[test]
+    fn a_header_error_before_any_mapping_fails_the_request_without_an_epoch() {
+        let mut pm = client();
+        let mut b = [0u8; 24];
+        let n = header_error(7, &mut b);
+        pm.handle_datagram(T0 + SEC, gw(), &b[..n]);
+        assert_eq!(pm.epoch, None);
+        assert_eq!(pm.mapped(), None);
+        assert_eq!(pm.step, Step::NatAddr);
+    }
+
+    #[test]
+    fn a_matching_answer_during_a_renewal_renews_and_a_wrong_nonce_is_ignored() {
+        let mut pm = granted(7200);
+        let renew = pm.poll_timeout().unwrap();
+        pm.handle_timeout(renew);
+        drain(&mut pm);
+        let mut b = [0u8; 60];
+        let n = map([1; 12], 5000, 7200, &mut b);
+        pm.handle_datagram(renew + SEC, gw(), &b[..n]);
+        assert_eq!(pm.step, Step::Pcp);
+        assert_eq!(pm.held.map(|l| l.expiry), Some(lease::expiry(T0, 7200)));
+        let n = map(NONCE, 5001, 7200, &mut b);
+        pm.handle_datagram(renew + SEC, gw(), &b[..n]);
+        assert_eq!(pm.step, Step::Held);
+        assert_eq!(pm.held.map(|l| l.expiry), Some(lease::expiry(renew, 7200)));
+    }
+
+    #[test]
+    fn a_datagram_at_the_lease_end_ends_the_lease_once() {
+        let mut pm = granted(2);
+        let b = [0u8; 3];
+        pm.handle_datagram(T0 + 2 * SEC - 1, gw(), &b);
+        assert!(pm.mapped().is_some());
+        pm.handle_datagram(T0 + 2 * SEC, gw(), &b);
+        assert_eq!(pm.mapped(), None);
+        assert_eq!(pm.step, Step::Pcp);
+        let sent = drain(&mut pm);
+        assert_eq!(sent, 1);
+        pm.handle_timeout(T0 + 2 * SEC);
+        assert_eq!(drain(&mut pm), 0, "the end is acted on once");
+    }
+
+    #[test]
+    fn the_timer_ends_the_lease_exactly_at_its_end_and_not_before() {
+        let mut pm = granted(2);
+        pm.handle_timeout(T0 + 2 * SEC - 1);
+        assert!(pm.mapped().is_some());
+        pm.handle_timeout(T0 + 2 * SEC);
+        assert_eq!(pm.mapped(), None);
+    }
+
+    #[test]
+    fn a_grant_already_past_its_end_on_our_clock_is_not_reported() {
+        let mut pm = client();
+        let mut b = [0u8; 60];
+        let n = map(NONCE, 5000, 1, &mut b);
+        pm.handle_datagram(T0 + SEC, gw(), &b[..n]);
+        assert_eq!(pm.mapped(), None);
+        assert_eq!(
+            pm.step,
+            Step::NatAddr,
+            "it failed the request: the next protocol is tried"
+        );
+    }
+
+    /// A renewal answered with a lifetime shorter than its round trip: the gateway's mapping is over, whatever the
+    /// lease held before said, so it is not reported.
+    #[test]
+    fn a_renewal_granted_less_than_its_round_trip_ends_the_lease_held_before() {
+        let mut pm = granted(7200);
+        let renew = pm.poll_timeout().unwrap();
+        pm.handle_timeout(renew);
+        assert_eq!(drain(&mut pm), 1);
+        let at = renew + 3 * SEC / 2;
+        let mut b = [0u8; 60];
+        let n = map(NONCE, 5000 + ((at - T0) / SEC) as u32, 1, &mut b);
+        pm.handle_datagram(at, gw(), &b[..n]);
+        assert_eq!(pm.mapped(), None);
+        assert_eq!(
+            pm.step,
+            Step::NatAddr,
+            "it failed the request: the next protocol is tried"
+        );
+    }
+
+    /// A renewal in flight, the lease runs out, the late answer comes: its end is the old request's time plus the
+    /// lifetime (the nonce is the same for every request, so the answer may be to either), never the arrival's.
+    #[test]
+    fn a_late_answer_to_a_renewal_ends_the_lease_from_the_request_that_left() {
+        for late in [0, SEC / 4] {
+            let mut pm = granted(2);
+            let renew = pm.poll_timeout().unwrap();
+            assert_eq!(renew, T0 + SEC);
+            pm.handle_timeout(renew);
+            assert_eq!(drain(&mut pm), 1);
+            let end = T0 + 2 * SEC;
+            pm.handle_timeout(end);
+            assert_eq!(pm.mapped(), None);
+            assert_eq!(drain(&mut pm), 1, "the next request leaves at once");
+            let mut b = [0u8; 60];
+            let n = map(NONCE, 5000, 2, &mut b);
+            pm.handle_datagram(end + late, gw(), &b[..n]);
+            assert_eq!(pm.held.map(|l| l.expiry), Some(lease::expiry(renew, 2)), "late={late}");
+            assert!(pm.mapped().is_some());
+        }
+        // the answer is what expires the lease: same end, not the arrival's plus the lifetime
+        let mut pm = granted(2);
+        let renew = pm.poll_timeout().unwrap();
+        pm.handle_timeout(renew);
+        drain(&mut pm);
+        let mut b = [0u8; 60];
+        let n = map(NONCE, 5000, 2, &mut b);
+        pm.handle_datagram(T0 + 2 * SEC + SEC / 2, gw(), &b[..n]);
+        assert_eq!(pm.held.map(|l| l.expiry), Some(lease::expiry(renew, 2)));
+    }
+
+    /// A gateway that grants 1 s but answers a PCP request only 1.5 s after it first left (the longest wait a request
+    /// has is 1.75 s, so 2 s could never be answered): every grant is over on arrival. Each is a failed request, so
+    /// the requests follow the failure schedule instead of one per round trip.
+    #[test]
+    fn a_gateway_that_grants_less_than_the_round_trip_is_not_asked_at_once_again() {
+        let mut pm = client();
+        let end = T0 + 60 * SEC;
+        let (mut sent, mut now, mut answer) = (1, T0, Some(T0 + 3 * SEC / 2));
+        let mut b = [0u8; 60];
+        while let Some(at) = [answer, pm.poll_timeout()]
+            .into_iter()
+            .flatten()
+            .min()
+            .filter(|&t| t < end)
+        {
+            now = now.max(at);
+            if answer == Some(now) && pm.step == Step::Pcp {
+                answer = None;
+                let n = map(NONCE, 5000, 1, &mut b);
+                pm.handle_datagram(now, gw(), &b[..n]);
+            } else {
+                answer = answer.filter(|&a| a != now);
+                pm.handle_timeout(now);
+            }
+            assert_eq!(pm.mapped(), None);
+            let n = drain(&mut pm);
+            if n > 0 && pm.step == Step::Pcp && answer.is_none() {
+                answer = Some(now + 3 * SEC / 2);
+            }
+            sent += n;
+        }
+        // PCP (3 tries before the answer), NAT-PMP's address request (3 tries), the SSDP search (3 tries), then the
+        // idle wait of 300 s
+        assert_eq!(sent, 9, "requests in 60 s");
     }
 }

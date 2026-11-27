@@ -793,26 +793,39 @@ where
             return;
         };
         let mut buf = core::mem::take(&mut ds.inb);
-        let (_, over) = self.io.drain_stream(session, stream, &mut buf, wire::BODY_MAX * 2);
-        let mut stop = if over { Some(Stop::Break) } else { None };
-        let mut used = 0;
-        while stop.is_none() {
-            let rest = buf.get(used..).unwrap_or_default();
-            let (ty, total) = match wire::next(rest) {
-                Ok(Some(f)) => f,
-                Ok(None) => break,
-                Err(()) => {
-                    stop = Some(Stop::Break);
-                    break;
-                }
-            };
-            let body = rest.get(wire::HDR..total).unwrap_or_default();
-            stop = self.dtn_frame(session, stream, &mut ds, ty, body).err();
-            used += total;
+        // At most the room is read; the rest waits on the stream and is drained again after the frames in hand are
+        // handled. A full buffer that holds no whole frame is a frame longer than the bound.
+        let cap = wire::BODY_MAX * 2;
+        let (_, mut more) = self.io.drain_stream(session, stream, &mut buf, cap);
+        let mut stop = None;
+        loop {
+            let mut used = 0;
+            while stop.is_none() {
+                let rest = buf.get(used..).unwrap_or_default();
+                let (ty, total) = match wire::next(rest) {
+                    Ok(Some(f)) => f,
+                    Ok(None) => break,
+                    Err(()) => {
+                        stop = Some(Stop::Break);
+                        break;
+                    }
+                };
+                let body = rest.get(wire::HDR..total).unwrap_or_default();
+                stop = self.dtn_frame(session, stream, &mut ds, ty, body).err();
+                used += total;
+            }
+            buf.drain(..used);
+            if stop.is_some() || !more {
+                break;
+            }
+            if used == 0 {
+                stop = Some(Stop::Break);
+                break;
+            }
+            (_, more) = self.io.drain_stream(session, stream, &mut buf, cap);
         }
         match stop {
             None => {
-                buf.drain(..used);
                 ds.inb = buf;
                 if let Some(d) = self.dtn.as_deref_mut() {
                     d.streams.insert((session, stream), ds);

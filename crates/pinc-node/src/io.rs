@@ -505,7 +505,8 @@ impl<E: Ep, St: Store> Io<E, St> {
     }
 
     /// Read what the endpoint holds for a stream into `into`, consuming it, and report the stream's receive state.
-    /// `cap` bounds what `into` may hold; past it the stream is left unread and the second value is true.
+    /// `cap` bounds what `into` may hold: at most the room left is read, and when bytes are left unread on the stream
+    /// (the transport's flow control then holds the peer back) the second value is true.
     pub(crate) fn drain_stream(
         &mut self,
         session: SessionId,
@@ -515,14 +516,14 @@ impl<E: Ep, St: Store> Io<E, St> {
     ) -> (RecvStatus, bool) {
         let (mut over, mut last) = (false, None);
         while let Some(chunk) = self.ep.read_chunk(session, stream).filter(|c| !c.is_empty()) {
-            let n = chunk.len();
-            if into.len().saturating_add(n) > cap {
-                over = true;
+            let n = chunk.len().min(cap.saturating_sub(into.len()));
+            over = n < chunk.len();
+            into.extend_from_slice(chunk.get(..n).unwrap_or_default());
+            if n == 0 {
                 break;
             }
-            into.extend_from_slice(chunk);
             last = self.consume(session, stream, n);
-            if last.is_none() {
+            if last.is_none() || over {
                 break;
             }
         }

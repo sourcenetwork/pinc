@@ -119,7 +119,8 @@ StopReleases ==
           /\ Owed(s) = "none" => o.st = "stopped"
     /\ ~s.hl /\ s.hd \in {"pcp", "natpmp"} => s.hd \in {Restart(s).s.rl[1], Restart(s).s.rl[2]}
 
-PcpMatch(k) == s.st = "pcp" /\ k \in {"grant", "grantpriv", "unsupp", "err", "hunsupp", "herr"}
+PcpMatch(k) ==
+    s.st = "pcp" /\ (k \in {"grant", "grantpriv", "unsupp", "err"} \/ (k \in {"hunsupp", "herr"} /\ s.hd = "none"))
 NatMatch(k) ==
     \/ k \in {"err0", "err1"} /\ s.st = "pcp" /\ ~s.rn
     \/ k \in {"addr", "addrpriv", "addrerr", "err0"} /\ s.st = "nataddr"

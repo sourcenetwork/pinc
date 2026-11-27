@@ -216,6 +216,15 @@ struct Host {
     /// The latest instant any lease the client was handed could still run to on its clock: the latest grant time
     /// plus the shorter of what was granted and what was asked (and at most the longest lease taken).
     bound: u64,
+    /// The times the first and the last map request of the current round left (seen by `drain`); a round ends when
+    /// a grant is taken, so the next request starts another.
+    round_first: Option<u64>,
+    last_left: u64,
+    /// When the first request left that led to the mapping held (the earliest the lease can have started).
+    lease_first: u64,
+    /// The shortest and the longest lifetime, in seconds, a grant handed to the client could carry.
+    secs_lo: u64,
+    secs_hi: u64,
     boot: u64,
     stopped: bool,
     released: bool,
@@ -241,6 +250,11 @@ impl Host {
             cfg,
             now: s.t0,
             bound: 0,
+            round_first: None,
+            last_left: 0,
+            lease_first: 0,
+            secs_lo: u64::MAX,
+            secs_hi: 0,
             boot: s.t0.saturating_sub(5000 * SEC),
             stopped: false,
             released: false,
@@ -261,6 +275,14 @@ impl Host {
     fn granted(&mut self, lifetime: u32) {
         let secs = lifetime.min(self.cfg.lifetime.max(1)).min(MAX_LIFETIME);
         self.bound = self.bound.max(self.now.saturating_add(u64::from(secs) * SEC));
+        self.secs_lo = self.secs_lo.min(u64::from(secs));
+        self.secs_hi = self.secs_hi.max(u64::from(secs));
+    }
+
+    /// A map request left the client now.
+    fn left(&mut self) {
+        self.round_first.get_or_insert(self.now);
+        self.last_left = self.now;
     }
 
     fn gw(&self) -> SocketAddr {
@@ -296,6 +318,11 @@ impl Host {
             assert!(len <= pinc_portmap::MAX_DATAGRAM);
             let d = &buf[..len];
             assert!(to == self.gw() || to == SSDP, "a datagram to {to}");
+            let map_request = pcp::decode_request(d).map(|r| r.lifetime > 0).unwrap_or(false)
+                || natpmp::decode_request(d).is_ok_and(|r| matches!(r, natpmp::Request::Map { lifetime, .. } if lifetime > 0));
+            if to == self.gw() && map_request {
+                self.left();
+            }
             if self.stopped {
                 assert!(!self.released || !self.pm.stopped(), "a datagram after the release went out");
                 let release = pcp::decode_request(d).map(|r| r.lifetime == 0).unwrap_or(false)
@@ -313,6 +340,9 @@ impl Host {
             assert!(len <= upnp::MAX_REQUEST);
             assert!(self.ssdp_from.contains(&to.ip()), "HTTP to {to}, a host that did not answer the search");
             let r = req[..len].to_vec();
+            if contains(&r, b"AddPortMapping") {
+                self.left();
+            }
             if self.stopped {
                 assert!(contains(&r, b"DeletePortMapping"), "after stop the client sent HTTP that is not the delete");
             }
@@ -496,7 +526,11 @@ impl Host {
                 nonce_less = true;
                 self.datagram(b);
             }
-            Op::Reboot => self.boot = self.now,
+            // like `Late`, no call reaches the client, so nothing is owed at `now` yet
+            Op::Reboot => {
+                self.boot = self.now;
+                return;
+            }
             Op::Stop => {
                 self.stopped = true;
                 self.pm.stop(self.now);
@@ -504,8 +538,28 @@ impl Host {
             Op::Restart => self.pm.restart(self.now),
         }
         let now = self.now;
+        if matches!(op, Op::Stop | Op::Restart) {
+            self.round_first = None;
+        }
+        let took = matches!(op, Op::PcpGrant { our_nonce: true, .. } | Op::NatMap { .. } | Op::Http(_));
+        if took && self.pm.mapped().is_some() {
+            // the earliest request the lease can have come from: kept across a renewal, as the client keeps it
+            let first = self.round_first.take();
+            self.lease_first = match (before.0, first) {
+                (Some(_), Some(f)) => self.lease_first.min(f),
+                (None, Some(f)) => f,
+                _ => self.lease_first,
+            };
+        }
         if let Some(ext) = self.pm.mapped() {
             assert!(!self.stopped, "a stopped client reports a mapping");
+            // a lease is no longer than the longest grant, counted from the last request that left
+            assert!(
+                now < self.last_left.saturating_add(self.secs_hi.saturating_mul(SEC)),
+                "at {now} the client reports {ext}, whose lease runs past the last request ({}) plus {} s",
+                self.last_left,
+                self.secs_hi
+            );
             if timer {
                 assert!(now < self.bound, "after the timer at {now} the client reports {ext}, whose lease ends by {}", self.bound);
             } else {
@@ -513,9 +567,10 @@ impl Host {
             }
         }
         if nonce_less && before.1 == Some(Proto::Pcp) {
-            assert_eq!(
-                self.pm.mapped(),
-                before.0,
+            let ended = self.pm.mapped().is_none()
+                && now >= self.lease_first.saturating_add(self.secs_lo.saturating_mul(SEC));
+            assert!(
+                ended || self.pm.mapped() == before.0,
                 "a datagram without this client's nonce changed the PCP mapping held"
             );
         }

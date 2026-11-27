@@ -74,7 +74,10 @@ impl<'a> Report<'a> {
         Entries { rest: &self.there.data }
     }
 
-    /// How many items [`missing_here`](Self::missing_here) yields.
+    /// How many items [`missing_here`](Self::missing_here) yields. The initiator refuses a part that overlaps the part
+    /// before it in the same message; a peer that answers a range again in a later message, or twice in one message
+    /// with another part between, gets every item of that range listed twice, and the final check catches this only
+    /// if the initiator sent a leaf and the peer answers the check honestly.
     pub const fn here_count(&self) -> usize {
         self.here.n
     }

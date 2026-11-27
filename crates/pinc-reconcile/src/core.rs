@@ -365,6 +365,63 @@ fn own_sum<I: ItemIndex>(idx: &I, sc: &mut Scratch, n: usize, item: &[u8]) -> Re
     Ok(item_sum(item))
 }
 
+/// Whether `item` lies in the range `[lo, hi)`, `hi` being `None` for no upper bound.
+fn within(item: &[u8], lo: &[u8], hi: Option<&[u8]>) -> bool {
+    item >= lo && hi.is_none_or(|h| item < h)
+}
+
+/// The range the peer last answered with items in this message, and, for a cold stream, the upper bound of its last
+/// chunk. A part that overlaps the item part before it in the same message, or a cold chunk that starts before the
+/// previous chunk's end, cannot come from an honest peer. Only those two are checked: a range answered again in a
+/// later message, or twice in one message with another part between, is not seen here. Parts of a message are not
+/// ascending in general (frames are resumed depth first), so order is checked only for the cold stream.
+#[derive(Debug, Default)]
+struct Floor {
+    lo: Vec<u8>,
+    hi: Vec<u8>,
+    /// Whether `lo` and `hi` hold a range; `inf` when it has no upper bound.
+    set: bool,
+    inf: bool,
+}
+
+impl Floor {
+    fn reset(&mut self) {
+        self.set = false;
+    }
+
+    /// Accept the range `[lo, hi)` unless it overlaps the previous one, and remember it.
+    fn disjoint(&mut self, lo: &[u8], hi: Option<&[u8]>) -> Result<(), Reason> {
+        let empty = hi.is_some_and(|h| h <= lo);
+        let overlaps =
+            self.set && !empty && (self.inf || lo < self.hi.as_slice()) && hi.is_none_or(|h| self.lo.as_slice() < h);
+        if overlaps {
+            return Err(Reason::Bound);
+        }
+        if !empty {
+            self.lo.clear();
+            self.lo.extend_from_slice(lo);
+            self.hi.clear();
+            self.hi.extend_from_slice(hi.unwrap_or_default());
+            self.inf = hi.is_none();
+            self.set = true;
+        }
+        Ok(())
+    }
+
+    /// Accept the cold chunk `[lo, hi)` if it starts at or after the end of the previous one.
+    fn ascending(&mut self, lo: &[u8], hi: Option<&[u8]>) -> Result<(), Reason> {
+        if self.set && (self.inf || lo < self.hi.as_slice()) {
+            return Err(Reason::Bound);
+        }
+        self.lo.clear();
+        self.hi.clear();
+        self.hi.extend_from_slice(hi.unwrap_or_default());
+        self.inf = hi.is_none();
+        self.set = true;
+        Ok(())
+    }
+}
+
 /// Append `item` to `arena` unless the report would pass `max`.
 fn push<E>(arena: &mut Arena, other: usize, max: usize, item: &[u8]) -> Result<(), Error<E>> {
     if arena.data.len() + other + item.len() + varint::MAX_LEN > max {
@@ -413,6 +470,10 @@ pub(crate) struct Core {
     hdr: Vec<u8>,
     pub(crate) here: Arena,
     pub(crate) there: Arena,
+    /// The previous answered range of the message being processed (initiator).
+    msg_floor: Floor,
+    /// The ranges of the peer's cold chunks, across messages (initiator).
+    cold_floor: Floor,
 }
 
 impl Core {
@@ -452,6 +513,8 @@ impl Core {
             hdr: Vec::with_capacity(m + 2 * varint::MAX_LEN),
             here: Arena::default(),
             there: Arena::default(),
+            msg_floor: Floor::default(),
+            cold_floor: Floor::default(),
         }
     }
 
@@ -466,6 +529,8 @@ impl Core {
         self.here.n = 0;
         self.there.data.clear();
         self.there.n = 0;
+        self.msg_floor.reset();
+        self.cold_floor.reset();
     }
 
     /// Count a round against the limit.
@@ -478,10 +543,9 @@ impl Core {
         }
     }
 
-    /// The longest message body: the parts up to the message limit, plus what frames them (two bounds, the part
-    /// count, and in the first message the set reference and the item count).
+    /// The longest message body, see [`Limits::max_body`].
     fn frame_cap(&self) -> usize {
-        self.out.cap + 2 * self.lim.max_item + 4 * varint::MAX_LEN
+        self.lim.max_body()
     }
 
     /// The body of a received message.
@@ -558,6 +622,8 @@ impl Core {
     pub(crate) fn restart_exact<I: ItemIndex>(&mut self, idx: &I, out: &mut Vec<u8>) -> Result<(), Error<I::Error>> {
         self.exact = true;
         self.leafed = false;
+        self.msg_floor.reset();
+        self.cold_floor.reset();
         self.top = 0;
         self.here.data.clear();
         self.here.n = 0;
@@ -661,6 +727,7 @@ impl Core {
     ) -> Result<Answer, Error<I::Error>> {
         self.out.reset();
         self.bounds.last.clear();
+        self.msg_floor.reset();
         let mut ans = Answer::default();
         let stop = self.answer(idx, r, nparts, &mut ans)?;
         if stop.left > 0 {
@@ -750,6 +817,8 @@ impl Core {
             sc,
             here,
             there,
+            msg_floor,
+            cold_floor,
             ..
         } = self;
         let (n, init, max_item) = (*n, *init, lim.max_item);
@@ -848,8 +917,14 @@ impl Core {
                 tag::FULL | tag::COLD if init => {
                     let mut theirs = Items::read(r, max_item)?;
                     let cap = lim.max_report;
+                    msg_floor.disjoint(lo, hi)?;
+                    if kind == tag::COLD {
+                        cold_floor.ascending(lo, hi)?;
+                    }
                     merge(idx, sc, a, b, &mut theirs, |m| match m {
                         Cmp::Both(_) => Ok(()),
+                        // an item outside the part's range is no answer to it
+                        Cmp::Theirs(item) if !within(item, lo, hi) => Err(Reason::Item.into()),
                         Cmp::Theirs(item) => push(here, there.data.len(), cap, item),
                         Cmp::Mine(item) => push(there, here.data.len(), cap, item),
                     })?;
@@ -863,6 +938,7 @@ impl Core {
                     if c != b - a || c > ALEAF {
                         return Err(Reason::Count.into());
                     }
+                    msg_floor.disjoint(lo, hi)?;
                     let seen = r.read_bytes(c.div_ceil(8)).map_err(|_| Reason::Truncated)?;
                     // The bits past the count are zero, so the bitmap has one encoding.
                     if c % 8 != 0 && seen.last().is_some_and(|byte| byte >> (c % 8) != 0) {
@@ -881,7 +957,23 @@ impl Core {
                         }
                     }
                     let mut extras = Items::read(r, max_item)?;
+                    let mut prev: Option<usize> = None;
                     while let Some(item) = extras.next_item()? {
+                        // the peer's extras are items of the range we lack, strictly ascending
+                        let at = rank(idx, item)?;
+                        let held = at < b && {
+                            let len = read(idx, at, &mut sc.p)?;
+                            sc.p.get(..len) == Some(item)
+                        };
+                        if !within(item, lo, hi)
+                            || held
+                            || prev.is_some_and(|l| sc.r.get(..l).unwrap_or_default() >= item)
+                        {
+                            return Err(Reason::Item.into());
+                        }
+                        sc.r.clear();
+                        sc.r.extend_from_slice(item);
+                        prev = Some(item.len());
                         push(here, there.data.len(), lim.max_report, item)?;
                     }
                 }
@@ -937,10 +1029,16 @@ fn reply<E>(out: &mut Out, lo: &[u8], hi: Option<&[u8]>, c: usize, seen: &[u8], 
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, reason = "tests may assert")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::cast_possible_truncation,
+    clippy::type_complexity,
+    reason = "tests may assert"
+)]
 mod tests {
     use super::*;
     use crate::mem::MemIndex;
+    use crate::wire::{put_bound, put_parts, put_varint};
 
     #[test]
     fn a_rollback_to_the_start_of_a_message_reads_nothing_an_earlier_message_left() {
@@ -987,5 +1085,88 @@ mod tests {
         let mut out = Vec::new();
         c.check_msg(&ix, &mut out).unwrap();
         assert_eq!(out.get(out.len() - FP_LEN..), Some(want.to_bytes().as_slice()));
+    }
+
+    /// A framed responder message of one item part per entry: tag, bounds (`hi` of `None` is infinite) and items.
+    fn message(parts: &[(u8, &[u8], Option<&[u8]>, &[&[u8]])]) -> Vec<u8> {
+        let mut body = Vec::new();
+        put_parts(&mut body, parts.len(), false).unwrap();
+        let mut last = Vec::new();
+        for (kind, lo, hi, items) in parts {
+            body.push(if hi.is_none() { kind | tag::INF } else { *kind });
+            put_bound(&mut body, &mut last, lo).unwrap();
+            if let Some(hi) = hi {
+                put_bound(&mut body, &mut last, hi).unwrap();
+            }
+            put_varint(&mut body, items.len()).unwrap();
+            for it in *items {
+                put_varint(&mut body, it.len()).unwrap();
+                body.extend_from_slice(it);
+            }
+        }
+        let n = body.len();
+        let mut m = vec![(n >> 16) as u8, (n >> 8) as u8, n as u8];
+        m.extend_from_slice(&body);
+        m
+    }
+
+    fn started() -> (crate::session::Initiator, MemIndex) {
+        let items: Vec<[u8; 1]> = (0u8..40).map(|i| [i]).collect();
+        let a = MemIndex::from_sorted(items.iter().map(<[u8; 1]>::as_slice)).unwrap();
+        let mut init = crate::session::Initiator::new(Limits::default());
+        init.start(&a, b"set", &mut Vec::new()).unwrap();
+        (init, a)
+    }
+
+    /// Every shape a responder cannot write ends the round as malformed and leaves no report.
+    #[test]
+    fn a_reply_no_honest_responder_writes_is_refused_and_leaves_no_report() {
+        let full = tag::FULL;
+        let cases: [(&str, Vec<u8>); 6] = [
+            ("item below the range", message(&[(full, &[20], None, &[&[0]])])),
+            (
+                "item at the upper bound",
+                message(&[(full, &[20], Some(&[30]), &[&[30]])]),
+            ),
+            ("repeated item", message(&[(full, &[], None, &[&[200], &[200]])])),
+            ("descending items", message(&[(full, &[], None, &[&[201], &[200]])])),
+            (
+                "overlapping parts",
+                message(&[(full, &[], None, &[&[200]]), (full, &[], None, &[&[200]])]),
+            ),
+            (
+                "overlapping finite parts",
+                message(&[(full, &[5], Some(&[20]), &[]), (full, &[10], Some(&[30]), &[])]),
+            ),
+        ];
+        for (name, msg) in cases {
+            let (mut init, a) = started();
+            let res = init.handle(&a, &msg, &mut Vec::new());
+            assert!(res.is_err(), "{name}: accepted as {res:?}");
+            assert!(init.report().is_none(), "{name}: left a report");
+        }
+    }
+
+    /// A cold stream ascends across messages.
+    #[test]
+    fn a_cold_chunk_that_starts_before_the_previous_one_ended_is_refused() {
+        let cold = tag::COLD;
+        let (mut init, a) = started();
+        let first = message(&[(cold, &[], Some(&[10]), &[&[1], &[2]])]);
+        assert!(init.handle(&a, &first, &mut Vec::new()).is_ok());
+        let again = message(&[(cold, &[5], Some(&[20]), &[&[6]])]);
+        assert!(init.handle(&a, &again, &mut Vec::new()).is_err());
+        assert!(init.report().is_none());
+    }
+
+    /// Honest disjoint parts, in any order, are accepted.
+    #[test]
+    fn disjoint_item_parts_in_any_order_are_accepted() {
+        let (mut init, a) = started();
+        let m = message(&[
+            (tag::FULL, &[20], Some(&[30]), &[&[25]]),
+            (tag::FULL, &[], Some(&[10]), &[&[3]]),
+        ]);
+        assert!(init.handle(&a, &m, &mut Vec::new()).is_ok());
     }
 }

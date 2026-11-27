@@ -461,8 +461,10 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `PathMove_stuck` | NP 3 -> 2, Ids {1, 2, 3} -> {1, 2} (three paths are never held at once; fail_over from a direct path not validated with a relayed path held, the case of fix T5, is still taken) |
 | `PortMapLease` | last tick MaxT 7 -> 4, tries Tries 2 -> 1; bounded by constraint: behaviours of depth 14 (PortMapLeaseQuickBound) |
 | `PortMapLease_announcedrop` | MaxT 7 -> 6 |
+| `PortMapLease_headerdrop` | MaxT 7 -> 6 |
 | `PortMapLease_noepoch` | MaxT 7 -> 6 |
 | `PortMapLease_noexpiry` | MaxT 7 -> 6 |
+| `PortMapLease_noexpirefirst` | MaxT 7 -> 6 |
 | `PortMapLease_nofloor` | MaxT 7 -> 6 |
 | `PortMapLease_norenew` | MaxT 7 -> 6 |
 | `PortMapLease_nostopdrop` | MaxT 7 -> 6 |

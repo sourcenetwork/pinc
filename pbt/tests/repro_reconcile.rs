@@ -4,7 +4,7 @@
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 
 use pinc_reconcile::wire::{put_bound, put_parts, put_varint};
-use pinc_reconcile::{Initiator, Limits, MemIndex, Step};
+use pinc_reconcile::{Initiator, Limits, MemIndex};
 
 /// A framed responder message of item parts (`tag | lo | [hi] | venc(n) items`), each with an infinite upper bound.
 fn items_message(parts: &[(&[u8], &[&[u8]])]) -> Vec<u8> {
@@ -39,7 +39,8 @@ fn started() -> (Initiator, MemIndex) {
 
 /// Expected: `Report::missing_here` is "The items the peer has and the initiator lacks"; the crate says "The
 /// initiator learns the exact difference" and "a finished session is exact". Whatever set the peer holds, an item
-/// the initiator holds is never in `missing_here`.
+/// the initiator holds is never in `missing_here`. A message that cannot come from any set (an item outside the range
+/// of its part) is refused as malformed: the round fails and leaves no report.
 ///
 /// Actual: one well-formed responder message, an items part for the range `[20], +inf)` that lists the item `[0]`,
 /// ends the session (`Step::Last`) with a report whose `missing_here` is `[[0]]`, an item the initiator holds, and
@@ -57,18 +58,15 @@ fn started() -> (Initiator, MemIndex) {
 fn a_responder_item_outside_its_part_range_is_reported_missing_although_held() {
     let (mut init, a) = started();
     let mut out = Vec::new();
-    let step = init.handle(&a, &items_message(&[(&[20], &[&[0]])]), &mut out).unwrap();
-    assert_eq!(step, Step::Last);
-    let rep = init.report().expect("the session finished");
-    let here: Vec<&[u8]> = rep.missing_here().collect();
-    assert!(
-        !here.contains(&&[0u8][..]),
-        "missing_here lists [0], which the initiator holds: {here:?}"
-    );
+    let res = init.handle(&a, &items_message(&[(&[20], &[&[0]])]), &mut out);
+    let here: Vec<Vec<u8>> = init.report().map(|r| r.missing_here().map(<[u8]>::to_vec).collect()).unwrap_or_default();
+    assert!(res.is_err(), "an item outside its part's range was accepted: {res:?}, missing_here {here:?}");
+    assert!(init.report().is_none(), "a refused message left a report: missing_here {here:?}");
 }
 
 /// Expected: as above; also `Report::here_count` is "How many items `missing_here` yields" of a difference, a set,
-/// so no item is listed twice.
+/// so no item is listed twice. A message whose parts overlap is refused as malformed: the round fails and leaves no
+/// report.
 ///
 /// Actual: one responder message with two items parts over the same range `[], +inf)`, each listing the item `[200]`,
 /// ends the session with `missing_here = [[200], [200]]` and every item of the initiator twice in `missing_there`
@@ -83,9 +81,8 @@ fn a_range_answered_twice_lists_every_item_of_it_twice() {
     let (mut init, a) = started();
     let mut out = Vec::new();
     let parts: [(&[u8], &[&[u8]]); 2] = [(&[], &[&[200]]), (&[], &[&[200]])];
-    let step = init.handle(&a, &items_message(&parts), &mut out).unwrap();
-    assert_eq!(step, Step::Last);
-    let rep = init.report().expect("the session finished");
-    assert_eq!(rep.here_count(), 1, "missing_here lists an item twice");
-    assert_eq!(rep.there_count(), 40, "missing_there lists the initiator's items twice");
+    let res = init.handle(&a, &items_message(&parts), &mut out);
+    let counts = init.report().map(|r| (r.here_count(), r.there_count()));
+    assert!(res.is_err(), "a range answered twice was accepted: {res:?}, (here, there) counts {counts:?}");
+    assert!(init.report().is_none(), "a refused message left a report: (here, there) counts {counts:?}");
 }
