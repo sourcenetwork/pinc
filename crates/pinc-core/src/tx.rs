@@ -5,7 +5,8 @@
 //! queue as soon as the open is queued, so the open keeps its place). [`Endpoint::poll_transmit`] takes the first
 //! session, asks its connection for a datagram, and sends it through the ledger gate: a datagram the ledger holds back
 //! is dropped, which the connection treats as loss (the size probe is the exception: it is not built for a path whose
-//! address the ledger holds).
+//! address the ledger holds). A datagram whose path has no address left is dropped and its connection is told the
+//! path is lost (`path_lost`).
 //! Between connections the endpoint batches for segmentation offload: after a datagram, the next sessions' datagrams
 //! to the same destination of the same size follow in the same buffer, ending with a shorter one; a datagram for
 //! another destination is kept for the next call. The session just served moves to the back of the queue its class
@@ -100,6 +101,7 @@ ep_impl! {
             let Some((local, remote)) = self.path_addrs(tx.path) else {
                 self.counters.dropped_out += 1;
                 trace!(self, now, TxDrop { slot: i as u64 });
+                self.lose_path(i, now, tx.path);
                 continue;
             };
             if !self.gate(now, remote, tx.len, segments) {
@@ -189,11 +191,24 @@ ep_impl! {
         allowed
     }
 
+    /// A datagram of session `i` on `path` found no address: the table of address pairs evicted the path. The
+    /// connection is told the path is lost, so it leaves it for a usable path at once or as soon as one validates.
+    fn lose_path(&mut self, i: usize, now: u64, path: PathId) {
+        let Some(conn) = self.slots.get_mut(i).filter(|s| s.m.in_use).and_then(|s| s.conn.as_mut()) else {
+            return;
+        };
+        // `Unknown`: the connection no longer tracks the path, so there is nothing to leave.
+        if conn.path_lost(path).is_ok() {
+            self.settle_core(i, now, false);
+        }
+    }
+
     /// Send the datagram kept from the last call.
     fn send_stash(&mut self, now: u64, out: &mut [u8], m: &StashMeta) -> Option<Transmit> {
         let Some((local, remote)) = self.path_addrs(m.path) else {
             self.counters.dropped_out += 1;
             trace!(self, now, TxDrop { slot: u64::MAX });
+            self.lose_path(m.slot, now, m.path);
             return None;
         };
         let (Some(src), Some(dst)) = (self.stash.get(..m.len), out.get_mut(..m.len)) else {
@@ -268,7 +283,12 @@ ep_impl! {
                 // Another destination or size: keep it for the next call.
                 if let (Some(s), Some(w)) = (self.stash.get_mut(..tx.len), out.get(first.len..first.len + tx.len)) {
                     s.copy_from_slice(w);
-                    self.stash_meta = Some(StashMeta { path: tx.path, len: tx.len, segment: tx.segment_size });
+                    self.stash_meta = Some(StashMeta {
+                        slot: j,
+                        path: tx.path,
+                        len: tx.len,
+                        segment: tx.segment_size,
+                    });
                 }
                 return;
             }

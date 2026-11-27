@@ -79,6 +79,10 @@ pub(super) enum Phase {
 pub(super) struct Sess {
     pub(super) peer: usize,
     pub(super) hidden: bool,
+    /// Streams the layers were told ended: the endpoint answers `Finished` as a state, the layers hear it once.
+    // vertexia: one entry per stream that ended, kept for the session's life (a simulated session ends few streams);
+    // drop the entry when the endpoint reports the stream closed if a scenario ever ends millions.
+    pub(super) ended: BTreeSet<u64>,
 }
 
 /// How the node knows a session an event names.

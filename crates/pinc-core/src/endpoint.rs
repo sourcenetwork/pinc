@@ -31,7 +31,8 @@
 //!   the sessions. Every input that touches a session settles it, and settling brings the session's entry in line with
 //!   its path (validation, migration, a rebind); freeing a slot removes it. A slot holds at most one entry, so the
 //!   table never fills; a lookup checks each entry against the session's path, so an entry whose path the table of
-//!   address pairs evicted since is not an answer.
+//!   address pairs evicted since is not an answer. A datagram of a session whose path has no address left is dropped,
+//!   and the connection is told the path is lost (`path_lost`).
 //! - **Amplification ledger.** Every outgoing datagram passes the [`Ledger`].
 //! - **Half-open cap.** A first Initial creates state only in a datagram of at least 1200 bytes (464 for a short
 //!   one), and only while fewer than 256 sessions are unauthenticated; a resumption Hello is exempt from the count.
@@ -280,6 +281,7 @@ impl<T, const K: usize> core::ops::DerefMut for Slots<'_, T, K> {
 /// A datagram built for a destination other than the one being batched, kept for the next call.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct StashMeta {
+    pub(crate) slot: usize,
     pub(crate) path: PathId,
     pub(crate) len: usize,
     pub(crate) segment: usize,
@@ -433,7 +435,10 @@ pub(crate) use env;
 
 ep_impl! {
     /// A new endpoint at time `now`, with `slots` as its connection table. Every slot must be free (built with
-    /// [`Slot::new`]). `D` must be at least ten times `K`.
+    /// [`Slot::new`]), or given back by [`Endpoint::into_slots`]: what survives such a hand-over is each slot's
+    /// memory, its generation (a session id of the earlier endpoint never names a session of this one) and the loss
+    /// estimate the slots share; the send queue, the free list and every other list start empty. `D` must be at
+    /// least ten times `K`.
     ///
     pub fn new(
         now: u64,
@@ -460,6 +465,10 @@ ep_impl! {
         let last = slots.len().saturating_sub(1);
         for (i, s) in slots.iter_mut().enumerate() {
             s.m.next_free = if i < last { u32::try_from(i + 1).unwrap_or(NIL) } else { NIL };
+            // Send-queue membership belongs to the endpoint: a table handed back while a slot waited to send
+            // carries a mark the new endpoint's empty queue knows nothing of.
+            s.m.dirty = 0;
+            s.m.dirty_next = NIL;
         }
         let free = if slots.is_empty() { NIL } else { 0 };
         Self {
@@ -529,7 +538,8 @@ ep_impl! {
     /// returned, so another endpoint can run in the same memory. `None` when a failed construction took a slot's
     /// memory for good (see [`Endpoint::retired_slots`]): the table is then not whole and must not be reused. `None`
     /// also for an endpoint that owns its table ([`Endpoint::new_owned`]): there is nothing to give back, and dropping
-    /// the endpoint frees it.
+    /// the endpoint frees it. Only the memory, the generations and the shared loss estimate reach the next endpoint:
+    /// the send-queue marks and the free list are the endpoint's own and are reset when the next one is built.
     pub fn into_slots(mut self) -> Option<&'s mut [Slot<'a, P, S, N, C, F, NP>; K]> {
         let now = self.last_now;
         for i in 0..K {

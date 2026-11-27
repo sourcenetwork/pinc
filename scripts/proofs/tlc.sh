@@ -557,6 +557,9 @@ par witness_tlc corerouteindex_nosync CoreRouteIndex CoreRouteIndex_nosync Agree
 par witness_tlc corerouteindex_nofree CoreRouteIndex CoreRouteIndex_nofree Exact
 par witness_tlc corerouteindex_noverify CoreRouteIndex CoreRouteIndex_noverify Agree
 par witness_tlc corerouteindex_keepold CoreRouteIndex CoreRouteIndex_keepold Exact
+par run_tlc corestalepath CoreStalePath CoreStalePath
+par witness_tlc corestalepath_silent CoreStalePath CoreStalePath_silent Left
+par witness_tlc corestalepath_w_recover CoreStalePath CoreStalePath_w_recover NoRecover
 par run_tlc corestate CoreState CoreState
 par witness_tlc corestate_lazy CoreState CoreState_lazy AtomicInv
 par witness_tlc corestate_tail CoreState CoreState_tail CanonInv

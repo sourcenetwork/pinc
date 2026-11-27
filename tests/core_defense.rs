@@ -1077,3 +1077,130 @@ fn a_half_open_session_of_a_thin_node_ends_strictly_past_60_s() {
         );
     });
 }
+
+/// Datagrams to `net.nodes[s]` from more forged sources than its table of address pairs holds, each a real short
+/// datagram of the session taken from the capture with its last byte flipped: it is routed by its id, mints a pair
+/// before it is opened, and fails to open. Every older pair, the session's own included, is evicted.
+fn evict_address_pairs(net: &mut CoreNet, s: usize, from_clients: &[SocketAddr]) {
+    let (addr, now) = (net.nodes[s].addr, net.now);
+    let reals: Vec<Vec<u8>> = from_clients
+        .iter()
+        .map(|c| {
+            net.captured
+                .iter()
+                .rev()
+                .find(|(l, r, d)| l == c && *r == addr && d[0] & 0x80 == 0)
+                .map(|(_, _, d)| d.clone())
+                .expect("a short datagram of the session")
+        })
+        .collect();
+    for k in 0..=(CD * 2) {
+        let from: SocketAddr = ([10, 77, (k / 200) as u8, (k % 200) as u8 + 1], 5000).into();
+        let mut d = reals[k % reals.len()].clone();
+        *d.last_mut().unwrap() ^= 0xFF;
+        net.nodes[s].ep.handle_datagram(now, addr, from, &mut d);
+    }
+}
+
+/// Open a unidirectional stream on `session` of node `n` and write `data` on it.
+fn written_to(net: &mut CoreNet, n: usize, session: pinc_core::SessionId, data: &[u8]) {
+    let now = net.now;
+    let pinc_core::Value::Stream(stream) = net.nodes[n]
+        .cmd(now, Command::OpenStream { session, bidi: false })
+        .unwrap()
+        .value
+    else {
+        panic!("no stream")
+    };
+    net.nodes[n].cmd(now, Command::Write { session, stream, data }).unwrap();
+}
+
+fn stats_of(net: &CoreNet, n: usize, session: pinc_core::SessionId) -> pinc_core::SessionStats {
+    match net.nodes[n].ep.query(Query::Stats(session)) {
+        Answer::Stats(st) => st,
+        _ => panic!("no stats"),
+    }
+}
+
+fn got(net: &CoreNet, n: usize, data: &[u8]) -> bool {
+    net.nodes[n].read.values().any(|v| v == data)
+}
+
+#[test]
+fn an_evicted_path_is_left_at_the_first_drop() {
+    big_stack(|| {
+        let mut net = CoreNet::new(5 * MS_NS);
+        let (s, c) = (net.add(1), net.add(2));
+        net.capture = true;
+        let (sc, sb) = net.connect_pair(c, s, ALPN_A, Role::Other);
+        net.run_for(SEC_NS);
+        let client = net.nodes[c].addr;
+        assert!(stats_of(&net, s, sb).path_validated, "no validated path to start");
+        evict_address_pairs(&mut net, s, &[client]);
+        assert_eq!(stats_of(&net, s, sb).route, None, "the pair was not evicted");
+        written_to(&mut net, s, sb, b"after the eviction");
+        let (now, before) = (net.now, net.nodes[s].ep.node_stats().dropped_out);
+        let mut buf = vec![0u8; 65_536];
+        while net.nodes[s].ep.poll_transmit(now, &mut buf).is_some() {}
+        assert_eq!(
+            net.nodes[s].ep.node_stats().dropped_out - before,
+            1,
+            "the datagram on the evicted path was not dropped once"
+        );
+        assert!(
+            !stats_of(&net, s, sb).path_validated,
+            "the first drop did not tell the session its path is lost"
+        );
+        // The client sends from its real address: its data names a new path, which the session moves to.
+        written_to(&mut net, c, sc, b"from the client");
+        let deadline = net.now + 20 * SEC_NS;
+        net.run(deadline, |n| got(n, c, b"after the eviction"));
+        assert!(
+            got(&net, c, b"after the eviction"),
+            "the bytes never arrived: {:?}",
+            net.nodes[c].read
+        );
+        assert!(
+            stats_of(&net, s, sb).route.is_some(),
+            "the session stayed on the evicted path"
+        );
+    });
+}
+
+#[test]
+fn a_kept_datagram_on_an_evicted_path_tells_its_session() {
+    big_stack(|| {
+        let mut net = CoreNet::new(5 * MS_NS);
+        let (s, a, c) = (net.add(1), net.add(2), net.add(3));
+        net.capture = true;
+        let (ca, sa) = net.connect_pair(a, s, ALPN_A, Role::Other);
+        let (cc, sc) = net.connect_pair(c, s, ALPN_A, Role::Other);
+        net.run_for(SEC_NS);
+        written_to(&mut net, s, sa, b"to the first");
+        written_to(&mut net, s, sc, b"to the second");
+        let (now, mut buf) = (net.now, vec![0u8; 65_536]);
+        // One destination leaves; the other session's datagram is kept for the next call.
+        assert!(net.nodes[s].ep.poll_transmit(now, &mut buf).is_some());
+        let clients = [net.nodes[a].addr, net.nodes[c].addr];
+        evict_address_pairs(&mut net, s, &clients);
+        let before = net.nodes[s].ep.node_stats().dropped_out;
+        while net.nodes[s].ep.poll_transmit(now, &mut buf).is_some() {}
+        assert!(
+            net.nodes[s].ep.node_stats().dropped_out > before,
+            "the kept datagram was not dropped"
+        );
+        // The kept datagram belonged to one of the two: that session is told its path is lost.
+        assert!(
+            [sa, sc].iter().any(|x| !stats_of(&net, s, *x).path_validated),
+            "no session was told its path is lost"
+        );
+        written_to(&mut net, a, ca, b"from the first");
+        written_to(&mut net, c, cc, b"from the second");
+        let deadline = net.now + 20 * SEC_NS;
+        net.run(deadline, |n| got(n, a, b"to the first") && got(n, c, b"to the second"));
+        assert!(
+            got(&net, a, b"to the first") && got(&net, c, b"to the second"),
+            "bytes never arrived"
+        );
+    });
+}
