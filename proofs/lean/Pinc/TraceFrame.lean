@@ -42,7 +42,8 @@ def frameOf (j : J) : Except String Frame := do
   | "MtuProbeEcho" => pure (.mtuProbeEcho (← natF j "mtu"))
   | "Sleep" => pure .sleep
   | "Wake" => pure .wake
-  | "Rekey" => pure (.rekey (← boolF j "ans") (← bytesF j "sh") (← bytesF j "echo") (← natF j "spn"))
+  -- the test records no roll count (`withRoll`, `unrolled`)
+  | "Rekey" => pure (.rekey (← boolF j "ans") (← bytesF j "sh") (← bytesF j "echo") (← natF j "spn") 0)
   | "Ready" => pure .ready
   | "NewTickets" =>
     match (← field j "es").arr? with
@@ -50,6 +51,25 @@ def frameOf (j : J) : Except String Frame := do
     | none => throw "the tickets are not an array"
   | "Extension" => pure (.ext (← natF j "ty") (← bytesF j "body"))
   | k => throw s!"unknown frame kind {k}"
+
+/-- A decoded frame as the test records it: a REKEY without its roll count (checked through the bytes consumed). -/
+def unrolled : Frame → Frame
+  | .rekey a sh echo spn _ => .rekey a sh echo spn 0
+  | f => f
+
+/-- The roll count of a REKEY request an enc event wrote (the test records none): the one its written bytes carry, or
+for a refused write the least count of the length its `encoded_len` gives (the refusal depends on that length only). -/
+def withRoll (f : Frame) (j : J) : Except String Frame := do
+  match f with
+  | .rekey false sh echo spn _ =>
+    if (← boolF j "ok") then
+      match decode (← bytesF j "b") with
+      | .ok (.rekey _ _ _ _ roll, _) => pure (.rekey false sh echo spn roll)
+      | _ => throw "enc: the bytes written are not a REKEY frame"
+    else
+      let l := (← natF j "len") - 34
+      pure (.rekey false sh echo spn (if l ≤ 1 then 0 else 128 ^ (l - 1)))
+  | f => pure f
 
 def sameErr (what : String) (e : Err) (name : String) (n : Nat) : Except String Unit :=
   check (e.tag == (name, n)) s!"{what}: the model answers {e.tag.1} {e.tag.2}, the code {name} {n}"
@@ -71,7 +91,7 @@ def replayEvent (j : J) : Except String Unit := do
     match decode b with
     | .ok (f, r) =>
       check (← boolF j "ok") s!"dec: the model accepts {repr f}, the code refuses"
-      check (f == (← frameOf (← field j "f"))) s!"dec: the frame differs: model {repr f}"
+      check (unrolled f == (← frameOf (← field j "f"))) s!"dec: the frame differs: model {repr f}"
       check (b.length - r.length == (← natF j "n")) "dec: the bytes consumed differ"
       match f with
       | .ack l fr x tail =>
@@ -81,7 +101,7 @@ def replayEvent (j : J) : Except String Unit := do
       check (!(← boolF j "ok")) s!"dec: the model refuses with {e.tag.1}, the code accepts"
       sameErr "dec" e (← strF j "err") (← natF j "en")
   | "enc" =>
-    let f ← frameOf (← field j "f")
+    let f ← withRoll (← frameOf (← field j "f")) j
     check (f.encodedLen == (← natF j "len")) s!"enc: encoded_len differs: model {f.encodedLen}"
     sameWrite "enc" (f.write (← natF j "cap") []) j
   | "ack" =>
@@ -99,7 +119,7 @@ def replayEvent (j : J) : Except String Unit := do
     let want ← match (← field j "fs").arr? with
       | some a => a.toList.mapM frameOf
       | none => throw "the frames are not an array"
-    check (fs == want) s!"iter: the frames differ: model {repr fs}"
+    check (fs.map unrolled == want) s!"iter: the frames differ: model {repr fs}"
     match e with
     | none => check ((← strF j "e") == "none") "iter: the model ends without an error, the code with one"
     | some e => sameErr "iter" e (← strF j "e") (← natF j "en")

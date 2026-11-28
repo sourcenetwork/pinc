@@ -67,24 +67,27 @@ def tailPart (o : Oracle) (S : List Item) (c : Core) (kind : Nat) (lo : Item) (h
   else if (kind = tFULL ∨ kind = tCOLD) ∧ c.init then
     let is ← lr (IS.read r)
     let cap := lim.maxReport
+    let mf ← c.msgFloor.disjoint lo hi
+    let cf ← if kind = tCOLD then c.coldFloor.ascending lo hi else .ok c.coldFloor
     let ((here, there), r) ← merge lim S a b is (fun m (st : List Item × List Item) =>
       match m with
       | .both _ => .ok st
-      | .theirs x => do pure (← pushItem st.1 (dataLen st.2) cap x, st.2)
+      | .theirs x => if !within x lo hi then .error (.malformed .item) else do pure (← pushItem st.1 (dataLen st.2) cap x, st.2)
       | .mine x => do pure (st.1, ← pushItem st.2 (dataLen st.1) cap x)) (c.here, c.there)
-    let c := { c with here := here, there := there }
+    let c := { c with here := here, there := there, msgFloor := mf, coldFloor := cf }
     let c := if kind = tCOLD then { c with ans := { c.ans with cold := true, coldEnd := !hi.isSome } } else c
     pure (c, r)
   else if kind = tREPLY ∧ c.init then
     let (cc, r) ← lr (count r)
     if cc != b - a ∨ cc > aleaf then throw (.malformed .count)
+    let mf ← c.msgFloor.disjoint lo hi
     let (seen, r) ← lr (readBytes ((cc + 7) / 8) r)
     if (cc % 8 != 0) && (match seen.getLast? with | some byte => byte >>> (cc % 8) != 0 | none => false) then
       throw (.malformed .count)
     let there ← unseen lim S a seen cc c.here cc c.there
     let is ← lr (IS.read r)
-    let (here, r) ← pushExtras lim there (is.left + 1) is c.here
-    pure ({ c with here := here, there := there }, r)
+    let (here, r) ← pushExtras lim S lo hi b there (is.left + 1) is none c.here
+    pure ({ c with here := here, there := there, msgFloor := mf }, r)
   else if kind = tCHECK ∧ !c.init then
     let (fpb, r) ← lr (readBytes fpLen r)
     if lo != [] ∨ hi.isSome then throw (.malformed .bound)

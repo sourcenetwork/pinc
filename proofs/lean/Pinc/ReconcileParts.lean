@@ -103,13 +103,24 @@ def unseen (lim : Limits) (S : List Item) (a : Nat) (seen : List Nat) (cc : Nat)
       let x ← readItem lim S (a + j)
       unseen lim S a seen cc here f (← pushItem there (dataLen here) lim.maxReport x)
 
-/-- The extra items of a reply, each appended to `here`. -/
-def pushExtras (lim : Limits) (there : List Item) : Nat → IS → List Item → Except Err (List Item × List Nat)
-  | 0, is, here => .ok (here, is.r)
-  | f + 1, is, here => do
+/-- The check of one extra of a REPLY: an item of the range `lo..hi` we do not hold, above the extra before it. -/
+def extraOk (lim : Limits) (S : List Item) (lo : Item) (hi : Option Item) (b : Nat) (prev : Option Item) (x : Item) :
+    Except Err Unit := do
+  let k := rankOf S x
+  let held ← if k < b then do pure ((← readItem lim S k) == x) else pure false
+  if !within x lo hi || held || (match prev with | some p => !lexLt p x | none => false) then
+    throw (.malformed .item)
+
+/-- The extra items of a reply, each checked and appended to `here`. -/
+def pushExtras (lim : Limits) (S : List Item) (lo : Item) (hi : Option Item) (b : Nat) (there : List Item) :
+    Nat → IS → Option Item → List Item → Except Err (List Item × List Nat)
+  | 0, is, _, here => .ok (here, is.r)
+  | f + 1, is, prev, here => do
     match ← lr (is.next lim.maxItem) with
     | none => pure (here, is.r)
-    | some (x, is') => pushExtras lim there f is' (← pushItem here (dataLen there) lim.maxReport x)
+    | some (x, is') =>
+      extraOk lim S lo hi b prev x
+      pushExtras lim S lo hi b there f is' (some x) (← pushItem here (dataLen there) lim.maxReport x)
 
 /-- `rposition` of `x` in the ids. -/
 def rpos (ids : List (List Nat)) (x : List Nat) : Option Nat :=
@@ -187,24 +198,27 @@ def procPart (o : Oracle) (S : List Item) (c : Core) (r : List Nat) (mark : Nat)
   else if (kind = tFULL ∨ kind = tCOLD) ∧ c.init then
     let is ← lr (IS.read r)
     let cap := lim.maxReport
+    let mf ← c.msgFloor.disjoint lo hi
+    let cf ← if kind = tCOLD then c.coldFloor.ascending lo hi else .ok c.coldFloor
     let ((here, there), r) ← merge lim S a b is (fun m (st : List Item × List Item) =>
       match m with
       | .both _ => .ok st
-      | .theirs x => do pure (← pushItem st.1 (dataLen st.2) cap x, st.2)
+      | .theirs x => if !within x lo hi then .error (.malformed .item) else do pure (← pushItem st.1 (dataLen st.2) cap x, st.2)
       | .mine x => do pure (st.1, ← pushItem st.2 (dataLen st.1) cap x)) (c.here, c.there)
-    let c := { c with here := here, there := there }
+    let c := { c with here := here, there := there, msgFloor := mf, coldFloor := cf }
     let c := if kind = tCOLD then { c with ans := { c.ans with cold := true, coldEnd := !hi.isSome } } else c
     pure (c, r)
   else if kind = tREPLY ∧ c.init then
     let (cc, r) ← lr (count r)
     if cc != b - a ∨ cc > aleaf then throw (.malformed .count)
+    let mf ← c.msgFloor.disjoint lo hi
     let (seen, r) ← lr (readBytes ((cc + 7) / 8) r)
     if (cc % 8 != 0) && (match seen.getLast? with | some byte => byte >>> (cc % 8) != 0 | none => false) then
       throw (.malformed .count)
     let there ← unseen lim S a seen cc c.here cc c.there
     let is ← lr (IS.read r)
-    let (here, r) ← pushExtras lim there (is.left + 1) is c.here
-    pure ({ c with here := here, there := there }, r)
+    let (here, r) ← pushExtras lim S lo hi b there (is.left + 1) is none c.here
+    pure ({ c with here := here, there := there, msgFloor := mf }, r)
   else if kind = tCHECK ∧ !c.init then
     let (fpb, r) ← lr (readBytes fpLen r)
     if lo != [] ∨ hi.isSome then throw (.malformed .bound)

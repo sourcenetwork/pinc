@@ -24,7 +24,10 @@
 (* else 0). A frame is a record whose field k names its kind; an ACK holds *)
 (* its three head fields and the raw bytes of its further ranges, a ticket *)
 (* its id and its lifetime as two 16-bit halves (TLC integers are 32 bits  *)
-(* wide).                                                                  *)
+(* wide), a REKEY its kind, share, echo, switch packet number (spn) and    *)
+(* roll count (roll): a request writes its roll count after the share, an *)
+(* answer its echo and spn, and the fields a kind does not write read back *)
+(* as zero.                                                                *)
 (*                                                                         *)
 (* The code's constants are MAXLEN = 9, LIMIT = 2^63, MAXPN = MAXEND =     *)
 (* 2^62 - 1 and MAXRANGES = 32. The model check (Frame.tla) runs the same  *)
@@ -145,8 +148,12 @@ RdRekey(r) ==
                    IF ~echo.ok THEN echo
                    ELSE LET spn == RdVarint(echo.r) IN
                         IF ~spn.ok THEN spn
-                        ELSE Ok([k |-> "Rekey", ans |-> TRUE, sh |-> sh.v, echo |-> echo.v, spn |-> spn.v], spn.r)
-              ELSE Ok([k |-> "Rekey", ans |-> FALSE, sh |-> sh.v, echo |-> Zeros(8), spn |-> 0], sh.r)
+                        ELSE Ok([k |-> "Rekey", ans |-> TRUE, sh |-> sh.v, echo |-> echo.v, spn |-> spn.v, roll |-> 0],
+                                spn.r)
+              ELSE LET roll == RdVarint(sh.r) IN
+                   IF ~roll.ok THEN roll
+                   ELSE Ok([k |-> "Rekey", ans |-> FALSE, sh |-> sh.v, echo |-> Zeros(8), spn |-> 0, roll |-> roll.v],
+                           roll.r)
 
 \* a ticket lifetime: the big-endian u32 as its two 16-bit halves
 Halves(d) == <<d[1] * 256 + d[2], d[3] * 256 + d[4]>>
@@ -270,7 +277,7 @@ Puts(f) ==
       [] f.k = "Sleep" -> <<PV(59)>>
       [] f.k = "Wake" -> <<PV(60)>>
       [] f.k = "Rekey" ->
-           <<PV(61), PS(<<IF f.ans THEN 1 ELSE 0>>), PS(f.sh)>> \o (IF f.ans THEN <<PS(f.echo), PV(f.spn)>> ELSE <<>>)
+           <<PV(61), PS(<<IF f.ans THEN 1 ELSE 0>>), PS(f.sh)>> \o (IF f.ans THEN <<PS(f.echo), PV(f.spn)>> ELSE <<PV(f.roll)>>)
       [] f.k = "Ready" -> <<PV(62)>>
       [] f.k = "NewTickets" -> <<PV(63), PS(<<Len(f.es)>>)>> \o TicketPuts(f.es)
       [] f.k = "Extension" -> <<PV(f.ty), PV(Len(f.body)), PS(f.body)>>
@@ -292,7 +299,7 @@ EncodedLen(f) ==
       [] f.k = "MaxStreams" -> 1 + VLen(f.limit)
       [] f.k = "Datagram" -> DatagramOverhead(Len(f.data), f.imp) + Len(f.data)
       [] f.k = "MtuProbeEcho" -> 1 + 2
-      [] f.k = "Rekey" -> 1 + 1 + 32 + (IF f.ans THEN 8 + VLen(f.spn) ELSE 0)
+      [] f.k = "Rekey" -> 1 + 1 + 32 + (IF f.ans THEN 8 + VLen(f.spn) ELSE VLen(f.roll))
       [] f.k = "NewTickets" -> 1 + 1 + Len(f.es) * 20
       [] f.k = "Extension" -> VLen(f.ty) + (VLen(Len(f.body)) + Len(f.body))
 
@@ -304,7 +311,7 @@ VarintFields(f) ==
       [] f.k = "Close" -> <<f.error, 0, 0>>
       [] f.k = "Extension" -> <<f.ty, 0, 0>>
       [] f.k = "MaxStreams" -> <<f.limit, 0, 0>>
-      [] f.k = "Rekey" -> <<f.spn, 0, 0>>
+      [] f.k = "Rekey" -> <<f.spn, f.roll, 0>>
       [] OTHER -> <<0, 0, 0>>
 
 Validate(f) ==

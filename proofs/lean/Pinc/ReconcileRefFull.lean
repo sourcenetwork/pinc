@@ -31,8 +31,10 @@ def initFullArm (kind : Nat) (S : List Item) (c : Core) (lo : Item) (hi : Option
   let lim := c.lim
   let is ← lr (IS.read r)
   let cap := lim.maxReport
-  let ((here, there), r) ← merge lim S a b is (initFullF cap) (c.here, c.there)
-  let c := { c with here := here, there := there }
+  let mf ← c.msgFloor.disjoint lo hi
+  let cf ← if kind = tCOLD then c.coldFloor.ascending lo hi else .ok c.coldFloor
+  let ((here, there), r) ← merge lim S a b is (initFullF cap lo hi) (c.here, c.there)
+  let c := { c with here := here, there := there, msgFloor := mf, coldFloor := cf }
   let c := if kind = tCOLD then { c with ans := { c.ans with cold := true, coldEnd := !hi.isSome } } else c
   pure (c, r)
 
@@ -147,32 +149,39 @@ theorem fullArm_split (o : Oracle) {lim S c} (I : Iv) (h : HCtx lim S c I)
     simp only [hbig, ite_false, hv, Bool.not_false, ite_true, hdr, lr, Except.mapError, he, hrb, hsp, bind,
       Except.bind, pure, Except.pure]
 
-/-- The initiator's FULL and COLD arm on an honest list: the peer's items we lack go to `here`, ours it lacks to `there`
-(the arenas must have room). -/
+/-- The initiator's FULL and COLD arm on an honest list of the part's range whose range the floors take: the peer's items
+we lack go to `here`, ours it lacks to `there` (the arenas must have room). -/
 theorem initFullArm_spec {lim S c} (I : Iv) (h : HCtx lim S c I) (kind : Nat)
     (xs : List Item) (hxl : xs.length < 2 ^ 63) (hx : ∀ t ∈ xs, t.length ≤ lim.maxItem ∧ t.length < 2 ^ 63)
-    (hasc : Asc xs) (rest : List Nat)
+    (hasc : Asc xs) (hin : ∀ t ∈ xs, within t I.lo I.hi = true) (rest : List Nat)
+    (mf cf : Floor) (hmf : c.msgFloor.disjoint I.lo I.hi = .ok mf)
+    (hcf : (if kind = tCOLD then c.coldFloor.ascending I.lo I.hi else .ok c.coldFloor) = .ok cf)
     (hroom : dataLen c.here + dataLen c.there + dataLen (xs.filter (fun x => !(I.items S).contains x))
       + dataLen ((I.items S).filter (fun x => !xs.contains x)) + varMax ≤ lim.maxReport) :
     initFullArm kind S c I.lo I.hi (rankOf S I.lo) (rankHi S I.hi) (putItems xs ++ rest) =
       .ok ((if kind = tCOLD then
           { c with here := c.here ++ xs.filter (fun x => !(I.items S).contains x),
-                   there := c.there ++ (I.items S).filter (fun x => !xs.contains x),
+                   there := c.there ++ (I.items S).filter (fun x => !xs.contains x), msgFloor := mf, coldFloor := cf,
                    ans := { c.ans with cold := true, coldEnd := !I.hi.isSome } }
         else
           { c with here := c.here ++ xs.filter (fun x => !(I.items S).contains x),
-                   there := c.there ++ (I.items S).filter (fun x => !xs.contains x) }), rest) := by
+                   there := c.there ++ (I.items S).filter (fun x => !xs.contains x), msgFloor := mf,
+                   coldFloor := cf }), rest) := by
   have hr := h.ranks
   have hlim := h.hlim
   subst hlim
   have hrd := read_putItems xs rest hxl
-  have hm := merge_spec c.lim S h.hlen (rankOf S I.lo) (rankHi S I.hi) hr.1 hr.2.1 (initFullF c.lim.maxReport) rest
+  have hm := merge_spec c.lim S h.hlen (rankOf S I.lo) (rankHi S I.hi) hr.1 hr.2.1 (initFullF c.lim.maxReport I.lo I.hi) rest
     (c.here, c.there) xs hx hasc
   rw [hr.2.2] at hm
   have hme := mergeEv_spec _ (I.items S) xs 0 (Nat.le_refl _) (items_asc I h) hasc
-  have hf := initFull_fold c.lim.maxReport (mergeEv (I.items S) xs 0) (c.here, c.there)
+  have hf := initFull_fold c.lim.maxReport I.lo I.hi (mergeEv (I.items S) xs 0) (c.here, c.there)
+    (by rw [hme.2.2]; intro t ht; exact hin t (List.mem_filter.mp ht).1)
     (by rw [hme.2.2, hme.2.1]; simp only []; omega)
   unfold initFullArm
-  simp only [hrd, bind, Except.bind, pure, Except.pure, hm, hf, hme.2.2, hme.2.1, Except.map]
+  simp only [hrd, bind, Except.bind, pure, Except.pure, hmf, hm, hf, hme.2.2, hme.2.1, Except.map]
+  by_cases hk : kind = tCOLD
+  · simp only [if_pos hk] at hcf ⊢; simp only [hcf]
+  · simp only [if_neg hk] at hcf ⊢; cases hcf; rfl
 
 end Pinc.Reconcile

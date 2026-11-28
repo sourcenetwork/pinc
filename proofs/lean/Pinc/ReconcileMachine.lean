@@ -123,6 +123,31 @@ structure Frame where
   left : Nat
   last : Item
 
+/-- `within`: `lo ≤ x < hi` (`hi = none` is infinity). -/
+def within (x lo : Item) (hi : Option Item) : Bool :=
+  !lexLt x lo && (match hi with | none => true | some h => lexLt x h)
+
+/-- `Floor`: the range of the last part of a message the initiator took (`msg_floor`), or the end of the last chunk of
+a cold stream (`cold_floor`); `hi = none` is infinity. -/
+structure Floor where
+  lo : Item := []
+  hi : Option Item := none
+  set : Bool := false
+
+/-- The end of the floor lies above `lo` (`inf || lo < hi`). -/
+def Floor.above (f : Floor) (lo : Item) : Bool := match f.hi with | none => true | some h => lexLt lo h
+
+/-- `Floor::disjoint`: a non-empty range that overlaps the floor is refused; a non-empty range becomes the floor. -/
+def Floor.disjoint (f : Floor) (lo : Item) (hi : Option Item) : Except Err Floor :=
+  let empty := match hi with | none => false | some h => !lexLt lo h
+  if f.set && !empty && f.above lo && (match hi with | none => true | some h => lexLt f.lo h) then
+    .error (.malformed .bound)
+  else .ok (if empty then f else ⟨lo, hi, true⟩)
+
+/-- `Floor::ascending`: a range that starts below the end of the floor is refused; its end becomes the floor. -/
+def Floor.ascending (f : Floor) (lo : Item) (hi : Option Item) : Except Err Floor :=
+  if f.set && f.above lo then .error (.malformed .bound) else .ok ⟨[], hi, true⟩
+
 /-- `Core`. `blast` is the previous bound of the message being read (`Bounds::last`) and `bsnap` its snapshot. -/
 structure Core where
   lim : Limits
@@ -141,13 +166,16 @@ structure Core where
   hdr : List Nat := []
   here : List Item := []
   there : List Item := []
+  msgFloor : Floor := {}
+  coldFloor : Floor := {}
 
 /-- The bytes of an arena (`Arena::data`). -/
 def dataLen (xs : List Item) : Nat := (xs.map fun x => (venc x.length).length + x.length).sum
 
 /-- `Core::clear`: forget the previous session. -/
 def Core.clear (c : Core) : Core :=
-  { c with exact := false, leafed := false, rounds := 0, coldAt := 0, frames := [], here := [], there := [] }
+  { c with exact := false, leafed := false, rounds := 0, coldAt := 0, frames := [], here := [], there := [],
+           msgFloor := {}, coldFloor := {} }
 
 /-- `push`: append `item` to the arena unless the report would pass `max`. -/
 def pushItem (arena : List Item) (other max : Nat) (item : Item) : Except Err (List Item) :=

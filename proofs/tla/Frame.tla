@@ -19,7 +19,8 @@
 (*              the frame and rest. Three kinds take what follows them     *)
 (*              (Expect): PADDING is the whole zero run, a STREAM or       *)
 (*              DATAGRAM frame without a length runs to the end. A REKEY   *)
-(*              request comes back with a zero echo and switch number.     *)
+(*              request comes back with a zero echo and switch number, an  *)
+(*              answer with a zero roll count.                             *)
 (*   Canon      whatever Decode accepts (the encodings, every cut, single  *)
 (*              bytes changed, bytes appended, every short string) leaves  *)
 (*              less than it was given and is the encoding Write gives for *)
@@ -82,7 +83,8 @@ Frames ==
     \cup {[k |-> "Close", error |-> a] : a \in Vals}
     \cup {[k |-> "Datagram", data |-> d, imp |-> im] : d \in Datas \cup {Long}, im \in BOOLEAN}
     \cup {[k |-> "MtuProbeEcho", mtu |-> m] : m \in {0, 255, 256, 1200, 65535}}
-    \cup {[k |-> "Rekey", ans |-> a, sh |-> s, echo |-> e, spn |-> p] : a \in BOOLEAN, s \in B32, e \in B8, p \in Vals}
+    \cup {[k |-> "Rekey", ans |-> a, sh |-> s, echo |-> e, spn |-> p, roll |-> n] :
+            a \in BOOLEAN, s \in B32, e \in B8, p, n \in Vals}
     \cup {[k |-> "NewTickets", es |-> es] : es \in Batches}
     \cup {[k |-> "Extension", ty |-> t, body |-> d] : t \in {0, 63, 64, 127, 128, LIMIT - 1, LIMIT}, d \in Datas \cup {Long}}
 
@@ -102,8 +104,8 @@ FramesQuick ==
     \cup {[k |-> "Close", error |-> a] : a \in Vals}
     \cup {[k |-> "Datagram", data |-> d, imp |-> im] : d \in Datas \cup {Long}, im \in BOOLEAN}
     \cup {[k |-> "MtuProbeEcho", mtu |-> m] : m \in {0, 255, 256, 1200, 65535}}
-    \cup {[k |-> "Rekey", ans |-> a, sh |-> [i \in 1..32 |-> i], echo |-> e, spn |-> p] :
-            a \in BOOLEAN, e \in B8, p \in {127, 128, LIMIT}}
+    \cup {[k |-> "Rekey", ans |-> a, sh |-> [i \in 1..32 |-> i], echo |-> e, spn |-> p, roll |-> n] :
+            a \in BOOLEAN, e \in B8, p, n \in {127, 128, LIMIT}}
     \cup {[k |-> "NewTickets", es |-> es] : es \in {<<>>, <<T1>>, <<T2, T1>>, <<T1, T2, T2>>}}
     \cup {[k |-> "Extension", ty |-> t, body |-> d] : t \in {63, 64, 128, LIMIT}, d \in {<<>>, <<7, 0>>}}
     \cup {[k |-> "Extension", ty |-> 64, body |-> Long]}
@@ -177,6 +179,7 @@ Expect(f, rest) ==
            ELSE Ok([f EXCEPT !.data = f.data \o rest], <<>>)
       [] f.k = "Datagram" /\ f.imp -> Ok([f EXCEPT !.data = f.data \o rest], <<>>)
       [] f.k = "Rekey" /\ ~f.ans -> Ok([f EXCEPT !.echo = Zeros(8), !.spn = 0], rest)
+      [] f.k = "Rekey" /\ f.ans -> Ok([f EXCEPT !.roll = 0], rest)
       [] OTHER -> Ok(f, rest)
 
 \* what Validate must answer, from the documentation of Frame::write
@@ -188,7 +191,7 @@ Refused(f) ==
        \/ f.k = "MaxStreams" /\ f.limit >= LIMIT
        \/ f.k = "Stream" /\ f.off >= LIMIT
        \/ f.k = "Extension" /\ f.ty >= LIMIT
-       \/ f.k = "Rekey" /\ f.spn >= LIMIT
+       \/ f.k = "Rekey" /\ (f.spn >= LIMIT \/ f.roll >= LIMIT)
     THEN Er("VarintOverflow", 0)
     ELSE IF f.k = "Stream" /\ f.off + Len(f.data) > MAXEND THEN Er("StreamEnd", 0)
     ELSE IF f.k = "Extension" /\ f.ty < 64 THEN Er("UnknownType", f.ty)

@@ -26,7 +26,10 @@
 (* RollSec of the Diffie-Hellman values the roll machines computed, a      *)
 (* share is Pub of an atom, an echo is RId of a share). So a packet opens, *)
 (* is dropped, or is held under the previous key exactly when the terms    *)
-(* say it does.                                                            *)
+(* say it does. A request carries the roll count of its sender; the trace *)
+(* does not record it, so the checker keeps the count each request was     *)
+(* sent with (rq, from the model message at the send), as the Lean replay  *)
+(* does.                                                                   *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds keylayer.ndjson.      *)
@@ -87,13 +90,17 @@ ViewShape(s, v) ==
 (* the node s is the node recorded in v, and the oracle stays a bijection with the terms of v added *)
 ViewOK(om, s, v, extra) == ViewShape(s, v) /\ BijOK(om, ViewPairs(s, v) \cup extra)
 
+(* the roll count the request of share t was sent with (Sent says one was) *)
+Sent(rq, t) == \E q \in rq : q[1] = t
+RollOf(rq, t) == (CHOOSE q \in rq : q[1] = t)[2]
+
 (* the REKEY message of a packet, from the recorded ids (the ghost field gdh is not recorded) *)
-MsgOf(om, k, sh, to, spn) ==
+MsgOf(om, rq, k, sh, to, spn) ==
     IF k = 0 THEN KR!NONE
-    ELSE IF k = 1 THEN KR!Req(TermOf(om, sh))
+    ELSE IF k = 1 THEN KR!Req(TermOf(om, sh), RollOf(rq, TermOf(om, sh)))
     ELSE KR!Ans(TermOf(om, sh), spn, TermOf(om, to), KR!NONE)
 
-Init == i = 1 /\ rs = [run |-> 0, nd |-> <<>>, om |-> {}]
+Init == i = 1 /\ rs = [run |-> 0, nd |-> <<>>, om |-> {}, rq |-> {}]
 
 NodeId(n) == Ev.n
 
@@ -107,7 +114,7 @@ InitEv ==
     IN /\ Ev.op = "init" /\ rs.run = 0
        /\ ViewShape(n0, v0) /\ ViewShape(n1, v1)
        /\ BijOK({}, p0 \cup p1)
-       /\ rs' = [run |-> Ev.run, nd |-> <<n0, n1>>, om |-> p0 \cup p1]
+       /\ rs' = [run |-> Ev.run, nd |-> <<n0, n1>>, om |-> p0 \cup p1, rq |-> {}]
 
 BeginEv ==
     LET n == Ev.n s == rs.nd[n + 1]
@@ -126,18 +133,20 @@ SendEv ==
        /\ o.ok /\ o.p.ph = Ev.ph /\ o.p.pn = Ev.pn
        /\ MsgShape(pl, Ev.mk, Ev.mspn)
        /\ ViewOK(rs.om, o.s, Ev.v, extra)
-       /\ rs' = [rs EXCEPT !.nd[n + 1] = o.s, !.om = @ \cup ViewPairs(o.s, Ev.v) \cup extra]
+       /\ rs' = [rs EXCEPT !.nd[n + 1] = o.s, !.om = @ \cup ViewPairs(o.s, Ev.v) \cup extra,
+                           !.rq = @ \cup (IF Ev.mk = 1 THEN {<<pl.sh, pl.roll>>} ELSE {})]
 
 SelCode(sel) == IF sel = "cur" THEN 0 ELSE IF sel = "prev" THEN 1 ELSE IF sel = "next" THEN 2 ELSE 3
 
 RecvEv ==
     LET n == Ev.n s0 == rs.nd[n + 1]
-        m == MsgOf(rs.om, Ev.mk, Ev.msh, Ev.mto, Ev.mspn)
+        m == MsgOf(rs.om, rs.rq, Ev.mk, Ev.msh, Ev.mto, Ev.mspn)
         p == [from |-> 1 - n, ph |-> Ev.ph, pn |-> Ev.pn, sec |-> TermOf(rs.om, Ev.key), pl |-> m]
         o == KR!DeliverOp(s0, p, Ev.forged, Ev.now, Ev.pto, n)
     IN /\ Ev.op = "recv" /\ Ev.run = rs.run
        /\ Bound(rs.om, Ev.key)
        /\ (Ev.mk # 0 => Bound(rs.om, Ev.msh))
+       /\ (Ev.mk = 1 => Sent(rs.rq, TermOf(rs.om, Ev.msh)))
        /\ (Ev.mk = 2 => Bound(rs.om, Ev.mto))
        /\ Ev.slot = SelCode(o.k.sel)
        /\ Ev.opened = o.k.acc
@@ -156,7 +165,7 @@ RlostEv ==
 
 EndEv ==
     /\ Ev.op = "end" /\ Ev.run = rs.run
-    /\ rs' = [run |-> 0, nd |-> <<>>, om |-> {}]
+    /\ rs' = [run |-> 0, nd |-> <<>>, om |-> {}, rq |-> {}]
 
 Step ==
     /\ i <= Len(Trace)

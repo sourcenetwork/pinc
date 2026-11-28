@@ -35,11 +35,13 @@ theorem respFull_fold : ∀ (evs : List Cmp) (st : List Nat × Out × Nat),
       simp [Cmp.mineItem, Cmp.bothIdx, List.filterMap_cons, Out.stageItem, stageBytes_cons, List.append_assoc]
       omega
 
-/-- The initiator's handler of a FULL or COLD part: the peer's items to `here`, ours to `there`. -/
-def initFullF (cap : Nat) (m : Cmp) (st : List Item × List Item) : Except Err (List Item × List Item) :=
+/-- The initiator's handler of a FULL or COLD part of the range `lo..hi`: the peer's items to `here` (an item outside
+the range is no answer to it), ours to `there`. -/
+def initFullF (cap : Nat) (lo : Item) (hi : Option Item) (m : Cmp) (st : List Item × List Item) :
+    Except Err (List Item × List Item) :=
   match m with
   | .both _ => .ok st
-  | .theirs x => do pure (← pushItem st.1 (dataLen st.2) cap x, st.2)
+  | .theirs x => if !within x lo hi then .error (.malformed .item) else do pure (← pushItem st.1 (dataLen st.2) cap x, st.2)
   | .mine x => do pure (st.1, ← pushItem st.2 (dataLen st.1) cap x)
 
 theorem dataLen_nil : dataLen [] = 0 := by simp [dataLen]
@@ -52,27 +54,33 @@ theorem dataLen_append (a b : List Item) : dataLen (a ++ b) = dataLen a + dataLe
 
 theorem venc_len_pos (n : Nat) : 1 ≤ (venc n).length := by rw [venc_length]; exact Varint.encodedLen_pos _
 
-theorem initFull_fold (cap : Nat) : ∀ (evs : List Cmp) (st : List Item × List Item),
+theorem initFull_fold (cap : Nat) (lo : Item) (hi : Option Item) : ∀ (evs : List Cmp) (st : List Item × List Item),
+    (∀ x ∈ evs.filterMap Cmp.theirsItem, within x lo hi = true) →
     dataLen st.1 + dataLen st.2 + dataLen (evs.filterMap Cmp.theirsItem) + dataLen (evs.filterMap Cmp.mineItem)
       + varMax ≤ cap →
-    evFold (initFullF cap) st evs =
+    evFold (initFullF cap lo hi) st evs =
       .ok (st.1 ++ evs.filterMap Cmp.theirsItem, st.2 ++ evs.filterMap Cmp.mineItem)
-  | [], st, _ => by simp [evFold_nil]
-  | e :: evs, st, h => by
+  | [], st, _, _ => by simp [evFold_nil]
+  | e :: evs, st, hw, h => by
     cases e with
     | both k =>
       simp only [evFold_cons, initFullF, bind, Except.bind]
-      rw [initFull_fold cap evs st (by simpa [Cmp.theirsItem, Cmp.mineItem, List.filterMap_cons] using h)]
+      rw [initFull_fold cap lo hi evs st (by simpa [Cmp.theirsItem, List.filterMap_cons] using hw)
+        (by simpa [Cmp.theirsItem, Cmp.mineItem, List.filterMap_cons] using h)]
       simp [Cmp.theirsItem, Cmp.mineItem, List.filterMap_cons]
     | theirs x =>
       simp only [Cmp.theirsItem, Cmp.mineItem, List.filterMap_cons, dataLen_cons] at h
       have hp := venc_len_pos x.length
       have hok : ¬ (dataLen st.1 + dataLen st.2 + x.length + varMax > cap) := by omega
-      simp only [evFold_cons, initFullF, bind, Except.bind, pushItem, hok, ite_false, pure, Except.pure]
+      have hwx : within x lo hi = true := hw x (by simp [Cmp.theirsItem, List.filterMap_cons])
+      have hw' : ∀ y ∈ evs.filterMap Cmp.theirsItem, within y lo hi = true :=
+        fun y hy => hw y (by simp only [Cmp.theirsItem, List.filterMap_cons]; exact List.mem_cons_of_mem _ hy)
+      simp only [evFold_cons, initFullF, bind, Except.bind, pushItem, hok, ite_false, pure, Except.pure, hwx,
+        Bool.not_true, Bool.false_eq_true]
       have h' : dataLen (st.1 ++ [x]) + dataLen st.2 + dataLen (evs.filterMap Cmp.theirsItem)
           + dataLen (evs.filterMap Cmp.mineItem) + varMax ≤ cap := by
         simp only [dataLen_append, dataLen_cons, dataLen_nil]; omega
-      rw [initFull_fold cap evs (st.1 ++ [x], st.2) h']
+      rw [initFull_fold cap lo hi evs (st.1 ++ [x], st.2) hw' h']
       simp [Cmp.theirsItem, Cmp.mineItem, List.filterMap_cons, List.append_assoc]
     | mine x =>
       simp only [Cmp.theirsItem, Cmp.mineItem, List.filterMap_cons, dataLen_cons] at h
@@ -82,7 +90,7 @@ theorem initFull_fold (cap : Nat) : ∀ (evs : List Cmp) (st : List Item × List
       have h' : dataLen st.1 + dataLen (st.2 ++ [x]) + dataLen (evs.filterMap Cmp.theirsItem)
           + dataLen (evs.filterMap Cmp.mineItem) + varMax ≤ cap := by
         simp only [dataLen_append, dataLen_cons, dataLen_nil]; omega
-      rw [initFull_fold cap evs (st.1, st.2 ++ [x]) h']
+      rw [initFull_fold cap lo hi evs (st.1, st.2 ++ [x]) (by simpa [Cmp.theirsItem, List.filterMap_cons] using hw) h']
       simp [Cmp.theirsItem, Cmp.mineItem, List.filterMap_cons, List.append_assoc]
 
 end Pinc.Reconcile

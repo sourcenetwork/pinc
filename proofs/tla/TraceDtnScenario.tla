@@ -107,7 +107,7 @@ BunEv == /\ Trace[i].e = "bun"
 AckEv == /\ Trace[i].e = "ack"
          /\ \E m \in msgs :
               /\ m.id = Trace[i].m /\ m.kind = "ack"
-              /\ C!OnAck(cb[m.to], lg[m.to], 1, m.from, m.off, TRUE).err = Trace[i].o
+              /\ C!OnAck(cb[m.to], lg[m.to], m.to, 1, m.from, m.to, m.off, TRUE).err = Trace[i].o
               /\ SC!DeliverAck(m)
          /\ i' = i + 1
 

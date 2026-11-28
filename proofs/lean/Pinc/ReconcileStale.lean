@@ -344,7 +344,7 @@ theorem turn_bd (o : Oracle) (S : List Item) {c d : Core} (h : Core.Bd c d) (r :
   obtain ⟨ou, bl, bs, an, l, hd, rfl⟩ := h
   unfold Core.turn
   dsimp only
-  refine Rel.bind (answerLoop_scr o S np { c with out := c.out.reset, blast := [], ans := {} } _ r
+  refine Rel.bind (answerLoop_scr o S np { c with out := c.out.reset, blast := [], ans := {}, msgFloor := {} } _ r
     ⟨ou.snap, bs, l, hd, rfl⟩) ?_
   rintro ⟨c1, rest, left⟩ ⟨c2, rest2, left2⟩ ⟨h1, h2⟩
   simp only [Prod.mk.injEq] at h1 h2
@@ -452,7 +452,8 @@ theorem restartExact_bd (o : Oracle) (S : List Item) {c d : Core} (h : Core.Bd c
   obtain ⟨ou, bl, bs, an, l, hd, rfl⟩ := h
   unfold Core.restartExact
   dsimp only
-  refine Rel.bind (root_bd o S (c := { c with exact := true, leafed := false, frames := [], here := [], there := [] })
+  refine Rel.bind (root_bd o S (c := { c with exact := true, leafed := false, frames := [], here := [], there := [],
+                                              msgFloor := {}, coldFloor := {} })
     ⟨ou, bl, bs, an, l, hd, rfl⟩) ?_
   rintro ⟨c1, cnt⟩ ⟨c2, cnt2⟩ ⟨hbd, hb, _, hc⟩
   simp only at hbd hb hc
