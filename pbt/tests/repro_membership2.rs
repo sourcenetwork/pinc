@@ -7,7 +7,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use pinc_membership::codec::{Alive, Hello, Snap, entry_bytes};
 use pinc_membership::consts::{AWARENESS_BOUND, HEAL_SILENCE, LEASE, NODE_TICK};
-use pinc_membership::session::StoreError;
+use pinc_membership::event::Removal;
+use pinc_membership::session::{DENIED_CODE, StoreError};
 use pinc_membership::{
     Broadcast, Carrier, CloseReason, Config, Event, Evidence, Frame, Local, Membership, NodeId, Record, Route, Session,
     Trace,
@@ -487,4 +488,71 @@ fn a_second_probe_through_a_slow_relay_is_waited_for() {
     }
     let confirmed = std::iter::from_fn(|| m.poll_trace()).filter(|t| matches!(t, Trace::Confirmed { .. })).count();
     assert_eq!(confirmed, 0, "a live member was confirmed down before its relayed answer could arrive");
+}
+
+/// view.rs, module doc: "A snapshot never removes a member on its own. A complete snapshot that omits a member starts
+/// that member's lease clock (the complete snapshot of the confirmed home does so for every member of the view it
+/// omits, whichever hub's copy the member came from); the member stays in the view, with no event, and leaves it only
+/// when the hub reports it down (...), or when a full lease passes without any hub listing it again."
+///
+/// Actual: a member with hubs A and B. A's snapshot lists B (as a member) and X; A is revoked, so its session ends; B
+/// links and its snapshot omits B; at the next slow tick B becomes the primary and A's copy, now stale, is dropped,
+/// which leaves B in the view with no copy listing it, its removal held for want of a confirmed home. B's next
+/// complete snapshot, empty, confirms the home and removes B at once (`Event::MemberConfirmedDown`, `Removal::Reported`)
+/// though no hub reported it down and no lease ran. Found by `machine_keeps_its_invariants` in `membership.rs`
+/// ("step 8: Frame(2, Snap(false, false, [])): a snapshot removed members [2]",
+/// EPHYRA_REPLAY=8006868287450456725:2339); the code before the fix of 2bd006d9 ages B for a lease.
+///
+/// Suspected fault: `mark_view_absent` (view.rs:434-441) gives no entry to a held member no copy lists, as its removal
+/// would be decided (a report or a lease), but `drop_stale_hubs` (timers.rs:156) drops a stale copy while removals are
+/// held, which empties a member's listings with no decision. Who can trigger it: no one in particular; a member whose
+/// home hub goes silent or away (a crash, a cut, a revocation) while a hub that never listed some member becomes its
+/// home.
+#[test]
+fn the_home_snapshot_removes_a_member_only_a_dropped_stale_copy_listed() {
+    let (a, b) = (id(1), id(2));
+    let hubs = [a, b];
+    let cfg = Config { me: id(0), is_hub: false, hubs: &hubs, trace: true };
+    let mut h = Host { persistent: true, ..Host::default() };
+    let mut now = T0;
+    let mut m = Membership::start(&cfg, &mut h, now, 0, 0).unwrap();
+    let link = |m: &mut Membership, h: &mut Host, now: u64, hub: NodeId, members: &[NodeId]| {
+        h.sessions.insert(hub);
+        m.session_up(h, now, &hub, false);
+        h.ev.insert(hub, Evidence { last_rx: now, srtt: 20 * MS, pto: 0, inflight: 0, direct: true });
+        hub_snap(m, h, now, hub, members);
+    };
+    now = now.max(m.poll_timeout());
+    m.on_timeout(&mut h, now);
+    now += 2_029 * MS;
+    m.on_timeout(&mut h, now);
+    link(&mut m, &mut h, now, a, &[id(3), b]);
+    assert!(m.in_view(&b), "A's snapshot lists B");
+    m.revoke(&mut h, now, &a).unwrap();
+    h.sessions.remove(&a);
+    m.session_down(&mut h, now, &a, DENIED_CODE);
+    now = now.max(m.poll_timeout());
+    m.on_timeout(&mut h, now);
+    link(&mut m, &mut h, now, b, &[id(6), a, id(3), id(4)]);
+    now = now.max(m.poll_timeout());
+    m.on_timeout(&mut h, now);
+    now += 1_971 * MS;
+    m.on_timeout(&mut h, now);
+    assert_eq!(m.primary(), Some(&b), "B is the primary, not yet a confirmed home");
+    assert!(m.in_view(&b), "held: no home is confirmed yet");
+    hub_snap(&mut m, &mut h, now, b, &[]);
+    let down = std::iter::from_fn(|| m.poll_event()).any(|e| e == Event::MemberConfirmedDown { member: b });
+    assert!(m.in_view(&b) && !down, "the confirming snapshot removed a member no hub reported down");
+    // Never listed again: it leaves a lease after the omission, as its lease ran out.
+    let end = now + LEASE + 5 * SEC;
+    while m.in_view(&b) && now < end {
+        now = m.poll_timeout().max(now + MS);
+        h.ev.insert(b, Evidence { last_rx: now, srtt: 20 * MS, pto: 0, inflight: 0, direct: true });
+        hub_delta(&mut m, &mut h, now, b, &id(6), Alive::Alive);
+        m.on_timeout(&mut h, now);
+    }
+    assert!(!m.in_view(&b), "a lease without a listing ends it");
+    let expired = std::iter::from_fn(|| m.poll_trace())
+        .any(|t| matches!(t, Trace::Removed { member, why: Removal::LeaseExpired } if member == b));
+    assert!(expired, "removed for its lease, not reported");
 }

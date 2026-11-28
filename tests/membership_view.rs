@@ -306,6 +306,51 @@ fn a_removal_held_while_no_home_is_confirmed_is_decided_when_the_home_is() {
 }
 
 #[test]
+fn a_member_only_a_stale_hub_listed_is_aged_by_the_new_home_not_removed() {
+    // The hubs never meet, so hub 1 never hears of member 3, which is attached to hub 0 only.
+    let mut w = World::new(2, 2, START);
+    let (m, x) = (2, 3);
+    w.cut.insert((0, 1));
+    w.connect(m, 0);
+    w.connect(m, 1);
+    w.connect(x, 0);
+    w.run(5 * SEC);
+    assert_eq!(w.nodes[m].m.primary(), Some(&id(0)));
+    assert!(w.has(m, x));
+    // The home goes silent: the member switches to hub 1, whose snapshot omits member 3.
+    w.cut.insert((0, m));
+    assert!(w.run_until(120 * SEC, |w| w.nodes[m].m.primary() == Some(&id(1))));
+    w.run(5 * SEC);
+    assert!(
+        w.has(m, x),
+        "a snapshot never removes a member on its own: the omission starts its lease"
+    );
+    assert_eq!(
+        w.count_events(
+            m,
+            |e| matches!(e, Event::MemberConfirmedDown { member } if *member == id(x))
+        ),
+        0
+    );
+    assert!(
+        traces(&w, m, |t| matches!(t, Trace::HubStale { hub } if *hub == id(0))) >= 1,
+        "the stale copy goes once the home is confirmed"
+    );
+    // No hub lists it again: a lease after the omission it leaves, for its lease.
+    assert!(w.run_until(LEASE + 10 * SEC, |w| !w.has(m, x)));
+    assert_eq!(
+        traces(&w, m, |t| matches!(
+            t,
+            Trace::Removed {
+                member,
+                why: Removal::LeaseExpired
+            } if *member == id(x)
+        )),
+        1
+    );
+}
+
+#[test]
 fn a_down_delta_of_the_same_or_a_newer_incarnation_removes_an_older_one_is_ignored() {
     let mut w = started(2, 3);
     let (m, x) = (2, 3);

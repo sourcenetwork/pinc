@@ -34,7 +34,7 @@ pub(crate) struct Source {
     /// Only this hub's copy counts (the home hub, confirmed).
     only: Option<NodeId>,
     /// Removals are held (no confirmed home view).
-    hold: bool,
+    pub(crate) hold: bool,
     /// At least one hub is fresh; otherwise every copy counts.
     any_fresh: bool,
 }
@@ -186,7 +186,7 @@ impl Membership {
         });
     }
 
-    fn source(&self, now: Nanos) -> Source {
+    pub(crate) fn source(&self, now: Nanos) -> Source {
         let home = self
             .primary
             .filter(|p| !self.is_hub && self.home_ok == Some(*p) && self.hv.contains_key(p) && self.hub_up(now, p));
@@ -418,8 +418,9 @@ impl Membership {
     /// home's copy never held gets an entry in it, carrying the view's record, that only the omission clock gives life
     /// to; `sweep_absent` ends it. With the copy full there is no room for the clock and the member is recomputed at
     /// once. A member whose removal already waits is given no entry when a window deferred it (its own instant ends
-    /// it, not another lease) or when it was held and no copy lists it; a held member that some other copy still
-    /// lists gets the entry, as that copy is stale until aged.
+    /// it, not another lease) or when it was held and no copy lists it (a hub reported it down or its omission lasted
+    /// a lease: no stale copy is dropped while removals are held); a held member that some other copy still lists gets
+    /// the entry, as that copy is stale until aged.
     fn mark_view_absent<H: Host>(&mut self, h: &mut H, now: Nanos, hub: &NodeId, round: u32) -> bool {
         let mut changed = false;
         let mut cur: Option<NodeId> = None;

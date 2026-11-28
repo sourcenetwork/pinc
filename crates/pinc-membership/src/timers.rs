@@ -153,9 +153,12 @@ impl Membership {
     }
 
     /// A stale hub's copy is dropped while another hub is fresh, and its session is closed so a fresh one is made.
+    /// While removals are held (a member with no confirmed home) the copies are kept: a stale copy feeds nothing, but
+    /// the members only it lists stay listed, so the confirmed home's snapshot ages them (`mark_view_absent`) instead
+    /// of removing at once members no hub reported down.
     fn drop_stale_hubs<H: Host>(&mut self, h: &mut H, now: Nanos) {
         let stale = self.hv.keys().filter(|k| !self.hub_up(now, k)).count();
-        if stale == 0 || stale >= self.hv.len() {
+        if stale == 0 || stale >= self.hv.len() || self.source(now).hold {
             return;
         }
         let mut changed = false;
