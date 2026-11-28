@@ -8,7 +8,7 @@ packet completes the reply on a path the dial does not hold may carry a 1-RTT pa
 then learns the path from the slot `handle_inner` found at the start of the datagram (none), after `follow_reply`
 learnt it. With the look-up of `learn` that learning finds the path: the datagram is the reply alone (`joined_eq`), no
 path is held twice (`joined_unique`), and at a full table exactly one path is given up, never the one the session
-left (`joined_gives_up_one`). Without the look-up, the rule before the correction, this model found the path held twice
+is on (`joined_gives_up_one`). Without the look-up, the rule before the correction, this model found the path held twice
 (`noLookup_dup`; `lookup_once` is the same datagram under the corrected rule). The responder learns by the same `learn`
 and keeps the table bounded, adds no path twice and keeps its active path (`respRx_*`). A resumed responder validates
 nothing at the Hello (`resume_proves_nothing`); the dialer's first 1-RTT packet validates the path its one Reply went
@@ -20,21 +20,21 @@ namespace Pinc.TransportPath
 
 /-- The 1-RTT packet behind the reply that established the session learns nothing new: its path is held by then, or
 there was no room for it and there still is none. So the joined datagram is the reply alone. -/
-theorem joined_eq {np : Nat} {c : C} {pid : Nat} (hi : Inv np c) (hhs : c.hs ≠ .done) (s : Bool) :
+theorem joined_eq {np : Nat} {c : C} {pid : Nat} (hi : Inv np c) (hhs : c.hs ≠ .done) (hkw : c.hs ≠ .key) (s : Bool) :
     rx false np c pid .auth true s = rx false np c pid .auth false s := by
   have hc1 : Inv np (hsMsg np c pid .auth s) := inv_hsMsg hi s
   have hdone : (hsMsg np c pid .auth s).hs = .done := by
-    rw [hsMsg_auth hhs]; exact (follow_keeps np _).1
+    rw [hsMsg_auth hhs hkw]; exact (follow_keeps np _).1
   have hkeep : (learn np (hsMsg np c pid .auth s).t (hsMsg np c pid .auth s).act pid).1 =
       (hsMsg np c pid .auth s).t := by
     cases hfind : find np (hsMsg np c pid .auth s).t pid with
     | some _ => rw [learn_found hfind]
     | none =>
       rw [learn_fresh hfind]
-      have ha := rx_auth (pid := pid) hi hhs s
+      have ha := rx_auth (pid := pid) hi hhs hkw s
       rw [rx_plain] at ha
-      by_cases room : (find np c.t pid).isSome ∨ (slot np c.t c.act).isSome
-      · obtain ⟨p, hp, hpid, _⟩ := ha.2.1 room
+      by_cases hfc : (find np c.t pid).isSome
+      · obtain ⟨p, hp, hpid, _⟩ := ha.2.1 hfc
         obtain ⟨k, hk⟩ := first_isSome (f := fun i => holds pid ((hsMsg np c pid .auth s).t i)) hc1.act_lt
           (by simp [hp, holds, hpid])
         unfold find at hfind
@@ -43,15 +43,20 @@ theorem joined_eq {np : Nat} {c : C} {pid : Nat} (hi : Inv np c) (hhs : c.hs ≠
       · have hf : find np c.t pid = none := by
           cases h : find np c.t pid with
           | none => rfl
-          | some _ => exact absurd (Or.inl (by simp [h])) room
-        have hs : slot np c.t c.act = none := by
-          cases h : slot np c.t c.act with
-          | none => rfl
-          | some _ => exact absurd (Or.inr (by simp [h])) room
-        obtain ⟨ht, hact⟩ := ha.2.2 hf hs
-        rw [ht, hact]
-        unfold learnNew
-        rw [hs]
+          | some _ => exact (hfc (by simp [h])).elim
+        cases hs : slot np c.t c.act with
+        | some i =>
+          obtain ⟨_, _, h3⟩ := ha.2.2.1 hf i hs
+          obtain ⟨k, hk⟩ := first_isSome (f := fun j => holds pid ((hsMsg np c pid .auth s).t j)) (slot_spec hs).1
+            (by simp [h3, holds])
+          unfold find at hfind
+          rw [hk] at hfind
+          cases hfind
+        | none =>
+          obtain ⟨ht, hact⟩ := ha.2.2.2 hf hs
+          rw [ht, hact]
+          unfold learnNew
+          rw [hs]
   rw [rx_plain]
   unfold rx
   simp only [Bool.false_and, Bool.false_eq_true, ↓reduceIte, Bool.true_and, hdone, decide_true]
@@ -64,45 +69,34 @@ theorem joined_unique {np : Nat} {c : C} {pid : Nat} {k : Kind} (hi : Inv np c) 
     Unique (rx old np c pid k coal s).t :=
   (inv_rx hi old coal s).unique
 
-/-- What `follow` does to the table when the reply's path is learnt in slot `i`. -/
-theorem follow_slots {np : Nat} {c : C} {pid i : Nat} (hrf : c.rf = some pid) (hf : find np c.t pid = none)
-    (hs : slot np c.t c.act = some i) (hia : i ≠ c.act) :
-    (follow np c).act = i ∧ (follow np c).t i = some ⟨pid, false⟩ ∧
-      (follow np c).t c.act = (c.t c.act).map (fun p => { p with v := false }) ∧
-      ∀ j, j ≠ i → j ≠ c.act → (follow np c).t j = c.t j := by
-  have hl : (learnNew np c.t c.act pid).2 = some i := by rw [learnNew_snd, hs]
-  rw [follow_learnt hrf hf hl, ite_eq_right hia]
-  refine ⟨rfl, ?_, ?_, ?_⟩
-  · show setV (setV (learnNew np c.t c.act pid).1 c.act false) i false i = _
-    rw [setV_at, setV_other _ _ _ hia, learnNew_at hl]
-    rfl
-  · show setV (setV (learnNew np c.t c.act pid).1 c.act false) i false c.act = _
-    rw [setV_other _ _ _ (Ne.symm hia), setV_at,
-      learnNew_other (by rw [hl]; intro e; exact hia (Option.some.inj e))]
-  · intro j hji hja
-    show setV (setV (learnNew np c.t c.act pid).1 c.act false) i false j = _
-    rw [setV_other _ _ _ hji, setV_other _ _ _ hja,
-      learnNew_other (by rw [hl]; intro e; exact hji (Option.some.inj e).symm)]
+/-- What `follow` does to the table when the reply's path, not held, is learnt in slot `i`: the session stays on its
+path, the reply's path joins there unvalidated, and every other slot is as it was. -/
+theorem follow_slots {np : Nat} {c : C} {pid i : Nat} {pa : P} (hpa : c.t c.act = some pa) (hrf : c.rf = some pid)
+    (hf : find np c.t pid = none) (hs : slot np c.t c.act = some i) :
+    (follow np c).act = c.act ∧ (follow np c).t i = some ⟨pid, false⟩ ∧ (follow np c).t c.act = c.t c.act ∧
+      ∀ j, j ≠ i → (follow np c).t j = c.t j := by
+  obtain ⟨h1, h2, h3, h4⟩ := follow_joins hpa hrf hf hs
+  exact ⟨h1, h3, h2.trans hpa.symm, h4⟩
 
-/-- A reply with a 1-RTT packet behind it, on a path the dial does not hold, that joins at slot `i`: the session is
-on it (unvalidated: the reply alone proves nothing about it), the path it left is held (no longer validated), and every other slot is as it was, so at a full table exactly
-one path is given up, the one in slot `i`, never the one the session left. -/
-theorem joined_gives_up_one {np : Nat} {c : C} {pid i : Nat} (hi : Inv np c) (hhs : c.hs ≠ .done)
+/-- A reply with a 1-RTT packet behind it, on a path the dial does not hold, that joins at slot `i`: the session stays
+on its path (the reply alone proves nothing about the new one), the reply's path is held unvalidated in slot `i`, and
+every other slot is as it was, so at a full table exactly one path is given up, the one in slot `i`, never the one
+the session is on. -/
+theorem joined_gives_up_one {np : Nat} {c : C} {pid i : Nat} (hi : Inv np c) (hhs : c.hs ≠ .done) (hkw : c.hs ≠ .key)
     (hf : find np c.t pid = none) (hs : slot np c.t c.act = some i) (s : Bool) :
-    (rx false np c pid .auth true s).act = i ∧ (rx false np c pid .auth true s).t i = some ⟨pid, false⟩ ∧
-      (rx false np c pid .auth true s).t c.act = (c.t c.act).map (fun p => { p with v := false }) ∧
-      ∀ j, j ≠ i → j ≠ c.act → (rx false np c pid .auth true s).t j = c.t j := by
+    (rx false np c pid .auth true s).act = c.act ∧ (rx false np c pid .auth true s).t i = some ⟨pid, false⟩ ∧
+      (rx false np c pid .auth true s).t c.act = c.t c.act ∧
+      ∀ j, j ≠ i → (rx false np c pid .auth true s).t j = c.t j := by
   obtain ⟨pa, hpa⟩ := hi.held
-  have hia : i ≠ c.act := slot_ne_act hpa hs
-  rw [joined_eq hi hhs, rx_plain, hsMsg_auth hhs]
-  exact follow_slots (c := { c with rf := some pid, hs := .done, pend := none, smp := c.smp || s }) rfl hf hs hia
+  rw [joined_eq hi hhs hkw, rx_plain, hsMsg_auth hhs hkw]
+  exact follow_slots (c := { c with rf := some pid, hs := .done, pend := none, smp := c.smp || s }) hpa rfl hf hs
 
 /-- The rule before the correction (found by this model): the same datagram, the dial on path 1 with two free slots
 and the resume Reply on path 9, leaves path 9 held twice. -/
 theorem noLookup_dup :
     (rxNoLook 3 (dial 1) 9 .auth true false).t 1 = some ⟨9, false⟩ ∧
       (rxNoLook 3 (dial 1) 9 .auth true false).t 2 = some ⟨9, false⟩ ∧
-      (rxNoLook 3 (dial 1) 9 .auth true false).act = 1 ∧
+      (rxNoLook 3 (dial 1) 9 .auth true false).act = 0 ∧
       uniqueB 3 (rxNoLook 3 (dial 1) 9 .auth true false).t = false := by
   decide
 

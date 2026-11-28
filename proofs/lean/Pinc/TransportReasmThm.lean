@@ -11,7 +11,7 @@ What the model proves about `Reassembly`, over unbounded messages and any run of
   message length stays within `mx` (`Inv`, `add_inv`);
 - reassembly is exact: a fragment that is kept makes the runs cover exactly what they covered plus the fragment
   (cut at the end of the message); a fragment that finds no free run changes nothing; a fragment of a message of
-  another length starts from nothing (`add_cover`);
+  another length is refused while runs are held and starts from nothing when none are (`add_cover`);
 - a message is handed over only when every byte `0 .. total - 1` is covered, and then the reassembly is fresh
   (`add_complete`).
 -/
@@ -192,6 +192,12 @@ theorem add_inv (r : R) (mx nr total off dlen : Nat) (hr : Inv mx nr r) :
     obtain ⟨-, rfl⟩ := h
     exact hr
   · rw [if_neg h0] at h
+    by_cases hc : total ≠ r.total ∧ r.runs ≠ []
+    · rw [if_pos hc] at h
+      simp only [Prod.mk.injEq] at h
+      obtain ⟨-, rfl⟩ := h
+      exact hr
+    rw [if_neg hc] at h
     have h0' : 0 < total ∧ total ≤ mx := by omega
     have hr1 : Inv mx nr (if total ≠ r.total then ({ runs := [], total } : R) else r) := by
       split
@@ -240,17 +246,23 @@ theorem add_inv (r : R) (mx nr total off dlen : Nat) (hr : Inv mx nr r) :
             · exact hb1 iv h
 
 /-- Reassembly is exact. A fragment the reassembly keeps adds exactly its bytes (cut at the end of the message) to
-what the runs cover; one that finds no free run changes no run; a fragment of a message of another length starts
-from nothing. -/
+what the runs cover; one that finds no free run changes no run; a fragment of a message of another length is
+refused while runs are held (and changes nothing) and starts from nothing when none are. -/
 theorem add_cover (r : R) (mx nr total off dlen : Nat) (hr : Inv mx nr r) (h0 : ¬ (total = 0 ∨ mx < total))
     (h1 : ¬ (min (off + dlen) total ≤ off)) :
     let r1 : R := if total ≠ r.total then { runs := [], total } else r
     ∀ r', add r mx nr total off dlen = (none, r') →
       (r'.runs = r1.runs ∧ r'.total = r1.total) ∨
-      (∀ n, Cov r'.runs n ↔ (Cov r1.runs n ∨ (off ≤ n ∧ n < min (off + dlen) total))) := by
+      (∀ n, Cov r'.runs n ↔ (Cov r1.runs n ∨ (off ≤ n ∧ n < min (off + dlen) total))) ∨
+      (total ≠ r.total ∧ r.runs ≠ [] ∧ r' = r) := by
   intro r1 r' h
   unfold add at h
   rw [if_neg h0] at h
+  by_cases hc : total ≠ r.total ∧ r.runs ≠ []
+  · rw [if_pos hc] at h
+    simp only [Prod.mk.injEq] at h
+    exact Or.inr (Or.inr ⟨hc.1, hc.2, h.2.symm⟩)
+  rw [if_neg hc] at h
   simp only [r1] at h ⊢
   have hr1 : Inv mx nr (if total ≠ r.total then ({ runs := [], total } : R) else r) := by
     have h0' : 0 < total ∧ total ≤ mx := by omega
@@ -277,7 +289,7 @@ theorem add_cover (r : R) (mx nr total off dlen : Nat) (hr : Inv mx nr r) (h0 : 
     · rw [if_neg h3] at h
       simp only [Prod.mk.injEq] at h
       obtain ⟨-, rfl⟩ := h
-      refine Or.inr (fun n => ?_)
+      refine Or.inr (Or.inl (fun n => ?_))
       rw [insertRun_cov]
       have := c6 n
       simp only [Pinc.TransportRx.cov_nil, false_or] at this
@@ -291,6 +303,9 @@ theorem add_complete (r : R) (mx nr total off dlen t : Nat) (hr : Inv mx nr r) (
         (off ≤ n ∧ n < min (off + dlen) total)) := by
   unfold add at h
   rw [if_neg h0] at h
+  by_cases hc : total ≠ r.total ∧ r.runs ≠ []
+  · rw [if_pos hc] at h; simp at h
+  rw [if_neg hc] at h
   have hr1 : Inv mx nr (if total ≠ r.total then ({ runs := [], total } : R) else r) := by
     have h0' : 0 < total ∧ total ≤ mx := by omega
     split

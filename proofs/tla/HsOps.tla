@@ -456,6 +456,8 @@ RInitial(st, s, sto, m) ==
                    THEN ROk([st1 EXCEPT !.nre = @ + 1], {st.reply}, {}, sto)
                    ELSE RRes(st1, {}, {}, "drop", sto, {}, {}))
              ELSE RDrop(st, sto))
+       (* the same Initial while its Reply waits for the signature: taken, nothing sent; the signed Reply answers it *)
+       ELSE IF st.ph = "sign" /\ st.th0 = th0 THEN ROk(st, {}, {}, sto)
        ELSE IF st.ph # "idle" THEN RDrop(st, sto)
        ELSE IF m.ver # "ok" THEN RFatal(st, sto)
        ELSE IF ~Served(m.al) THEN RFatal(st, sto)

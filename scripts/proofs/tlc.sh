@@ -497,6 +497,29 @@ par run_tlc cc_pacer_limited Cc Cc_pacer_limited
 par witness_tlc cc_pacer_strict Cc Cc_pacer_strict PacerRateStrict
 par run_tlc pn Pn Pn
 par run_tlc reasm Reasm Reasm
+par witness_tlc reasm_last Reasm Reasm_last Agrees
+par run_tlc reasm_pair ReasmPair ReasmPair
+par run_tlc reasm_pair_any ReasmPair ReasmPair_any
+par run_tlc reasm_pair_any3 ReasmPair ReasmPair_any3
+par witness_tlc reasm_pair_one ReasmPair ReasmPair_one Served
+par witness_tlc reasm_pair_last ReasmPair ReasmPair_last Served
+par witness_tlc reasm_pair_two ReasmPair ReasmPair_two Served
+par witness_tlc reasm_pair_async ReasmPair ReasmPair_async Served
+par witness_tlc reasm_pair_keep ReasmPair ReasmPair_keep Served
+par run_tlc first_flight FirstFlight FirstFlight
+par run_tlc first_flight_cut FirstFlight FirstFlight_cut
+par run_tlc first_flight_two FirstFlight FirstFlight_two
+par witness_tlc first_flight_code_cut FirstFlight FirstFlight_code_cut Served
+par witness_tlc first_flight_code_two FirstFlight FirstFlight_code_two Served
+par witness_tlc first_flight_nofork FirstFlight FirstFlight_nofork Served
+par witness_tlc first_flight_noadd FirstFlight FirstFlight_noadd Served
+par witness_tlc first_flight_noagree FirstFlight FirstFlight_noagree Served
+par witness_tlc first_flight_race FirstFlight FirstFlight_race Served
+par witness_tlc first_flight_fill FirstFlight FirstFlight_fill Served
+par witness_tlc first_flight_b4 FirstFlight FirstFlight_b4 Served
+par witness_tlc first_flight_cmp FirstFlight FirstFlight_cmp Served
+par witness_tlc first_flight_agree FirstFlight FirstFlight_agree Served
+par witness_tlc first_flight_old FirstFlight FirstFlight_old Served
 par run_tlc early Early Early
 par run_tlc early_cap3 Early Early_cap3
 par witness_tlc early_oldest Early Early_oldest FullRefuses
@@ -672,6 +695,10 @@ par run_tlc reply_path_one ReplyPath ReplyPath_one
 par witness_tlc reply_path_held ReplyPath ReplyPath_held ReplyTaken
 par witness_tlc reply_path_coalesced ReplyPath ReplyPath_coalesced Unique
 par witness_tlc reply_path_resume ReplyPath ReplyPath_resume ResumeProvesNothing
+par witness_tlc reply_path_move ReplyPath ReplyPath_move ActiveValid
+par witness_tlc reply_path_active ReplyPath ReplyPath_active Answered
+par witness_tlc reply_path_loose ReplyPath ReplyPath_loose RespValid
+par witness_tlc reply_path_nohold ReplyPath ReplyPath_nohold NotLost
 par run_tlc timers Timers Timers
 par witness_tlc timers_close Timers Timers_close NoCloseSent
 par witness_tlc timers_nowake Timers Timers_nowake PollLeLife
@@ -832,3 +859,11 @@ par witness_tlc facade_turn_drain FacadeTurn FacadeTurn_drain NotCut
 par run_tlc facade_turn_wrapfew FacadeTurn FacadeTurn_wrapfew
 par witness_tlc facade_turn_wrapkeep FacadeTurn FacadeTurn_wrapkeep QueueOnce
 par witness_tlc facade_turn_donegap FacadeTurn FacadeTurn_donegap DoneInline
+par run_tlc corepairs CorePairs CorePairs
+par witness_tlc corepairs_mintfirst CorePairs CorePairs_mintfirst HeldStays
+par witness_tlc corepairs_norelease CorePairs CorePairs_norelease HeldStays
+par run_tlc punchchain PunchChain PunchChain
+par witness_tlc punchchain_unbounded PunchChain PunchChain_unbounded Cost
+par run_tlc streamend StreamEnd StreamEnd
+par witness_tlc streamend_stale StreamEnd StreamEnd_stale Fresh
+par witness_tlc streamend_twice StreamEnd StreamEnd_twice EndOnce

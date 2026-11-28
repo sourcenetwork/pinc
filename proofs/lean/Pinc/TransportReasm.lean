@@ -5,7 +5,9 @@ A model of `pinc-transport` `conn/reasm.rs` (`Reassembly`), as `proofs/tla/Reasm
 `Nat`: one handshake message put together from fragments that arrive in any order and any number of times, kept as
 at most `nr` disjoint sorted runs `[start, end)`. `Pinc.TraceReasm` replays the recorded calls of the real code
 through these functions; the theorems are in `Pinc.TransportReasmThm`. The bytes are not in the model: the code
-copies a fragment into the buffer at its offset when it keeps it.
+copies a fragment into the buffer at its offset when it keeps it, and refuses one whose bytes differ from what the
+runs hold at an offset they cover (`proofs/tla/Reasm.tla`, `Agrees`, checks that part); a fragment of another length
+while runs are held is refused here as there.
 -/
 
 namespace Pinc.TransportReasm
@@ -32,6 +34,7 @@ def insertRun : List Iv → Iv → List Iv
 (and a fresh reassembly), and the new state. `mx` is the largest message, `nr` the most runs. -/
 def add (r : R) (mx nr total off dlen : Nat) : Option Nat × R :=
   if total = 0 ∨ mx < total then (none, r)
+  else if total ≠ r.total ∧ r.runs ≠ [] then (none, r)
   else
     let r1 : R := if total ≠ r.total then { runs := [], total } else r
     let stop := min (off + dlen) total

@@ -738,7 +738,8 @@ def rInitSt (st : RState) (n k : Nat) (m : Msg) : RState :=
             al := m.al, ad := rAd n m, dc := m.dc, sc := m.sc, pcr := m.cr }
 
 /-- Responder::on_initial for the session `(n, k)`. The bytes of a resumed responder count whether or not the Reply
-goes out again. -/
+goes out again. The same Initial while its Reply waits for the signature is taken and sends nothing: the signed Reply
+answers it. -/
 def RInitial (st : RState) (n k : Nat) (sto : Store) (m : Msg) : RRes :=
   let sp := st.spent + m.len
   let st1 : RState := { st with spent := sp }
@@ -750,6 +751,7 @@ def RInitial (st : RState) (n k : Nat) (sto : Store) (m : Msg) : RRes :=
       (if st.reply.len ≤ 3 * m.len ∧ sp ≤ LB then ROk { st1 with nre := st1.nre + 1 } [st.reply] [] sto
        else { st := st1, err := .drop, sto := sto })
      else RDrop st sto)
+  else if st.ph = .sign ∧ st.th0 = rT0 m then ROk st [] [] sto
   else if st.ph ≠ .idle then RDrop st sto
   else if m.ver ≠ ok then RFatal st sto
   else if ¬ Served m.al then RFatal st sto

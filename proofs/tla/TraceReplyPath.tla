@@ -18,6 +18,16 @@
 (* model's. reply_from is not recorded: the model carries it, and the path *)
 (* a later key answer moves the session to checks it.                      *)
 (*                                                                         *)
+(* While a Reply waits for its verdict the code holds every handshake      *)
+(* fragment and applies none, so what a held one completes shows only      *)
+(* when it is tried: the recorded k is then "none" (or "rej" for a reject  *)
+(* datagram, which the test tells by its bytes), and the model holds it    *)
+(* as any kind, or drops it (no room in the hold). A Reply may also come   *)
+(* with a second message the same fragment completed (ready), held first.  *)
+(* A key answer recorded "ok" is one that established the session: the     *)
+(* Reply's verdict, or a failed verdict whose held message authenticated   *)
+(* (the dropped count tells them apart).                                   *)
+(*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable PINC_TRACE_DIR, the directory that holds reply_path.ndjson.    *)
 (***************************************************************************)
@@ -32,7 +42,8 @@ Ev0 == Trace[i]
 
 \* the dialing side on path id: the path validated and active in the first slot
 C0(id) == [t |-> [j \in 1..NP |-> IF j = 1 THEN [id |-> id, v |-> TRUE] ELSE Empty], act |-> 1, hs |-> "wait",
-           rf |-> 0, pend |-> 0, smp |-> FALSE, hd |-> 0, rp |-> 0]
+           rf |-> 0, pend |-> 0, smp |-> FALSE, hd |-> 0, fan |-> {}, asked |-> {}, ev |-> [fan |-> {}, val |-> {}],
+           rp |-> 0, hq |-> <<>>]
 
 \* the held paths in slot order, as path_list gives them
 RECURSIVE HeldFrom(_, _)
@@ -52,8 +63,14 @@ AddEv == Ev0.op = "add" /\ LET a == AddPath(c.t, c.act, Ev0.id)
 RmEv == Ev0.op = "rm" /\ LET a == RemovePath(c.t, c.act, Ev0.id)
                          IN a.r = Ev0.r /\ c' = [c EXCEPT !.t = a.t] /\ Same(c', Ev0.v)
 \* the sample a step may give is the one recorded (smp only ever turns on, at the establishment)
-RxEv == Ev0.op = "rx" /\ Ev0.k \in Kinds /\ c' = Rx(c, Ev0.id, Ev0.k, Ev0.coal, Ev0.v.smp, FALSE, TRUE) /\ Same(c', Ev0.v)
-KeyEv == Ev0.op = "key" /\ c' = Key(c, Ev0.r, Ev0.v.smp) /\ Same(c', Ev0.v)
+RxOf(k) == Rx(c, Ev0.id, k, Ev0.coal, Ev0.v.smp, FALSE, TRUE)
+RxEv == /\ Ev0.op = "rx" /\ Ev0.k \in Kinds
+        /\ IF c.hs = "key"
+           THEN Ev0.k \in {"none", "rej"} /\ (c' = c \/ \E k \in Kinds : c' = RxOf(k))
+           ELSE \/ c' = RxOf(Ev0.k)
+                \/ Ev0.k = "pend" /\ \E k \in Kinds : c' = [RxOf("pend") EXCEPT !.hq = <<[id |-> Ev0.id, k |-> k]>>]
+        /\ Same(c', Ev0.v)
+KeyEv == Ev0.op = "key" /\ (\E r \in IF Ev0.r = "ok" THEN {"ok", "bad"} ELSE {Ev0.r} : c' = Key(c, r, Ev0.v.smp)) /\ Same(c', Ev0.v)
 
 Init == i = 1 /\ c = C0(1)
 Step == /\ i <= Len(Trace) /\ Ev0.t = "rp"
@@ -62,10 +79,10 @@ Finished == i > Len(Trace) /\ UNCHANGED vars
 TNext == Step \/ Finished
 TraceSpec == Init /\ [][TNext]_vars
 
-\* the active path is held throughout and validated until the establishment (after it, validated exactly when the dial
-\* held the reply's path: FollowReply computes it and Same compares it with the recorded flags), and no path is held
+\* the active path is held and validated throughout (the dial moves only to a reply's path it held, which the reply
+\* validates; a path only the reply named joins unvalidated and the session stays where it was), and no path is held
 \* twice, throughout (ReplyPath.tla ActiveHeld, ActiveValid, Unique)
-Inv == /\ c.t[c.act].id # 0 /\ (c.hs # "done" => c.t[c.act].v)
+Inv == /\ c.t[c.act].id # 0 /\ c.t[c.act].v
        /\ \A a, b \in 1..NP : (c.t[a].id # 0 /\ c.t[a].id = c.t[b].id) => a = b
 \* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
 ReplayAtEnd == ReplaySeen(i > Len(Trace))
