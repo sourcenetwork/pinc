@@ -101,7 +101,7 @@ proptest! {
             guard += 1;
             prop_assert!(guard < 100_000);
             match t.on_stream_frame(&mut pool, 0, a as u64, &data[a..b], b == len) {
-                Ok(()) => {}
+                Ok(_) => {}
                 // Too many holes right now: the peer would retransmit it later.
                 Err(StreamError::Fragmented) => queue.push_back((a, b)),
                 Err(e) => prop_assert!(false, "unexpected {e}"),
@@ -211,13 +211,22 @@ fn a_grant_waits_for_pool_room_and_is_issued_when_the_pool_gives_it_back() {
     assert_eq!(t.recv_window(), 64 * 1024);
     t.on_stream_frame(&mut pool, 0, 0, &vec![1; 48 * 1024], false).unwrap();
     let hog: Vec<_> = (0..13).map(|_| pool.alloc_chunk().unwrap()).collect();
-    // Consuming frees three chunks, but granting 48 KiB more on top of the 16 KiB outstanding needs 64 KiB.
+    // Consuming frees three chunks, but granting 48 KiB more on top of the 16 KiB outstanding needs 64 KiB: the
+    // grant is the part that fits, at least half a window, and the rest waits for the pool.
     assert_eq!(read_all(&mut t, &mut pool, 0).len(), 48 * 1024);
+    let part = drain_control(&mut t);
+    let max = match part[..] {
+        [ControlFrame::MaxStreamData { id: 0, max }] => max,
+        _ => 0,
+    };
     assert!(
-        drain_control(&mut t).is_empty(),
-        "no grant while the pool cannot hold it"
+        (96 * 1024..112 * 1024).contains(&max),
+        "one partial grant, not the whole window: {part:?}"
     );
-    assert_eq!(t.stream_recv_window(0).unwrap().1, 64 * 1024, "the limit did not move");
+    assert!(
+        t.granted_unreceived() <= pool.available_bytes(),
+        "the grant passes the free bytes"
+    );
     for c in hog {
         pool.free_chunk(c);
     }

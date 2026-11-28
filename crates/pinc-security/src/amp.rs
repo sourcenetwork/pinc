@@ -3,7 +3,8 @@
 //! Invariants: before the path is validated, a send of `n` bytes is allowed only while
 //! `tx + n + OVERHEAD <= 3 * rx`; after validation there is no limit. A caller that sends only when
 //! [`AmpBudget::can_send`] holds keeps `tx <= 3 * rx` for the whole unvalidated phase. Counters saturate, and the
-//! comparison is done in 128 bits, so no input overflows it.
+//! comparison is done in 128 bits, so no input overflows it. A saturated `tx` no longer counts sends, so an
+//! unvalidated budget with `tx == u64::MAX` allows nothing more.
 
 /// The per-datagram overhead counted against the budget, in bytes.
 pub const OVERHEAD: usize = 48;
@@ -41,7 +42,8 @@ impl AmpBudget {
     /// Whether a datagram of `n` bytes may be sent now.
     pub fn can_send(&self, n: u64) -> bool {
         self.validated
-            || u128::from(self.tx) + u128::from(n) + OVERHEAD as u128 <= u128::from(self.rx) * u128::from(FACTOR)
+            || self.tx != u64::MAX
+                && u128::from(self.tx) + u128::from(n) + OVERHEAD as u128 <= u128::from(self.rx) * u128::from(FACTOR)
     }
 
     /// Mark the path validated: there is no limit from now on.
@@ -62,5 +64,45 @@ impl AmpBudget {
     /// Bytes sent.
     pub const fn sent(&self) -> u64 {
         self.tx
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_saturated_send_count_allows_nothing_more() {
+        let mut b = AmpBudget::new();
+        b.on_receive(u64::MAX);
+        let mut sent = 0u128;
+        for _ in 0..4 {
+            if b.can_send(u64::MAX) {
+                b.on_send(u64::MAX);
+                sent += u128::from(u64::MAX);
+            }
+        }
+        assert!(sent <= 3 * u128::from(u64::MAX));
+        assert!(!b.can_send(0));
+    }
+
+    #[test]
+    fn a_saturated_receive_count_allows_sends_up_to_the_bound() {
+        let mut b = AmpBudget::new();
+        b.on_receive(u64::MAX);
+        assert!(b.can_send(1 << 40));
+        b.on_send(u64::MAX - 1);
+        assert!(b.can_send(1000));
+        b.on_send(u64::MAX);
+        assert!(!b.can_send(1));
+    }
+
+    #[test]
+    fn a_validated_budget_is_unaffected_by_saturation() {
+        let mut b = AmpBudget::new();
+        b.on_send(u64::MAX);
+        assert!(!b.can_send(1));
+        b.validate();
+        assert!(b.can_send(u64::MAX));
     }
 }

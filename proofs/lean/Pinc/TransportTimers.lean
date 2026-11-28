@@ -45,6 +45,8 @@ structure S where
   ph : Ph := .hs
   /-- The code of the CLOSE to send, until it left. -/
   close : Option Nat := none
+  /-- The host asked for a datagram since the close began, so the CLOSE was offered to it. -/
+  co : Bool := false
   /-- The 1-RTT sending keys are installed. -/
   keys : Bool := false
   /-- When the peer was last heard (or the connection last resumed). -/
@@ -76,6 +78,12 @@ structure C where
   ack : Option Nat
   /-- The active path may still be sent 64 bytes (the acknowledgement deadline is read only then). -/
   amp : Bool
+  /-- A REKEY request can be written: the send ring and the active path have room for the smallest datagram that
+  carries it (the REKEY deadline is read only then, so a deadline that cannot be acted on is not offered). -/
+  rr : Bool
+  /-- A keepalive can be written: the send ring and the active path have room for the smallest datagram that carries
+  a PING (the keepalive deadline is read only then). The two rooms differ, so each deadline has its own gate. -/
+  kr : Bool
   paced : Option Nat
   path : Option Nat
   mtu : Option Nat
@@ -152,10 +160,10 @@ def poll (k : K) (s : S) (c : C) : Option Nat :=
       some (if s.ld.isSome then addD t c.recov else t)
     else
       let t1 := if !c.conf then addD (idle k s) c.hs else idle k s
-      let t2 := addD (addD t1 c.rekey) c.recov
+      let t2 := addD (addD t1 (if c.rr then c.rekey else none)) c.recov
       let t3 := if c.amp then addD t2 c.ack else t2
       let t4 := addD (addD (addD (addD t3 c.paced) c.path) s.wd) (linkEnd k s)
-      some (if s.ph == .conn then addD (addD t4 (keepDue s)) c.mtu else t4)
+      some (if s.ph == .conn then addD (addD t4 (if c.kr then keepDue s else none)) c.mtu else t4)
 
 /-- The state after a call and what it reported. -/
 structure R where
@@ -176,10 +184,11 @@ def carrier (k : K) (now : Nat) (p : P) : Bool :=
 def silent (s : S) : S := { s with ph := .closed, close := none }
 
 /-- `begin_close`: one CLOSE is to leave if the connection was established with sending keys; otherwise it is over
-at once. -/
+at once. The CLOSE has not been offered to the host yet. -/
 def beginClose (s : S) (err : Nat) (why : Ev) : R :=
   if isOpen s then
-    { s := { s with close := some err, ph := if s.ph == .conn && s.keys then .closing else .closed }, ev := [why] }
+    { s := { s with close := some err, co := false, ph := if s.ph == .conn && s.keys then .closing else .closed },
+      ev := [why] }
   else { s := s, ev := [] }
 
 /-- The handshake timer of `handle_timeout` (`pump` in `conn/drive.rs`): the handshake may run out of time while
@@ -215,14 +224,18 @@ def wakeStep (r : R) (now : Nat) : R :=
   | some w => if w ≤ now then ⟨{ r.s with wd := none }, r.ev ++ [.unanswered]⟩ else r
   | none => r
 
-/-- `handle_timeout`: a closing connection ends; past the idle deadline the connection ends silently and nothing else
+/-- The timer of a closing connection: it ends once its CLOSE was offered to the host (written or not) or it has none
+to send, and until then it waits, so a host held up past the endpoint's grace still sends the CLOSE. -/
+def graceStep (s : S) : R := if s.close.isNone || s.co then ⟨{ s with ph := .closed }, []⟩ else ⟨s, []⟩
+
+/-- `handle_timeout`: a closing connection ends once its CLOSE was offered (`graceStep`); past the idle deadline the connection ends silently and nothing else
 runs; otherwise the handshake timer (it may end a handshaking connection, or a connected one whose peer never confirmed
 the session), the end of a link outage, the recovery timer (it may give up, or close behind a live carrier) and the
 wake wait, in this order. -/
 def timeout (k : K) (s : S) (now : Nat) (cc : CC) (p : P) : R :=
   match s.ph with
   | .closed => ⟨s, []⟩
-  | .closing => ⟨{ s with ph := .closed }, []⟩
+  | .closing => graceStep s
   | _ =>
     if idle k s ≤ now then ⟨silent s, [.idle]⟩
     else
@@ -254,13 +267,14 @@ def canSend (s : S) : Bool :=
   | .closing => s.close.isSome
   | _ => !suspended s
 
-/-- One `poll_transmit` call: `sent` says whether it wrote a datagram, `stx` is the SLEEP count after it. -/
+/-- One `poll_transmit` call: `sent` says whether it wrote a datagram, `stx` is the SLEEP count after it. While
+closing with a CLOSE to send, the call offers it, whether or not it could be written. -/
 def tx (s : S) (now : Nat) (sent : Bool) (stx : Nat) : S :=
   match s.ph with
   | .closed => s
   | .closing =>
     if s.close.isNone then { s with ph := .closed }
-    else if sent then { s with ph := .closed, close := none, sent := now } else s
+    else if sent then { s with ph := .closed, close := none, sent := now, co := true } else { s with co := true }
   | _ => if suspended s then s else { s with sent := if sent then now else s.sent, stx := stx }
 
 /-- Whether the call wrote the CLOSE. -/

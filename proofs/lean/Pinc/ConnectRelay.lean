@@ -104,9 +104,11 @@ structure FB where
   rel : Nat
   at_ : Nat
 
+/-- A sleep mark: when the notice was accepted, the last wake-up asked for, and the notice's clock in ms. -/
 structure Sl where
   at_ : Nat
   woke : Nat
+  ts : Nat := 0
 
 structure Rc where
   seq : Nat
@@ -118,6 +120,8 @@ structure RS where
   tb : ConnectTable.T := ConnectTable.T.new 1
   cd : List (Nat × Client) := []
   gone : List (Nat × Nat) := []
+  /-- The table that holds the entries of `gone` in the code's slots, so a full table drops the entry the code drops. -/
+  gt : ConnectTable.T := ConnectTable.T.new 1
   sl : List (Nat × Sl) := []
   udp : List (Nat × Nat) := []
   /-- Members the host reports with no validated direct route (`Sink::tunnel_ready` is false). -/
@@ -131,7 +135,7 @@ structure RS where
   np : Nat := 0
 
 def RS.new (cf : CF) : RS :=
-  { tb := ConnectTable.T.new cf.C, fb := List.replicate cf.C ⟨0, 0, 0⟩ }
+  { tb := ConnectTable.T.new cf.C, gt := ConnectTable.T.new cf.C, fb := List.replicate cf.C ⟨0, 0, 0⟩ }
 
 structure Out where
   r : RS
@@ -180,7 +184,7 @@ def hold (cf : CF) (r : RS) (now dst src flag len : Nat) : Out :=
   let (mb, res) := ConnectMailbox.push (mc cf) now r.mb dst src flag len
   match res with
   | .stored seq dropped first =>
-    let s : Sl := (aget r.sl dst).getD ⟨0, 0⟩
+    let s : Sl := (aget r.sl dst).getD ⟨0, 0, 0⟩
     let rearm := (aget r.sl dst).isSome && ConnectMailbox.shouldWake wakeRearm now s.woke first
     let r1 := { r with mb := mb, sl := if rearm then aput r.sl dst { s with woke := now } else r.sl }
     okOut r1 ([routedE src dst "mailbox" len, [.s "t", .s "mstored", .n dst, .n seq, .n dropped]] ++
@@ -251,6 +255,17 @@ def releaseHeld (cf : CF) (r : RS) (now node : Nat) : RS × Ef :=
 /-- The answer `o` behind the effects `ef` of an earlier step of the same call. -/
 def Out.after (ef : Ef) (o : Out) : Out := { o with ef := ef ++ o.ef }
 
+/-- A sleep mark lasts as long as the mailbox keeps a message (`cf.age`, `mailbox_max_age_ns`), counted from the notice
+that set it; routing and the sweep read this one rule (relay/mod.rs `mark_live`). -/
+def live (cf : CF) (r : RS) (now n : Nat) : Bool :=
+  match aget r.sl n with
+  | some s => decide (now - s.at_ < cf.age)
+  | none => false
+
+/-- The end of a member's mark by its return (a carrier opened, or `member_returned`), traced so the host writes it. -/
+def sleepEnd (r : RS) (node : Nat) : Ef :=
+  if (aget r.sl node).isSome then [[.s "t", .s "sleepend", .n node]] else []
+
 /-- Whatever the destination holds, a packet goes down its carrier, or down its UDP session, or is held while its sleep
 mark lasts, or is forwarded to its home (or refused); routing starts no release. -/
 def route (cf : CF) (r : RS) (now src dst flag len : Nat) (origin : Origin) : Out :=
@@ -258,7 +273,7 @@ def route (cf : CF) (r : RS) (now src dst flag len : Nat) (origin : Origin) : Ou
   else if (deliverClient cf r now src dst flag len true).2.1 then
     okOut (deliverClient cf r now src dst flag len true).1 (deliverClient cf r now src dst flag len true).2.2
   else if (tunnelDown r now dst src flag len).1 then okOut r (tunnelDown r now dst src flag len).2
-  else if (aget r.sl dst).isSome then hold cf r now dst src flag len
+  else if live cf r now dst then hold cf r now dst src flag len
   else if origin == .peer then fail r "noroute" src
   else forward cf r now src dst flag len
 
@@ -270,17 +285,44 @@ def carrierOpened (cf : CF) (r : RS) (now node : Nat) : Out :=
   | .full => ⟨r, "full", pre ++ [rejE "full" node]⟩
   | .ok _ =>
     let cl : Client := ⟨id, now, now, now, 0, AT.new, AT.new⟩
-    let r1 := { r with tb := t, cd := aput r.cd node cl, ns := id + 1, gone := adel r.gone node, sl := adel r.sl node }
+    let r1 := { r with tb := t, cd := aput r.cd node cl, ns := id + 1, gone := adel r.gone node,
+                       gt := (ConnectTable.remove cf.C r.bkf r.gt node).1, sl := adel r.sl node }
     let (r2, ef) := deliverHeld cf r1 now node
-    okOut r2 (pre ++ [[.s "t", .s "opened", .n node, .n id]] ++ ef)
+    okOut r2 (pre ++ [[.s "t", .s "opened", .n node, .n id]] ++ sleepEnd r node ++ ef)
+
+/-- The key of the first entry with the oldest time, in slot order (`Iterator::min_by_key`). -/
+def oldestKey (es : List ConnectTable.Slot) : Option Nat :=
+  (es.foldl (fun acc x => match acc with
+    | none => some x
+    | some a => if x.v < a.v then some x else some a) none).map (·.k)
+
+/-- `record_gone`: `node` closed at `now`. A full table first drops its entry with the oldest time (a node already in it
+only has its time refreshed), so the close is never lost. -/
+def recordGone (cf : CF) (r : RS) (node now : Nat) : RS :=
+  let r1 :=
+    if (ConnectTable.find cf.C r.bkf r.gt node).isNone && decide (r.gt.len ≥ cf.C) then
+      match oldestKey (ConnectTable.entries r.gt) with
+      | some o => { r with gone := adel r.gone o, gt := (ConnectTable.remove cf.C r.bkf r.gt o).1 }
+      | none => r
+    else r
+  { r1 with gone := aput r1.gone node now, gt := (ConnectTable.insert cf.C r1.bkf r1.gt node now).1 }
+
+/-- The `gone.retain` of the sweep on the slots: the entries closed `goneTtl` or more ago go. -/
+def retainGone (n : Nat) (bk : Nat → Nat) (now : Nat) : Nat → ConnectTable.T → Nat → ConnectTable.T
+  | 0, t, _ => t
+  | fuel + 1, t, i =>
+    if i ≥ n then t
+    else if (ConnectTable.getS t.s i).k = 0 then retainGone n bk now fuel t (i + 1)
+    else if now - (ConnectTable.getS t.s i).v < goneTtl then retainGone n bk now fuel t (i + 1)
+    else retainGone n bk now fuel (ConnectTable.removeAt n bk t i) i
 
 def carrierClosed (cf : CF) (r : RS) (now node sid : Nat) : Out :=
   if !hasC cf r node || (cget r node).id != sid then okOut r []
   else
     let (t, _) := ConnectTable.remove cf.C r.bkf r.tb node
-    let gone1 := if acan r.gone node cf.C then aput r.gone node now else r.gone
-    let asleep := (aget gone1 node).isSome && (match aget r.sl node with | some s => decide (s.at_ ≥ now - sleepWin) | none => false)
-    okOut { r with tb := t, cd := adel r.cd node, gone := gone1 } [[.s "t", .s "closed", .n node, .n (if asleep then 1 else 0)]]
+    let r2 := recordGone cf { r with tb := t, cd := adel r.cd node } node now
+    let asleep := (aget r2.gone node).isSome && (match aget r.sl node with | some s => decide (s.at_ ≥ now - sleepWin) | none => false)
+    okOut r2 [[.s "t", .s "closed", .n node, .n (if asleep then 1 else 0)]]
 
 /-- The client with its byte window restarted when the window length has passed. -/
 def chargeC (cf : CF) (c : Client) (now : Nat) : Client := if now - c.ws ≥ cf.window then { c with ws := now, wb := 0 } else c
@@ -312,13 +354,22 @@ def publish (cf : CF) (r : RS) (now node k seq home rlen : Nat) : Out :=
 /-- The notice's clock is 10 s or more away from the relay's, in milliseconds (`abs_diff`). -/
 def skewed (now ts : Nat) : Bool := decide ((now / 1000000).max ts - (now / 1000000).min ts ≥ skewMs)
 
+/-- `discovery.rs` `sleep_notice`. A copy of the notice that set a live mark changes nothing. Not modelled: on a full
+table the code (`put_sleeper`) first drops the oldest mark whose member holds no mail and traces it ended
+(`SleepEnded`), and refuses only when every mark holds mail; this model refuses at once, which the code does only in
+that last case. No notice of the recorded trace (C 3) evicts a mark, nor does any of `ConnectRelay.tla` (C 2). A
+mark derived from restored mail carries the clock `u64::MAX`, which the skew check refuses, so no notice reads as its
+copy; the restore that derives it is not in this model. -/
 def sleepNotice (cf : CF) (r : RS) (now k ts good sender : Nat) : Out :=
   if sender != 0 && sender != k then fail r "wrongsender" k
   else if skewed now ts then fail r "skew" k
   else if !(hasC cf r k || (aget r.gone k).isSome) then fail r "unknown" k
   else if good == 0 then fail r "sig" k
+  else if live cf r now k && (aget r.sl k).any (·.ts == ts) then okOut r []
   else if !acan r.sl k cf.C then fail r "full" k
-  else okOut { r with sl := aput r.sl k ⟨now, ((aget r.sl k).map (·.woke)).getD 0⟩ } [[.s "t", .s "sleepok", .n k]]
+  else
+    let woke := if live cf r now k then ((aget r.sl k).map (·.woke)).getD 0 else 0
+    okOut { r with sl := aput r.sl k ⟨now, woke, ts⟩ } [[.s "t", .s "sleepok", .n k]]
 
 def weight : List V → Nat
   | [.s "send", _, _, .n l] => l
@@ -389,7 +440,7 @@ def udpGone (r : RS) (node : Nat) : RS := { r with udp := adel r.udp node }
 
 def memberReturned (cf : CF) (r : RS) (now node : Nat) : Out :=
   let (r2, ef) := deliverHeld cf { r with sl := adel r.sl node } now node
-  okOut r2 ef
+  okOut r2 (sleepEnd r node ++ ef)
 
 /-- The SPU datagram of a validated member `m`: the member is heard first (its effects come first, a full table is
 traced and the datagram goes on). -/
@@ -412,8 +463,7 @@ def sweepC (cf : CF) (now : Nat) : Nat → Nat → RS → Ef → RS × Ef
         let c := cget r k
         if now - c.opened < cf.sessT then sweepC cf now fuel (i + 1) r acc
         else
-          let r1 := { r with tb := ConnectTable.removeAt cf.C r.bkf r.tb i, cd := adel r.cd k,
-                             gone := if acan r.gone k cf.C then aput r.gone k now else r.gone }
+          let r1 := recordGone cf { r with tb := ConnectTable.removeAt cf.C r.bkf r.tb i, cd := adel r.cd k } k now
           sweepC cf now fuel i r1 (acc ++ [[.s "t", .s "expired", .n k], [.s "close", .n k, .n c.id, .s "session"]])
 
 /-- The PING written on every client carrier, in slot order. -/
@@ -433,9 +483,12 @@ def timeout (cf : CF) (r0 : RS) (now : Nat) : Out :=
   else
     let (r1, ef) := sweepC cf now (2 * cf.C + 2) 0 r pf
     let gone2 := r1.gone.filter (fun p => now - p.2 < goneTtl)
-    let sl2 := r1.sl.filter (fun p => now - p.2.at_ < goneTtl)
+    -- a mark past its life ends, and the messages held under it end with it (`Mailbox::clear`, counted expired)
+    let sl2 := r1.sl.filter (fun p => now - p.2.at_ < cf.age)
+    let ended := r1.sl.filter (fun p => !(now - p.2.at_ < cf.age))
     let recs2 := r1.recs.filter (fun p => now - p.2.rcv < recTtl)
-    let mb2 := ConnectMailbox.sweep (mc cf) now r1.mb
-    okOut { r1 with ls := now, gone := gone2, sl := sl2, recs := recs2, mb := mb2 } ef
+    let mb2 := ConnectMailbox.sweep (mc cf) now (ended.foldl (fun mb p => ConnectMailbox.clear mb p.1) r1.mb)
+    let gt2 := retainGone cf.C r1.bkf now (2 * cf.C + 2) r1.gt 0
+    okOut { r1 with ls := now, gone := gone2, gt := gt2, sl := sl2, recs := recs2, mb := mb2 } ef
 
 end Pinc.ConnectRelay

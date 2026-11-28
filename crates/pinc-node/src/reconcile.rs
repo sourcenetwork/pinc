@@ -17,10 +17,10 @@ use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use core::fmt;
+use core::ops::ControlFlow;
 
 use pinc_core::{Command, SessionId};
 use pinc_membership::NodeId;
-use pinc_reconcile::limits::FRAME_MAX;
 use pinc_reconcile::{Error, Initiator, Limits, Responder, Step, first_set_ref, frame_len};
 use pinc_transport::stream::{RecvStatus, StreamId};
 use pinc_values::knobs::OPEN_RETRY;
@@ -516,6 +516,52 @@ where
         });
     }
 
+    /// Read `stream` into `buf` and hand every whole message to `each`, until the stream holds nothing readable,
+    /// `each` breaks, or the framing breaks. `frame` gives the length of the message at the front of its argument (and
+    /// what `each` is told of it), `None` if it is not whole yet, or an error if it announces more than the bound.
+    /// At most `cap` bytes are held in `buf`: what does not fit waits on the stream (the transport's flow control
+    /// then holds the peer back) and is read after the messages in hand are handled. Returns the stream's receive
+    /// state and whether the stream broke the framing: a message over the bound, or a full buffer that holds no whole
+    /// message. Messages are handled in order, and the one `each` broke on counts as taken.
+    pub(crate) fn read_messages<T>(
+        &mut self,
+        session: SessionId,
+        stream: StreamId,
+        buf: &mut Vec<u8>,
+        cap: usize,
+        frame: impl Fn(&[u8]) -> Result<Option<(usize, T)>, ()>,
+        mut each: impl FnMut(&mut Self, &[u8], T) -> ControlFlow<()>,
+    ) -> (RecvStatus, bool) {
+        let (mut status, mut more) = self.io.drain_stream(session, stream, buf, cap);
+        loop {
+            let mut used = 0;
+            let (mut halted, mut broken) = (false, false);
+            while !halted {
+                let rest = buf.get(used..).unwrap_or_default();
+                match frame(rest) {
+                    Ok(Some((n, t))) => {
+                        halted = each(self, rest.get(..n).unwrap_or_default(), t).is_break();
+                        used += n;
+                    }
+                    Ok(None) => break,
+                    Err(()) => {
+                        broken = true;
+                        break;
+                    }
+                }
+            }
+            buf.drain(..used);
+            if halted || broken || !more {
+                return (status, broken);
+            }
+            // a full buffer that holds no whole message is a message longer than the bound
+            if used == 0 {
+                return (status, true);
+            }
+            (status, more) = self.io.drain_stream(session, stream, buf, cap);
+        }
+    }
+
     fn round_readable(&mut self, now: Nanos, id: u32) {
         let Some(mut round) = self.recs.as_deref_mut().and_then(|r| r.take(id)) else {
             return;
@@ -525,56 +571,60 @@ where
             return;
         };
         let limits = self.apps.sets().limits();
-        let cap = limits.max_message.min(FRAME_MAX) + 3;
-        let (status, over) = self
-            .io
-            .drain_stream(session, stream, &mut round.inb, cap.saturating_mul(2));
+        let cap = limits.max_body() + 3;
         let mut done = false;
-        let mut failed = if over { Some(ReconcileFailure::Protocol) } else { None };
-        while failed.is_none() && !done {
-            let n = match next_message(&round.inb, cap.saturating_sub(3)) {
-                Ok(Some(n)) => n,
-                Ok(None) => break,
-                Err(()) => {
-                    failed = Some(ReconcileFailure::Protocol);
-                    break;
-                }
-            };
-            let Some(rec) = self.recs.as_deref_mut() else {
-                return;
-            };
-            let Some(idx) = self.apps.sets().index(&round.set_ref) else {
-                failed = Some(ReconcileFailure::UnknownSet);
-                break;
-            };
-            rec.tx.clear();
-            let step = {
-                let msg = round.inb.get(..n).unwrap_or_default();
-                round.init.handle(&idx, msg, &mut rec.tx)
-            };
-            round.inb.drain(..n);
-            match step {
-                Ok(Step::Send) => {
-                    if !self.io.write(session, stream, &rec.tx) {
-                        failed = Some(ReconcileFailure::Protocol);
+        let mut failed = None;
+        let mut gone = false;
+        let (status, broken) = self.read_messages(
+            session,
+            stream,
+            &mut round.inb,
+            cap.saturating_mul(2),
+            |inb| next_message(inb, cap.saturating_sub(3)).map(|n| n.map(|n| (n, ()))),
+            |node, msg, ()| {
+                let Some(rec) = node.recs.as_deref_mut() else {
+                    gone = true;
+                    return ControlFlow::Break(());
+                };
+                let Some(idx) = node.apps.sets().index(&round.set_ref) else {
+                    failed = Some(ReconcileFailure::UnknownSet);
+                    return ControlFlow::Break(());
+                };
+                rec.tx.clear();
+                match round.init.handle(&idx, msg, &mut rec.tx) {
+                    Ok(Step::Send) => {
+                        if !node.io.write(session, stream, &rec.tx) {
+                            failed = Some(ReconcileFailure::Protocol);
+                        }
                     }
-                }
-                Ok(Step::Last) => {
-                    if !self.io.write(session, stream, &rec.tx) {
-                        failed = Some(ReconcileFailure::Protocol);
+                    Ok(Step::Last) => {
+                        if !node.io.write(session, stream, &rec.tx) {
+                            failed = Some(ReconcileFailure::Protocol);
+                        }
+                        node.io.close_stream(session, stream);
+                        done = true;
                     }
-                    self.io.close_stream(session, stream);
-                    done = true;
+                    Ok(Step::Done) => {
+                        // The responder ended the exchange; ours ends with an empty finish.
+                        node.io.close_stream(session, stream);
+                        done = true;
+                    }
+                    Ok(Step::Wait) => {}
+                    Ok(Step::Chunk) => failed = Some(ReconcileFailure::Protocol),
+                    Err(e) => failed = Some(failure(&e)),
                 }
-                Ok(Step::Done) => {
-                    // The responder ended the exchange; ours ends with an empty finish.
-                    self.io.close_stream(session, stream);
-                    done = true;
+                if failed.is_some() || done {
+                    ControlFlow::Break(())
+                } else {
+                    ControlFlow::Continue(())
                 }
-                Ok(Step::Wait) => {}
-                Ok(Step::Chunk) => failed = Some(ReconcileFailure::Protocol),
-                Err(e) => failed = Some(failure(&e)),
-            }
+            },
+        );
+        if gone {
+            return;
+        }
+        if broken {
+            failed = Some(ReconcileFailure::Protocol);
         }
         if let Some(reason) = failed {
             self.round_abort(&round, PROTOCOL);
@@ -625,81 +675,87 @@ where
             return;
         };
         let limits: Limits = self.apps.sets().limits();
-        let cap = limits.max_message.min(FRAME_MAX) + 3;
-        let (status, over) = self.io.drain_stream(session, stream, &mut r.inb, cap.saturating_mul(2));
-        let mut code = if over { Some(PROTOCOL) } else { None };
+        let cap = limits.max_body() + 3;
+        let mut code = None;
         let mut done = false;
-        while code.is_none() && !done {
-            let n = match next_message(&r.inb, cap.saturating_sub(3)) {
-                Ok(Some(n)) => n,
-                Ok(None) => break,
-                Err(()) => {
-                    code = Some(PROTOCOL);
-                    break;
+        let mut gone = false;
+        let (status, broken) = self.read_messages(
+            session,
+            stream,
+            &mut r.inb,
+            cap.saturating_mul(2),
+            |inb| next_message(inb, cap.saturating_sub(3)).map(|n| n.map(|n| (n, ()))),
+            |node, msg, ()| {
+                if r.fresh {
+                    let Ok(name) = first_set_ref(msg).map(<[u8]>::to_vec) else {
+                        code = Some(PROTOCOL);
+                        return ControlFlow::Break(());
+                    };
+                    r.set_ref = Some(name);
+                    r.fresh = false;
                 }
-            };
-            if r.fresh {
-                let named = first_set_ref(r.inb.get(..n).unwrap_or_default()).map(<[u8]>::to_vec);
-                let Ok(name) = named else {
+                let Some(set_ref) = r.set_ref.as_deref() else {
                     code = Some(PROTOCOL);
-                    break;
+                    return ControlFlow::Break(());
                 };
-                r.set_ref = Some(name);
-                r.fresh = false;
-            }
-            let Some(set_ref) = r.set_ref.as_deref() else {
-                code = Some(PROTOCOL);
-                break;
-            };
-            let Some(idx) = self.apps.sets().index(set_ref) else {
-                code = Some(UNKNOWN_SET);
-                break;
-            };
-            let Some(rec) = self.recs.as_deref_mut() else {
-                return;
-            };
-            rec.tx.clear();
-            let mut step = {
-                let msg = r.inb.get(..n).unwrap_or_default();
-                r.machine.handle(&idx, msg, &mut rec.tx)
-            };
-            r.inb.drain(..n);
-            loop {
-                match step {
-                    Ok(Step::Chunk) => {
-                        if !self.io.write(session, stream, &rec.tx) {
+                let Some(idx) = node.apps.sets().index(set_ref) else {
+                    code = Some(UNKNOWN_SET);
+                    return ControlFlow::Break(());
+                };
+                let Some(rec) = node.recs.as_deref_mut() else {
+                    gone = true;
+                    return ControlFlow::Break(());
+                };
+                rec.tx.clear();
+                let mut step = r.machine.handle(&idx, msg, &mut rec.tx);
+                loop {
+                    match step {
+                        Ok(Step::Chunk) => {
+                            if !node.io.write(session, stream, &rec.tx) {
+                                code = Some(PROTOCOL);
+                                break;
+                            }
+                            rec.tx.clear();
+                            step = r.machine.resume(&idx, &mut rec.tx);
+                        }
+                        Ok(Step::Send) => {
+                            if !node.io.write(session, stream, &rec.tx) {
+                                code = Some(PROTOCOL);
+                            }
+                            break;
+                        }
+                        Ok(Step::Last) => {
+                            if !node.io.write(session, stream, &rec.tx) {
+                                code = Some(PROTOCOL);
+                            }
+                            node.io.close_stream(session, stream);
+                            done = true;
+                            break;
+                        }
+                        Ok(Step::Done) => {
+                            node.io.close_stream(session, stream);
+                            done = true;
+                            break;
+                        }
+                        Ok(Step::Wait) => break,
+                        Err(_) => {
                             code = Some(PROTOCOL);
                             break;
                         }
-                        rec.tx.clear();
-                        step = r.machine.resume(&idx, &mut rec.tx);
-                    }
-                    Ok(Step::Send) => {
-                        if !self.io.write(session, stream, &rec.tx) {
-                            code = Some(PROTOCOL);
-                        }
-                        break;
-                    }
-                    Ok(Step::Last) => {
-                        if !self.io.write(session, stream, &rec.tx) {
-                            code = Some(PROTOCOL);
-                        }
-                        self.io.close_stream(session, stream);
-                        done = true;
-                        break;
-                    }
-                    Ok(Step::Done) => {
-                        self.io.close_stream(session, stream);
-                        done = true;
-                        break;
-                    }
-                    Ok(Step::Wait) => break,
-                    Err(_) => {
-                        code = Some(PROTOCOL);
-                        break;
                     }
                 }
-            }
+                if code.is_some() || done {
+                    ControlFlow::Break(())
+                } else {
+                    ControlFlow::Continue(())
+                }
+            },
+        );
+        if gone {
+            return;
+        }
+        if broken {
+            code = Some(PROTOCOL);
         }
         if let Some(code) = code {
             self.io.abandon_with(session, stream, code);
@@ -721,4 +777,35 @@ where
 /// The reset code of a refusal for lack of room, the same the values server uses.
 const fn pinc_values_busy() -> u64 {
     pinc_values::knobs::code::BUSY
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::cast_possible_truncation)]
+mod tests {
+    use alloc::vec;
+
+    use super::*;
+
+    fn framed(body: usize, have: usize) -> Vec<u8> {
+        let mut m = vec![(body >> 16) as u8, (body >> 8) as u8, body as u8];
+        m.resize(3 + have, 0);
+        m
+    }
+
+    /// A body of exactly the longest an honest peer writes is read, one byte more is refused, whether or not the whole
+    /// message has arrived: a peer cannot make the node wait for an endless message.
+    #[test]
+    fn a_body_of_the_longest_length_is_read_and_one_byte_more_is_refused() {
+        let cap = Limits::default().max_body();
+        let lim = Limits {
+            max_message: 154,
+            max_item: 16,
+            ..Limits::default()
+        };
+        let long = lim.max_body();
+        assert_eq!(next_message(&framed(long, long + 3), long), Ok(Some(long + 3)));
+        assert_eq!(next_message(&framed(long, 10), long), Ok(None));
+        assert_eq!(next_message(&framed(long + 1, 10), long), Err(()));
+        assert_eq!(next_message(&framed(cap, 10), cap), Ok(None));
+    }
 }

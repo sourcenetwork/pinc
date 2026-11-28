@@ -57,6 +57,8 @@ impl<N: Node, R: Random, C: CostModel> Sim<N, R, C> {
             log: Vec::new(),
             timer_gen: 0,
             timer_at: None,
+            timer_last: None,
+            timer_left: false,
             busy_until: 0,
             cpu: None,
             clock: Clock::default(),

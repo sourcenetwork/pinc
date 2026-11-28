@@ -231,17 +231,20 @@ theorem RHandle_cases (st : RState) (n k : Nat) (sto : Store) (m : Msg) (cs : Li
             · exact ⟨⟨st.spent + m.len, st.nre + 1, by simp [h1, h2, h3, h4, ROk]⟩, Or.inr (by simp [h1, h2, h3, h4, ROk]), by simp [h1, h2, h3, h4, ROk], by simp [h1, h2, h3, h4, ROk], by simp [h1, h2, h3, h4, ROk]⟩
             · exact ⟨⟨st.spent + m.len, st.nre, by simp [h1, h2, h3, h4, ROk]⟩, Or.inl (by simp [h1, h2, h3, h4, ROk]), by simp [h1, h2, h3, h4, ROk], by simp [h1, h2, h3, h4, ROk], by simp [h1, h2, h3, h4, ROk]⟩
           · left; simp [h1, h2, h3, RDrop]
-        · by_cases h3 : st.ph = .idle
-          · by_cases h4 : m.ver = ok
-            · by_cases h5 : Served m.al
-              · by_cases h6 : rAd n m = nil
-                · right; left; simp [h1, h2, h3, h4, h5, h6, RFatal]
-                · by_cases h7 : m.form = .short ∧ rHpk m ∉ sto.pkc
-                  · right; right; right; right; left; simp [h1, h2, h3, h4, h5, h6, h7, ROk, hty]
-                  · right; right; right; right; right; left; simp [h1, h2, h3, h4, h5, h6, h7, ROk, hty]
-              · right; left; simp [h1, h2, h3, h4, h5, RFatal]
-            · right; left; simp [h1, h2, h3, h4, RFatal]
-          · left; simp [h1, h2, h3, RDrop]
+        · by_cases hs : st.ph = .sign ∧ st.th0 = rT0 m
+          · obtain ⟨hs1, hs2⟩ := hs
+            left; simp [hs1, hs2, ROk]
+          · by_cases h3 : st.ph = .idle
+            · by_cases h4 : m.ver = ok
+              · by_cases h5 : Served m.al
+                · by_cases h6 : rAd n m = nil
+                  · right; left; simp [h1, h2, h3, h4, h5, h6, RFatal]
+                  · by_cases h7 : m.form = .short ∧ rHpk m ∉ sto.pkc
+                    · right; right; right; right; left; simp [h1, h2, h3, h4, h5, h6, h7, ROk, hty]
+                    · right; right; right; right; right; left; simp [h1, h2, h3, h4, h5, h6, h7, ROk, hty]
+                · right; left; simp [h1, h2, h3, h4, h5, RFatal]
+              · right; left; simp [h1, h2, h3, h4, RFatal]
+            · left; simp [h1, h2, h3, hs, RDrop]
     · simp only [RFinish]
       by_cases h1 : st.ph = .finish
       · by_cases h2 : st.hsi = m.sealed.k ∧ st.th3 = m.sealed.ad
@@ -270,14 +273,17 @@ theorem RHandle_cases (st : RState) (n k : Nat) (sto : Store) (m : Msg) (cs : Li
         · by_cases h4 : m.ver = ok
           · by_cases h5 : Served m.al
             · by_cases h6 : rhUsable sto m
-              · by_cases h7 : (rhIs n k sto m cs).ok = false
+              · have hb : ¬ rhBadBinder sto m := fun hb => hb.2.2.2.2 h6.2.2.2.2
+                by_cases h7 : (rhIs n k sto m cs).ok = false
                 · right; right; right; right; right; right; right; right; right; right
-                  simp [h2, h3, h4, h5, h6, h7, hty]
+                  simp [h2, h3, h4, h5, h6, h7, hb, hty]
                 · right; right; right; right; right; right; right; right; right; left
                   have h7' : (rhIs n k sto m cs).ok = true := by simpa using h7
-                  simp [h2, h3, h4, h5, h6, h7', hty]
-              · right; right; right; right; right; right; right; right; left
-                simp [h2, h3, h4, h5, h6, hty, ROk]
+                  simp [h2, h3, h4, h5, h6, h7', hb, hty]
+              · by_cases hb : rhBadBinder sto m
+                · left; simp [h2, h3, h4, h5, hb, hty, RDrop]
+                · right; right; right; right; right; right; right; right; left
+                  simp [h2, h3, h4, h5, h6, hb, hty, ROk]
             · right; left; simp [h2, h3, h4, h5, RFatal]
           · right; left; simp [h2, h3, h4, RFatal]
         · left; simp [h2, h3, RDrop]

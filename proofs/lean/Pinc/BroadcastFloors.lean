@@ -12,7 +12,8 @@ initial state `init born`.
 `note` is the TLA `Note` (per-origin update with its own overflow, then the overall one, then `top := max top ts`;
 `top` starts at `0` where TLA starts at `-1`, both vanish under `max hlc top`); `body`, `settle`, `isOld` are `Body`,
 `Settle`, `IsOld`. Facts for every cap, member count, origin and stamp: `floorsSound`, `floorExact`, `caps`,
-`bareMarker`, `listWithin`, `conservativeOverflow`; concrete witnesses `topFix_needed`, `hubRestartResidual`.
+`bareMarker`, `listWithin`, `conservativeOverflow`; concrete witnesses `topFix_needed`, `hubRestartResidual`. The FLOOR
+frame: `parse_strict` (a frame is taken only if it re-encodes to itself), `parse_encode` (the encoder's frame is taken).
 -/
 
 namespace Pinc.BroadcastFloors
@@ -432,6 +433,106 @@ theorem hubRestartResidual (borns : List Nat) (p o ts : Nat) :
   have ha : ((borns.map fun b => body true (Floors.init b) p).all (·.list.isSome)) = true := by
     simp [List.all_eq_true, body, Floors.init, look]
   simp [isOld, settle, ha, hf _ [], look]
+
+/-! ### The FLOOR frame
+
+`floors.rs` `write` and `parse_floor` at the token level: one token for the topic length, the timestamp, the history
+byte, the list marker, the count, an origin key and an entry's timestamp. `parse_strict`: a frame is taken only if it
+re-encodes to the same tokens, so a refused frame records nothing; `parse_encode`: every frame the encoder writes
+(at most `om` entries, keys ascending) is taken as the body it carries. -/
+
+/-- What a FLOOR frame carries: the floor, the history flag, and the per-origin list if there is one. -/
+structure Wire where
+  floor : Nat
+  hist : Bool
+  list : Option (List (Nat × Nat))
+  deriving DecidableEq
+
+def encList : List (Nat × Nat) → List Nat
+  | [] => []
+  | (k, v) :: t => k :: v :: encList t
+
+/-- `SentFloors::write` behind an empty topic. -/
+def encode (w : Wire) : List Nat :=
+  0 :: w.floor :: (if w.hist then 1 else 0) ::
+    (match w.list with
+     | none => [0]
+     | some l => 1 :: l.length :: encList l)
+
+/-- Exactly `n` entries. -/
+def decList : Nat → List Nat → Option (List (Nat × Nat))
+  | 0, [] => some []
+  | n + 1, k :: v :: t => (decList n t).map ((k, v) :: ·)
+  | _, _ => none
+
+/-- Keys strictly ascending. -/
+def ascending : List (Nat × Nat) → Bool
+  | a :: b :: t => decide (a.1 < b.1) && ascending (b :: t)
+  | _ => true
+
+/-- The list of a FLOOR frame: exactly `n` ascending entries, `n` at most `om`. -/
+def parseList (om n : Nat) (es : List Nat) : Option (List (Nat × Nat)) :=
+  if n ≤ om then (decList n es).bind (fun l => if ascending l then some l else none) else none
+
+/-- `parse_floor`: the topic is empty, the history byte 0 or 1, then the bare marker or the list, and nothing after. -/
+def parse (om : Nat) : List Nat → Option Wire
+  | 0 :: f :: h :: 0 :: [] => if h ≤ 1 then some ⟨f, h == 1, none⟩ else none
+  | 0 :: f :: h :: 1 :: n :: es => if h ≤ 1 then (parseList om n es).map (fun l => ⟨f, h == 1, some l⟩) else none
+  | _ => none
+
+theorem decList_enc {n : Nat} : ∀ {es : List Nat} {l : List (Nat × Nat)}, decList n es = some l →
+    encList l = es ∧ l.length = n := by
+  induction n with
+  | zero => intro es l h; cases es <;> simp_all [decList, encList]
+  | succ n ih =>
+    intro es l h
+    match es, h with
+    | k :: v :: t, h =>
+      simp only [decList, Option.map_eq_some_iff] at h
+      obtain ⟨l', hl', rfl⟩ := h
+      obtain ⟨h1, h2⟩ := ih hl'
+      simp [encList, h1, h2]
+
+theorem decList_self : ∀ l : List (Nat × Nat), decList l.length (encList l) = some l
+  | [] => rfl
+  | (k, v) :: t => by simp [decList, encList, decList_self t]
+
+/-- A frame is taken only if it re-encodes to the same tokens: a refused frame records nothing. -/
+theorem parse_strict (om : Nat) (fr : List Nat) (w : Wire) (h : parse om fr = some w) : encode w = fr := by
+  match fr, h with
+  | 0 :: f :: hb :: 0 :: [], h =>
+    simp only [parse] at h
+    split at h
+    · rename_i hle
+      cases h
+      rcases Nat.le_one_iff_eq_zero_or_eq_one.mp hle with rfl | rfl <;> simp [encode]
+    · cases h
+  | 0 :: f :: hb :: 1 :: n :: es, h =>
+    simp only [parse] at h
+    split at h
+    · rename_i hle
+      simp only [Option.map_eq_some_iff, parseList] at h
+      obtain ⟨l, hl, rfl⟩ := h
+      split at hl
+      · simp only [Option.bind_eq_some_iff] at hl
+        obtain ⟨l', hd, ha⟩ := hl
+        split at ha
+        · cases ha
+          obtain ⟨h1, h2⟩ := decList_enc hd
+          rcases Nat.le_one_iff_eq_zero_or_eq_one.mp hle with rfl | rfl <;> simp [encode, h1, h2]
+        · cases ha
+      · cases hl
+    · cases h
+
+/-- Every frame the encoder writes, with at most `om` ascending entries, is taken as the body it carries. -/
+theorem parse_encode (om : Nat) (w : Wire) (hl : ∀ l, w.list = some l → l.length ≤ om ∧ ascending l = true) :
+    parse om (encode w) = some w := by
+  rcases w with ⟨f, hb, ol⟩
+  cases ol with
+  | none => cases hb <;> rfl
+  | some l =>
+    obtain ⟨h1, h2⟩ := hl l rfl
+    cases hb <;> simp [encode, parse, parseList, h1, h2, decList_self]
 
 end Pinc.BroadcastFloors
 

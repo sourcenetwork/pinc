@@ -27,7 +27,10 @@
 (*    out and ends a link outage exactly when it lasted LDM (DueWork), and *)
 (*    leaves none of its own deadlines in the past (NoStale);              *)
 (*  - at most one CLOSE ever leaves, only from the closing state, and the  *)
-(*    connection is closed after it (OneClose); a peer's CLOSE, the idle   *)
+(*    connection is closed after it (OneClose); a timer call ends a        *)
+(*    closing connection only once its CLOSE was offered to the host (a    *)
+(*    poll_transmit since the close), and then always (CloseWaits,         *)
+(*    CloseFreed); a peer's CLOSE, the idle                                *)
 (*    timeout, a dead path, a handshake timeout and a session its peer     *)
 (*    never confirmed send nothing (SilentEnd); a closed connection stays  *)
 (*    closed, has no timer, sends nothing and takes nothing (ClosedInert); *)
@@ -53,8 +56,10 @@
 (* carrier close that ignores the carrier's freshness), and so is          *)
 (* Timers_nounconf (the rule before #390: the handshake timer ends only a  *)
 (* handshaking connection, so a dialing side whose peer never confirmed    *)
-(* the session stays connected); Timers_close is the reachability witness  *)
-(* of a CLOSE leaving and Timers_carrier that of a carrier close.          *)
+(* the session stays connected), and so is Timers_grace (the close rule    *)
+(* before the fix: a closing connection ends at its next timer, its CLOSE  *)
+(* never offered, breaking CloseWaits); Timers_close is the reachability   *)
+(* witness of a CLOSE leaving and Timers_carrier that of a carrier close.  *)
 (* Lean counterpart: proofs/lean/Pinc/TransportTimers*.lean.               *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
@@ -70,8 +75,9 @@ K == [idle |-> IDLE, hold |-> HOLD, wake |-> WAKE, ldm |-> LDM, cf |-> CF, ir |-
 Comps == {"hs", "rec", "ack", "path", "rekey", "paced", "mtu"}
 Pats == {[x \in Comps |-> None]} \cup {[x \in Comps |-> IF x = y THEN v ELSE None] : y \in Comps, v \in CD}
         \cup {[x \in Comps |-> v] : v \in CD}
-CSet == {[conf |-> cf, amp |-> am, hs |-> f["hs"], rec |-> f["rec"], ack |-> f["ack"], path |-> f["path"],
-          rekey |-> f["rekey"], paced |-> f["paced"], mtu |-> f["mtu"]] : cf \in BOOLEAN, am \in BOOLEAN, f \in Pats}
+CSet == {[conf |-> cf, amp |-> am, rr |-> rr, kr |-> kr, hs |-> f["hs"], rec |-> f["rec"], ack |-> f["ack"],
+          path |-> f["path"], rekey |-> f["rekey"], paced |-> f["paced"], mtu |-> f["mtu"]] :
+          cf \in BOOLEAN, am \in BOOLEAN, rr \in BOOLEAN, kr \in BOOLEAN, f \in Pats}
 CC == {"none", "dead", "hs", "unconf"}
 CloseWhy == {"local", "peer", "viol", "idle", "dead", "hs", "unconf"}
 
@@ -86,8 +92,8 @@ ShapeSet(t) == {Shape(t, p, rl, pt, c) : p \in BOOLEAN, rl \in BOOLEAN, pt \in {
 FullSet == {[ping |-> TRUE, relay |-> rl, ch |-> c, pto |-> pt, lh |-> l, smp |-> sm, sr |-> sr, nd |-> nd] :
               rl \in BOOLEAN, c \in {None} \cup 0..TMAX, pt \in 3..5, l \in 0..TMAX, sm \in BOOLEAN, sr \in 0..2, nd \in 0..1}
 
-S0(ph) == [ph |-> ph, close |-> None, keys |-> ph = "conn", act |-> 0, sent |-> 0, ka |-> None, pa |-> None,
-           la |-> FALSE, stx |-> 0, wd |-> None, ld |-> None]
+S0(ph) == [ph |-> ph, close |-> None, co |-> FALSE, keys |-> ph = "conn", act |-> 0, sent |-> 0, ka |-> None,
+           pa |-> None, la |-> FALSE, stx |-> 0, wd |-> None, ld |-> None]
 
 Init == s \in {S0("hs"), S0("conn")} /\ now = 0 /\ n = 0 /\ closes = 0 /\ why = "none"
 
@@ -135,9 +141,9 @@ Some(x) == IF x = None THEN {} ELSE {x}
 Enabled(c) ==
     {Idle(s, K)} \cup Some(LinkEnd(s, K)) \cup Some(s.wd)
     \cup (IF Suspended(s) THEN (IF s.ld # None THEN Some(c.rec) ELSE {})
-          ELSE Some(c.rekey) \cup Some(c.rec) \cup Some(c.paced) \cup Some(c.path)
+          ELSE (IF c.rr THEN Some(c.rekey) ELSE {}) \cup Some(c.rec) \cup Some(c.paced) \cup Some(c.path)
                \cup (IF ~c.conf THEN Some(c.hs) ELSE {}) \cup (IF c.amp THEN Some(c.ack) ELSE {})
-               \cup (IF s.ph = "conn" THEN Some(KeepDue(s)) \cup Some(c.mtu) ELSE {}))
+               \cup (IF s.ph = "conn" THEN (IF c.kr THEN Some(KeepDue(s)) ELSE {}) \cup Some(c.mtu) ELSE {}))
 MinOf(X) == CHOOSE x \in X : \A y \in X : x <= y
 PollMin == Open(s) => \A c \in CSet : LET p == PollB(s, c, K, BUG)
                                           E == Enabled(c)
@@ -174,6 +180,14 @@ OneClose == /\ closes <= 1
             /\ s.ph = "closing" => closes = 0 /\ s.close # None
             /\ closes = 1 => s.ph = "closed" /\ s.close = None
 SilentEnd == why \in {"peer", "idle", "dead", "hs", "unconf"} => closes = 0 /\ s.ph = "closed" /\ s.close = None
+\* the grace of a close: a timer call leaves a closing connection whose CLOSE was not offered to the host yet as it is
+\* (CloseWaits: a host held up past the grace still sends it), and ends one whose CLOSE was offered, written or not
+\* (CloseFreed: a CLOSE that cannot leave does not hold the state past the next timer)
+CloseWaits == (s.ph = "closing" /\ s.close # None /\ ~s.co) =>
+                \A t \in Times : \A cc \in CC, pr \in Move(t) : TimeoutB(s, t, cc, pr, K, BUG) = [s |-> s, ev |-> <<>>]
+CloseFreed == (s.ph = "closing" /\ s.co) =>
+                \A t \in Times : \A cc \in CC, pr \in Move(t) :
+                  TimeoutB(s, t, cc, pr, K, BUG) = [s |-> [s EXCEPT !.ph = "closed"], ev |-> <<>>]
 \* the handshake's own ends, at a timer call before the idle deadline: a handshaking connection whose handshake ran out
 \* of time and a connected one whose peer never confirmed the session end silently, each reported as its own reason
 \* and only in its own phase
@@ -226,7 +240,8 @@ CarrierClose == Open(s) => \A t \in Times : \A cc \in CC, pr \in ShapeSet(t) :
 CarrierEnd == why = "carrier" => ~Open(s) /\ (s.ph = "closing" => s.close = 0)
 
 Inv == /\ PollMin /\ PollPhase /\ PollLeLife /\ EarlyNothing /\ IdleExact /\ DueWork /\ NoStale
-       /\ OneClose /\ SilentEnd /\ HsEnds /\ ClosedInert /\ KeysWhenConnected /\ IdleRestart /\ SleepHold /\ TimesPast
+       /\ OneClose /\ CloseWaits /\ CloseFreed /\ SilentEnd /\ HsEnds /\ ClosedInert /\ KeysWhenConnected
+       /\ IdleRestart /\ SleepHold /\ TimesPast
        /\ CarrierClose /\ CarrierEnd
 
 \* ---- witnesses ----

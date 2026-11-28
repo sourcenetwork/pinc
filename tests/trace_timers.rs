@@ -11,7 +11,8 @@
 //! injected that do not decode or break a rule, `sleep`, `wake`, `set_link_down`, `set_keepalive`, `pulse` and the
 //! application's opens and writes. The scenarios: random runs with traffic, loss, duplicates, sleep and wake, link
 //! outages, keepalives and closes; the idle timeout on both sides; a local close and its one CLOSE; a close whose
-//! connection reaches a timer first; violations; a sleeping peer held 120 s; an unanswered WAKE; a link outage past
+//! connection reaches a timer past the grace before the host asks for a datagram (the CLOSE still leaves); a close
+//! whose first ask had no room for the CLOSE (the next timer ends it, nothing leaves); violations; a sleeping peer held 120 s; an unanswered WAKE; a link outage past
 //! 30 s; a dial nobody answers, until its handshake gives up; a close while handshaking; a dialing side whose Finish
 //! never reached the responder (the test takes over once the dialing side is connected), which ends the session
 //! unconfirmed at its connect limit counted from when it established (30 s, 60 s on a thin node, the limit following
@@ -66,7 +67,7 @@ use lifecycle::{close_run, dead_run, idle_run, link_run, sleep_hold_run, violati
 use random::random_run;
 use rec::Log;
 use relay::{Carrier, relay_run};
-use unconfirmed::{dial_run, unconfirmed_run};
+use unconfirmed::{dial_run, thin_budget_run, unconfirmed_run};
 
 #[test]
 fn timers_match_the_models() {
@@ -85,12 +86,19 @@ fn timers_match_the_models() {
             next(&mut log);
             idle_run(&mut log, 100 + seed);
         }
-        for (i, (timer_first, talk)) in [(false, false), (true, false), (false, true), (true, true)]
-            .into_iter()
-            .enumerate()
+        for (i, (timer_first, cramped, talk)) in [
+            (false, false, false),
+            (true, false, false),
+            (false, false, true),
+            (true, false, true),
+            (false, true, false),
+            (true, true, true),
+        ]
+        .into_iter()
+        .enumerate()
         {
             next(&mut log);
-            close_run(&mut log, 200 + i as u64, timer_first, talk);
+            close_run(&mut log, 200 + i as u64, timer_first, cramped, talk);
         }
         for (i, bad) in [true, false].into_iter().enumerate() {
             next(&mut log);
@@ -124,6 +132,8 @@ fn timers_match_the_models() {
             next(&mut log);
             unconfirmed_run(&mut log, 750 + i as u64, thin, turn);
         }
+        next(&mut log);
+        thin_budget_run(&mut log, 790);
         for (i, (relay, carrier, node)) in [
             (true, Carrier::Fresh, None),
             (true, Carrier::Edge, None),
@@ -187,6 +197,8 @@ fn timers_match_the_models() {
             "near_direct",
             "near_heard_sampled",
             "near_heard_unsampled",
+            "no_control_room",
+            "ping_room_only",
         ] {
             assert!(
                 log.seen.get(k).copied().unwrap_or(0) > 0,

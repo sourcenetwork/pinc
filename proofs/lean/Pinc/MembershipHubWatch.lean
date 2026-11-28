@@ -115,11 +115,12 @@ theorem newSusp_roster (e : Env) (n : N) (now m since : Nat) (ev : Option Evid) 
       else
         let wait := max PROBE_WAIT_MIN (match ev with | some x => min (x.srtt * 3) U64MAX | none => 0)
         let n1 := N.nsFirst e n m
+        let srttB := N.srttFor e n1 now m ev
         let (n2, probeB) := N.nsSecond e n1 now m ev
-        let sp : Susp := ⟨since, now, probeB, wait⟩
+        let sp : Susp := ⟨since, now, probeB, wait, srttB⟩
         let n3 := ({ n2 with susp := n2.susp.insert m sp }).scheduleConfirm now (now + wait)
         match probeB with
-        | some (tb, _) => n3.scheduleConfirm now (max (max (since + CONFIRM) (now + wait)) (tb + wait))
+        | some (tb, _) => n3.scheduleConfirm now (max (max (since + CONFIRM) (now + wait)) (tb + waitB wait srttB))
         | none => n3.trace (.noIndependentPath m) := by
     unfold N.newSusp N.nsFirst N.nsSecond
     rfl
@@ -162,11 +163,14 @@ theorem cw_lone_new (e : Env) (n : N) (now m since : Nat) (sleep : Option Nat) (
   · cases hev : e.evidence m <;> cases sleep <;> simp_all [newSusp_roster] <;> (intros; exfalso; omega)
   · cases hev : e.evidence m <;> cases sleep <;> simp_all [newSusp_roster] <;> (intros; exfalso; omega)
 
+/-- The confirmation rule: the second probe (`tb`, on `path`, through a relay whose round trip is `srtt`) waits
+`waitB` (the first probe's wait and three round trips of that relay). -/
 def ConfirmCond (e : Env) (n : N) (now m : Nat) (l : Lease) : Prop :=
-  ∃ since sleep sp tb path, e.carrier m = .gone since sleep ∧ ¬ Excused l since sleep (e.evidence m) ∧
+  ∃ since sleep sp tb path srtt, e.carrier m = .gone since sleep ∧ ¬ Excused l since sleep (e.evidence m) ∧
     n.susp.get? m = some sp ∧ sp.since = since ∧ (path = 1 ∨ path = 2) ∧
-    (sp.probeB = some (tb, path) ∨ (sp.probeB = none ∧ tb = now ∧ ∃ r, n.independentRoute e now m (e.evidence m) = some (r, path))) ∧
-    max (max (since + CONFIRM) (sp.probeA + sp.wait)) (tb + sp.wait) ≤ now
+    ((sp.probeB = some (tb, path) ∧ srtt = sp.srttB) ∨
+      (sp.probeB = none ∧ tb = now ∧ ∃ r, n.independentRoute e now m (e.evidence m) = some (r, path) ∧ srtt = N.relaySrtt e r)) ∧
+    max (max (since + CONFIRM) (sp.probeA + sp.wait)) (tb + waitB sp.wait srtt) ≤ now
 
 /-- The `else` of the excuse test in `carrier_watch`: the suspicion of this drop. -/
 def N.cwMain (e : Env) (n : N) (now m since : Nat) (l : Lease) (ev : Option Evid) : N :=
@@ -180,13 +184,13 @@ def N.cwMain (e : Env) (n : N) (now m since : Nat) (l : Lease) (ev : Option Evid
           | some (route, path) =>
             let n := (N.tx e n m route .probe).1
             let n := n.trace (.probeSent m path)
-            let sp := { sp0 with probeB := some (now, path) }
+            let sp := { sp0 with probeB := some (now, path), srttB := N.relaySrtt e route }
             ({ n with susp := n.susp.insert m sp }, sp)
           | none => (n, sp0)
         else (n, sp0)
       match sp.probeB with
       | some (tb, _) =>
-        let dl := max (max (sp.since + CONFIRM) (sp.probeA + sp.wait)) (tb + sp.wait)
+        let dl := max (max (sp.since + CONFIRM) (sp.probeA + sp.wait)) (tb + waitB sp.wait sp.srttB)
         if dl ≤ now then N.confirm e n now m sp l else n.scheduleConfirm now dl
       | none => n
     else N.newSusp e n now m since ev
@@ -234,19 +238,20 @@ theorem cwMain_keeps_unless (e : Env) (n : N) (now m since : Nat) (sleep : Optio
         | some rp =>
           obtain ⟨route, path⟩ := rp
           simp only [hr, rewatch_indep]
-          by_cases hdl : max (max (since + CONFIRM) (sp0.probeA + sp0.wait)) (now + sp0.wait) ≤ now
+          by_cases hdl : max (max (since + CONFIRM) (sp0.probeA + sp0.wait)) (now + waitB sp0.wait (N.relaySrtt e route)) ≤ now
           · right
-            exact ⟨since, sleep, sp0, now, path, hc, hx, hs, hsi, independentRoute_path e n now m _ route path hr,
-              Or.inr ⟨hb, rfl, route, hr⟩, hdl⟩
+            exact ⟨since, sleep, sp0, now, path, N.relaySrtt e route, hc, hx, hs, hsi,
+              independentRoute_path e n now m _ route path hr, Or.inr ⟨hb, rfl, route, hr, rfl⟩, hdl⟩
           · left
             simp only [hdl, if_false]
             exact keep _ (by simp [scheduleConfirm_roster, rewatch_roster])
       | some tbp =>
         obtain ⟨tb, path⟩ := tbp
         simp only [hb, Option.isNone_some, Bool.false_eq_true, ite_false, rewatch_indep]
-        by_cases hdl : max (max (sp0.since + CONFIRM) (sp0.probeA + sp0.wait)) (tb + sp0.wait) ≤ now
+        by_cases hdl : max (max (sp0.since + CONFIRM) (sp0.probeA + sp0.wait)) (tb + waitB sp0.wait sp0.srttB) ≤ now
         · right
-          exact ⟨since, sleep, sp0, tb, path, hc, hx, hs, hsi, hOk m sp0 tb path hs hb, Or.inl hb, by rw [← hsi]; exact hdl⟩
+          exact ⟨since, sleep, sp0, tb, path, sp0.srttB, hc, hx, hs, hsi, hOk m sp0 tb path hs hb, Or.inl ⟨hb, rfl⟩,
+            by rw [← hsi]; exact hdl⟩
         · left
           rw [if_neg hdl]
           exact keep _ (by simp [scheduleConfirm_roster, rewatch_roster])

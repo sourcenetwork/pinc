@@ -79,6 +79,10 @@ pub(super) enum Phase {
 pub(super) struct Sess {
     pub(super) peer: usize,
     pub(super) hidden: bool,
+    /// Streams the layers were told ended: the endpoint answers `Finished` as a state, the layers hear it once.
+    // vertexia: one entry per stream that ended, kept for the session's life (a simulated session ends few streams);
+    // drop the entry when the endpoint reports the stream closed if a scenario ever ends millions.
+    pub(super) ended: BTreeSet<u64>,
 }
 
 /// How the node knows a session an event names.
@@ -172,8 +176,9 @@ pub(super) struct Core {
     pub(super) relay_ids: Vec<pinc_crypto::NodeId>,
     /// The 5 s slot of true time the last path snapshot of the decision trace was taken in.
     pub(super) snap_slot: u64,
-    /// The due deadline the endpoint showed after the previous timer call, to tell a stuck timer from a due one.
-    pub(super) stale_deadline: Option<u64>,
+    /// The time of the previous timer check and whether it left the endpoint's deadline due (see `sim::stuck`).
+    pub(super) timer_last: Option<u64>,
+    pub(super) timer_left: bool,
 }
 
 impl Core {
@@ -256,7 +261,8 @@ impl Core {
             notices: VecDeque::new(),
             relay_ids: Vec::new(),
             snap_slot: 0,
-            stale_deadline: None,
+            timer_last: None,
+            timer_left: false,
             shared,
         })
     }

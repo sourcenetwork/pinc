@@ -14,9 +14,12 @@
 (* (the write out given back, nothing restored). Every call must be the    *)
 (* step the operators of FacadeRelayKeepOps.tla compute: the answer of     *)
 (* each call, the record and the packets the machine holds after it, every *)
-(* write job (a failed one tried again behind the marks not tried yet, at  *)
-(* most MAX_TRIES times), and after each restore and rerun the whole of    *)
-(* what the machine holds and the store error count.                       *)
+(* write job in the order the core takes them (mailbox writes first in,    *)
+(* first out, each with the mark its blob carries; a failed one tried      *)
+(* again behind the marks not tried yet, at most MAX_TRIES times), and     *)
+(* after each restore and rerun the whole of                               *)
+(* what the machine holds (records, packets, sleep marks) and the store    *)
+(* error count.                                                            *)
 (*                                                                         *)
 (* Times are in units of RECORD_TTL_NS / 4; nodes and members are numbered *)
 (* in the order of their store key. Needs the TLA+ CommunityModules (Json, *)
@@ -36,11 +39,14 @@ Ids(l) == [j \in 1..Len(l) |-> l[j].id]
 \* the clock of a call within one run never goes back; the probe sets last_now as the calls that bring these events do
 At(t) == [s EXCEPT !.now = t, !.ln = t]
 
-\* what the test read back after a restore: every record held, every member's packets (members 1..NM in order)
+\* what the test read back after a restore: every record held, every member's packets and sleep mark (its time in units,
+\* -1 for none; members 1..NM in order)
 View(m, e) == /\ {x.n : x \in Rng(e.recs)} = {n \in Nodes : m.rec[n].seq # 0}
               /\ \A x \in Rng(e.recs) : m.rec[x.n].seq = x.seq /\ m.rec[x.n].rcv = x.rcv
               /\ Len(e.mail) = NM
               /\ \A k \in Members : Ids(m.mb[k]) = e.mail[k]
+              /\ Len(e.marks) = NM
+              /\ \A k \in Members : m.sl[k] = e.marks[k]
               /\ m.errs = e.errs
 
 Torn(e) == IF job.k = "none" THEN st ELSE Tear(st, job, e.tear)
@@ -83,6 +89,8 @@ JobEv == /\ E.op = "job" /\ job.k = "none"
             /\ E.k # "none" => r.job.n = E.n
             /\ E.k = "put" => r.job.seq = E.seq /\ r.job.rcv = E.rcv
             /\ E.k = "mail" => r.job.pk = E.pk
+            \* the mark the blob carries (its time in units, -1 for none), on every mail line
+            /\ E.k = "mail" => r.job.mk = E.mk
             /\ s' = r.s /\ job' = r.job
          /\ UNCHANGED st
 

@@ -41,7 +41,8 @@
 //! the member.
 //!
 //! Invariants: the active path index always names a live slot; an unvalidated path never sends past its
-//! amplification budget; a direct path is validated only by an answer to a challenge sent to it, or by another
+//! amplification budget; a direct path is validated only by an answer to a challenge sent to it, or, for a resumed responder, by
+//! the dialer's first 1-RTT packet, for the one path its Reply went to, or by another
 //! session to the same peer validating the same address again ([`Connection::path_returned`]); a path whose address
 //! is gone is never validated again, unless the endpoint adds its id again.
 
@@ -59,6 +60,8 @@ use crate::stream::StreamSource;
 pub(crate) const PTO_FALLBACK: u32 = 3;
 /// Probes sent to a new path.
 const NAT_PROBES: u32 = 9;
+/// Challenges one end sends back with a response in one punch round (the same nine as the probes it sends).
+const NAT_BACK: u8 = 9;
 /// The first gap between probes to a new path.
 const PROBE_BASE: u64 = 33_300_000;
 /// How many of the oldest packets sent on another path are sent again at once when an abandoned path answers.
@@ -258,6 +261,10 @@ pub(crate) struct Paths<const NP: usize> {
     pub(crate) slots: [Option<Path>; NP],
     pub(crate) active: usize,
     pub(crate) held: usize,
+    /// The challenges this end may still send back with a response; refilled by a punch this end starts
+    /// (`start_punch`: its own, or one the host starts for a peer's REACH_OUT) and by a validation, never by time or
+    /// by a challenge received.
+    pub(crate) back_left: u8,
 }
 
 impl<const NP: usize> Paths<NP> {
@@ -267,6 +274,7 @@ impl<const NP: usize> Paths<NP> {
             slots: [None; NP],
             active: 0,
             held: 0,
+            back_left: NAT_BACK,
         }
     }
 
@@ -493,12 +501,13 @@ conn_impl! {
             *s = None;
         }
         self.paths.recount();
+        self.unowe(1 << i);
         Ok(())
     }
 
-    /// Tell the connection the local address of path `id` is gone (the host's interface moved). The path is no longer
-    /// usable: the connection leaves it for the best validated path at once, or as soon as one validates, and then
-    /// forgets it.
+    /// Tell the connection path `id` can no longer be used: its local address is gone (the host's interface moved) or
+    /// the endpoint no longer holds its address pair. The connection leaves the path for the best validated path at
+    /// once, or as soon as one validates, and then forgets it.
     ///
     /// # Errors
     /// [`PathError::Unknown`] if the path is not tracked.
@@ -520,12 +529,23 @@ conn_impl! {
     /// Stop tracking the paths whose local address is gone, except the active one.
     pub(super) fn forget_gone(&mut self) {
         let active = self.paths.active;
+        let mut forgotten = 0u16;
         for (i, s) in self.paths.slots.iter_mut().enumerate() {
             if i != active && s.as_ref().is_some_and(|p| p.gone) {
                 *s = None;
+                forgotten |= 1 << i;
             }
         }
         self.paths.recount();
+        self.unowe(forgotten);
+    }
+
+    /// The slots in `mask` were emptied or given to another path: the handshake flight is owed to no path in them. A
+    /// bit left behind would hand its flight, and the validation the Finish gives a lone owed path, to the next path
+    /// learnt into the slot.
+    fn unowe(&mut self, mask: u16) {
+        self.fan_set &= !mask;
+        self.fan_mask &= !mask;
     }
 
     /// Whether the connection tracks path `id`.
@@ -626,12 +646,21 @@ conn_impl! {
             return Some(i);
         }
         let active = self.paths.active;
-        let free = self
-            .paths
-            .slots
-            .iter()
-            .position(Option::is_none)
-            .or_else(|| self.paths.iter().find(|(i, p)| *i != active && !p.validated).map(|(i, _)| i))?;
+        // A path the handshake flight is still owed is never given up: dropping it would leave the dialer's flight
+        // unanswered on the path it was sent for.
+        let owed = self.fan_set;
+        let free = self.paths.slots.iter().position(Option::is_none).or_else(|| {
+            self.paths
+                .iter()
+                .find(|(i, p)| *i != active && !p.validated && owed & (1 << i) == 0)
+                .map(|(i, _)| i)
+        });
+        let Some(free) = free else {
+            if self.paths.iter().any(|(i, p)| i != active && !p.validated && owed & (1 << i) != 0) {
+                self.stats.paths_owed_full += 1;
+            }
+            return None;
+        };
         self.put_path(free, id, info, now);
         Some(free)
     }
@@ -665,13 +694,32 @@ conn_impl! {
         }
     }
 
+    /// Start validating path `i` by a challenge: queue it, and retry it on the probe cadence (one probe per round
+    /// of the probe timeout, doubling) until it is answered or the probes are spent. A punch or re-join already
+    /// running on the path keeps its own cadence.
+    pub(super) fn challenge_path(&mut self, env: &mut Env<'_, P>, i: usize) {
+        self.queue_challenge(env, i);
+        let gap = self.rec.pto_duration();
+        if let Some(p) = self.paths.get_mut(i)
+            && p.probes_left == 0
+        {
+            p.probes_left = NAT_PROBES;
+            p.probe_gap = gap;
+            p.next_probe = env.now.saturating_add(gap);
+            p.rejoin = false;
+        }
+    }
+
     /// The peer challenged path `i`. If this end sends through a relay, and the path is a direct one it has not
     /// validated and has no challenge out on, its own challenge leaves with the response, in the same datagram, so
     /// both ends validate the direct path in the round trip of the peer's challenge and the session leaves the relay
     /// then. Sent on its own after the response, the challenge would be more than an address that has only sent a
     /// challenge may be answered with (three times what arrived from it), and it would wait for the next probe; the
     /// two frames together fit. One challenge, never a second while it is out: the probes of a punch keep their own
-    /// cadence. An end whose active path is direct gains nothing from it and is left alone, and so is an idle one (no
+    /// cadence. A punch round of this end allows nine of them (`back_left`): the answer to a probe that comes from a new
+    /// port is a new path whose own answer is another challenge, and two ends behind translators that map by
+    /// destination would otherwise send each other challenges for ever. An end whose active path is direct gains
+    /// nothing from it and is left alone, and so is an idle one (no
     /// application data for 20 s): the reference model looks for no direct path on an idle session (its punch round
     /// is skipped), so a session that lapsed onto its relay stays there until data moves again.
     pub(super) fn challenge_back(&mut self, env: &mut Env<'_, P>, i: usize) {
@@ -680,13 +728,15 @@ conn_impl! {
         let wanted = self.phase == Phase::Connected
             && !self.cfg.thin
             && env.now < self.life.app_until
+            && self.paths.back_left > 0
             && self.paths.active().is_none_or(|c| c.info.kind == PathKind::Relay)
             && self
                 .paths
                 .get(i)
                 .is_some_and(|p| p.info.kind == PathKind::Direct && !p.validated && p.challenge.is_none());
         if wanted {
-            self.queue_challenge(env, i);
+            self.paths.back_left = self.paths.back_left.saturating_sub(1);
+            self.challenge_path(env, i);
         }
     }
 
@@ -694,6 +744,7 @@ conn_impl! {
     fn start_punch(&mut self, env: &mut Env<'_, P>, i: usize) {
         let srtt = if self.rec.rtt().has_sample() { self.rec.rtt().smoothed() } else { 0 };
         self.set_challenge(env, i);
+        self.paths.back_left = NAT_BACK;
         if let Some(p) = self.paths.get_mut(i) {
             p.probes_left = NAT_PROBES;
             p.probe_gap = PROBE_BASE.max(srtt / 8);
@@ -720,6 +771,7 @@ conn_impl! {
         p.rtt = if p.last_tx == 0 { 0 } else { now.saturating_sub(p.last_tx) };
         p.rejoin = false;
         let id = p.id;
+        self.paths.back_left = NAT_BACK;
         if !was {
             self.events.push(Ev::PathValidated(id));
             self.mtu_event(i);

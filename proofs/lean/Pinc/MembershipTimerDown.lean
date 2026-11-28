@@ -74,11 +74,12 @@ theorem newSusp_eq2 (e : Env) (n : N) (now m since : Nat) (ev : Option Evid) :
       else
         let wait := max PROBE_WAIT_MIN (match ev with | some x => min (x.srtt * 3) U64MAX | none => 0)
         let n1 := N.nsFirst e n m
+        let srttB := N.srttFor e n1 now m ev
         let (n2, probeB) := N.nsSecond e n1 now m ev
-        let sp : Susp := ⟨since, now, probeB, wait⟩
+        let sp : Susp := ⟨since, now, probeB, wait, srttB⟩
         let n3 := ({ n2 with susp := n2.susp.insert m sp }).scheduleConfirm now (now + wait)
         match probeB with
-        | some (tb, _) => n3.scheduleConfirm now (max (max (since + CONFIRM) (now + wait)) (tb + wait))
+        | some (tb, _) => n3.scheduleConfirm now (max (max (since + CONFIRM) (now + wait)) (tb + waitB wait srttB))
         | none => n3.trace (.noIndependentPath m) := by
   unfold N.newSusp N.nsFirst N.nsSecond
   rfl
@@ -129,7 +130,7 @@ theorem cwMain_ps (e : Env) (n : N) (now m since : Nat) (l : Lease) (ev : Option
           obtain ⟨route, path⟩ := rp
           simp only []
           have key : PS ({ (N.tx e n1 m route .probe).1.trace (.probeSent m path) with
-              susp := ((N.tx e n1 m route .probe).1.trace (.probeSent m path)).susp.insert m { sp0 with probeB := some (now, path) } } : N) n1 :=
+              susp := ((N.tx e n1 m route .probe).1.trace (.probeSent m path)).susp.insert m { sp0 with probeB := some (now, path), srttB := N.relaySrtt e route } } : N) n1 :=
             PS_trans (PS_of_sent (trace_outSent_c _ _)) (tx_ps e n1 m route .probe)
           repeat' split
           all_goals first | exact PS_trans (confirm_ps _ _ _ _ _ _) key | (refine PS_trans ?_ key; exact PS_of_sent rfl)
@@ -297,10 +298,10 @@ theorem cwMain_ak (e : Env) (n : N) (now m since : Nat) (l : Lease) (ev : Option
           obtain ⟨route, path⟩ := rp
           simp only []
           have key : AK n1 ({ (N.tx e n1 m route .probe).1.trace (.probeSent m path) with
-              susp := ((N.tx e n1 m route .probe).1.trace (.probeSent m path)).susp.insert m { sp0 with probeB := some (now, path) } } : N) :=
+              susp := ((N.tx e n1 m route .probe).1.trace (.probeSent m path)).susp.insert m { sp0 with probeB := some (now, path), srttB := N.relaySrtt e route } } : N) :=
             AK.trans (AK.of_ht (N.HT_trans (trace_ht _ _) (tx_ht e n1 m route .probe))) ⟨rfl, rfl, rfl, fun _ _ h => h⟩
           have hb2 : ({ (N.tx e n1 m route .probe).1.trace (.probeSent m path) with
-              susp := ((N.tx e n1 m route .probe).1.trace (.probeSent m path)).susp.insert m { sp0 with probeB := some (now, path) } } : N).isBoot m = false := by
+              susp := ((N.tx e n1 m route .probe).1.trace (.probeSent m path)).susp.insert m { sp0 with probeB := some (now, path), srttB := N.relaySrtt e route } } : N).isBoot m = false := by
             unfold N.isBoot at *; simpa using hb1
           repeat' split
           all_goals first | exact key | exact key.trans (hcf _ _ hb2) | exact key.trans (hsc _ _ _)

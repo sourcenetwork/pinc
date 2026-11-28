@@ -39,7 +39,9 @@ where
     R: AsyncFn(&mut [u8]) -> Result<(usize, SocketAddr)>,
     S: AsyncFn(&[u8], SocketAddr) -> Result<usize>,
 {
-    /// `recv` fills the buffer with one datagram and returns its length and sender; `send` sends one datagram.
+    /// `recv` fills the buffer with one datagram and returns its length and sender; `send` sends one datagram. The
+    /// relay learns the socket's family from the first datagram it receives, so a send before that on a dual-stack
+    /// socket goes out with an IPv4 destination unmapped.
     pub const fn new(recv: R, send: S) -> Self {
         Self { recv, send }
     }

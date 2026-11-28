@@ -100,12 +100,24 @@ pub(crate) struct ViewEntry {
     pub(crate) rec: Record,
 }
 
+/// A removal that waits in [`Membership::recheck`], and what put it there.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Recheck {
+    /// When it is due.
+    pub(crate) due: Nanos,
+    /// Whether its extra look has begun.
+    pub(crate) grace: bool,
+    /// Held because no home was confirmed (set when the entry is made, never changed), not deferred by a window.
+    pub(crate) held: bool,
+}
+
 /// A carrier drop a hub is confirming.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Susp {
     pub(crate) since: Nanos,
     pub(crate) probe_a: Nanos,
-    pub(crate) probe_b: Option<(Nanos, Path)>,
+    /// When the second probe left, the path it took and the smoothed round trip of the relay hub it went through.
+    pub(crate) probe_b: Option<(Nanos, Path, Nanos)>,
     pub(crate) wait: Nanos,
 }
 
@@ -154,12 +166,14 @@ pub struct Membership {
     pub(crate) primary: Option<NodeId>,
     pub(crate) home_ok: Option<NodeId>,
     pub(crate) home_seen: bool,
-    /// Members whose removal a quiet window deferred, each with the instant it is due and whether its extra look
-    /// has begun.
-    pub(crate) recheck: BTreeMap<NodeId, (Nanos, bool)>,
+    /// Members whose removal waits: held until a home is confirmed, or deferred by a quiet window.
+    pub(crate) recheck: BTreeMap<NodeId, Recheck>,
     pub(crate) quiet_until: Nanos,
     /// Whether the extra look of the current window has begun: a removal found during it is due when it ends.
     pub(crate) regrace: bool,
+    /// The earliest instant an omission clock in the copies runs out (it may be early, never late): the tick sweeps
+    /// then, not at the next slow tick.
+    pub(crate) next_absent: Option<Nanos>,
     pub(crate) gone_ver: BTreeMap<NodeId, (u16, [u8; 8])>,
     pub(crate) left: BTreeSet<NodeId>,
     pub(crate) next_renew: Nanos,
@@ -243,6 +257,7 @@ impl Membership {
             recheck: BTreeMap::new(),
             quiet_until: 0,
             regrace: false,
+            next_absent: None,
             gone_ver: BTreeMap::new(),
             left: BTreeSet::new(),
             next_renew: now,
@@ -435,7 +450,8 @@ impl Membership {
         self.regrace = false;
         if cause == QuietCause::LateTimer {
             for e in self.recheck.values_mut() {
-                *e = (self.quiet_until, false);
+                e.due = self.quiet_until;
+                e.grace = false;
             }
         }
         self.trace(Trace::Quiet { cause });
@@ -468,6 +484,8 @@ impl Membership {
             return;
         }
         self.up.insert(*peer, now);
+        // A session that replaces one without a `session_down` cut that one's snapshot as well.
+        self.stream_reset(peer);
         if incoming {
             self.attached.remove(peer);
         }
@@ -492,8 +510,18 @@ impl Membership {
         self.drop_peer(h, now, peer);
     }
 
+    /// A stream `peer` wrote on ended, or its session did, with the session staying up: a snapshot of its roster that
+    /// was cut short will not be finished. The copy is closed, so the next snapshot of `peer` starts a new round and
+    /// ages what only the cut one listed.
+    pub fn stream_reset(&mut self, peer: &NodeId) {
+        if let Some(c) = self.hv.get_mut(peer) {
+            c.open = false;
+        }
+    }
+
     pub(crate) fn drop_peer<H: Host>(&mut self, h: &mut H, now: Nanos, peer: &NodeId) {
         self.up.remove(peer);
+        self.stream_reset(peer);
         self.attached.remove(peer);
         self.homed.remove(peer);
         if let Some(v) = self.hello_at.get_mut(peer) {

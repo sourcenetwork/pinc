@@ -387,7 +387,7 @@ fn the_random_source_is_pluggable() {
 }
 
 #[test]
-fn timeouts_that_do_not_advance_are_counted_and_pushed_one_millisecond() {
+fn a_timeout_left_due_by_two_timer_calls_in_a_row_is_counted_and_pushed_one_millisecond() {
     let mut sim: Sim<Probe> = Sim::new(1);
     let mut sticky = Probe::new();
     sticky.sticky = true;
@@ -395,8 +395,21 @@ fn timeouts_that_do_not_advance_are_counted_and_pushed_one_millisecond() {
     sim.command(0, a, ProbeCmd::Timer(MS));
     sim.run_until(5 * MS + 500_000);
     let times: Vec<Time> = sim.events(a).iter().map(|(t, _)| *t).collect();
-    assert_eq!(times, vec![MS, 2 * MS, 3 * MS, 4 * MS, 5 * MS]);
+    assert_eq!(times, vec![MS, MS, 2 * MS, 3 * MS, 4 * MS, 5 * MS]);
     assert_eq!(sim.metrics().timer_violations, 5);
+}
+
+#[test]
+fn a_timeout_at_the_calls_own_time_once_is_served_at_once_and_not_counted() {
+    let mut sim: Sim<Probe> = Sim::new(1);
+    let mut again = Probe::new();
+    again.again = 1;
+    let a = sim.add_node_at(again, ip(1));
+    sim.command(0, a, ProbeCmd::Timer(MS));
+    sim.run_until(5 * MS);
+    let times: Vec<Time> = sim.events(a).iter().map(|(t, _)| *t).collect();
+    assert_eq!(times, vec![MS, MS]);
+    assert_eq!(sim.metrics().timer_violations, 0);
 }
 
 const NAT_EXT: IpAddr = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 1));

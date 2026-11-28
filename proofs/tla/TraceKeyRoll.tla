@@ -43,7 +43,7 @@ KR == INSTANCE KeyRoll WITH PTO <- 1, MaxTime <- 1, Cap0 <- 1, Cap1 <- 1, MaxPn 
                             nd <- 0, net <- 0, now <- 0, slog <- 0, ev <- 0, comp <- 0
 RC == INSTANCE Record WITH MaxPn <- 1000000, AesLimit <- 0, ChachaLimit <- 0, MaxGen <- 1000000, Sat <- 1000000,
                            Aead <- "aes", DhIds <- {}, key <- 0, log <- 0
-CD == INSTANCE RekeyCodec WITH ans <- 0, sh <- 0, echo <- 0, spn <- 0
+CD == INSTANCE RekeyCodec WITH ans <- 0, sh <- 0, echo <- 0, num <- 0
 U == INSTANCE U64
 
 Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/keyroll.ndjson")
@@ -99,7 +99,7 @@ OnReqEv ==
     LET n == Ev.n
         fr == KR!Atom(n, rs.ctr[n])
         sh == InShare(rs.sOm, Ev.share, Ev.zero)
-        m == [ans |-> Ev.ans, sh |-> sh, spn |-> 0, to |-> KR!NONE, gdh |-> KR!NONE]
+        m == [ans |-> Ev.ans, sh |-> sh, spn |-> 0, roll |-> IF Ev.ans THEN 0 ELSE Ev.roll, to |-> KR!NONE, gdh |-> KR!NONE]
         r == KR!ROnRequest(rs.rolls[n], m, Ev.spn, fr)
         om1 == rs.sOm \cup {<<sh, Ev.share>>}
         om2 == IF r.res = "ok" THEN om1 \cup {<<r.ans.sh, Ev.oans>>} ELSE om1
@@ -119,8 +119,8 @@ OnReqEv ==
 OnAnsEv ==
     LET n == Ev.n
         sh == InShare(rs.sOm, Ev.share, Ev.zero)
-        m == [ans |-> Ev.ans, sh |-> sh, spn |-> Ev.spn, to |-> IF Ev.ans THEN InEcho(rs.eOm, Ev.echo) ELSE KR!NONE,
-              gdh |-> KR!NONE]
+        m == [ans |-> Ev.ans, sh |-> sh, spn |-> Ev.spn, roll |-> 0,
+              to |-> IF Ev.ans THEN InEcho(rs.eOm, Ev.echo) ELSE KR!NONE, gdh |-> KR!NONE]
         r == KR!ROnAnswer(rs.rolls[n], m)
         om1 == rs.sOm \cup {<<sh, Ev.share>>}
         dm2 == IF r.res = "ok" THEN rs.dOm \cup {<<r.dh, Ev.dh>>} ELSE rs.dOm
@@ -178,7 +178,8 @@ DueEv ==
        /\ UNCHANGED rs
 
 EncEv ==
-    LET e == CD!RkEncode([ans |-> Ev.ans, sh |-> Ev.share, echo |-> Ev.echo, spn |-> U!FromLimbs(Ev.sl)])
+    LET e == CD!RkEncode([ans |-> Ev.ans, sh |-> Ev.share, echo |-> Ev.echo, spn |-> U!FromLimbs(Ev.sl),
+                          roll |-> U!FromLimbs(Ev.rl)])
     IN /\ Ev.op = "enc"
        /\ IF e.err = "ok" THEN Ev.res = "ok" /\ Ev.bytes = e.bytes ELSE Ev.res = "overflow" /\ Ev.bytes = <<>>
        /\ UNCHANGED rs
@@ -187,7 +188,8 @@ DecEv ==
     LET d == CD!RkDecode(Ev.bytes)
     IN /\ Ev.op = "dec"
        /\ IF d.err = "ok"
-          THEN Ev.res = "ok" /\ Ev.ans = d.ans /\ Ev.share = d.sh /\ Ev.echo = d.echo /\ U!FromLimbs(Ev.sl) = d.spn
+          THEN /\ Ev.res = "ok" /\ Ev.ans = d.ans /\ Ev.share = d.sh /\ Ev.echo = d.echo /\ U!FromLimbs(Ev.sl) = d.spn
+               /\ U!FromLimbs(Ev.rl) = d.roll
           ELSE Ev.res = (IF d.err \in {"kind", "trailing"} THEN d.err ELSE "other")
        /\ UNCHANGED rs
 

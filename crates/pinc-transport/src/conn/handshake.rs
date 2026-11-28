@@ -57,16 +57,17 @@
 
 use pinc_crypto::provider::KEM_CIPHERTEXT_LEN;
 use pinc_crypto::{IdentityAlg, Provider};
-use pinc_security::initiator::REJECT_GAP;
-use pinc_security::message::{MAX_MESSAGE_LEN, MessageType};
-use pinc_security::{
-    Env, Event as SecEvent, Failure, Initiator, KeyHandle, KeyRequest, Output, Responder, ResponderStores,
-};
-use pinc_wire::{Reader, varint};
+use pinc_security::message::{MAX_MESSAGE_LEN, MessageType, classical_reply_len, max_first_len};
+use pinc_security::{ConnId, Env, Event as SecEvent, Failure, Initiator, KeyHandle, KeyRequest, Output, Responder};
+use pinc_wire::varint;
 
 use super::reasm::Reassembly;
-use crate::recovery::{MS, SECOND};
+
+#[path = "handshake_rx.rs"]
+mod receive;
+use crate::recovery::{MS, SECOND, deadline_after};
 use crate::stream::pool::{BufferPool, CHUNK_SIZE, Chunk};
+pub(crate) use receive::Got;
 
 /// The first resend delay of a dialing side when no round trip is known (the algorithm's 500 ms).
 const FIRST: u64 = 500 * MS;
@@ -109,9 +110,17 @@ const MIN_SAMPLE: u64 = MS;
 /// The longest message a key request signs.
 const SIGN_MAX: usize = 64;
 
+/// Where a responder keeps its first message in the handshake chunk, after the two message buffers.
+const FIRST_OFF: usize = 2 * MAX_MESSAGE_LEN;
+/// The longest first message a responder keeps to compare its repeats against.
+const FIRST_MAX: usize = max_first_len();
+/// The longest message the second candidate of the reassembly holds in the handshake chunk: a Reply of a classical
+/// identity. A longer one (a post-quantum Reply, a Finish) takes a chunk of its own on the first conflict.
+const ALT_MAX: usize = classical_reply_len();
+
 const _: () = assert!(
-    2 * MAX_MESSAGE_LEN <= CHUNK_SIZE,
-    "both handshake buffers fit one pool chunk"
+    FIRST_OFF + FIRST_MAX + ALT_MAX <= CHUNK_SIZE,
+    "both handshake buffers, a responder's first message and a second candidate fit one pool chunk"
 );
 
 /// What the timers know about the node: how long round trips take. All durations in nanoseconds.
@@ -356,6 +365,23 @@ pub(crate) struct Handshake {
     tx_retx: bool,
     retransmitting: bool,
     rx: Reassembly,
+    /// The second candidate of a message only this session receives (see [`receive`]), and whether it was written
+    /// less recently than the first.
+    alt: Reassembly,
+    alt_lru: bool,
+    /// The chunk of the second candidate for a message longer than [`ALT_MAX`], taken on the first conflict.
+    spill: Option<Chunk>,
+    /// The length of a responder's first message, kept at [`FIRST_OFF`]; 0 before it has one.
+    first_len: usize,
+    /// The fragment last taken was a part of the first message again, or added no byte to the one being assembled.
+    repeat: bool,
+    /// A dialing side that waits for the verdict on a Reply: the length of the second candidate's message, complete
+    /// and not yet fed (the first candidate's is the one the machine holds).
+    ready: Option<u16>,
+    /// The chunk of the handshake fragments that arrived while that verdict was awaited, taken at the first one.
+    hold: Option<Chunk>,
+    /// The bytes of `hold` in use.
+    hold_len: u16,
     pub(crate) request: Option<OwnedRequest>,
     pub(crate) request_announced: bool,
     stage: Stage,
@@ -428,10 +454,18 @@ impl Handshake {
             tx_retx: false,
             retransmitting: false,
             rx: Reassembly::new(),
+            alt: Reassembly::new(),
+            alt_lru: false,
+            spill: None,
+            first_len: 0,
+            repeat: false,
+            ready: None,
+            hold: None,
+            hold_len: 0,
             request: None,
             request_announced: false,
             stage: Stage::Open,
-            retx_at: client.then(|| now.saturating_add(first)),
+            retx_at: client.then(|| deadline_after(now, first)).flatten(),
             held: false,
             sends,
             srtt: 0,
@@ -511,7 +545,7 @@ impl Handshake {
                         }
                         // A responder's resend schedule starts when its flight first goes out.
                         if !self.client && self.stage == Stage::Open && self.retx_at.is_none() {
-                            self.retx_at = Some(self.clock.saturating_add(SERVER_FIRST));
+                            self.retx_at = deadline_after(self.clock, SERVER_FIRST);
                         }
                         // It has answered: it holds the handshake for a slow dialer's Finish.
                         if !self.client && self.stage == Stage::Open && !reject && !self.timing.hold {
@@ -551,7 +585,7 @@ impl Handshake {
             SecEvent::ResumeRejected => {
                 self.sends = 1;
                 self.first_sent = self.clock;
-                self.retx_at = Some(self.clock.saturating_add(self.timing.first()));
+                self.retx_at = deadline_after(self.clock, self.timing.first());
             }
             SecEvent::Established(est) => {
                 self.connect_at = None;
@@ -580,8 +614,44 @@ impl Handshake {
         }
     }
 
+    /// Whether a dialing side's machine waits for the answer to a Decapsulate request: the verdict on a Reply.
+    pub(crate) fn awaiting(&mut self) -> bool {
+        self.client
+            && matches!(
+                machine_of(&mut self.machine),
+                Some(Machine::Client(m)) if matches!(m.pending_key_request(), Some(KeyRequest::Decapsulate { .. }))
+            )
+    }
+
+    /// Whether a handshake fragment that arrives now is held, to be applied after the verdict.
+    pub(crate) fn holds(&mut self) -> bool {
+        self.client && (self.hold_len > 0 || self.awaiting())
+    }
+
+    /// The length of the message the second candidate completed with the first, once, if the verdict on the first failed.
+    pub(crate) const fn take_ready(&mut self) -> Option<u16> {
+        self.ready.take()
+    }
+
+    /// Drop what a verdict that came held: the second candidate's length and the held fragments.
+    pub(crate) fn drop_held(&mut self, pool: &mut BufferPool<'_>) {
+        if let Some(c) = self.hold.take() {
+            pool.free_chunk(c);
+        }
+        self.hold_len = 0;
+        self.ready = None;
+    }
+
     /// Return the chunk to the pool once neither buffer is wanted.
     fn release(&mut self, pool: &mut BufferPool<'_>) {
+        if !self.rx_live {
+            self.drop_held(pool);
+            if let Some(c) = self.spill.take() {
+                pool.free_chunk(c);
+            }
+            self.alt.clear();
+            self.first_len = 0;
+        }
         if !self.tx_live && !self.rx_live {
             if let Some(c) = self.chunk.take() {
                 pool.free_chunk(c);
@@ -601,7 +671,7 @@ impl Handshake {
             {
                 self.finish_pto = pto;
             }
-            self.retx_at = Some(now.saturating_add(self.finish_first));
+            self.retx_at = deadline_after(now, self.finish_first);
             // The wait for the peer's confirmation counts from this instant too: the key answer that established the
             // session can come long after the last datagram or timer the handshake took.
             self.established = now;
@@ -655,10 +725,24 @@ impl Handshake {
         true
     }
 
+    /// Stop the flight being sent on the current target (a path whose budget cannot carry a datagram): the next
+    /// target replays it from the start.
+    pub(crate) const fn stop_flight(&mut self) {
+        self.tx_active = false;
+    }
+
     /// Allow short Initials in a dialing side's resends while the clock is below `until`.
     pub(crate) fn set_short_until(&mut self, until: u64) {
         if let Some(Machine::Client(m)) = machine_of(&mut self.machine) {
             m.set_short_until(until);
+        }
+    }
+
+    /// The server id a dialing side's authenticated Reply (or resume Reply) named, once the session is established.
+    pub(crate) fn server_cid(&mut self) -> Option<ConnId> {
+        match machine_of(&mut self.machine) {
+            Some(Machine::Client(m)) => m.server_cid(),
+            _ => None,
         }
     }
 
@@ -774,88 +858,7 @@ impl Handshake {
         }
     }
 
-    /// A fragment arrived, in any order. Returns the length of the complete message once every byte is in;
-    /// [`Self::feed`] hands it to the state machine.
-    pub(crate) fn on_fragment(&mut self, pool: &mut BufferPool<'_>, body: &[u8]) -> Option<usize> {
-        if !self.rx_live {
-            return None;
-        }
-        let mut r = Reader::new(body);
-        let total = usize::try_from(r.read_varint().ok()?).ok()?;
-        let off = usize::try_from(r.read_varint().ok()?).ok()?;
-        let data = r.read_bytes(r.remaining()).ok()?;
-        let buf = self
-            .chunk
-            .as_ref()
-            .and_then(|c| pool.bytes_mut(c).get_mut(MAX_MESSAGE_LEN..));
-        self.rx.add(buf, total, off, data)
-    }
-
-    /// [`Self::on_fragment`] with the state of the reassembly around it and the message buffer after it.
-    #[cfg(feature = "trace")]
-    pub(crate) fn trace_fragment(
-        &mut self,
-        pool: &mut BufferPool<'_>,
-        body: &[u8],
-    ) -> super::reasm::trace::FragmentView {
-        let before = self.rx.trace_view();
-        let ret = self.on_fragment(pool, body);
-        let after = self.rx.trace_view();
-        let n = ret.unwrap_or(0).max(after.total);
-        let message = self
-            .chunk
-            .as_ref()
-            .and_then(|c| pool.bytes(c).get(MAX_MESSAGE_LEN..))
-            .and_then(|b| b.get(..n))
-            .map(<[u8]>::to_vec)
-            .unwrap_or_default();
-        super::reasm::trace::FragmentView {
-            before,
-            after,
-            ret,
-            message,
-        }
-    }
-
-    /// Hand the complete message of `len` bytes to the state machine. A server needs the shared `stores`.
-    ///
-    /// The message taken last, if the first flight went unrepeated, gives the handshake round trip, offered only once
-    /// the session is established: the message that leads there is the one that authenticated, so a forged one gives
-    /// no sample. The reference model seeds its estimate the same way, only after the reply's checks:
-    /// `if c.hs_tries == 1 and c.srtt == 0 and c.hs_sent:` then `c.srtt = max(1000000, now - c.hs_sent)`.
-    pub(crate) fn feed<P: Provider, const PK: usize, const TK: usize>(
-        &mut self,
-        pool: &BufferPool<'_>,
-        env: &mut Env<'_, P>,
-        stores: Option<&mut ResponderStores<PK, TK>>,
-        len: usize,
-    ) -> Result<(), Failure> {
-        self.clock = env.now;
-        let chunk = self.chunk.as_ref().filter(|_| self.rx_live).ok_or(Failure::Closed)?;
-        let msg = pool
-            .bytes(chunk)
-            .get(MAX_MESSAGE_LEN..)
-            .and_then(|b| b.get(..len))
-            .ok_or(Failure::InvalidParameter)?;
-        // A prekey reject is answered with the full Initial at most once per `max(500 ms, node round trip)`.
-        let gap = REJECT_GAP.max(self.timing.node_rtt.unwrap_or(0));
-        let r = match (machine_of(&mut self.machine).ok_or(Failure::Closed)?, stores) {
-            (Machine::Client(m), _) => {
-                m.set_reject_gap(gap);
-                m.handle(env, msg)
-            }
-            (Machine::Server(m), Some(stores)) => m.handle(env, stores, msg),
-            (Machine::Server(_), None) => Err(Failure::InvalidParameter),
-        };
-        if r.is_ok() && self.client {
-            // The peer answered (a reject too): only flights sent after this count towards the early end.
-            self.unheard = 0;
-            self.sample = (self.sends == 1).then_some(env.now.saturating_sub(self.first_sent).max(MIN_SAMPLE));
-        }
-        r
-    }
-
-    /// The handshake round trip, taken when the session is established (see [`Self::feed`]).
+    /// The handshake round trip, taken when the session is established (see [`Self::receive`]).
     pub(crate) const fn take_rtt_sample(&mut self) -> Option<u64> {
         self.sample.take()
     }
@@ -901,7 +904,7 @@ impl Handshake {
             return false;
         }
         if self.held && self.client && self.stage == Stage::Open {
-            self.retx_at = Some(now.saturating_add(HELD_RECHECK));
+            self.retx_at = deadline_after(now, HELD_RECHECK);
             return false;
         }
         if self.early
@@ -948,7 +951,7 @@ impl Handshake {
         }
         self.retransmitting = true;
         // A fallback or a reject restarts the schedule when its event is drained; otherwise the delay stands.
-        self.retx_at = Some(now.saturating_add(delay));
+        self.retx_at = deadline_after(now, delay);
         true
     }
 

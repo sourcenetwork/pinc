@@ -14,12 +14,13 @@
 //! peer's sleep (a copy of an old packet is refused first and changes nothing).
 
 use pinc_crypto::Provider;
-use pinc_security::{Env, ResponderStores};
+use pinc_security::{Env, Failure, ResponderStores};
 use pinc_wire::varint;
 
 use super::config::{MIN_MTU, PathId};
 use super::ctl::{Outcome, apply};
 use super::event::{Drop, Ev, code};
+use super::handshake::Got;
 use super::path::RJ_THIN_GAP;
 use super::{Connection, Phase};
 use crate::frame::{Ack, Frame, FrameIter};
@@ -201,6 +202,7 @@ conn_impl! {
         self.stats.bytes_received += dlen as u64;
         let mut ctx = Rx { path_id: path, path: known, dlen, now, old_key: false };
         self.life.clock = now;
+        self.life.hs_repeat = false;
         let (mut ok, mut first_err) = (false, None);
         for pkt in packets(dgram, self.cfg.cid_len) {
             let r = match pkt {
@@ -257,35 +259,110 @@ conn_impl! {
         header_len: usize,
         bytes: &[u8],
     ) -> Result<(), Drop> {
-        // A resumed server keeps answering a repeated Hello (or a full Initial under the same ids) until the first
-        // 1-RTT packet shows the client holds the session.
-        if self.phase != Phase::Handshaking && !(self.phase == Phase::Connected && self.hs.keeps_reply()) {
+        if !self.takes_handshake() {
             return Err(Drop::Empty);
         }
         if self.client {
-            // A dialing side believes nothing of the packet itself: its path (held or not) and source id count only
-            // once the message it completes has authenticated (`follow_reply`).
+            // A dialing side believes nothing of the packet itself: its path (held or not) counts only once the message
+            // it completes has authenticated (`follow_reply`), and the peer's id is the one inside that message, never
+            // the header's source id.
             if self.cids.first_local() != header.dcid {
                 return Err(Drop::Unroutable);
             }
-        } else {
-            let Some(pi) = ctx.path else { return Err(Drop::NoPath) };
-            self.cids.set_first_remote(header.scid);
-            if let Some(p) = self.paths.get_mut(pi) {
-                p.last_rx = ctx.now;
-            }
-            self.note_heard(ctx.now);
+        } else if ctx.path.is_none() {
+            return Err(Drop::NoPath);
         }
         let body = bytes.get(header_len..).ok_or(Drop::Malformed(PacketError::Length))?;
-        let Some(len) = self.hs.on_fragment(&mut self.pool, body) else {
+        if self.hs.holds() {
+            // The verdict on a Reply is still to come: nothing is applied before it, the fragment waits (see
+            // `after_verdict`).
+            let from = (ctx.path_id, ctx.now, ctx.dlen);
+            if !self.hold_part(from, body) {
+                self.stats.handshake_held_full += 1;
+            }
             self.life.hs_part = true;
             return Ok(());
+        }
+        let got = self.hs.receive(&mut self.pool, env, stores, body);
+        self.after_receive(env, got, ctx.path, (ctx.path_id, ctx.now, ctx.dlen))
+    }
+
+    /// Whether the session takes a Handshake packet now: during its handshake, and as a resumed server, which keeps
+    /// answering a repeated Hello (or a full Initial under the same ids) until the first 1-RTT packet shows the client
+    /// holds the session. The replay of held fragments stops where this does (`after_verdict`).
+    pub(super) fn takes_handshake(&self) -> bool {
+        self.phase == Phase::Handshaking || (self.phase == Phase::Connected && self.hs.keeps_reply())
+    }
+
+    /// Keep a handshake fragment that arrived on `from` while the verdict on a Reply is awaited. Returns whether it
+    /// was kept: the hold has room for it, and its path can be named by `path_ids` until it is applied. A path that is
+    /// not a slot's own is recorded in `hold_ids` even while it is also `reply_from`, which moves during the replay;
+    /// the places admitted count the distinct ids of the slots, `reply_from` and `hold_ids` together.
+    fn hold_part(&mut self, from: (PathId, u64, usize), body: &[u8]) -> bool {
+        let ids = self.path_ids();
+        let slot = if self.paths.find(from.0).is_some() || self.hold_ids.contains(&Some(from.0)) {
+            None
+        } else {
+            if !ids.contains(&Some(from.0)) && !ids.iter().any(Option::is_none) {
+                return false;
+            }
+            let Some(i) = self.hold_ids.iter().position(Option::is_none) else {
+                return false;
+            };
+            Some(i)
+        };
+        if !self.hs.hold(&mut self.pool, from, body) {
+            return false;
+        }
+        if let Some(entry) = slot.and_then(|i| self.hold_ids.get_mut(i)) {
+            *entry = Some(from.0);
+        }
+        true
+    }
+
+    /// What a datagram's handshake fragment led to, `got`: the path it arrived on (a responder's), and where and when
+    /// (`from`: path id, instant, datagram length). The live path and the replay of held fragments run this one
+    /// function.
+    pub(super) fn after_receive(
+        &mut self,
+        env: &mut Env<'_, P>,
+        got: Got,
+        path: Option<usize>,
+        from: (PathId, u64, usize),
+    ) -> Result<(), Drop> {
+        self.life.hs_repeat |= self.hs.was_repeat();
+        let (r, owed) = match got {
+            Got::Part => {
+                self.life.hs_part = true;
+                return Ok(());
+            }
+            Got::Conflict => {
+                self.stats.handshake_conflicts += 1;
+                return Err(Drop::Handshake(Failure::DifferentFirst));
+            }
+            Got::Fed { r, owed } => (r, owed),
         };
         self.life.hs_part = false;
-        let r = self.hs.feed(&self.pool, env, stores, len);
         self.count_unauthentic(&r);
-        if self.client && r.is_ok() {
-            self.reply_from = Some((ctx.path_id, header.scid, ctx.now));
+        if r.is_ok() {
+            // Only a message the machine accepted shows the peer is there: a forged fragment keeps nothing alive, and
+            // the peer's id is the one inside the message, never the header's.
+            if !self.client {
+                if let Some(c) = self.hs.client_cid() {
+                    self.cids.set_first_remote(c);
+                }
+                if let Some(pi) = path {
+                    if let Some(p) = self.paths.get_mut(pi) {
+                        p.last_rx = from.1;
+                    }
+                    // The flight is owed to every path the first message completed on.
+                    if owed {
+                        self.fan_set |= 1 << pi;
+                    }
+                }
+                self.note_heard(from.1);
+            }
+            self.reply_from = Some((from.0, from.1, from.2));
         }
         self.pump(env);
         r.map_err(Drop::Handshake)
@@ -295,6 +372,13 @@ conn_impl! {
     /// session did not decide anything about it; the endpoint hands such a datagram to every session of an id.
     pub fn take_handshake_part(&mut self) -> bool {
         core::mem::take(&mut self.life.hs_part)
+    }
+
+    /// Whether the datagram the last call took was a part of the first message the session already holds, again (a
+    /// responder compares it with that message), or a part that added no byte to the first message it is still
+    /// assembling. Any such packet makes the datagram weak: it goes on to the other holders too.
+    pub fn take_handshake_repeat(&mut self) -> bool {
+        core::mem::take(&mut self.life.hs_repeat)
     }
 
     /// Keep a packet that arrived before the keys to open it, for [`drain_early`](Self::drain_early).
@@ -396,7 +480,14 @@ conn_impl! {
         self.keys.early_recv = None;
         if !self.client && !self.confirmed {
             self.confirmed = true;
+            self.end_fan();
             self.hs.confirm(&mut self.pool);
+            if let Some(i) = self.proof.take().and_then(|id| self.paths.find(id))
+                && let Some(p) = self.paths.get_mut(i)
+            {
+                p.validated = true;
+                p.amp.validate();
+            }
         }
         if let Some(dcid) = bytes.get(1..1 + self.cfg.cid_len).and_then(pinc_security::ConnId::new) {
             self.cids.on_authenticated(&dcid);
@@ -529,6 +620,7 @@ conn_impl! {
         }
         if self.client && self.phase == Phase::Connected && !self.confirmed {
             self.confirmed = true;
+            self.end_fan();
             self.hs.confirm(&mut self.pool);
         }
         Ok(())
@@ -551,7 +643,7 @@ conn_impl! {
                 && p.challenge.is_some()
                 && now.saturating_sub(p.challenge_at) < RJ_THIN_GAP.max(node.saturating_mul(2));
             if !fresh {
-                self.queue_challenge(env, pi);
+                self.challenge_path(env, pi);
             }
         }
         let cur_relay = self.paths.active().is_none_or(|c| c.info.kind == PathKind::Relay);
@@ -591,12 +683,14 @@ conn_impl! {
             }
             Frame::Stream { id, offset, fin, data, .. } => {
                 let first = self.first_unopened(id);
-                match self.streams.on_stream_frame(&mut self.pool, id, offset, data, fin) {
-                    Ok(()) => {}
+                let news = match self.streams.on_stream_frame(&mut self.pool, id, offset, data, fin) {
+                    Ok(news) => news,
                     Err(e) => return Err(stream_fault(e)),
-                }
+                };
                 self.push_opened(id, first);
-                self.push(Ev::Readable(id));
+                if news {
+                    self.push(Ev::Readable(id));
+                }
             }
             Frame::MaxStreamData { id, max } => {
                 match self.streams.on_max_stream_data(&self.pool, id, max) {

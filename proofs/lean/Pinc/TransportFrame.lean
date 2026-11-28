@@ -16,7 +16,7 @@ over byte lists, call for call:
   `Frame::encoded_len`, `stream_overhead`, `datagram_overhead`, `ack_len` and `write_ack`.
 
 A frame value holds what the Rust value holds: byte strings are lists of bytes, an ACK is its three head fields and
-the raw bytes of its further ranges (`Ack::tail`), a REKEY its four fields, a ticket batch its entries. A `usize` is
+the raw bytes of its further ranges (`Ack::tail`), a REKEY its five fields, a ticket batch its entries. A `usize` is
 64 bits wide, so `usize::try_from` of a varint never fails (the targets of the crate; on a narrower target the code
 answers `Truncated { needed: usize::MAX }` or `TooManyRanges`, which is not modelled).
 
@@ -79,7 +79,7 @@ inductive Frame where
   | mtuProbeEcho (mtu : Nat)
   | sleep
   | wake
-  | rekey (answer : Bool) (share echo : List Nat) (switchPn : Nat)
+  | rekey (answer : Bool) (share echo : List Nat) (switchPn roll : Nat)
   | ready
   | newTickets (entries : List (List Nat × Nat))
   | ext (ty : Nat) (body : List Nat)
@@ -152,7 +152,8 @@ def decodeStream (t : Nat) (r : List Nat) : Rd Frame :=
   if offset + data.length > maxEnd then .error .streamEnd
   else .ok (.stream id offset (t % 2 = 1) data (t / 2 % 2 = 0), r3)
 
-/-- `Rekey::read` under `decode_rekey`: an unknown kind is `RekeyKind`. -/
+/-- `Rekey::read` under `decode_rekey`: an unknown kind is `RekeyKind`; a request carries its sender's roll count,
+an answer its echo and switch packet number. -/
 def rdRekey (r : List Nat) : Rd Frame :=
   andThen (rdBytes 1 r) fun k r1 =>
   if k.headD 0 > 1 then .error .rekeyKind
@@ -160,8 +161,8 @@ def rdRekey (r : List Nat) : Rd Frame :=
     andThen (rdBytes 32 r1) fun share r2 =>
     if k.headD 0 = 1 then
       andThen (rdBytes 8 r2) fun echo r3 =>
-      andThen (rdVarint r3) fun spn r4 => .ok (.rekey true share echo spn, r4)
-    else .ok (.rekey false share (List.replicate 8 0) 0, r2)
+      andThen (rdVarint r3) fun spn r4 => .ok (.rekey true share echo spn 0, r4)
+    else andThen (rdVarint r2) fun roll r3 => .ok (.rekey false share (List.replicate 8 0) 0 roll, r3)
 
 /-- The loop of `TicketBatch::read`: `count` entries of a 16-byte id and a big-endian `u32`. -/
 def rdTickets : Nat → List Nat → Rd (List (List Nat × Nat))
@@ -301,8 +302,8 @@ def Frame.puts : Frame → List Put
   | .mtuProbeEcho m => [.v 0x3a, .s (be16 m)]
   | .sleep => [.v 0x3b]
   | .wake => [.v 0x3c]
-  | .rekey a sh echo spn =>
-    [.v 0x3d, .s [if a then 1 else 0], .s sh] ++ (if a then [.s echo, .v spn] else [])
+  | .rekey a sh echo spn roll =>
+    [.v 0x3d, .s [if a then 1 else 0], .s sh] ++ (if a then [.s echo, .v spn] else [.v roll])
   | .ready => [.v 0x3e]
   | .newTickets es => [.v 0x3f, .s [es.length]] ++ es.flatMap (fun e => [.s e.1, .s (be32 e.2)])
   | .ext ty body => [.v ty, .v body.length, .s body]
@@ -328,7 +329,7 @@ def Frame.encodedLen : Frame → Nat
   | .maxStreams l => 1 + Varint.encodedLen l
   | .datagram d imp => datagramOverhead d.length imp + d.length
   | .mtuProbeEcho _ => 1 + 2
-  | .rekey a _ _ spn => 1 + 1 + 32 + (if a then 8 + Varint.encodedLen spn else 0)
+  | .rekey a _ _ spn roll => 1 + 1 + 32 + (if a then 8 + Varint.encodedLen spn else Varint.encodedLen roll)
   | .newTickets es => 1 + 1 + es.length * 20
   | .ext ty body => Varint.encodedLen ty + (Varint.encodedLen body.length + body.length)
 
@@ -338,7 +339,7 @@ def Frame.varintFields : Frame → List Nat
   | .maxStreamData id v | .stopSending id v => [id, v, 0]
   | .stream id off _ _ _ => [id, off, 0]
   | .close v | .ext v _ | .maxStreams v => [v, 0, 0]
-  | .rekey _ _ _ spn => [spn, 0, 0]
+  | .rekey _ _ _ spn roll => [spn, roll, 0]
   | _ => [0, 0, 0]
 
 /-- `Frame::validate`. -/

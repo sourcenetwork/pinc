@@ -192,7 +192,7 @@ def AckOk (l f x : Nat) (tail : List Nat) : Prop :=
   l ≤ maxPn ∧ x < maxAckRanges ∧ f ≤ l ∧ ValidBytes tail ∧ ∃ ps, ackLoop x (l - f) tail = .ok (ps, [])
 
 /-- A frame value of the code: the arrays have their lengths, a byte is a byte, a slice written with its length is
-shorter than 2^63 (a STREAM frame's data is bounded by `validate`), an ACK was validated (only decoding produces one), a REKEY request carries zeros, a batch has at most 4 tickets.
+shorter than 2^63 (a STREAM frame's data is bounded by `validate`), an ACK was validated (only decoding produces one), a REKEY request carries zeros and an answer a zero roll count, a batch has at most 4 tickets.
 A PADDING of no bytes writes nothing and is no frame on the wire. -/
 def Frame.WF : Frame → Prop
   | .padding len => 1 ≤ len
@@ -201,9 +201,9 @@ def Frame.WF : Frame → Prop
   | .pathChallenge d | .pathResponse d => d.length = 8 ∧ ValidBytes d
   | .datagram d imp => ValidBytes d ∧ (imp = false → d.length < Varint.limit)
   | .mtuProbeEcho m => m < 65536
-  | .rekey a sh echo spn =>
+  | .rekey a sh echo spn roll =>
     sh.length = 32 ∧ ValidBytes sh ∧ echo.length = 8 ∧ ValidBytes echo ∧
-      (a = false → echo = List.replicate 8 0 ∧ spn = 0)
+      (a = false → echo = List.replicate 8 0 ∧ spn = 0) ∧ (a = true → roll = 0)
   | .newTickets es => es.length ≤ maxBatch ∧ ∀ e ∈ es, e.1.length = 16 ∧ ValidBytes e.1 ∧ e.2 < 2 ^ 32
   | .ext _ body => ValidBytes body ∧ body.length < Varint.limit
   | _ => True
@@ -318,8 +318,9 @@ theorem puts_ok (f : Frame) (hg : f.Good) : PutsOk f.puts := by
       rcases hy with rfl | rfl
       · exact hsm _ (by omega)
       · exact hwf.2 rfl
-  | rekey a sh echo spn =>
+  | rekey a sh echo spn roll =>
     have h1 := hv spn (by simp [Frame.varintFields])
+    have h2 := hv roll (by simp [Frame.varintFields])
     intro y hy
     simp only [Frame.puts, List.mem_append, List.mem_cons, Put.v.injEq, reduceCtorEq, List.not_mem_nil,
       or_false] at hy
@@ -327,7 +328,7 @@ theorem puts_ok (f : Frame) (hg : f.Good) : PutsOk f.puts := by
     · exact hsm _ (by omega)
     · split at hy
       · simp at hy; subst hy; exact h1
-      · simp at hy
+      · simp at hy; subst hy; exact h2
   | newTickets es =>
     intro y hy
     simp only [Frame.puts, List.mem_append, List.mem_cons, Put.v.injEq, reduceCtorEq, List.not_mem_nil,
@@ -375,7 +376,7 @@ theorem bytes_length (f : Frame) (hwf : f.WF) : f.bytes.length = f.encodedLen :=
     by_cases hi : imp = true <;>
       simp [Frame.bytes, Frame.puts, Frame.encodedLen, datagramOverhead, hi, flat, Varint.length_encodeBytes,
         vlen_small] <;> omega
-  | rekey a sh echo spn =>
+  | rekey a sh echo spn roll =>
     obtain ⟨h1, _, h2, _, _⟩ := hwf
     by_cases ha : a = true <;>
       simp [Frame.bytes, Frame.puts, Frame.encodedLen, ha, flat, Varint.length_encodeBytes,

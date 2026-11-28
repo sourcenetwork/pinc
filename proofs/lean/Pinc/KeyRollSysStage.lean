@@ -45,7 +45,7 @@ theorem getLast?_idx {α : Type} {l : List α} {e : α} (h : l.getLast? = some e
 /-- The node that stages a roll is never behind the number of derivations of the other node. -/
 theorem stage_chg_le {P : Params} {S : Sys} {n : Bool} (h : Inv P S) {p : Pkt} (hp : p ∈ S.net) (hsrc : p.src = !n)
     {m : Msg} (hpl : p.pl = some m) (hm : m.answer = false) (hnx : (S.nd n).nxt = none)
-    (hn : (S.nd n).roll.isDup m = false) (hc : (!(S.nd n).roll.isIdle && (S.nd n).roll.dialer) = false)
+    (hn : (S.nd n).roll.isDup m = false) (hc : (S.nd n).roll.blocks m = false)
     (hdep : p.sec.depth = (S.nd n).cur.g ∨ p.sec.depth + 1 = (S.nd n).cur.g) :
     (S.nd (!n)).chg ≤ (S.nd n).chg := by
   by_cases hle : (S.nd (!n)).chg ≤ (S.nd n).chg
@@ -145,8 +145,8 @@ theorem stage_chg_le {P : Params} {S : Sys} {n : Bool} (h : Inv P S) {p : Pkt} (
       | true => rw [hdialY] at hYd; simp at hYd
     have hnd : (S.nd n).roll.dialer = true := by rw [hdial, hnn]; rfl
     have hidle : (S.nd n).roll.isIdle = true := by
-      have : (!(S.nd n).roll.isIdle) = false := by simpa [hnd] using hc
-      simpa using this
+      have h2 := (Bool.or_eq_false_iff.1 hc).2
+      simpa [hnd] using h2
     rcases eLvl with hl | hl
     · -- the request it answered is still pending here: the dialer ignores requests
       have := (h.breqOK _ eBr).2.2
@@ -178,7 +178,7 @@ theorem stage_chg_le {P : Params} {S : Sys} {n : Bool} (h : Inv P S) {p : Pkt} (
 theorem inv_stage {P : Params} {S : Sys} {n : Bool} (h : Inv P S) {p : Pkt} (hp : p ∈ S.net) (hsrc : p.src = !n)
     {m : Msg} (hpl : p.pl = some m) (hm : m.answer = false) (b : Atom) (hsh : m.share = .pub b)
     (hg : gated (S.nd n) m = false) (hn : (S.nd n).roll.isDup m = false)
-    (hc : (!(S.nd n).roll.isIdle && (S.nd n).roll.dialer) = false)
+    (hc : (S.nd n).roll.blocks m = false)
     (hdep : p.sec.depth = (S.nd n).cur.g ∨ p.sec.depth + 1 = (S.nd n).cur.g) :
     Inv P { (S.setNode n ((S.nd n).staged ((S.nd n).roll.answeredWith m.share
         (answerTo n (S.nd n).ctr (S.nd n).npn m.share b))
@@ -308,7 +308,7 @@ theorem inv_stage {P : Params} {S : Sys} {n : Bool} (h : Inv P S) {p : Pkt} (hp 
         | none => rw [hpd] at this; simp at this
         | some rq' =>
           have hid := pending_not_idle _ hpd
-          rw [hid, hd] at hc; simp at hc
+          simp [Roll.blocks, hid, hd] at hc
     · rw [hne _ hbn] at hd hj ⊢; exact h.breqF3 b0 hb0 hd hj
   case derBreq =>
     intro m' q e he hs
@@ -379,7 +379,7 @@ theorem inv_stage {P : Params} {S : Sys} {n : Bool} (h : Inv P S) {p : Pkt} (hp 
       obtain ⟨_, rfl⟩ := hl
       exact ⟨_, List.mem_cons_self .., rfl, rfl⟩
   case unsent =>
-    intro m' mm ho ha q hq heq
+    intro m' mm ho ha q hq r heq hr
     by_cases hmn : m' = n
     · subst hmn
       rw [hsame, s'out] at ho
@@ -387,7 +387,7 @@ theorem inv_stage {P : Params} {S : Sys} {n : Bool} (h : Inv P S) {p : Pkt} (hp 
       subst ho
       rw [ans_ans] at ha; simp at ha
     · rw [hne m' hmn] at ho
-      exact h.unsent m' mm ho ha q hq heq
+      exact h.unsent m' mm ho ha q hq r heq hr
   case compOK =>
     intro c' hc'
     obtain ⟨⟨k, k1, k2⟩, k3⟩ := h.compOK c' hc'

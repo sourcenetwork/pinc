@@ -101,7 +101,7 @@ MSD == [k |-> "MaxStreamData", id |-> 4, max |-> 900]
 MS == [k |-> "MaxStreams", limit |-> 20]
 RS == [k |-> "ResetStream", id |-> 8, error |-> 1, fs |-> 300]
 SS == [k |-> "StopSending", id |-> 8, error |-> 2]
-RK == [k |-> "Rekey", ans |-> FALSE, sh |-> Zeros(32), echo |-> Zeros(8), spn |-> 0]
+RK == [k |-> "Rekey", ans |-> FALSE, sh |-> Zeros(32), echo |-> Zeros(8), spn |-> 0, roll |-> 0]
 
 \* the control frames pending: none; some; the others, with an extension frame that may not fit
 Ctls ==

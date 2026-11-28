@@ -16,7 +16,8 @@ pub const FRAME_MAX: usize = 0x00ff_ffff;
 pub struct Limits {
     /// The longest item, and the longest set reference, in bytes.
     pub max_item: usize,
-    /// The longest message body in bytes; at most [`FRAME_MAX`]. A difference of any size is spread over as many
+    /// The longest run of parts in a message body in bytes; at most [`FRAME_MAX`]. What frames the parts comes on top
+    /// ([`max_body`](Self::max_body)). A difference of any size is spread over as many
     /// messages as it needs, as long as the limit is at least [`min_message`](Self::min_message).
     pub max_message: usize,
     /// The most bytes of difference the initiator keeps for its report. This is the host's choice of how much memory a
@@ -48,9 +49,57 @@ impl Limits {
         4 * bound + 2 * (1 + FP_LEN) + 16
     }
 
+    /// The longest message body a peer with these limits writes, and the longest one a reader accepts: the parts up
+    /// to the message limit, plus what frames them (two bounds, the part count, and in the first message the set
+    /// reference and the item count). A host that buffers messages bounds a body by this, and no more.
+    pub fn max_body(&self) -> usize {
+        (self.max_message.min(FRAME_MAX) + 2 * self.max_item + 4 * varint::MAX_LEN).min(FRAME_MAX)
+    }
+
     /// The message limit clamped to what the frame can carry.
     #[cfg(feature = "alloc")]
     pub(crate) fn cap(&self) -> usize {
         self.max_message.min(FRAME_MAX)
+    }
+}
+
+#[cfg(all(test, feature = "alloc"))]
+#[allow(clippy::unwrap_used, clippy::cast_possible_truncation, reason = "tests may assert")]
+mod tests {
+    use alloc::vec::Vec;
+
+    use super::*;
+    use crate::{Initiator, MemIndex, Responder};
+
+    /// An honest first message with a long set reference and a full part is longer than `max_message` and no longer
+    /// than `max_body`; the responder takes it, and a body one byte over `max_body` is refused.
+    #[test]
+    fn the_longest_honest_body_is_within_max_body_and_one_byte_more_is_refused() {
+        let base = Limits {
+            max_item: 16,
+            ..Limits::default()
+        };
+        let lim = Limits {
+            max_message: base.min_message(),
+            ..base
+        };
+        let items: Vec<[u8; 16]> = (0u16..17).map(|i| [i as u8; 16]).collect();
+        let idx = MemIndex::from_sorted(items.iter().map(<[u8; 16]>::as_slice)).unwrap();
+        let mut init = Initiator::new(lim);
+        let mut msg = Vec::new();
+        init.start(&idx, &[0x5a; 16], &mut msg).unwrap();
+        let body = msg.len() - 3;
+        assert!(
+            body > lim.max_message && body <= lim.max_body(),
+            "body {body}, limit {}",
+            lim.max_message
+        );
+        let empty = MemIndex::from_sorted(core::iter::empty::<&[u8]>()).unwrap();
+        let mut out = Vec::new();
+        assert!(Responder::new(lim).handle(&empty, &msg, &mut out).is_ok());
+        let over = lim.max_body() + 1;
+        let mut long = alloc::vec![(over >> 16) as u8, (over >> 8) as u8, over as u8];
+        long.resize(3 + over, 0);
+        assert!(Responder::new(lim).handle(&empty, &long, &mut out).is_err());
     }
 }

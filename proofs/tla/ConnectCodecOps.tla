@@ -12,6 +12,7 @@
 (* Every refusal is the string the Rust test prints for the error it got:  *)
 (* "trunc:N", "type:T", "trailing", "alias:A", "packet", "body",           *)
 (* "status:S", "batch:why", "magic", "reach:T", "addrtag:T", "toomany",    *)
+(* "padding",                                                              *)
 (* "hints", "version:V", "flags:F", "toolong", "unexpected:why", with the  *)
 (* prefix "frame/" for the wire errors of a datagram and "addr/", "taddr/" *)
 (* and "baddr/" for those of an address of a datagram, a ticket and a      *)
@@ -229,6 +230,21 @@ DgLayout(ty) ==
       [] ty \in {8, 9} -> [pre |-> <<Nd, U8>>, tail |-> <<[max |-> MaxTunnel - 35, e |-> "packet"]>>]
       [] OTHER -> [none |-> TRUE]
 
+\* The zero bytes an address query (type 1) and a lookup (type 3) carry after their fields: the longest answer (a QADR
+\* of 1 + 8 + 19 bytes, a DNSR of MAX_DNS_DATAGRAM, which is MaxTunnel) plus its 28 header bytes is at most three times
+\* the query's length, so the ledger of the node that answers lets the answer go to a source that proved nothing
+\* (pinc-connect relay/datagram.rs QAD_LEN 19 and DNSQ_LEN 484: query_len of the answer, (answer + 28) / 3 rounded up).
+MaxQadr == 1 + 8 + 19
+QueryLen(a) == (a + 28 + 2) \div 3
+DgPad(ty) == CASE ty = 1 -> QueryLen(MaxQadr) - 9
+               [] ty = 3 -> QueryLen(MaxTunnel) - 34
+               [] OTHER -> 0
+Zeros(n) == [i \in 1..n |-> 0]
+\* the padding: n bytes (Truncated with the shortfall), each zero, else Padding
+RdPad(n, b) ==
+    LET r == Pre("frame/", RdBytes(n, b)) IN
+    IF ~r.ok THEN r ELSE IF r.v = Zeros(n) THEN RdOk(<<>>, r.r) ELSE Er("padding")
+
 \* Datagram::decode
 Dgram(b) ==
     LET r == Pre("frame/", RdU8(b)) IN
@@ -238,7 +254,9 @@ Dgram(b) ==
          ELSE IF DgLayout(ty) = [none |-> TRUE] THEN Er("type:" \o ToString(ty))
          ELSE LET l == RdLayout("frame/", DgLayout(ty), r.r) IN
               IF ~l.ok THEN l
-              ELSE LET f == Finish(l.r) IN IF ~f.ok THEN f ELSE RdOk([ty |-> ty, fs |-> l.v], <<>>)
+              ELSE LET z == RdPad(DgPad(ty), l.r) IN
+                   IF ~z.ok THEN z
+                   ELSE LET f == Finish(z.r) IN IF ~f.ok THEN f ELSE RdOk([ty |-> ty, fs |-> l.v], <<>>)
 
 (* ---- the writer: steps run against a buffer of cap bytes ---- *)
 Put(bs) == [t |-> "put", b |-> bs]
@@ -288,12 +306,12 @@ FrameBytes(f) == IF f.ty = 13 THEN <<13, Len(f.fs)>> \o LensBytes(f.fs) \o Cat(f
 
 DgOps(f) ==
     IF f.ty = 4 THEN DnsrOps(4, "frame/body", f.fs)
-    ELSE <<Put(<<f.ty>>)>> \o LayoutOps(DgLayout(f.ty), f.fs)
+    ELSE <<Put(<<f.ty>>)>> \o LayoutOps(DgLayout(f.ty), f.fs) \o (IF DgPad(f.ty) = 0 THEN <<>> ELSE <<Put(Zeros(DgPad(f.ty)))>>)
 
 \* Datagram::encode: a datagram is refused with the error its decoder would give, once the bytes before the field fit
 EncodeDg(cap, f) == Run("frame/", cap, DgOps(f), <<>>)
 
-DgBytes(f) == <<f.ty>> \o Cat(f.fs)
+DgBytes(f) == <<f.ty>> \o Cat(f.fs) \o Zeros(DgPad(f.ty))
 
 (* ---- signed structures ---- *)
 RecMagic == <<86, 78, 67, 82, 69, 67, 0, 1>>

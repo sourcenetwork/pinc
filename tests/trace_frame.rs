@@ -182,7 +182,7 @@ fn small(f: &Frame<'_>) -> bool {
         Frame::MaxStreamData { id, max } => [*id, *max, 0],
         Frame::MaxStreams { limit } => [*limit, 0, 0],
         Frame::Close { error } => [*error, 0, 0],
-        Frame::Rekey(r) => [r.switch_pn, 0, 0],
+        Frame::Rekey(r) => [r.switch_pn, r.roll, 0],
         Frame::Extension { ty, .. } => [*ty, 0, 0],
         _ => [0; 3],
     };
@@ -492,6 +492,7 @@ fn gen_frame<'a>(rng: &mut SplitMix64, wide: bool, kind: u64, data: &'a [u8]) ->
                 share: bytes(rng, 32, wide).try_into().unwrap(),
                 echo: if plain { [0; 8] } else { arr8(rng) },
                 switch_pn: if plain { 0 } else { num(rng, wide) },
+                roll: 0,
             })
         }
         16 => {
@@ -547,6 +548,7 @@ fn normal<'a>(f: &Frame<'a>) -> Frame<'a> {
             share: r.share,
             echo: [0; 8],
             switch_pn: 0,
+            roll: r.roll,
         }),
         other => other.clone(),
     }

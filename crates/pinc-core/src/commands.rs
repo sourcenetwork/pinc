@@ -2,10 +2,12 @@
 //!
 //! [`Endpoint::command`] applies a [`Command`] and returns the [`Reply`]: the command's value and the events it caused
 //! at once (up to eight; any more wait in the queue for [`Endpoint::poll_event`]). A command that fails changes no
-//! session and queues no event, and its error says why, with two exceptions: a dial of the node's own id queues
-//! [`Event::ConnectFailed`], and a sub-session whose open cannot be queued has taken a session slot, which it undoes
-//! and redials, so the redial may queue events. It may leave two traces: an address the endpoint learned a path id
-//! for, and, for a dial whose connection could not be built, the resumption ticket it took.
+//! session and queues no event, and its error says why, with three exceptions: a dial of the node's own id queues
+//! [`Event::ConnectFailed`], a sub-session whose open cannot be queued has taken a session slot, which it undoes
+//! and redials, so the redial may queue events, and a key answer whose message did not authenticate goes on with the
+//! handshake fragments the session held while it waited, which may queue that session's events (a new key request, or
+//! its end). It may leave two traces: an address the endpoint learned a path id for, and, for a dial whose connection
+//! could not be built, the resumption ticket it took.
 //! [`Endpoint::query`] reads state and changes nothing.
 //!
 //! A dial first looks for an established session with the peer: if there is one, the new protocol opens as a
@@ -236,6 +238,7 @@ ep_impl! {
             }
             Command::FlightPaths { session, addrs, skip_primary } => {
                 let i = self.live(session)?;
+                // `live` checked the connection: nothing below returns between a mint and its settle.
                 let mut ids: [Option<(pinc_transport::conn::PathId, PathInfo)>; NP] = [None; NP];
                 // The table holds NP paths, the dial's own among them. A relay path reaches any peer that has a
                 // carrier, a direct address only a peer that can be reached there, so when the list is longer than the
@@ -247,7 +250,12 @@ ep_impl! {
                 for (d, a) in ids.iter_mut().zip(relay_first) {
                     *d = self.route_for(a).map(|l| (self.path_id(l, *a), path_info(a, self.cfg.conn.interface_mtu)));
                 }
-                let conn = self.slots.get_mut(i).and_then(|s| s.conn.as_mut()).ok_or(CommandError::NoSession)?;
+                let Some(conn) = self.slots.get_mut(i).and_then(|s| s.conn.as_mut()) else {
+                    for (id, _) in ids.iter().flatten() {
+                        self.drop_unheld_pair(*id);
+                    }
+                    return Err(CommandError::NoSession);
+                };
                 let mut env = env!(self, now);
                 // A full table makes room by dropping its oldest unvalidated path, so the paths are added from the
                 // least wanted to the most wanted, and the fan-out names the ones that are still tracked.
@@ -267,6 +275,10 @@ ep_impl! {
                 conn.set_flight_fanout(list.get(..n).unwrap_or_default());
                 conn.set_flight_skip_primary(skip_primary);
                 self.settle(i, now);
+                // A pair no session took (a path the connection refused) does not stay.
+                for (id, _) in ids.iter().flatten() {
+                    self.drop_unheld_pair(*id);
+                }
                 Ok(Value::None)
             }
             Command::Pulse { session, sent } => {
@@ -324,10 +336,15 @@ ep_impl! {
                 let i = self.live(session)?;
                 let local = self.route_for(&addr).ok_or(CommandError::NoRoute)?;
                 let pid = self.path_id(local, addr);
-                let conn = self.slots.get_mut(i).and_then(|s| s.conn.as_mut()).ok_or(CommandError::NoSession)?;
+                let Some(conn) = self.slots.get_mut(i).and_then(|s| s.conn.as_mut()) else {
+                    self.drop_unheld_pair(pid);
+                    return Err(CommandError::NoSession);
+                };
                 let mut env = env!(self, now);
-                conn.punch(&mut env, pid, path_info(&addr, self.cfg.conn.interface_mtu)).map_err(|_| CommandError::Full)?;
+                let punched = conn.punch(&mut env, pid, path_info(&addr, self.cfg.conn.interface_mtu));
                 self.settle(i, now);
+                self.drop_unheld_pair(pid);
+                punched.map_err(|_| CommandError::Full)?;
                 Ok(Value::None)
             }
             Command::SetRole { session, role } => {
@@ -469,6 +486,10 @@ ep_impl! {
             Ok(c) => c,
             Err(e) => {
                 self.retire_slot(i);
+                self.drop_unheld_pair(pid);
+                for (p, _) in extra.iter().flatten() {
+                    self.drop_unheld_pair(*p);
+                }
                 return Err(CommandError::Failure(e));
             }
         };
@@ -515,6 +536,10 @@ ep_impl! {
             self.announce(i);
         }
         self.settle(i, now);
+        self.drop_unheld_pair(pid);
+        for (p, _) in extra.iter().flatten() {
+            self.drop_unheld_pair(*p);
+        }
         Ok(self.session_id(i))
     }
 

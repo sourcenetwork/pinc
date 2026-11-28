@@ -6,13 +6,15 @@ use pinc_security::{
     ClientTickets, Env, Event as SecEvent, Failure, KeyResponse, ResponderStores, ServerTickets, SoftKeys, TicketBatch,
 };
 
+use super::config::MIN_MTU;
 use super::event::{CloseReason, Ev};
-use super::handshake::Machine;
+use super::handshake::{Got, Machine};
 use super::keys::Dir;
 use super::params::{CreditRecord, peer_limits};
 use super::recv::Rx;
 use super::{Connection, Phase};
 use crate::packet::packets;
+use crate::recovery::{MAX_PATHS, PathKind};
 use crate::stream::StreamSource;
 
 /// The largest early packet replayed: the biggest datagram a path carries.
@@ -66,6 +68,7 @@ conn_impl! {
             None => Err(Failure::UnexpectedKeyResponse),
         };
         self.count_unauthentic(&r);
+        self.after_verdict(env, matches!(r, Err(Failure::Authentication)));
         self.pump(env);
         r
     }
@@ -82,8 +85,56 @@ conn_impl! {
             None => Ok(false),
         };
         self.count_unauthentic(&r);
+        self.after_verdict(env, matches!(r, Err(Failure::Authentication)));
         self.pump(env);
         r
+    }
+
+    /// What the answer to a key request means for the handshake fragments held while a Reply's verdict was awaited. A
+    /// dialing side that awaits another answer changes nothing. Otherwise a verdict that is not a failed
+    /// authentication ends the hold (the Reply was taken, or the session ended); a failed one feeds the second
+    /// candidate's message, if the same fragment completed it, then applies the held fragments in arrival order, up to
+    /// the one that makes the machine wait again. Each is applied only while the session takes a handshake packet
+    /// (`takes_handshake`, the check a live fragment meets); from where it takes none, the rest are dropped.
+    fn after_verdict(&mut self, env: &mut Env<'_, P>, failed_auth: bool) {
+        if !self.client || self.hs.awaiting() {
+            return;
+        }
+        if !failed_auth {
+            self.hs.drop_held(&mut self.pool);
+            self.hold_ids = [None; NP];
+            return;
+        }
+        if self.takes_handshake()
+            && let Some(n) = self.hs.take_ready()
+        {
+            let r = self
+                .hs
+                .feed(&self.pool, env, None::<&mut ResponderStores<0, 0>>, 1, usize::from(n));
+            // Nothing changed `reply_from` during the wait: it is still the datagram that completed both candidates.
+            if let Some(from) = self.reply_from {
+                let path = self.paths.find(from.0);
+                let _ = self.after_receive(env, Got::Fed { r, owed: false }, path, from);
+            }
+        }
+        let mut out = [0u8; MIN_MTU as usize];
+        while self.takes_handshake()
+            && !self.hs.awaiting()
+            && let Some((from, len)) = self.hs.take_held(&mut self.pool, &mut out)
+        {
+            let body = out.get(..len).unwrap_or_default();
+            let got = self.hs.receive(&mut self.pool, env, None::<&mut ResponderStores<0, 0>>, body);
+            let path = self.paths.find(from.0);
+            let _ = self.after_receive(env, got, path, from);
+        }
+        if !self.takes_handshake() {
+            self.hs.drop_held(&mut self.pool);
+        }
+        if !self.hs.holds() {
+            self.hold_ids = [None; NP];
+        }
+        // A part the replay took decided nothing about a datagram of the endpoint's.
+        self.life.hs_part = false;
     }
 
     /// Count a handshake message the machine dropped because it did not authenticate: a forged or damaged one, which
@@ -177,13 +228,14 @@ conn_impl! {
                 self.phase = Phase::Connected;
                 self.life.last_activity = now;
                 if self.client {
-                    self.follow_reply();
+                    // The reply came back on one path: the Finish and each resend of it follow it there, not onto the
+                    // other paths the flight was copied to; a reply on a path the dial did not hold adds that path to
+                    // the copies (`follow_reply`).
+                    self.set_flight_fanout(&[]);
+                    self.follow_reply(env);
                     if let Some(rtt) = self.hs.take_rtt_sample() {
                         self.rec.seed_rtt(rtt);
                     }
-                    // The reply came back on one path: the Finish and each resend of it follow it there, not onto the
-                    // other paths the flight was copied to.
-                    self.set_flight_fanout(&[]);
                     if !est.resumed {
                         let srtt = self.rec.rtt().smoothed();
                         self.hs.finish_sent(now, srtt, self.rec.pto_duration());
@@ -192,9 +244,14 @@ conn_impl! {
                         self.events.push_tickets(est.tickets);
                     }
                 } else {
-                    if let Some(p) = self.paths.active_mut() {
-                        p.validated = true;
-                        p.amp.validate();
+                    if est.resumed {
+                        // A resumption Hello proves nothing about its source: anyone who saw it can send a copy from
+                        // any address. The session is established; the Reply goes to this one path, and the dialer's
+                        // first 1-RTT packet (it needs the Reply's fresh key share) validates it.
+                        self.proof = self.paths.active().map(|p| p.id);
+                        self.reply_from = None;
+                    } else {
+                        self.validate_finish_path(env);
                     }
                     self.sess_amp.validate();
                     if !est.resumed && !est.tickets.entries().is_empty() {
@@ -215,36 +272,89 @@ conn_impl! {
 
     /// A dialing side's session is established, so the message that led there authenticated: the Reply's sealed block
     /// opened and the responder's signature verified, or the resume Reply's confirmation tag matched. Only now does
-    /// the datagram that completed it count: its source id becomes the peer's first id, and the session continues on
-    /// its path (the answer to a flight sent on several paths came back there), while the path that did not answer
-    /// is validated only when a challenge on it is answered. A handshake packet whose message does not authenticate
-    /// moves no path, validates none and names no id.
+    /// the datagram that completed it count: the server id the authenticated message named becomes the peer's first
+    /// id (the header's source id is never read).
+    ///
+    /// A reply on a path the dial holds validates that path (the flight went there and came back) and the session
+    /// continues on it. A reply on a path the dial does not hold proves nothing about that path, since anyone can send
+    /// a copy of the reply from any source: the session stays on the path it was on, the path is learnt with its
+    /// budget counting the datagram, a challenge goes out on it, and the Finish and its resends are copied to it, so a
+    /// responder that answered a path of its own is reached; the path moves the session only when its challenge is
+    /// answered. A handshake packet whose message does not authenticate moves no path, validates none and names no id.
     ///
     /// The reference model acts on the server flight in the same order: it opens the sealed part and verifies the
-    /// signature, and only then takes the peer's id and moves to the path the flight came on; a resumption moves only
-    /// after its reply has opened. Here nothing leaves between the signature check and the establishment, so the
-    /// Finish leaves on the new active path, as the reference's does.
-    fn follow_reply(&mut self) {
-        let Some((id, scid, at)) = self.reply_from.take() else { return };
+    /// signature, and only then takes the peer's id; a resumption moves only after its reply has opened.
+    fn follow_reply(&mut self, env: &mut Env<'_, P>) {
+        let Some((id, at, dlen)) = self.reply_from.take() else { return };
+        // An established dialing side always has the authenticated id; without it nothing can be addressed.
+        let Some(scid) = self.hs.server_cid() else {
+            self.silent_close(CloseReason::Handshake(Failure::UnexpectedMessage));
+            return;
+        };
         self.cids.set_first_remote(scid);
-        // A reply on a path the dial does not hold adds it now, as a responder learns one, at the table's bound; at a
-        // full table the session stays on its path.
-        let Some(pi) = self.learn_path(id, at) else { return };
-        if let Some(p) = self.paths.get_mut(pi) {
-            p.last_rx = p.last_rx.max(at);
-        }
-        if pi == self.paths.active {
+        if let Some(pi) = self.paths.find(id) {
+            if let Some(p) = self.paths.get_mut(pi) {
+                p.last_rx = p.last_rx.max(at);
+            }
+            if pi == self.paths.active {
+                return;
+            }
+            let old = self.paths.active;
+            if let Some(p) = self.paths.get_mut(old) {
+                p.validated = false;
+            }
+            if let Some(p) = self.paths.get_mut(pi) {
+                p.validated = true;
+                p.amp.validate();
+            }
+            self.switch_active(pi);
             return;
         }
-        let old = self.paths.active;
-        if let Some(p) = self.paths.get_mut(old) {
-            p.validated = false;
-        }
+        // At a full table the session stays on its path.
+        let Some(pi) = self.learn_path(id, at) else { return };
         if let Some(p) = self.paths.get_mut(pi) {
-            p.validated = true;
-            p.amp.validate();
+            p.amp.on_receive(dlen as u64);
         }
-        self.switch_active(pi);
+        self.challenge_path(env, pi);
+        self.fan_set |= 1 << pi;
+    }
+
+    /// A responder's full handshake is established: the Finish authenticated its dialer. The flight was sent only on
+    /// the paths it was owed on (`fan_set`). With exactly one of them the dialer answered there, so that path is
+    /// validated and the session moves to it. With several, a copy of the Finish proves none of them (any source can
+    /// repeat it): the path the Finish came on becomes the active one, unvalidated, and a challenge goes out on each
+    /// owed direct path; the one that answers validates. An owed relay path is valid from the moment it is tracked and
+    /// is never challenged: its answer would prove nothing and would move the keepalive schedule of that path at both
+    /// ends.
+    fn validate_finish_path(&mut self, env: &mut Env<'_, P>) {
+        let from = self.reply_from.take();
+        let owed = self.fan_set;
+        self.end_fan();
+        if owed.is_power_of_two() {
+            let pi = owed.trailing_zeros() as usize;
+            if let Some(p) = self.paths.get_mut(pi) {
+                p.validated = true;
+                p.amp.validate();
+                if pi != self.paths.active {
+                    self.switch_active(pi);
+                }
+                return;
+            }
+        }
+        if let Some((id, at, _)) = from
+            && let Some(pi) = self.learn_path(id, at)
+            && pi != self.paths.active
+        {
+            self.switch_active(pi);
+        }
+        // With no path owed (a flight that left nowhere) a copy of the Finish proves nothing: the active path is
+        // challenged.
+        let challenged = if owed == 0 { 1 << self.paths.active } else { owed };
+        for i in 0..MAX_PATHS {
+            if challenged & (1 << i) != 0 && self.paths.get(i).is_some_and(|p| p.info.kind != PathKind::Relay) {
+                self.challenge_path(env, i);
+            }
+        }
     }
 
     /// Apply the peer's authenticated credit record. Returns false if the connection was closed instead.

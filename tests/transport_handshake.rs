@@ -626,3 +626,94 @@ fn a_responder_that_only_rejected_is_not_held_60_s() {
         }
     });
 }
+
+/// A liveness guard for a dial begun at the end of the clock: the connect and confirm deadlines are read first, so the
+/// terminal deadline fires once and the connection closes silently; before it, after every timer call the handshake
+/// offers no deadline at or before the call. It cannot observe a saturated resend deadline (the terminal one wins
+/// first), only that the dial always ends and never spins. With `held` the resends of the first flight are held
+/// (`hold_first_flight`), so none leaves.
+fn dial_at_the_end_of_the_clock(held: bool) {
+    let w = World::new(IdentityAlg::Ed25519);
+    let mut sa = Store::new(true);
+    let mut now = u64::MAX - 5 * SEC;
+    let mut node = w.client_at(now, &mut sa, None, pinc_security::ClientTickets::new());
+    node.conn.hold_first_flight(held);
+    let mut buf = vec![0u8; 65_536];
+    for _ in 0..64 {
+        while node
+            .with_lent(now, |c, env, l| c.poll_transmit(env, l, &mut buf))
+            .is_some()
+        {}
+        let Some(t) = node.conn.poll_timeout() else { break };
+        now = now.max(t);
+        node.with_lent(now, Conn::handle_timeout);
+        if node.conn.is_closed() {
+            return;
+        }
+        assert!(
+            node.conn.poll_timeout().is_none_or(|t| t > now),
+            "a deadline at or before the call at {now} is offered again"
+        );
+    }
+    panic!("the dial never ended");
+}
+
+#[test]
+fn a_dial_at_the_end_of_the_clock_has_no_deadline_that_stays_due() {
+    big_stack(|| {
+        dial_at_the_end_of_the_clock(false);
+        dial_at_the_end_of_the_clock(true);
+    });
+}
+
+/// The room of a responder's amplification budget as the connection reads it: three times what arrived, less what
+/// left with its 48 bytes of overhead per datagram, less the 48 bytes kept back. Negative when overspent.
+fn budget_room(c: &Conn<'_>) -> i64 {
+    let s = c.stats();
+    let spent = s.bytes_sent + 48 * s.datagrams_sent + 48;
+    i64::try_from(3 * s.bytes_received).unwrap() - i64::try_from(spent).unwrap()
+}
+
+/// The keepalive and REKEY gates are open exactly where the packet builder can write their datagram: a short header
+/// (1 byte, a 4-byte connection id, a 2-byte packet number), the payload (a PING is 1 byte but a packet carries at
+/// least 4; a REKEY is at most 51: type, flag, 32-byte key, 8-byte echo, a 9-byte roll) and the 16-byte tag, so 27 and
+/// 74 bytes. A connected session's budget is unlimited, so the boundary is read on a responder that never got the
+/// Finish: its budget is spent by its own resends, then raised by junk datagrams of one byte (three bytes of room
+/// each), and at every step the gates equal the arithmetic.
+#[test]
+fn the_control_gates_open_exactly_where_a_datagram_fits() {
+    const PING: i64 = 1 + 4 + 2 + 4 + 16;
+    const REKEY: i64 = 1 + 4 + 2 + 51 + 16;
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let mut net = setup(&mut w, &mut sa, &mut sb, Link::new(11, Params::new(10 * MS)));
+        net.drop_finish = true;
+        assert!(net.run(net.now + 5 * SEC, |n| n.a.conn.is_connected()));
+        assert!(!net.b.conn.is_connected(), "the responder took the Finish");
+        // Nothing of the dialer arrives from here on, so the responder's resends spend what it was allowed.
+        net.link.route(PathId(1)).up = false;
+        assert!(
+            net.run(net.now + 60 * SEC, |n| budget_room(&n.b.conn) < PING - 3),
+            "the responder's budget was never spent"
+        );
+        let mut seen = [false; 4];
+        for _ in 0..200 {
+            let (room, v) = (budget_room(&net.b.conn), net.b.conn.trace_timers());
+            assert_eq!((v.kr, v.rr), (room >= PING, room >= REKEY), "gates at room {room}");
+            seen[0] |= (PING - 3..PING).contains(&room) && !v.kr;
+            seen[1] |= (PING..PING + 3).contains(&room) && v.kr;
+            seen[2] |= (REKEY - 3..REKEY).contains(&room) && !v.rr;
+            seen[3] |= (REKEY..REKEY + 3).contains(&room) && v.rr;
+            if room >= REKEY + 3 {
+                break;
+            }
+            let (now, stores) = (net.now, &mut *net.stores);
+            let mut junk = [0u8; 1];
+            let _ = net.b.with_lent(now, |c, env, l| {
+                c.handle_datagram_with(env, l, stores, PathId(2), &mut junk)
+            });
+        }
+        assert_eq!(seen, [true; 4], "a boundary was not reached: {seen:?}");
+    });
+}

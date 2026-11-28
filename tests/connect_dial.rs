@@ -167,6 +167,8 @@ fn thin_hs0_sends_only_relay_paths() {
     let mut t = base();
     t.hs0 = true;
     assert_eq!(pick(&c, &t, true, 1), vec![Cand::Relay(0)]);
+    // with no relay path the resend still goes out on the UDP paths
+    assert_eq!(pick(&[udp(1), udp(2)], &t, true, 1), vec![udp(1), udp(2)]);
     t.dialer = false;
     assert_eq!(pick(&c, &t, true, 1).len(), 3);
 }

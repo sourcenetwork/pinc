@@ -3,6 +3,8 @@
 
 use core::convert::Infallible;
 
+use pinc_core::{Answer, Query};
+
 use super::*;
 use crate::endpoint::{Endpoint, Pinc};
 
@@ -160,8 +162,8 @@ fn a_datagram_for_a_member_before_the_role_is_restored_is_dropped_and_counted() 
         sh.role_carries(&mut core, T0, &to, b"x", 1),
         "the datagram was left to the socket"
     );
+    assert!(sh.role_outgoing(&mut core, T0, &mut [0u8; 1500]).is_none());
     drop(core);
-    assert!(sh.role_outgoing(&mut [0u8; 1500]).is_none());
     assert_eq!(ep.relay_stats().unwrap().hub_dropped, 1, "the drop was not counted");
 }
 
@@ -213,19 +215,20 @@ fn a_datagram_for_a_known_member_is_not_handed_to_a_role_that_is_not_restored() 
 fn a_role_that_is_not_restored_sends_nothing() {
     let ep = rolled(3 * SEC);
     let sh = &ep.0.shared;
-    let mut q = [0u8; 16];
+    let mut q = [0u8; 64];
     let n = pinc_connect::relay::datagram::Datagram::Qad { nonce: [7; 8] }
         .encode(&mut q)
         .unwrap();
     let mut core = sh.lock().unwrap();
     sh.role_datagrams(&mut core, T0, "198.51.100.7:5000".parse().unwrap(), &mut q[..n], n);
-    drop(core);
     assert!(
-        sh.role_outgoing(&mut [0u8; 1500]).is_none(),
+        sh.role_outgoing(&mut core, T0, &mut [0u8; 1500]).is_none(),
         "a role that is not restored sent a datagram"
     );
+    drop(core);
+    // This test is about readiness, not the ledger: the gate lets everything through.
     assert!(
-        sh.role().unwrap().outgoing(&mut [0u8; 1500]).is_some(),
+        sh.role().unwrap().outgoing(&mut [0u8; 1500], |_, _| true).is_some(),
         "the role did not queue an answer, so the test proves nothing"
     );
 }
@@ -244,4 +247,77 @@ fn the_role_is_built_at_the_platforms_wall_clock() {
         Some(wall + SEC),
         "the role was built at a clock other than the wall clock"
     );
+}
+
+/// A spoofed lookup query to an ordinary node that carries the relay role is answered with at most three times its
+/// bytes, each datagram counted with its 28 header bytes, however often it is sent.
+#[test]
+fn a_spoofed_query_to_a_node_with_the_role_gets_at_most_three_times_its_bytes() {
+    let ep = rolled(3 * SEC);
+    let sh = &ep.0.shared;
+    sh.role_ready.set(true);
+    let spoofed: SocketAddr = "198.51.100.7:5000".parse().unwrap();
+    let peer = pinc_crypto::NodeId {
+        alg: pinc_crypto::IdentityAlg::Ed25519,
+        bytes: [3; 32],
+    };
+    let mut q = [0u8; pinc_connect::relay::datagram::DNSQ_LEN];
+    let n = pinc_connect::relay::datagram::Datagram::DnsQuery { peer }
+        .encode(&mut q)
+        .unwrap();
+    let (mut received, mut sent) = (0u64, 0u64);
+    let mut core = sh.lock().unwrap();
+    for _ in 0..20 {
+        let mut d = q;
+        sh.role_datagrams(&mut core, T0, spoofed, &mut d[..n], n);
+        received += n as u64;
+        let mut out = [0u8; 1500];
+        while let Some((to, len, _)) = sh.role_outgoing(&mut core, T0, &mut out) {
+            assert_eq!(to, spoofed);
+            sent += len as u64 + 28;
+        }
+    }
+    assert!(sent > 0, "the role answered nothing, so the test proves nothing");
+    assert!(
+        sent <= 3 * received,
+        "{sent} bytes went to a source that sent {received}"
+    );
+    // The ledger of the node's endpoint counted every datagram once, on the way in and on the way out.
+    let Answer::Ledger(e) = core.node.endpoint().query(Query::Ledger(spoofed)) else {
+        unreachable!("the ledger holds no entry for the source")
+    };
+    assert_eq!((e.rx, e.tx, e.validated), (received, sent, false));
+}
+
+/// An answer the ledger refuses is not sent and is counted: a source whose budget is spent gets nothing more.
+#[test]
+fn the_role_answer_to_a_source_with_no_budget_left_is_refused_and_counted() {
+    let ep = rolled(3 * SEC);
+    let sh = &ep.0.shared;
+    sh.role_ready.set(true);
+    let spoofed: SocketAddr = "198.51.100.7:5000".parse().unwrap();
+    let peer = pinc_crypto::NodeId {
+        alg: pinc_crypto::IdentityAlg::Ed25519,
+        bytes: [3; 32],
+    };
+    let mut q = [0u8; pinc_connect::relay::datagram::DNSQ_LEN];
+    let n = pinc_connect::relay::datagram::Datagram::DnsQuery { peer }
+        .encode(&mut q)
+        .unwrap();
+    let mut core = sh.lock().unwrap();
+    sh.role_datagrams(&mut core, T0, spoofed, &mut q[..n], n);
+    // Session traffic to the same source spends all but a few bytes of its budget: 3 * n in all.
+    let spend = 3 * n - 28 - 10;
+    assert!(core.node.endpoint_mut().host_send(T0, spoofed, spend));
+    let mut out = [0u8; 1500];
+    let held0 = sh.role().unwrap().stats().unwrap().datagrams_held;
+    assert!(
+        sh.role_outgoing(&mut core, T0, &mut out).is_none(),
+        "an answer went past the budget"
+    );
+    assert_eq!(sh.role().unwrap().stats().unwrap().datagrams_held, held0 + 1);
+    let Answer::Ledger(e) = core.node.endpoint().query(Query::Ledger(spoofed)) else {
+        unreachable!("the ledger holds no entry for the source")
+    };
+    assert_eq!((e.rx, e.tx), (n as u64, (spend + 28) as u64));
 }

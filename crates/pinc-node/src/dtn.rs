@@ -23,7 +23,7 @@
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
 use core::fmt;
-use core::ops::Range;
+use core::ops::{ControlFlow, Range};
 
 use pinc_core::{Command, SessionId};
 use pinc_crypto::NodeId as FullId;
@@ -233,10 +233,10 @@ pub(crate) fn redial_due(cur: Option<Nanos>, now: Nanos) -> bool {
 }
 
 impl Dtn {
-    pub(crate) fn new(policy: Policy, budget: u64, wall_ms: u64) -> Self {
+    pub(crate) fn new(policy: Policy, budget: u64, wall_ms: u64, me: pinc_crypto::NodeId) -> Self {
         Self {
             fwd: Fwd::new(policy, wall_ms),
-            book: Book::new(),
+            book: Book::new(me),
             led: Led::new(budget),
             hlc: Hlc::new(wall_ms, 0),
             heads: BTreeMap::new(),
@@ -793,26 +793,33 @@ where
             return;
         };
         let mut buf = core::mem::take(&mut ds.inb);
-        let (_, over) = self.io.drain_stream(session, stream, &mut buf, wire::BODY_MAX * 2);
-        let mut stop = if over { Some(Stop::Break) } else { None };
-        let mut used = 0;
-        while stop.is_none() {
-            let rest = buf.get(used..).unwrap_or_default();
-            let (ty, total) = match wire::next(rest) {
-                Ok(Some(f)) => f,
-                Ok(None) => break,
-                Err(()) => {
-                    stop = Some(Stop::Break);
-                    break;
+        // At most the room is read; the rest waits on the stream and is read after the frames in hand are handled.
+        let mut stop = None;
+        let (_, broken) = self.read_messages(
+            session,
+            stream,
+            &mut buf,
+            wire::BODY_MAX * 2,
+            |inb| wire::next(inb).map(|f| f.map(|(ty, total)| (total, ty))),
+            |node, frame, ty| match node.dtn_frame(
+                session,
+                stream,
+                &mut ds,
+                ty,
+                frame.get(wire::HDR..).unwrap_or_default(),
+            ) {
+                Ok(()) => ControlFlow::Continue(()),
+                Err(s) => {
+                    stop = Some(s);
+                    ControlFlow::Break(())
                 }
-            };
-            let body = rest.get(wire::HDR..total).unwrap_or_default();
-            stop = self.dtn_frame(session, stream, &mut ds, ty, body).err();
-            used += total;
+            },
+        );
+        if broken {
+            stop = Some(Stop::Break);
         }
         match stop {
             None => {
-                buf.drain(..used);
                 ds.inb = buf;
                 if let Some(d) = self.dtn.as_deref_mut() {
                     d.streams.insert((session, stream), ds);
@@ -912,18 +919,13 @@ where
     /// The holder's side of an ACK: the receiver took the bundle.
     fn dtn_acked(&mut self, bundle: &BundleId, peer: &NodeId, body: &[u8]) -> Result<(), Stop> {
         let wall = self.io.wall_ms();
-        let me = self.ident;
         let Some(d) = self.dtn.as_deref_mut() else {
             return Err(Stop::Break);
         };
         let Ok(ack) = CustodyAck::decode(body) else {
             return Err(Stop::Break);
         };
-        if ack.verify().is_err()
-            || ack.bundle != *bundle
-            || ack.custodian.bytes != *peer
-            || ack.previous.bytes != me.bytes
-        {
+        if ack.verify().is_err() || ack.bundle != *bundle || ack.custodian.bytes != *peer || !d.book.addressed(&ack) {
             return Err(Stop::Break);
         }
         let _ = d.fwd.step(

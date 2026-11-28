@@ -11,7 +11,9 @@
 (*                                                                         *)
 (* The state s: ph (the phase: "hs" handshaking, "conn" connected,         *)
 (* "closing" with its CLOSE still to leave, "closed"), close (the code of  *)
-(* the CLOSE to send, None for none), keys (the 1-RTT sending keys are     *)
+(* the CLOSE to send, None for none), co (the host asked for a datagram    *)
+(* since the close began, so the CLOSE was offered to it, whether or not   *)
+(* it could be written), keys (the 1-RTT sending keys are                  *)
 (* installed), act (when the peer was last heard or the connection last    *)
 (* resumed), sent (when a datagram last left), ka (the keepalive interval),*)
 (* pa (since when the peer announced its sleep), la (this endpoint         *)
@@ -22,8 +24,13 @@
 (* handshake is confirmed), hs (its retransmit deadline), rekey (the REKEY *)
 (* request resent), rec (loss recovery: the loss time or the probe         *)
 (* timeout), ack (the acknowledgement due), amp (the active path may still *)
-(* be sent 64 bytes), paced (the pacer's release), path (path probes and   *)
-(* idle-out) and mtu (the MTU retry and black-hole suspicion). Their own   *)
+(* be sent 64 bytes), rr and kr (a REKEY request, a PING, can be written: *)
+(* the send ring and the active path have room for the smallest datagram   *)
+(* that carries it; the REKEY request and the keepalive deadlines are each *)
+(* offered only under its own gate, so a deadline that cannot be acted on  *)
+(* never keeps the host polling), paced (the pacer's release),             *)
+(* path (path probes and idle-out) and mtu (the MTU retry and black-hole   *)
+(* suspicion). Their own                                                   *)
 (* rules are proved in their own models (TransportRecovery*, TransportCc*, *)
 (* TransportRx*, TransportMtu); here they are opaque. So are the decisions *)
 (* the components take inside a call: a close a component decides in      *)
@@ -76,18 +83,19 @@ PollB(s, c, k, bug) ==
                   t2 == IF bug = "nowake" THEN t1 ELSE AddD(t1, s.wd)
               IN IF s.ld # None THEN AddD(t2, c.rec) ELSE t2
          ELSE LET t1 == IF ~c.conf THEN AddD(Idle(s, k), c.hs) ELSE Idle(s, k)
-                  t2 == AddD(AddD(t1, c.rekey), c.rec)
+                  t2 == AddD(AddD(t1, IF c.rr THEN c.rekey ELSE None), c.rec)
                   t3 == IF c.amp THEN AddD(t2, c.ack) ELSE t2
                   t4 == AddD(AddD(AddD(AddD(t3, c.paced), c.path), s.wd), LinkEnd(s, k))
-              IN IF s.ph = "conn" THEN AddD(AddD(t4, KeepDue(s)), c.mtu) ELSE t4
+              IN IF s.ph = "conn" THEN AddD(AddD(t4, IF c.kr THEN KeepDue(s) ELSE None), c.mtu) ELSE t4
 Poll(s, c, k) == PollB(s, c, k, "none")
 
 Silent(s) == [s EXCEPT !.ph = "closed", !.close = None]
 
-\* begin_close: one CLOSE is to leave if the connection was established with sending keys; otherwise it is over at once
+\* begin_close: one CLOSE is to leave if the connection was established with sending keys; otherwise it is over at once.
+\* The CLOSE has not been offered to the host yet.
 BeginClose(s, err, why) ==
     IF ~Open(s) THEN [s |-> s, ev |-> <<>>]
-    ELSE [s |-> [s EXCEPT !.close = err, !.ph = IF s.ph = "conn" /\ s.keys THEN "closing" ELSE "closed"],
+    ELSE [s |-> [s EXCEPT !.close = err, !.co = FALSE, !.ph = IF s.ph = "conn" /\ s.keys THEN "closing" ELSE "closed"],
           ev |-> <<why>>]
 
 \* the round trip dead_behind_live_carrier reads: the smoothed one, or before a sample the larger of INITIAL_RTT and
@@ -103,7 +111,10 @@ CarrierB(now, pr, k, bug) ==
     /\ Mx(now - pr.lh, 0) >= 4 * Rtt(pr, k)
 Carrier(now, pr, k) == CarrierB(now, pr, k, "none")
 
-\* handle_timeout: a closing connection ends; past the idle deadline the connection ends silently and nothing else
+\* handle_timeout: a closing connection ends once its CLOSE was offered to the host or it has none to send, and until
+\* then waits (the grace of the endpoint, CLOSE_GRACE in pinc-core, only decides when the timer runs; bug = "grace" is
+\* the rule before the fix: it ends at its next timer, so a host held up past the grace before it asked for a datagram
+\* never sends the CLOSE); past the idle deadline the connection ends silently and nothing else
 \* runs; otherwise the handshake timer (it may end a handshaking connection whose handshake ran out of time, and a
 \* connected one whose peer never confirmed the session, each silently), the end of a link outage, the recovery timer
 \* and the wake wait, in this order. The recovery timer ends the connection silently when the path is dead
@@ -112,7 +123,8 @@ Carrier(now, pr, k) == CarrierB(now, pr, k, "none")
 \* #390: the handshake timer ends only a handshaking connection
 TimeoutB(s, now, cc, pr, k, bug) ==
     IF s.ph = "closed" THEN [s |-> s, ev |-> <<>>]
-    ELSE IF s.ph = "closing" THEN [s |-> [s EXCEPT !.ph = "closed"], ev |-> <<>>]
+    ELSE IF s.ph = "closing"
+         THEN [s |-> IF bug = "grace" \/ s.close = None \/ s.co THEN [s EXCEPT !.ph = "closed"] ELSE s, ev |-> <<>>]
     ELSE IF now >= Idle(s, k) THEN [s |-> Silent(s), ev |-> <<"idle">>]
     ELSE LET h == IF cc = "hs" /\ s.ph = "hs" THEN [s |-> Silent(s), ev |-> <<"hs">>]
                   ELSE IF cc = "unconf" /\ s.ph = "conn" /\ bug # "nounconf" THEN [s |-> Silent(s), ev |-> <<"unconf">>]
@@ -149,12 +161,14 @@ Close(s, err) == BeginClose(s, err, "local")
 
 \* What poll_transmit may write: nothing once closed, only the CLOSE while closing, nothing while suspended
 CanSend(s) == IF s.ph = "closed" THEN FALSE ELSE IF s.ph = "closing" THEN s.close # None ELSE ~Suspended(s)
-\* One poll_transmit call: sent says whether it wrote a datagram, stx is the SLEEP count after it
+\* One poll_transmit call: sent says whether it wrote a datagram, stx is the SLEEP count after it. While closing with
+\* a CLOSE to send, the call offers it (build_close), whether or not it could be written.
 Tx(s, now, sent, stx) ==
     IF s.ph = "closed" THEN s
     ELSE IF s.ph = "closing"
          THEN IF s.close = None THEN [s EXCEPT !.ph = "closed"]
-              ELSE IF sent THEN [s EXCEPT !.ph = "closed", !.close = None, !.sent = now] ELSE s
+              ELSE IF sent THEN [s EXCEPT !.ph = "closed", !.close = None, !.sent = now, !.co = TRUE]
+              ELSE [s EXCEPT !.co = TRUE]
     ELSE IF Suspended(s) THEN s
     ELSE [s EXCEPT !.sent = IF sent THEN now ELSE s.sent, !.stx = stx]
 \* whether the call wrote the CLOSE

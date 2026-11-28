@@ -54,7 +54,8 @@ impl From<WireError> for StateError {
 /// What a restore loaded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Restored {
-    /// Tickets stored.
+    /// Tickets of the input the client store holds after the restore (one replaced or evicted by a later one of the
+    /// same input is not counted).
     pub tickets: usize,
     /// Peers with a remembered round trip.
     pub peers: usize,

@@ -88,7 +88,7 @@ pub(crate) struct Core<S, K: KeyStore, A> {
     hs: Vec<u8>,
     handshaking: usize,
     check_at: u64,
-    udp_out: VecDeque<(SocketAddr, Vec<u8>)>,
+    udp_out: VecDeque<(SocketAddr, Vec<u8>, bool)>,
     udp_pool: Vec<Vec<u8>>,
     keep: keep::Keep,
     /// Slots with a read or a write to start, and slots to close: the loop works through these and never scans the
@@ -217,6 +217,7 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
             datagrams_in: c.datagrams_in,
             datagrams_out: c.datagrams_out,
             datagrams_dropped: c.datagrams_dropped,
+            datagrams_held: c.datagrams_held,
             hub_dropped: c.hub_dropped,
             hub_sessions: self.hub.as_ref().map_or(0, tunnel::Tunnel::sessions),
             carriers_denied: c.carriers_denied,
@@ -807,7 +808,10 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
                 self.note_record(node);
                 self.event(Event::RecordStored { node, seq });
             }
-            Trace::MailboxStored { node, .. } | Trace::MailboxDelivered { node, .. } => self.note_mail(node),
+            Trace::MailboxStored { node, .. }
+            | Trace::MailboxDelivered { node, .. }
+            | Trace::SleepAccepted { node }
+            | Trace::SleepEnded { node } => self.note_mail(node),
             _ => {}
         }
     }
@@ -839,6 +843,15 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
     }
 
     pub(crate) fn queue_udp(&mut self, to: SocketAddr, bytes: &[u8]) {
+        self.push_udp(to, bytes, false);
+    }
+
+    /// Queue a datagram the hub endpoint's gate has already charged: `take_udp` does not ask the ledger again.
+    pub(crate) fn queue_charged(&mut self, to: SocketAddr, bytes: &[u8]) {
+        self.push_udp(to, bytes, true);
+    }
+
+    fn push_udp(&mut self, to: SocketAddr, bytes: &[u8], charged: bool) {
         if self.udp_out.len() >= UDP_BACKLOG {
             self.counters.datagrams_dropped += 1;
             return;
@@ -846,12 +859,36 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
         let mut v = self.udp_pool.pop().unwrap_or_default();
         v.clear();
         v.extend_from_slice(bytes);
-        self.udp_out.push_back((to, v));
+        self.udp_out.push_back((to, v, charged));
     }
 
-    /// The next datagram to send.
-    pub(crate) fn take_udp(&mut self) -> Option<(SocketAddr, Vec<u8>)> {
-        self.udp_out.pop_front()
+    /// The next datagram to send that `allow` passes (the ledger of the endpoint that owns the address). A datagram
+    /// already charged is not asked. A refused datagram is dropped and counted, and its buffer is kept for the next
+    /// one.
+    pub(crate) fn take_udp(
+        &mut self,
+        mut allow: impl FnMut(SocketAddr, usize) -> bool,
+    ) -> Option<(SocketAddr, Vec<u8>)> {
+        while let Some((to, buf, charged)) = self.udp_out.pop_front() {
+            if charged || allow(to, buf.len()) {
+                return Some((to, buf));
+            }
+            self.counters.datagrams_held += 1;
+            if self.udp_pool.len() < 8 {
+                self.udp_pool.push(buf);
+            }
+        }
+        None
+    }
+
+    /// The seed of a ledger the host keeps when the relay has no hub endpoint (and so no ledger of its own).
+    ///
+    /// # Errors
+    /// The error of the identity's entropy source.
+    pub(crate) fn ledger_seed(&mut self) -> crate::Result<u64> {
+        let mut b = [0u8; 8];
+        self.identity.borrow_mut().random(&mut b)?;
+        Ok(u64::from_le_bytes(b))
     }
 
     /// A datagram sent (or failed); its buffer is kept for the next one.

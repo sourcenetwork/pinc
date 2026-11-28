@@ -46,7 +46,10 @@ pub const HYST_ABS: Nanos = 20 * MS;
 /// An RTT sample older than this round trip is ignored.
 pub const RTT_SAMPLE_MAX: Nanos = 5 * S;
 /// The longest a change of the group (a join, a leave or a crash) takes to reach every live member: the service level
-/// the layer states, which the scenario suite checks.
+/// the layer states, which the scenario suite checks. It holds when the hub that tells the member's home announced the
+/// crash before it went. A crash while the only hub restarts is removed at the restart plus the member's detection of
+/// it (within the transport's 60 s give-up), the redial and one lease: about 140 s plus the redial after an announced
+/// crash, and up to about 221 s after a silent one the restart hid.
 pub const AWARENESS_BOUND: Nanos = 145 * S;
 /// The false suspicions of live members per member hour the layer states it stays under.
 pub const FALSE_SUSPICION_PER_MEMBER_HOUR: f64 = 1.0;

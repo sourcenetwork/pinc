@@ -309,7 +309,7 @@ fn a_stream_with_more_holes_than_its_inline_ranges_spills_into_one_arena_slot() 
     let holes = crate::stream::RECV_RANGES as u64 + 32;
     for k in 0..holes {
         let got = t.on_stream_frame(&mut pool, 0, 20 * k + 10, &[7; 10], false);
-        assert_eq!(got, Ok(()), "frame {k} of {holes} refused");
+        assert_eq!(got, Ok(true), "frame {k} of {holes} refused");
     }
     assert_eq!(
         (pool.used_chunks(), pool.spill_held()),
@@ -349,7 +349,7 @@ fn a_stream_whose_spilled_ranges_are_full_refuses_the_next_hole_and_counts_it() 
     let full = crate::stream::spill::SLOT_RANGES as u64;
     for k in 0..full {
         let got = t.on_stream_frame(&mut pool, 0, 20 * k + 10, &[7; 10], false);
-        assert_eq!(got, Ok(()), "frame {k} of {full} refused");
+        assert_eq!(got, Ok(true), "frame {k} of {full} refused");
     }
     assert_eq!(t.stats().range_overflows, 0);
     let got = t.on_stream_frame(&mut pool, 0, 20 * full + 10, &[7; 10], false);
@@ -363,7 +363,7 @@ fn a_stream_whose_spilled_ranges_are_full_refuses_the_next_hole_and_counts_it() 
     assert_eq!(t.stats().range_spills, 1);
     assert_eq!(
         t.on_stream_frame(&mut pool, 0, 0, &[7; 10], false),
-        Ok(()),
+        Ok(true),
         "filling a hole needs no new range"
     );
     assert_eq!(t.read_chunk(&pool, 0).map(<[u8]>::len), Some(20));
@@ -410,4 +410,133 @@ fn a_deferred_grant_goes_out_when_a_sibling_read_frees_room() {
     for c in held {
         pool.free_chunk(c);
     }
+}
+
+/// A stream whose reader drained everything it was sent, with a window of 8 chunks on a pool of 3, is granted the
+/// largest limit that fits: the credit granted and not yet received never passes the free bytes, and a second pass with
+/// no change of room grants nothing more. Without the partial grant the limit stays and the slot stays deferred.
+#[test]
+fn a_drained_stream_is_granted_what_fits_on_a_pool_smaller_than_a_window() {
+    let chunk = CHUNK_SIZE as u64;
+    let mut pool = BufferPool::new_boxed(3);
+    let mut cfg = Config::new(false);
+    cfg.peer = PeerLimits {
+        window: 64 * 1024,
+        max_streams: 16,
+    };
+    cfg.credit = true;
+    let mut t: Streams<NoSource, 4, 65> = Streams::new(&cfg, &pool);
+    // The peer sends up to the limit it was given.
+    let mut sent = 0;
+    while let Some(n) = t
+        .stream_recv_window(0)
+        .map_or(Some(chunk), |w| w.1.checked_sub(sent))
+        .map(|n| n.min(chunk))
+        .filter(|n| *n > 0)
+    {
+        if t.on_stream_frame(&mut pool, 0, sent, &alloc::vec![7u8; n as usize], false)
+            .is_err()
+        {
+            break;
+        }
+        sent += n;
+    }
+    assert!(sent > 0, "the peer could send nothing");
+    // The reader's rate asks for a window of 8 chunks, more than the pool holds.
+    let i = t.find(0).unwrap();
+    t.slots.get_mut(i).unwrap().recv.win.size = 8 * chunk;
+    let mut read = 0;
+    while let Some(c) = t.read_chunk(&pool, 0) {
+        let n = c.len();
+        read += n as u64;
+        t.consume(&mut pool, 0, n, 1_000_000, 10_000_000).unwrap();
+    }
+    assert_eq!(read, sent, "the reader took everything");
+    let (_, limit) = t.stream_recv_window(0).unwrap();
+    assert!(
+        limit >= read + chunk,
+        "the limit {limit} did not move a chunk past the read position {read}"
+    );
+    assert!(t.slot(i).unwrap().recv.win.pending, "the grant is not queued");
+    assert!(
+        t.granted_unreceived() + t.reserved() <= pool.available_bytes(),
+        "the credit granted passes the free bytes"
+    );
+    t.regrant(&pool);
+    assert_eq!(
+        t.stream_recv_window(0).unwrap().1,
+        limit,
+        "a second pass with no new room granted more"
+    );
+}
+
+/// A copy of a frame already received brings nothing to read: a copy of the last frame after the stream was read to
+/// its end, a copy of a frame still unread, and a copy beyond a hole all answer false; a frame that fills the hole
+/// or tells the final size for the first time answers true.
+#[test]
+fn only_a_frame_with_something_new_says_so() {
+    let mut pool = BufferPool::new_boxed(512);
+    let mut t: Streams<NoSource, 72, 65> = Streams::new(&Config::new(false), &pool);
+    assert_eq!(t.on_stream_frame(&mut pool, 0, 0, &[7; 10], false), Ok(true));
+    assert_eq!(
+        t.on_stream_frame(&mut pool, 0, 0, &[7; 10], false),
+        Ok(false),
+        "a copy of an unread frame"
+    );
+    assert_eq!(
+        t.on_stream_frame(&mut pool, 0, 20, &[7; 10], false),
+        Ok(true),
+        "bytes beyond a hole"
+    );
+    assert_eq!(
+        t.on_stream_frame(&mut pool, 0, 20, &[7; 10], false),
+        Ok(false),
+        "a copy beyond a hole"
+    );
+    assert_eq!(
+        t.on_stream_frame(&mut pool, 0, 2, &[7; 6], false),
+        Ok(false),
+        "a frame inside held bytes"
+    );
+    assert_eq!(
+        t.on_stream_frame(&mut pool, 0, 10, &[7; 10], false),
+        Ok(true),
+        "the frame that fills the hole"
+    );
+    assert_eq!(
+        t.on_stream_frame(&mut pool, 0, 30, &[], true),
+        Ok(true),
+        "the final size, learned for the first time"
+    );
+    assert_eq!(
+        t.on_stream_frame(&mut pool, 0, 30, &[], true),
+        Ok(false),
+        "the final size again"
+    );
+    while let Some(k) = t.read_chunk(&pool, 0).map(<[u8]>::len) {
+        t.consume(&mut pool, 0, k, 0, 0).unwrap();
+    }
+    assert_eq!(t.consume(&mut pool, 0, 0, 0, 0), Ok(RecvStatus::Finished));
+    assert_eq!(
+        t.on_stream_frame(&mut pool, 0, 20, &[7; 10], true),
+        Ok(false),
+        "the last frame again after the end was read"
+    );
+}
+
+/// A frame whose bytes were all consumed already and whose end was known brings nothing, though the stream is kept
+/// for its send half; a first end with no bytes does.
+#[test]
+fn an_end_with_no_bytes_is_new_once() {
+    let mut pool = BufferPool::new_boxed(512);
+    let mut t: Streams<NoSource, 72, 65> = Streams::new(&Config::new(false), &pool);
+    assert_eq!(t.on_stream_frame(&mut pool, 0, 0, &[7; 10], false), Ok(true));
+    t.consume(&mut pool, 0, 10, 0, 0).unwrap();
+    assert_eq!(t.on_stream_frame(&mut pool, 0, 10, &[], true), Ok(true));
+    assert_eq!(t.on_stream_frame(&mut pool, 0, 10, &[], true), Ok(false));
+    assert_eq!(
+        t.on_stream_frame(&mut pool, 0, 0, &[7; 10], false),
+        Ok(false),
+        "bytes below the read position"
+    );
 }

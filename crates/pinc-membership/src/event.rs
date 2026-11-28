@@ -9,7 +9,9 @@ use crate::codec::{NodeId, Path};
 /// A change in the membership view or the local state, for the application.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Event {
-    /// A member appeared, or came back with a newer incarnation.
+    /// A member appeared, or came back with a newer incarnation. Also when its record moves to another epoch (a
+    /// copy that held a later life went stale or was aged, so the view follows another copy): the member is still
+    /// in the view, and the event may repeat while no home is confirmed.
     MemberJoined {
         /// The member.
         member: NodeId,

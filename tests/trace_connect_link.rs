@@ -25,7 +25,7 @@
 
 use std::collections::BTreeMap;
 
-use pinc_connect::client::link::{Act, Ctx, Link, Pulse, Shared};
+use pinc_connect::client::link::{Act, Ctx, Link, Pulse, Shared, rule};
 use pinc_tests::SplitMix64;
 
 const MS: u64 = 1_000_000;
@@ -146,6 +146,8 @@ fn run(seed: u64, steps: usize, out: &mut Vec<String>) {
     };
     let mut l = Link::new();
     let mut now = pick(&mut rng, &[0, 5 * S, 100 * S]);
+    // the client anchors the defer where it is built
+    sh.defer_until = sh.restarted.then(|| now + rule::DEFER);
     out.push(format!(r#"{{"t":"lknew","S":{}}}"#, shared_json(&sh)));
     let deltas: [u64; 24] = [
         0,
@@ -279,7 +281,8 @@ fn run(seed: u64, steps: usize, out: &mut Vec<String>) {
                     1 => sh.keep_learn = !sh.keep_learn,
                     2 => {
                         sh.restarted = !sh.restarted;
-                        sh.defer_until = None;
+                        // anchored as the client does at its start
+                        sh.defer_until = sh.restarted.then(|| now + rule::DEFER);
                     }
                     3 => sh.lease_hi = pick(&mut rng, &[0, 15 * S, 20 * S, 30 * S, 40 * S]),
                     4 => sh.keep_iv = pick(&mut rng, &[0, 15 * S, 20 * S, 40 * S]),

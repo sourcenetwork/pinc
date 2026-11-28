@@ -434,6 +434,9 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
         let mut shared = Shared {
             phone: cfg.phone,
             restarted: cfg.restarted,
+            defer_until: cfg
+                .restarted
+                .then(|| cfg.start.saturating_add(super::link::rule::DEFER)),
             keep_learn: cfg.keep_learn,
             ..Shared::default()
         };
@@ -547,11 +550,17 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
     }
 
     fn relay_by_udp(&self, a: &SocketAddr) -> Option<usize> {
-        self.rly.iter().position(|r| r.cfg.is_some_and(|c| c.udp == Some(*a)))
+        let a = netcheck::canonical(*a);
+        self.rly
+            .iter()
+            .position(|r| r.cfg.is_some_and(|c| c.udp.map(netcheck::canonical) == Some(a)))
     }
 
     fn relay_by_alt(&self, a: &SocketAddr) -> Option<usize> {
-        self.rly.iter().position(|r| r.alt_udp == Some(*a))
+        let a = netcheck::canonical(*a);
+        self.rly
+            .iter()
+            .position(|r| r.alt_udp.map(netcheck::canonical) == Some(a))
     }
 
     /// Relay `relay` answers from `addr` as well as from the address it is configured with: a dual-stack relay's
@@ -560,7 +569,8 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
     /// control datagram may come from.
     pub fn relay_seen_at(&mut self, relay: usize, addr: SocketAddr) {
         if let Some(r) = self.rly.get_mut(relay)
-            && r.cfg.is_some_and(|c| c.udp != Some(addr))
+            && r.cfg
+                .is_some_and(|c| c.udp.map(netcheck::canonical) != Some(netcheck::canonical(addr)))
         {
             r.alt_udp = Some(addr);
         }

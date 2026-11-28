@@ -20,7 +20,7 @@ use std::rc::Rc;
 use pinc_crypto::IdentityAlg;
 use pinc_security::Env;
 use pinc_tests::*;
-use pinc_transport::conn::{CloseReason, Lent, PathId, PathInfo};
+use pinc_transport::conn::{CloseReason, Lent, PathId, PathInfo, SlotView};
 use pinc_transport::packet::LongHeader;
 use proptest::prelude::*;
 
@@ -95,6 +95,49 @@ fn one_close_then_the_state_is_freed() {
         assert_eq!(net.a.tx_log.len(), a_sent);
         assert!(net.a.conn.poll_timeout().is_none() && net.b.conn.poll_timeout().is_none());
         assert!(net.b.conn.open_bi().is_err());
+    });
+}
+
+/// A host that serves the close's grace before it asks for a datagram still sends the CLOSE: the state is freed once
+/// the CLOSE was offered, not when the grace passes.
+#[test]
+fn a_close_reaches_the_peer_after_a_timer_call_past_the_grace() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let mut net = connected(&mut w, &mut sa, &mut sb, Link::new(3, Params::new(10 * MS)));
+        net.run(net.now + SEC, |_| false);
+        let at = net.now;
+        net.a.with_lent(at, |c, env, l| c.close(env, l, 42));
+        net.a.with_lent(at + 2 * SEC, Conn::handle_timeout);
+        assert!(net.run(at + 5 * SEC, |n| n.b.closed().is_some()));
+        assert_eq!(net.b.closed(), Some(CloseReason::Peer { error: 42 }));
+    });
+}
+
+/// A CLOSE the host was offered but that had no room to be written does not hold the state: the next timer call frees
+/// it and nothing leaves afterwards.
+#[test]
+fn a_close_that_could_not_be_written_is_freed_by_the_next_timer_call() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let mut net = connected(&mut w, &mut sa, &mut sb, Link::new(3, Params::new(10 * MS)));
+        net.run(net.now + SEC, |_| false);
+        let at = net.now;
+        net.a.with_lent(at, |c, env, l| c.close(env, l, 42));
+        let mut small = [0u8; 8];
+        assert!(
+            net.a
+                .with_lent(at, |c, env, l| c.poll_transmit(env, l, &mut small))
+                .is_none()
+        );
+        assert!(net.a.conn.poll_timeout().is_some(), "the close ended before its timer");
+        net.a.with_lent(at + 2 * SEC, Conn::handle_timeout);
+        assert!(net.a.conn.poll_timeout().is_none(), "the state outlived the grace");
+        let sent = net.a.tx_log.len();
+        net.run(at + 5 * SEC, |_| false);
+        assert_eq!(net.a.tx_log.len(), sent, "a datagram left a freed connection");
     });
 }
 
@@ -915,4 +958,278 @@ proptest! {
             }
         });
     }
+}
+
+/// Route 3/4 validated for both sides, then the responder's slot of it dropped: the dialer's next datagram on it
+/// brings the responder a path it learns, as it does for any source it did not dial. Nothing the responder sends on
+/// the route reaches the dialer.
+fn held_route<'a>(w: &'a mut World, sa: &'a mut Store, sb: &'a mut Store, seed: u64) -> Net<'a, 'a> {
+    let mut link = Link::new(seed, Params::new(10 * MS));
+    link.add_route(PathId(3), PathId(4), Params::new(10 * MS), Params::new(10 * MS));
+    let mut net = connected(w, sa, sb, link);
+    let now = net.now;
+    net.a
+        .with_env(now, |c, env| c.add_path(env, PathId(3), PathInfo::default()))
+        .unwrap();
+    assert!(net.run(net.now + 5 * SEC, |n| n.a.conn.path_validated(PathId(3))));
+    net.run(net.now + SEC, |_| false);
+    net.b.conn.remove_path(PathId(4)).unwrap();
+    net.link.route(PathId(3)).ba.p.loss_ppm = 1_000_000;
+    net
+}
+
+/// The dialer moves to route 3/4 and the responder takes its first datagram there, then the endpoint's ledger holds the
+/// address (it does so as soon as it delivers the datagram): the path is unvalidated and the responder owes a challenge
+/// on it, with three times the datagram as its whole budget.
+fn move_to_held(net: &mut Net<'_, '_>, stream: u64, data: &[u8]) {
+    // The dialer's size probe on the new path would be the first datagram and brings the responder a large budget.
+    net.a.conn.set_path_held(PathId(3), true);
+    net.a.conn.set_active(PathId(3)).unwrap();
+    let _ = net.a.conn.write(stream, data);
+    net.flush();
+    net.now = net.now.max(net.link.next_at().unwrap());
+    while let Some((p, mut d)) = net.link.pop_b(net.now) {
+        assert_eq!(p, PathId(4));
+        let mut env = Env {
+            provider: &net.b.prov,
+            now: net.now,
+            drbg: &mut net.b.drbg,
+        };
+        let lent = &mut Lent {
+            spill: &mut net.b.spill,
+        };
+        net.b
+            .conn
+            .handle_datagram_with(&mut env, lent, net.stores, p, &mut d)
+            .unwrap();
+        net.b.conn.set_path_held(p, true);
+    }
+}
+
+/// The responder's view of its slot of `path`.
+fn b_slot(net: &Net<'_, '_>, path: PathId) -> SlotView {
+    net.b
+        .conn
+        .trace_paths()
+        .slots
+        .into_iter()
+        .flatten()
+        .find(|s| s.id == path.0)
+        .unwrap()
+}
+
+/// A connected session whose active path moved to an address the ledger holds, never validated, with the keepalive on
+/// and the keys rolling often: whatever budget the path has, a deadline `poll_timeout` offers is one `poll_transmit`
+/// can serve (a gate that opens below the smallest datagram of its frame would spin the host), and the path never
+/// sends past three times what it received.
+#[test]
+fn a_held_unvalidated_path_after_a_move_never_spins_on_a_deadline() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        w.cfg.keepalive = Some(2 * SEC);
+        w.cfg.key_update_after = 8;
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let mut net = held_route(&mut w, &mut sa, &mut sb, 41);
+        let stream = net.a.conn.open_bi().unwrap();
+        let data = pattern(60, 3);
+        move_to_held(&mut net, stream, &data);
+        let (mut at, mut due_at, mut streak) = (net.now, 0, 0u32);
+        let end = net.now + 200 * SEC;
+        net.run(end, |n| {
+            if n.now >= at && n.now < end - 150 * SEC {
+                let _ = n.a.conn.write(stream, &data);
+                at = n.now + 100 * MS;
+            }
+            let due = n.b.conn.poll_timeout().is_some_and(|t| t <= n.now);
+            streak = if due && n.now == due_at { streak + 1 } else { 0 };
+            due_at = if due { n.now } else { 0 };
+            assert!(streak < 50, "a deadline stays due at {} and nothing leaves", n.now);
+            let s = b_slot(n, PathId(4));
+            if !s.validated {
+                assert!(
+                    s.amp_sent <= 3 * s.amp_received,
+                    "{} sent on {} received",
+                    s.amp_sent,
+                    s.amp_received
+                );
+            }
+            false
+        });
+        // The route answers nothing, so the session ends by a reason, never by a spin.
+        let ends = |c: Option<CloseReason>| matches!(c, Some(CloseReason::IdleTimeout | CloseReason::PathDead));
+        assert!(
+            ends(net.a.closed()) && ends(net.b.closed()),
+            "a {:?} b {:?} at +{} s",
+            net.a.closed(),
+            net.b.closed(),
+            (net.now - T0) / SEC
+        );
+    });
+}
+
+/// A path the ledger holds, unvalidated, that owes a challenge keeps the room of one challenge datagram back from
+/// every frame but the challenge: whatever its first datagram's budget, the first datagram the responder writes on it
+/// carries the challenge, never an acknowledgement in its place.
+#[test]
+fn a_challenge_owed_on_a_held_path_is_not_pushed_out_by_an_acknowledgement() {
+    big_stack(|| {
+        let mut sent_first = 0;
+        for pad in 1..121usize {
+            let mut w = World::new(IdentityAlg::Ed25519);
+            let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+            let mut net = held_route(&mut w, &mut sa, &mut sb, 42);
+            let stream = net.a.conn.open_bi().unwrap();
+            move_to_held(&mut net, stream, &pattern(pad, 5));
+            let before = net.b.tx_log.iter().filter(|t| t.2 == PathId(4)).count();
+            let left = |n: &Net<'_, '_>| n.b.tx_log.iter().filter(|t| t.2 == PathId(4)).count() - before;
+            net.run(net.now + 200 * MS, |n| left(n) > 0);
+            if left(&net) == 0 {
+                continue;
+            }
+            sent_first += 1;
+            let s = b_slot(&net, PathId(4));
+            assert!(
+                s.sent.iter().any(Option::is_some),
+                "pad {pad}: the first datagram of the held path left without the challenge (room {}, received {}, {s:?}, {:?})",
+                s.amp_room,
+                s.amp_received,
+                net.b.tx_log
+            );
+        }
+        assert!(sent_first > 0, "no scenario wrote on the held path");
+    });
+}
+
+/// A path with no challenge outstanding keeps nothing back: a validated path's datagrams may be as large as the path
+/// carries, so the whole room goes to the frames.
+#[test]
+fn no_reserve_without_an_outstanding_challenge() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let mut net = connected(&mut w, &mut sa, &mut sb, Link::new(43, Params::new(10 * MS)));
+        let stream = net.a.conn.open_bi().unwrap();
+        net.a.conn.write(stream, &[1; 100]).unwrap();
+        net.run(net.now + 100 * MS, |_| false);
+        net.b.conn.trace_dgram_enable();
+        net.b.conn.write(stream, &pattern(6000, 7)).unwrap();
+        net.run(net.now + 500 * MS, |_| false);
+        let recs = net.b.conn.trace_dgram_take();
+        let largest = recs
+            .iter()
+            .filter(|r| r.len > 0)
+            .max_by_key(|r| r.len)
+            .expect("the responder sent nothing");
+        assert!(
+            largest.len + 16 > usize::from(largest.path_mtu),
+            "a datagram never used the whole room: {largest:?}"
+        );
+    });
+}
+
+/// The reserve a path with a challenge outstanding keeps back is the smallest datagram that carries the challenge: with
+/// the stream data of the responder waiting, whatever room the first datagram of the path has, it carries the
+/// challenge, stays within the room, and a room of no more than the reserve and a few bytes holds nothing else.
+#[test]
+fn the_reserve_is_the_smallest_challenge_datagram() {
+    big_stack(|| {
+        let (mut firsts, mut all) = (Vec::new(), Vec::new());
+        let (mut cid_len, mut pn_len) = (0, 0);
+        for pad in 2..121usize {
+            let mut w = World::new(IdentityAlg::Ed25519);
+            let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+            let mut net = held_route(&mut w, &mut sa, &mut sb, 42);
+            net.b.conn.trace_dgram_enable();
+            let stream = net.a.conn.open_bi().unwrap();
+            net.a.conn.write(stream, &[1; 100]).unwrap();
+            move_to_held(&mut net, stream, &pattern(pad, 5));
+            let _ = net.b.conn.write(stream, &pattern(3000, 9));
+            net.run(net.now + 200 * MS, |_| false);
+            let recs = net.b.conn.trace_dgram_take();
+            all.extend(
+                recs.iter()
+                    .filter(|r| r.len > 0 && r.amp < 1_000_000)
+                    .map(|r| (r.amp, r.len)),
+            );
+            let Some(first) = recs.iter().find(|r| r.len > 0 && r.amp < 1_000_000).copied() else {
+                continue;
+            };
+            let view = net.b.conn.trace_paths();
+            (cid_len, pn_len) = (view.cid_len, view.pn_len);
+            let s = b_slot(&net, PathId(4));
+            assert!(
+                s.sent.iter().any(Option::is_some),
+                "pad {pad}: the first datagram left without the challenge {first:?}"
+            );
+            assert!(
+                first.len <= first.amp,
+                "pad {pad}: a datagram of {} left on a room of {}",
+                first.len,
+                first.amp
+            );
+            firsts.push((first.amp, first.len));
+        }
+        assert!(!firsts.is_empty(), "no scenario wrote on the held path");
+        // The smallest datagram that carries a challenge, as the config gives it: a short header of the connection id
+        // and the packet number, the frame (the sample skip or the longest challenge), and the tag. A datagram written
+        // with less room than the reserve (that, and the overhead the budget keeps) holds nothing but the challenge.
+        let challenge = 1 + cid_len + (pn_len + 9).max(pinc_transport::packet::SAMPLE_SKIP) + 16;
+        let reserve = challenge + pinc_security::amp::OVERHEAD;
+        let smallest = all
+            .iter()
+            .map(|f| f.1)
+            .min()
+            .expect("no datagram was written on the held path");
+        assert_eq!(
+            smallest, challenge,
+            "the smallest datagram on the held path is not the challenge: {all:?}"
+        );
+        for (room, len) in all.iter().filter(|(room, _)| *room < reserve) {
+            assert_eq!(
+                *len, challenge,
+                "a room of {room} below the reserve held more than the challenge: {len}"
+            );
+        }
+        for (room, len) in &all {
+            assert!(len <= room, "a datagram of {len} left on a room of {room}");
+        }
+    });
+}
+
+/// The reserve is exactly the smallest challenge datagram and its overhead, computed from the configuration: on a held
+/// path that received `n` bytes and has a challenge outstanding, with more stream data waiting than the room holds, the
+/// first datagram the responder writes there is the room less the reserve less the 9 bytes of the challenge frame it
+/// carries inside that cap (a reserve of one byte more or less, or none, moves its size).
+#[test]
+fn a_challenged_path_keeps_back_exactly_the_smallest_challenge_datagram() {
+    big_stack(|| {
+        let mut checked = 0;
+        for pad in (20..=120usize).step_by(20) {
+            let mut w = World::new(IdentityAlg::Ed25519);
+            let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+            let mut net = held_route(&mut w, &mut sa, &mut sb, 42);
+            let stream = net.a.conn.open_bi().unwrap();
+            net.a.conn.write(stream, &[1; 100]).unwrap();
+            move_to_held(&mut net, stream, &pattern(pad, 5));
+            let view = net.b.conn.trace_paths();
+            let s = b_slot(&net, PathId(4));
+            assert!(
+                !s.validated && s.challenge.is_some(),
+                "pad {pad}: no challenge is outstanding"
+            );
+            let reserve = 1
+                + view.cid_len
+                + (view.pn_len + 9).max(pinc_transport::packet::SAMPLE_SKIP)
+                + 16
+                + pinc_security::amp::OVERHEAD;
+            let t0 = net.now;
+            let _ = net.b.conn.write(stream, &pattern(3000, 9));
+            net.run(net.now + 5 * MS, |_| false);
+            let first = net.b.tx_log.iter().find(|t| t.2 == PathId(4) && t.0 >= t0).map(|t| t.1);
+            let first = first.expect("nothing left on the held path");
+            assert_eq!(first, s.amp_room - reserve - 9, "pad {pad}: room {}", s.amp_room);
+            checked += 1;
+        }
+        assert_eq!(checked, 6);
+    });
 }

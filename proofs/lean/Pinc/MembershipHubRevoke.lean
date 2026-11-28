@@ -206,6 +206,10 @@ theorem onHello_full_refuses (e : Env) (n : N) (now peer : Nat) (rc : Rec) (snap
          if rc.inc < held.rc.inc then
            let n := { n1 with roster := n1.roster.modify peer (fun l => { l with renewed := now }) }
            N.deltaTo e n peer peer held.rc .alive
+         else if (n1.viewAhead peer rc).isSome then
+           let s := (n1.viewAhead peer rc).getD rc
+           let n := { n1 with roster := n1.roster.modify peer (fun l => { l with renewed := now }) }
+           N.deltaTo e n peer peer s .alive
          else if held.rc == rc then
            { n1 with roster := n1.roster.modify peer (fun l => { l with renewed := now }) }
          else if MAX_TABLE ≤ n1.roster.len && !n1.roster.has peer then n1
@@ -213,7 +217,8 @@ theorem onHello_full_refuses (e : Env) (n : N) (now peer : Nat) (rc : Rec) (snap
            let n := { n1 with roster := n1.roster.insert peer ⟨rc, now⟩ }
            N.pushDelta e n now peer rc .alive
        | none =>
-         if MAX_TABLE ≤ n1.roster.len then n1
+         if (n1.viewAhead peer rc).isSome then N.deltaTo e n1 peer peer ((n1.viewAhead peer rc).getD rc) .alive
+         else if MAX_TABLE ≤ n1.roster.len then n1
          else
            let n := { n1 with roster := n1.roster.insert peer ⟨rc, now⟩ }
            N.pushDelta e n now peer rc .alive) := rfl
@@ -225,6 +230,8 @@ theorem onHello_full_refuses (e : Env) (n : N) (now peer : Nat) (rc : Rec) (snap
     simpa [List.any_eq_false, List.find?_eq_none] using hn
   rw [hg]
   have : MAX_TABLE ≤ (n.ohPre e now peer snap homed).roster.len := by rw [hr]; exact hfull
-  rw [if_pos this]; exact hr
+  by_cases hv : ((n.ohPre e now peer snap homed).viewAhead peer rc).isSome = true
+  · rw [if_pos hv, deltaTo_roster]; exact hr
+  · rw [if_neg hv, if_pos this]; exact hr
 
 end Pinc.Membership

@@ -199,4 +199,15 @@ theorem pushDelta_ps (e : Env) (n : N) (now m : Nat) (rc : Rec) (a : Alive) : PS
   · exact h1
   · exact PS_trans (applyDeltaCore_ps ..) h1
 
+/-- `recompute_one`'s arm for a member the view lists whose best eligible record is of another epoch, an older one
+included: the view takes that record, so it never keeps a later life that no eligible copy holds. -/
+theorem rcArm_other_epoch (n : N) (m : Nat) (best : Rec) (c : ViewEntry) (h : best.inc / 65536 ≠ c.rc.inc / 65536) :
+    (n.rcArm m best (some c)).1.members.get? m = some ⟨best⟩ := by
+  unfold N.rcArm N.rcNewer N.rcOldVer
+  dsimp only
+  rw [if_neg h]
+  first
+    | (simp [Pinc.Membership.AMap.get?_insert_self]; done)
+    | (repeat' split) <;> simp [Pinc.Membership.AMap.get?_insert_self]
+
 end Pinc.Membership.Cmp

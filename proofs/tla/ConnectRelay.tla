@@ -44,15 +44,37 @@
 (* holds mail and is homed elsewhere, and one that holds a long message.  *)
 (*  SpuSilent      an uploaded packet from a member whose UDP stamp finds   *)
 (*                 the table full is no refusal: nothing is traced        *)
+(*  CloseRecorded  a close (and a session the sweep ends) is recorded in   *)
+(*                 the table of gone nodes with its time, full or not      *)
+(*  GoneBound      the gone nodes are what the table's slots hold, at most *)
+(*                 C of them                                               *)
+(* FullGone starts with the gone table full of other nodes (3 and 6):     *)
+(* ConnectRelay_gone; ConnectRelay_wgone puts the old rule back (a full   *)
+(* table forgets the close). The other configs never fill it: two nodes  *)
+(* open carriers and C is 2, which is how the old rule went unseen.       *)
+(*  MarkKept       a mark whose notice clock stays the same keeps its      *)
+(*                 time: a copy of a notice does not move it (witness     *)
+(*                 ConnectRelay_wcopy, the old rule SleepNoticeMove)       *)
+(*  WakeKept       a packet for a member whose last accepted notice is    *)
+(*                 younger than the mailbox age (cf.Age), with no carrier *)
+(*                 and no ready route here, is held, and the first held   *)
+(*                 asks for a wake-up (witness ConnectRelay_wlife: marks  *)
+(*                 that live less than the mailbox keeps a message)       *)
+(*  OneLife        after a sweep no mark is older than cf.Age, and a mark *)
+(*                 the sweep ends leaves its member no held message       *)
+(*                 (witness ConnectRelay_wmail: the mail stays)            *)
+(* ConnectRelay_mark reaches a copy within the skew (times 0 and 9), a    *)
+(* packet held under a mark and the mark's end at cf.Age (40).            *)
 (* FullUdp starts with the UDP table full of other nodes (ConnectRelay_full) *)
 (* and LoudSpu puts the traced refusal back (ConnectRelay_wfull).          *)
 (* Lean: Pinc/ConnectRelayThm.lean (peer_unauth, forward_peer, no_reforward,*)
 (* back_window, charge_inv, tunnel_spec, spu_member, heard_idle,           *)
-(* heard_unready_quiet, forwarded, sleep_spec, ...).                       *)
+(* heard_unready_quiet, forwarded, sleep_spec, close_recorded, ...).       *)
 (***************************************************************************)
 EXTENDS ConnectRelayOps
 
-CONSTANTS Times, MaxNs, Depth, WithSleep, WithReady, OldHeld, HoldBehind, StopFirst, Seed, Lens, MBytes, FullUdp, LoudSpu
+CONSTANTS Times, MaxNs, Depth, WithSleep, WithReady, OldHeld, HoldBehind, StopFirst, Seed, Lens, MBytes, FullUdp, LoudSpu,
+          FullGone
 cf == [me |-> 9, C |-> 2, R |-> 2, MN |-> 1, MB |-> MBytes, Bytes |-> 3, Window |-> 3, SessT |-> 4, Age |-> 40,
        old |-> OldHeld, hb |-> HoldBehind, stop |-> StopFirst]
 \* the quick profile: cf with a window quota of 1 byte, so that the second frame of a window is refused at a small depth
@@ -77,16 +99,25 @@ PeersQuick == {5}
 \* model can fill: at most two peer relays (5, 6) are ever added and a carrier learns at most three sources (1, 2, 3)
 MAXPEERSQuick == 2
 AMQuick == 4
-VARIABLES R, clock, last, steps, ref, fw, heard, step, quiet
-vars == <<R, clock, last, steps, ref, fw, heard, step, quiet>>
+\* nt (ghost): the time of each member's last accepted notice that set a mark, read from the effects (sleepok sets it,
+\* opened and sleepend end it), whatever the relay's own table keeps; mk, wk, ol: MarkKept, WakeKept, OneLife of the
+\* last call
+VARIABLES R, clock, last, steps, ref, fw, heard, step, quiet, kept, nt, mk, wk, ol
+vars == <<R, clock, last, steps, ref, fw, heard, step, quiet, kept, nt, mk, wk, ol>>
 
 SeedRelay == [NewRelay(cf) EXCEPT !.bk = [x \in {1, 2, 3, 5, 6, 9} |-> x % 2],
                   !.peers = [i \in 1..MAXPEERS |-> IF i = 1 THEN Seed ELSE 0],
                   !.udp = IF FullUdp THEN [x \in {3, 4} |-> 0] ELSE [x \in {} |-> 0],
+                  !.gone = IF FullGone THEN [x \in {3, 6} |-> 0] ELSE [x \in {} |-> 0],
+                  !.gt = IF FullGone
+                         THEN LET bk == [x \in {1, 2, 3, 5, 6, 9} |-> x % 2]
+                              IN Insert(cf.C, bk, Insert(cf.C, bk, NewTable(cf.C), 3, 0).t, 6, 0).t
+                         ELSE NewTable(cf.C),
                   !.rec = IF Seed = 0 THEN [x \in {} |-> 0] ELSE [x \in {2} |-> [seq |-> 1, home |-> Seed, rcv |-> 0]]]
 
 Init == /\ R = SeedRelay
-        /\ clock = 0 /\ steps = 0 /\ last = TRUE /\ ref = FALSE /\ fw = TRUE /\ heard = TRUE /\ step = TRUE /\ quiet = TRUE
+        /\ clock = 0 /\ steps = 0 /\ last = TRUE /\ ref = FALSE /\ fw = TRUE /\ heard = TRUE /\ step = TRUE /\ quiet = TRUE /\ kept = TRUE
+        /\ nt = [x \in {} |-> 0] /\ mk = TRUE /\ wk = TRUE /\ ol = TRUE
 
 IsFwd(e) == Len(e) >= 3 /\ e[1] = "peer" /\ e[3] = "fwd"
 IsUdp(e) == Len(e) >= 3 /\ e[1] = "udp"
@@ -143,19 +174,58 @@ StepsOk(kind, o, node, tm) ==
 \* SpuSilent on one call: an uploaded packet from a member whose UDP stamp does not fit the full table is no refusal
 SpuQuiet(kind, o) == kind = "spu" => \A k \in 1..Len(o.ef) : o.ef[k] # RejE("full", 1)
 
+\* CloseRecorded on one call: the node a close names (from), and every node the sweep expired, is gone since tm
+KeptOk(kind, o, from, tm) ==
+    /\ (kind = "close" /\ o.ef # <<>>) => (from \in DOMAIN o.R.gone /\ o.R.gone[from] = tm)
+    /\ \A k \in 1..Len(o.ef) : (Len(o.ef[k]) = 3 /\ o.ef[k][1] = "t" /\ o.ef[k][2] = "expired") =>
+           (o.ef[k][3] \in DOMAIN o.R.gone /\ o.R.gone[o.ef[k][3]] = tm)
+
+\* the ghost nt after the effects E of a call at tm
+RECURSIVE Ghost(_, _, _, _)
+Ghost(f, E, i, tm) ==
+    IF i > Len(E) THEN f
+    ELSE LET e == E[i]
+             f1 == IF Len(e) = 3 /\ e[1] = "t" /\ e[2] = "sleepok" THEN Put(f, e[3], tm)
+                   ELSE IF Len(e) >= 3 /\ e[1] = "t" /\ e[2] \in {"opened", "sleepend"} THEN Del(f, e[3])
+                   ELSE f
+         IN Ghost(f1, E, i + 1, tm)
+
+\* MarkKept on one call: a mark that lives at the call and whose notice clock is the same after it keeps its time
+MarkOk(o) == \A n \in DOMAIN R.sl \cap DOMAIN o.R.sl :
+                 Live(cf, R, clock', n) /\ o.R.sl[n].ts = R.sl[n].ts => o.R.sl[n].at = R.sl[n].at
+
+\* WakeKept on one call (dst the destination it routes, tm its time): a packet routed to a member whose last accepted
+\* notice is younger than cf.Age, with no carrier and no ready route here, is held (or refused by a full mailbox), and
+\* when the member held nothing a wake-up is asked for
+IsMb(e, d) == Len(e) >= 3 /\ e[1] = "t" /\ e[2] = "mstored" /\ e[3] = d
+WakeOk(kind, o, dst, tm) ==
+    (/\ kind \in {"frame", "spu", "peer"} /\ dst \notin {0, cf.me} /\ o.res \notin Unrouted
+     /\ dst \in DOMAIN nt /\ Sat(tm - nt[dst]) < cf.Age
+     /\ ~HasC(cf, R, dst) /\ ~(Fresh(R, tm, dst) /\ dst \notin R.nr))
+    => \/ o.res = "mbrefused"
+       \/ /\ \E k \in 1..Len(o.ef) : IsMb(o.ef[k], dst)
+          /\ dst \notin DOMAIN R.mb.held => \E k \in 1..Len(o.ef) : o.ef[k] = <<"wake", dst>>
+
+\* OneLife on one call: a mark the sweep ended leaves its member no held message
+EndOk(kind, o) == kind = "time" => \A n \in DOMAIN R.sl \ DOMAIN o.R.sl : n \notin DOMAIN o.R.mb.held
+
 Do(kind, o, from, dst) == /\ R' = o.R /\ last' = Checks(kind, o, from, clock') /\ steps' = steps + 1
                           /\ fw' = FwdOk(kind, o, dst, clock') /\ heard' = HeardOk(kind, o, dst)
                           /\ step' = StepsOk(kind, o, dst, clock')
                           /\ quiet' = SpuQuiet(kind, o)
+                          /\ kept' = KeptOk(kind, o, from, clock')
                           /\ ref' = (ref \/ \E k \in 1..Len(o.ef) : IsNoTunnel(o.ef[k]))
+                          /\ nt' = Ghost(nt, o.ef, 1, clock')
+                          /\ mk' = MarkOk(o) /\ wk' = WakeOk(kind, o, dst, clock') /\ ol' = EndOk(kind, o)
 
+\* a notice may carry the clock of any earlier time (a copy, or a notice late on the wire); the skew refuses the old
 Frames(nd, tm) == {<<"send", d, 0, 1>> : d \in {1, 2, 3}}
              \cup {<<"sendalias", 0, 0, 1>>}
-             \cup (IF WithSleep THEN {<<"sleep", nd, tm * 1000, 1, 1>>} ELSE {})
+             \cup (IF WithSleep THEN {<<"sleep", nd, u * 1000, 1, 1>> : u \in {v \in Times : v <= tm}} ELSE {})
 
 Next == \/ \E t \in Times : t >= clock /\ clock' = t /\
             ( (\E n \in Cl : R.ns < MaxNs /\ Do("open", CarrierOpened(cf, R, t, n), 0, 0))
-            \/ (\E n \in Cl, s \in 0..MaxNs : Do("close", CarrierClosed(cf, R, t, n, s), 0, 0))
+            \/ (\E n \in Cl, s \in 0..MaxNs : Do("close", CarrierClosed(cf, R, t, n, s), n, 0))
             \/ (\E nd \in Cl : \E s \in 0..MaxNs : \E f \in Frames(nd, t) : Do("frame", CarrierFrame(cf, R, t, nd, s, f), 0, FDst(nd, f)))
             \/ (\E p \in Peers \cup {1}, s \in {3}, d \in {1, 3}, ln \in Lens :
                     Do("peer", PeerFrame(cf, R, t, p, <<"fwd", s, d, 0, ln>>), p, d))
@@ -163,12 +233,13 @@ Next == \/ \E t \in Times : t >= clock /\ clock' = t /\
             \/ (\E m \in {0, 1}, d \in {2, 3} : Do("spu", IF LoudSpu THEN SpuLoud(cf, R, t, m, d, 0, 1) ELSE Spu(cf, R, t, m, d, 0, 1), 0, d))
             \/ (WithReady /\ \E n \in Cl : Do("ret", MemberReturned(cf, R, t, n), 0, 0))
             \/ Do("time", Timeout(cf, R, t), 0, 0) )
-        \/ (\E p \in Peers : R' = AddPeer(R, p).R /\ UNCHANGED <<clock, last, ref, fw, heard, step, quiet>>
+        \/ (\E p \in Peers : R' = AddPeer(R, p).R /\ UNCHANGED <<clock, last, ref, fw, heard, step, quiet, kept, nt, mk, wk, ol>>
                           /\ steps' = steps + 1)
-        \/ (\E p \in Peers : R' = RemovePeer(R, p) /\ UNCHANGED <<clock, last, ref, fw, heard, step, quiet>>
+        \/ (\E p \in Peers : R' = RemovePeer(R, p) /\ UNCHANGED <<clock, last, ref, fw, heard, step, quiet, kept, nt, mk, wk, ol>>
                           /\ steps' = steps + 1)
         \/ (WithReady /\ \E n \in Cl, o \in {0, 1} :
-                R' = SetReady(R, n, o) /\ UNCHANGED <<clock, last, ref, fw, heard, step, quiet>> /\ steps' = steps + 1)
+                R' = SetReady(R, n, o) /\ UNCHANGED <<clock, last, ref, fw, heard, step, quiet, kept, nt, mk, wk, ol>>
+                /\ steps' = steps + 1)
 
 Spec == Init /\ [][Next]_vars
 
@@ -193,6 +264,12 @@ HeardDelivers == heard
 StepsOver == step
 \* the uploaded packet of a member is answered, with the table full, as without a stamp and not as a refusal
 SpuSilent == quiet
+CloseRecorded == kept
+GoneBound == R.gone = MapOf(R.gt, cf.C) /\ Cardinality(DOMAIN R.gone) <= cf.C
+MarkKept == mk
+WakeKept == wk
+OneLife == /\ ol
+           /\ R.ls = clock /\ clock > 0 => \A n \in DOMAIN R.sl : Sat(clock - R.sl[n].at) < cf.Age
 \* a bounded model check: calls up to a depth of Depth
 SmallMb == steps <= Depth
 \* witness: some call refused the hand-over of a held message (only possible when the host reports a member not ready)

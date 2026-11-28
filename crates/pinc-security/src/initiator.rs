@@ -142,6 +142,8 @@ pub struct Initiator {
     peer_credit: CreditRecord,
     remembered: CreditRecord,
     dcid: ConnId,
+    /// The connection id the responder's Reply names, set once that Reply authenticated.
+    server_scid: ConnId,
     seed: Secret<32>,
     e: [u8; 32],
     th: Transcript,
@@ -190,6 +192,7 @@ impl Initiator {
             peer_credit: CreditRecord::NONE,
             remembered: CreditRecord::NONE,
             dcid: ConnId::default(),
+            server_scid: ConnId::default(),
             seed: Secret::new([0; 32]),
             e: [0; 32],
             th: Transcript::new(),
@@ -223,6 +226,18 @@ impl Initiator {
     /// again until `on_key_response` answers it.
     pub fn pending_key_request(&self) -> Option<KeyRequest<'_>> {
         self.out.request()
+    }
+
+    /// The connection id the responder named in its Reply (`scid_R`), once the handshake completed: `Some` only after
+    /// the Reply's signature verified (a full handshake) or the resume Reply's confirmation matched (a resumption),
+    /// `None` before. A dialing host addresses the session to this id, never to one read from an unauthenticated
+    /// packet header.
+    pub const fn server_cid(&self) -> Option<ConnId> {
+        if matches!(self.state, State::Done) {
+            Some(self.server_scid)
+        } else {
+            None
+        }
     }
 
     /// The next thing to do: a message to send, a key operation to perform, or an event.
@@ -636,6 +651,7 @@ impl Initiator {
         )
         .map_err(|_| Failure::BadSignature)?;
         self.th.absorb("sig", ids.signature);
+        self.server_scid = reply.scid;
         Ok(credit)
     }
 
@@ -736,6 +752,7 @@ impl Initiator {
 
     /// Complete a resumption whose reply authenticated.
     fn finish_resume(&mut self, aead: Aead, secrets: AppSecrets, reply: ResumeReply, remembered: CreditRecord) {
+        self.server_scid = reply.scid;
         self.out.established = Some(Established {
             peer: self.peer,
             alpn: self.alpn,

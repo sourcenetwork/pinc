@@ -23,7 +23,7 @@ theorem rcKnown_len (e : Env) (n : N) (m : Nat) (best : Rec) (c : ViewEntry) :
     (rcKnown e n m best c).1.members.len ≤ n.members.len + 1 := by
   have hi := AMap.insert_length_le n.members m ⟨best⟩
   unfold rcKnown
-  by_cases h1 : best.inc / 65536 ≤ c.rc.inc / 65536 <;> by_cases h2 : (best.inc / 65536 == c.rc.inc / 65536 && decide (c.rc.inc ≤ best.inc)) = true <;>
+  by_cases h1 : best.inc / 65536 = c.rc.inc / 65536 <;> by_cases h2 : (best.inc / 65536 == c.rc.inc / 65536 && decide (c.rc.inc ≤ best.inc)) = true <;>
     by_cases h3 : (best.ver != c.rc.ver) = true <;> by_cases h4 : (best.th != c.rc.th) = true <;>
     by_cases h5 : (match (some (c.rc.ver, c.rc.th)).orElse (fun _ => (n.emit (.joined m)).goneVer.get? m) with | some (ver, th) => ver != best.ver | none => false) = true <;>
     simp [h1, h2, h3, h4, h5, AMap.len, AMap.length_modify] <;> first | omega | (split <;> simp_all [AMap.len, AMap.length_modify] <;> omega) | skip

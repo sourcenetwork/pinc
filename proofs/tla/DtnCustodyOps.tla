@@ -28,11 +28,14 @@
 (*             [err, B, nx, id]: the offer gets the id nx, the counter      *)
 (*             becomes nx + 1, the record's outstanding offer is replaced by*)
 (*             (to, nx); "unknown" for a bundle not held (nx unchanged)     *)
-(*  OnAck(B, L, b, custodian, offer, valid)                                 *)
+(*  OnAck(B, L, me, b, custodian, previous, offer, valid)                   *)
 (*             the ack's signature check is the boolean `valid` (the        *)
 (*             signature scheme is assumed, not modelled); relief needs the *)
 (*             record's off to be the custodian AND its oid to be the ack's *)
-(*             offer, else "notoffered" and nothing changes; relief clears  *)
+(*             offer AND the ack to be addressed to this book's node (its   *)
+(*             previous is me: offer ids are per book, from 0, so another   *)
+(*             offerer's ack can name the same pair), else "notoffered" and *)
+(*             nothing changes; relief clears                               *)
 (*             the record and reclasses the item to transit; if the ledger  *)
 (*             no longer holds the item the record is dropped and the error *)
 (*             is "storeunknown" (the store's Unknown: pinned behaviour)    *)
@@ -86,13 +89,18 @@ Offer(B, nx, b, to) ==
 \* the record offers custody to the node under the offer id
 OfferedTo(r, node, id) == r.off # 0 /\ r.off = node /\ r.oid = id
 
+\* the ack is addressed to this book's node; AnyAddressed is the rule before, which never read the ack's previous
+\* (repro_dtn.rs: an ack addressed to another offerer relieves custody)
+Addressed(previous, me) == previous = me
+AnyAddressed(previous, me) == TRUE
+
 \* on_ack: [err, B, L], err one of "ok", "ack", "unknown", "notoffered", "storeunknown"
-OnAck(B, L, b, custodian, offer, valid) ==
+OnAck(B, L, me, b, custodian, previous, offer, valid) ==
     LET i == SlotOf(B, b)
         rc == Reclass(L, BKey(b), "transit")
     IN IF ~valid THEN [err |-> "ack", B |-> B, L |-> L]
        ELSE IF i = 0 THEN [err |-> "unknown", B |-> B, L |-> L]
-       ELSE IF ~OfferedTo(B[i], custodian, offer) THEN [err |-> "notoffered", B |-> B, L |-> L]
+       ELSE IF ~OfferedTo(B[i], custodian, offer) \/ ~Addressed(previous, me) THEN [err |-> "notoffered", B |-> B, L |-> L]
        ELSE [err |-> IF rc.ok THEN "ok" ELSE "storeunknown", B |-> [B EXCEPT ![i] = BNone], L |-> rc.L]
 
 \* delivered: [err, B, L], err "ok" or "unknown"

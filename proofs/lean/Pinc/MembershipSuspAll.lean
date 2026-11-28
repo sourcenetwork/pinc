@@ -302,9 +302,8 @@ theorem snapFin_su (e : Env) (now hub : Nat) (partial_ more : Bool) (round : Nat
     rw [hR] at h3
     change n2.susp = n1.susp at h3
     simp only []
-    generalize hn3 : (if (!n2.isHub && n2.primary == some hub) = true then
-        ({ n2 with homeOk := some hub, homeSeen := true } : N) else n2) = n3
-    have h4 : n3.susp = n2.susp := by rw [← hn3]; split <;> rfl
+    generalize hn3 : n2 = n3
+    have h4 : n3.susp = n2.susp := by rw [← hn3]
     have h5 : (List.foldl (snapStep e now hub round) (n3, false, 0) es).1.susp = n3.susp :=
       foldl_su2 (snapStep e now hub round) es (n3, false, 0) (fun b x => snapStep_su e now hub round b x)
     have h6 := snapFin_su e now hub partial_ more round (List.foldl (snapStep e now hub round) (n3, false, 0) es)
@@ -328,6 +327,7 @@ theorem forKeys_so (ks : List Nat) (f : Nat → N → N) (h : ∀ k b, b.SuspOk 
 /-- `tick` up to the last step, which is the only one that can touch the suspicion table. -/
 def N.tickMid (e : Env) (n : N) (now : Nat) : N :=
   let n := N.recheckDue e n now
+  let n := if n.absentDue now then N.sweepAbsent e n now else n
   let n := if n.sent != some (n.ver, n.th) then N.renew e n now false false else n
   if n.isHub || n.nextSlow ≤ now then
     N.slowTick e (if !n.isHub then { n with nextSlow := satAdd now SLOW_TICK } else n) now
@@ -411,9 +411,9 @@ def N.otB (e : Env) (n : N) (now : Nat) : N :=
 
 def N.otC (e : Env) (n : N) (now : Nat) : N :=
   if (n.nextTick.getD 0) ≤ now then
-    let n := match n.nextTick with
-      | some t => if !n.isHub && WAKE_GAP < now - t then N.renew e (n.beginQuiet now 0) now true false else n
-      | none => n
+    let n := if !n.isHub && WAKE_GAP < now - n.nextTick.getD n.born then
+        N.renew e (n.beginQuiet now 0) now true false
+      else n
     let n := { n with nextTick := some (satAdd now (if n.isHub then HUB_TICK else NODE_TICK)) }
     N.tick e n now
   else n

@@ -49,6 +49,7 @@ def Et : CErr → String
   | .flags f => s!"flags:{f}"
   | .text => "text"
   | .tooLong => "toolong"
+  | .padding => "padding"
   | .dframe e => "frame/" ++ Et e
   | .daddr e => "addr/" ++ Et e
   | .taddr e => "taddr/" ++ Et e

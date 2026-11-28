@@ -46,7 +46,7 @@ theorem markAbsent_hv_step (e : Env) (now hub round : Nat) (a : N × Bool) (m : 
           let n := match n.hv.get? hub with
             | some c => { n with hv := n.hv.insert hub { c with entries := c.entries.modify m (fun x => { x with absentSince := some now }) } }
             | none => n
-          let n := n.trace (.absent m)
+          let n := (n.noteAbsent now).trace (.absent m)
           let (n, ch) := N.recomputeOne e n now m
           (n, changed || ch)
         else a
@@ -63,7 +63,7 @@ theorem markAbsent_hv_step (e : Env) (now hub round : Nat) (a : N × Bool) (m : 
       | none => simp [hh] at hg
       | some c =>
         simp only []
-        have := (recomputeOne_keeps2 e ((({ n1 with hv := n1.hv.insert hub { c with entries := c.entries.modify m (fun x => { x with absentSince := some now }) } }) : N).trace (.absent m)) now m).1.1
+        have := (recomputeOne_keeps2 e (((({ n1 with hv := n1.hv.insert hub { c with entries := c.entries.modify m (fun x => { x with absentSince := some now }) } }) : N).noteAbsent now).trace (.absent m)) now m).1.1
         simp only [trace_hv] at this
         exact this
     · simp [h]
@@ -261,14 +261,16 @@ def swIn (e : Env) (now hub : Nat) (a : N × Bool) (m : Nat) : N × Bool :=
       | some c => { n with hv := n.hv.insert hub { c with entries := c.entries.erase m } }
       | none => n
     (n, changed || ch)
-  else a
+  else (n.keepAbsent hub m, changed)
 
 /-- The body of the outer loop of `sweep_absent`. -/
 def swOut (e : Env) (now : Nat) (a : N × Bool) (hub : Nat) : N × Bool :=
   (match a.1.hv.get? hub with | some c => c.entries.keys | none => []).foldl (swIn e now hub) a
 
 theorem sweepAbsent_eq (e : Env) (n : N) (now : Nat) :
-    N.sweepAbsent e n now = (let (n, changed) := n.hv.keys.foldl (swOut e now) (n, false); if changed then n.bump else n) := rfl
+    N.sweepAbsent e n now =
+      (let n0 : N := { n with nextAbsent := none }
+       let (n, changed) := n0.hv.keys.foldl (swOut e now) (n0, false); if changed then n.bump else n) := rfl
 
 theorem swIn_hv (e : Env) (now hub : Nat) (a : N × Bool) (m : Nat) : (swIn e now hub a m).1.hv = swHv now hub a.1.hv m := by
   obtain ⟨n1, c1⟩ := a
@@ -302,10 +304,11 @@ theorem swOut_hv (e : Env) (now : Nat) (a : N × Bool) (hub : Nat) : (swOut e no
 theorem sweepAbsent_hv (e : Env) (n : N) (now : Nat) :
     (N.sweepAbsent e n now).hv = n.hv.keys.foldl (fun hv hub => swInner now hub hv) n.hv := by
   rw [sweepAbsent_eq]
-  have := foldl_proj (fun a : N × Bool => a.1.hv) (fun hv hub => swInner now hub hv) (swOut e now) (fun a hub => swOut_hv e now a hub) n.hv.keys (n, false)
+  have := foldl_proj (fun a : N × Bool => a.1.hv) (fun hv hub => swInner now hub hv) (swOut e now) (fun a hub => swOut_hv e now a hub) n.hv.keys ({ n with nextAbsent := none }, false)
   simp only [] at this
+  dsimp only
   rw [← this]
-  generalize n.hv.keys.foldl (swOut e now) (n, false) = F
+  generalize n.hv.keys.foldl (swOut e now) ({ n with nextAbsent := none }, false) = F
   obtain ⟨f1, f2⟩ := F
   by_cases h : f2 = true <;> simp [h, bump_hv]
 

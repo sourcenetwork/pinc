@@ -409,6 +409,8 @@ fn op_json(c: &Call) -> String {
         Op::Moved => format!("\"op\":\"mv\",\"now\":{now}"),
         Op::SnapshotTo { peer } => format!("\"op\":\"sn\",\"peer\":{},\"now\":{now}", nid(peer)),
         Op::SetMaxFrame { max } => format!("\"op\":\"sm\",\"mf\":{},\"now\":{now}", limbs(*max as u64)),
+        Op::StreamReset { peer } => format!("\"op\":\"sr\",\"peer\":{},\"now\":{now}", nid(peer)),
+        Op::StaleFrames { peer } => format!("\"op\":\"xs\",\"peer\":{},\"now\":{now}", nid(peer)),
     }
 }
 

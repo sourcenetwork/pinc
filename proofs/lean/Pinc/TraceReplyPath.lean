@@ -10,6 +10,15 @@ reads the `rp` events written by the Rust test `trace_reply_path` and replays ev
 `Pinc.TransportPath`: the table recorded after it (the held paths in slot order and the active one), whether the
 session is established, whether the round trip has a sample and the dropped count must be the model's, and so must
 whether `add_path` took the path and what `remove_path` answered.
+
+While a Reply waits for its verdict the code holds every handshake fragment and applies none, so what a held one
+completes shows only when it is tried, inside the key answer that fails: the recorded kind is then `none` (or `rej`
+for a reject datagram, which the test tells by its bytes). As `TraceReplyPath.tla` does, the replay then carries every
+state the model may be in: the datagram held as each kind, or lost (no room in the hold); a Reply that may have come
+with a second message the same fragment completed, held first; and a key answer recorded `ok`, which is the verdict
+or a failed verdict whose held message authenticated. A call passes when some carried state computes what the code
+recorded; the states that do not are dropped, and the replay fails when none is left. The states carried are at most
+seven for each datagram held, as many as the hold had at once, and the same state is carried once.
 -/
 
 namespace Pinc.TraceReplyPath
@@ -17,10 +26,10 @@ open Pinc.Json Pinc.TransportPath
 
 def isTag (t : String) : Bool := t == "rp"
 
-/-- The table's places and the dialing side the replay carries. -/
+/-- The table's places and the states of the dialing side the replay carries. -/
 structure W where
   np : Nat := 4
-  c : C := dial 1
+  cs : List C := [dial 1]
 
 /-- What the recorder shows of a connection: the held paths (id, validated) in slot order, the active path's id (0 for
 none), established, the round trip has a sample, the dropped count. -/
@@ -53,6 +62,28 @@ def keyOf : String → Except String KeyR
   | "bad" => pure .bad
   | r => throw s!"unknown key answer {r}"
 
+/-- What tells two states of the model apart, over the table's places. -/
+def sig (np : Nat) (c : C) :=
+  ((List.range np).map c.t, c.act, c.hs, c.rf, c.pend, c.smp, c.hd, c.rp, c.hq)
+
+/-- Each state once, in the order found. -/
+def dedup (np : Nat) (cs : List C) : List C :=
+  cs.foldl (fun acc c => if acc.any (fun d => sig np d == sig np c) then acc else acc ++ [c]) []
+
+def kinds : List Kind := [.none, .bad, .other, .rej, .pend, .auth]
+
+/-- The states after a datagram on `pid` the code answered `k` (`rx`, see the module comment). -/
+def rxNext (np : Nat) (c : C) (pid : Nat) (k : Kind) (coal s : Bool) : List C :=
+  if c.hs = .key then
+    if k = .none ∨ k = .rej then c :: kinds.map (fun k' => rx false np c pid k' coal s) else []
+  else
+    let c1 := rx false np c pid k coal s
+    if k = .pend then c1 :: kinds.map (fun k' => { c1 with hq := [(pid, k')] }) else [c1]
+
+/-- The states after a key answer the code answered `r` (`key`, see the module comment). -/
+def keyNext (np : Nat) (c : C) (r : KeyR) (s : Bool) : List C :=
+  (if r = .ok then [KeyR.ok, .bad] else [r]).map (fun r' => key np c r' s)
+
 def removed : Nat → String
   | 0 => "ok"
   | 1 => "unknown"
@@ -62,22 +93,31 @@ def replayEvent (j : J) (w : W) : Except String W := do
   let v ← field j "v"
   let rec' ← viewOf v
   let smp ← boolF v "smp"
-  let upd (np : Nat) (c : C) (what : String) : Except String W := do
-    let mine := view np c
-    if mine == rec' then pure { np, c }
-    else throw s!"{what}: the model computes {repr mine}, the code recorded {repr rec'}"
+  let upd (np : Nat) (next : List C) (what : String) : Except String W := do
+    let kept := dedup np (next.filter (fun c => view np c == rec'))
+    if kept.isEmpty then
+      throw s!"{what}: the model computes {repr ((next.map (view np)).take 3)}, the code recorded {repr rec'}"
+    else pure { np, cs := kept }
   match ← strF j "op" with
-  | "init" => upd (← natF j "np") (dial (← natF j "id")) "init"
+  | "init" => upd (← natF j "np") [dial (← natF j "id")] "init"
   | "add" =>
-    let (c2, ok) := addPath w.np w.c (← natF j "id")
-    check (ok == ((← strF j "r") == "ok")) "add: whether the path was taken differs"
-    upd w.np c2 "add"
+    let pid ← natF j "id"
+    let took := (← strF j "r") == "ok"
+    let next := w.cs.filterMap fun c => let a := addPath w.np c pid; if a.2 == took then some a.1 else none
+    check (!next.isEmpty) "add: whether the path was taken differs"
+    upd w.np next "add"
   | "rm" =>
-    let (c2, r) := removePath w.np w.c (← natF j "id")
-    check (removed r == (← strF j "r")) "rm: the answer differs"
-    upd w.np c2 "rm"
-  | "rx" => upd w.np (rx false w.np w.c (← natF j "id") (← kindOf (← strF j "k")) (← boolF j "coal") smp) "rx"
-  | "key" => upd w.np (key w.np w.c (← keyOf (← strF j "r")) smp) "key"
+    let pid ← natF j "id"
+    let r ← strF j "r"
+    let next := w.cs.filterMap fun c => let a := removePath w.np c pid; if removed a.2 == r then some a.1 else none
+    check (!next.isEmpty) "rm: the answer differs"
+    upd w.np next "rm"
+  | "rx" =>
+    let (pid, k, coal) := (← natF j "id", ← kindOf (← strF j "k"), ← boolF j "coal")
+    upd w.np (w.cs.flatMap fun c => rxNext w.np c pid k coal smp) "rx"
+  | "key" =>
+    let r ← keyOf (← strF j "r")
+    upd w.np (w.cs.flatMap fun c => keyNext w.np c r smp) "key"
   | op => throw s!"unknown reply path op {op}"
 
 end Pinc.TraceReplyPath

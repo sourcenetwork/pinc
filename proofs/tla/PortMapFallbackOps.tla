@@ -149,9 +149,11 @@ Pcp(s, k) ==
                         [] k = "grantpriv" -> Fail(s, "refused")
                         [] k = "unsupp" -> (IF s.rn THEN Fail(s, "none") ELSE Same(Enter(s, "nataddr"), "none"))
                         [] OTHER -> Fail(s, "none"))
+           \* a header-form error has no nonce: during a renewal (a mapping held) it is counted as unexpected and
+           \* changes nothing, and its epoch is never noted; before any mapping it fails the round (fix P1)
            [] k \in {"hunsupp", "herr"} ->
-                IF s.st # "pcp" THEN Unexp(s)
-                ELSE IF k = "hunsupp" /\ ~s.rn THEN Same(Enter(s, "nataddr"), "none")
+                IF s.st # "pcp" \/ s.hd # "none" THEN Unexp(s)
+                ELSE IF k = "hunsupp" THEN Same(Enter(s, "nataddr"), "none")
                 ELSE Fail(s, "none")
            [] OTHER -> IF s.hd = "none" THEN Unexp(s) ELSE Same(s, "none")      \* announce
 

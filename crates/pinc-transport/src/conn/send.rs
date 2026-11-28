@@ -17,7 +17,7 @@
 
 use core::ops::RangeInclusive;
 
-use pinc_crypto::Provider;
+use pinc_crypto::{Aead, Provider};
 use pinc_security::AmpBudget;
 use pinc_security::Env;
 use pinc_security::amp::{FACTOR, OVERHEAD};
@@ -29,7 +29,8 @@ use super::event::Ev;
 use super::{Connection, Phase};
 use crate::frame::{Frame, MAX_ACK_RANGES, ack_len, stream_overhead, ty, write_ack};
 use crate::packet::{
-    ConnId, LongHeader, LongType, PN_LEN_BASE, PnLayout, ShortHeader, encode_pn, handshake_packet, seal,
+    ConnId, LongHeader, LongType, MAX_CID_LEN, PN_LEN_BASE, PnLayout, ShortHeader, encode_pn, handshake_packet, seal,
+    short_header_len,
 };
 use crate::recovery::{FrameRef, FrameRefs, MAX_FRAME_REFS, PathKind, REPAIR_FRAME_BYTES, Sent};
 use crate::stream::pool::BufferPool;
@@ -89,6 +90,9 @@ struct Fill {
     /// The packet re-carries the stream frames of this packet.
     repair: Option<u64>,
     min_total: usize,
+    /// How far the packet may be filled with stream and datagram frames, so the budget of an unvalidated path keeps
+    /// room for its challenge: a datagram size on entry to `build_packet`, then a payload size.
+    data_cap: usize,
 }
 
 /// What filling a packet found.
@@ -217,6 +221,44 @@ conn_impl! {
         order
     }
 
+    /// Whether a control frame can be written now: every one is recorded in flight, so none is written while the ring
+    /// has no slot for the packet. The send path and the timer both ask this.
+    pub(super) fn control_room(&self) -> bool {
+        self.rec.ring_has_room()
+    }
+
+    /// Whether a REKEY request can leave on path `ti` now: the ring has a slot and the path's amplification budget
+    /// covers the smallest datagram that carries one. The send path and the resend deadline both ask this.
+    pub(super) fn rekey_room(&self, ti: usize) -> bool {
+        self.control_room() && self.frame_room(ti) >= self.control_min(ti, REKEY_MAX)
+    }
+
+    /// The size of the smallest datagram that carries one control frame of `payload` bytes on path `ti`: a short
+    /// header with the path's connection id, the packet number, the payload (at least 4 bytes, the least the packet
+    /// builder seals) and the tag. The builder refuses to write below it and every gate of a control frame asks it,
+    /// so a gate is open only where the builder can write.
+    pub(super) fn control_min(&self, ti: usize, payload: usize) -> usize {
+        let cid = self
+            .paths
+            .get(ti)
+            .and_then(|p| p.dcid)
+            .or_else(|| self.cids.first_remote())
+            .map_or(MAX_CID_LEN, |c| c.as_bytes().len());
+        short_header_len(cid, self.pn_len) + payload.max(4) + Aead::TAG_LEN
+    }
+
+    /// Whether the acknowledgement that would be written now can leave on path `ti`: the budget covers the datagram
+    /// of its encoded size. The send path and the acknowledgement deadline both ask this.
+    pub(super) fn ack_room(&self, ti: usize) -> bool {
+        ack_len(self.rx.ack_ranges(self.life.clock)).is_ok_and(|n| self.frame_room(ti) >= self.control_min(ti, n))
+    }
+
+    /// Whether a keepalive PING can leave on path `ti` now: the ring has a slot and the path's amplification budget
+    /// covers a datagram. The send path and the keepalive deadline both ask this.
+    pub(super) fn keepalive_room(&self, ti: usize) -> bool {
+        self.control_room() && self.frame_room(ti) >= self.control_min(ti, 1)
+    }
+
     /// How many bytes an unvalidated path, and an unvalidated session, may still be sent.
     pub(super) fn amp_room(&self, ti: usize) -> usize {
         let left = |b: &AmpBudget| {
@@ -227,11 +269,46 @@ conn_impl! {
             usize::try_from(allowed.saturating_sub(b.sent()).saturating_sub(OVERHEAD as u64)).unwrap_or(usize::MAX)
         };
         match self.paths.get(ti) {
-            // Once the session is validated its peer is known to hold the keys, so a path it moved to is not limited by
-            // what arrived on it: the budget would be spent before the challenge that validates the path is answered.
-            Some(_) if self.sess_amp.is_validated() => usize::MAX,
+            // Once the session is validated its peer is known to hold the keys, so a path the endpoint does not hold
+            // is not limited by what arrived on it. A path whose address the ledger holds is limited by its own
+            // budget: the ledger would drop anything past it, and the challenge that validates the path must fit.
+            Some(p) if self.sess_amp.is_validated() && !p.held => usize::MAX,
+            Some(p) if self.sess_amp.is_validated() => left(&p.amp),
             Some(p) => left(&p.amp).min(left(&self.sess_amp)),
             None => 0,
+        }
+    }
+
+    /// How many bytes of path `ti`'s amplification budget every frame but the challenge may use: the room less the
+    /// challenge reserve. The builder limits acknowledgements, control frames, stream data and datagrams to it, and
+    /// every gate of a control frame compares its smallest datagram against it, so the two agree.
+    fn frame_room(&self, ti: usize) -> usize {
+        self.amp_room(ti).saturating_sub(self.challenge_reserve(ti))
+    }
+
+    /// What an unvalidated path with a challenge outstanding keeps back from stream and datagram frames: the smallest
+    /// datagram that carries a PATH_CHALLENGE, so the retry of the challenge always fits the amplification budget.
+    fn challenge_reserve(&self, ti: usize) -> usize {
+        if !self.paths.get(ti).is_some_and(|p| !p.validated && p.challenge.is_some()) {
+            return 0;
+        }
+        1 + self.cfg.cid_len + (self.pn_len + 9).max(crate::packet::SAMPLE_SKIP) + Aead::TAG_LEN + OVERHEAD
+    }
+
+    /// The Reply of a resumed responder (or a resend of it) left on path `ti`. Its first path is validated by the
+    /// dialer's first 1-RTT packet; a second path it leaves on is challenged instead, and the proof is dropped, since
+    /// the keys then prove receipt somewhere among the paths, not where.
+    fn reply_left_on(&mut self, env: &mut Env<'_, P>, ti: usize) {
+        if self.client || !self.resumed || self.confirmed {
+            return;
+        }
+        let Some(p) = self.paths.get(ti).copied() else { return };
+        if self.proof == Some(p.id) {
+            return;
+        }
+        self.proof = None;
+        if !p.validated && p.challenge.is_none() {
+            self.challenge_path(env, ti);
         }
     }
 
@@ -259,7 +336,7 @@ conn_impl! {
         };
         let mtu = probe.unwrap_or(base).min(out.len());
         let max_len = mtu.min(self.amp_room(ti));
-        if max_len < MIN_ROOM {
+        if max_len < self.control_min(ti, 4) {
             return self.dgram_end(note, [0; 3], None);
         }
         let window = out.get_mut(..max_len)?;
@@ -268,6 +345,9 @@ conn_impl! {
         if self.hs.has_tx() {
             hs_len = self.write_handshake(window);
             used = hs_len;
+            if hs_len > 0 {
+                self.reply_left_on(env, ti);
+            }
         }
         if hs_len == 0 && self.hs.padding_owed() > 0 {
             let n = self.hs.padding_owed().min(max_len);
@@ -279,9 +359,10 @@ conn_impl! {
         let can_app = self.can_build_app();
         // The packet behind the handshake ends at the path's datagram size; only an MTU probe is built larger.
         let app_end = probe.unwrap_or(usize::from(path_mtu)).min(max_len);
+        let data_total = self.frame_room(ti);
         if can_app
             && let Some(rest) = window.get_mut(used..app_end)
-            && let Some(n) = self.build_app(env, ti, rest, probe)
+            && let Some(n) = self.build_app(env, ti, rest, probe, data_total.saturating_sub(used))
         {
             used += n;
         }
@@ -393,7 +474,14 @@ conn_impl! {
     }
 
     /// Build an application packet (short, or ZeroRtt on an early client) at the start of `window`.
-    fn build_app(&mut self, env: &mut Env<'_, P>, ti: usize, window: &mut [u8], probe: Option<usize>) -> Option<usize> {
+    fn build_app(
+        &mut self,
+        env: &mut Env<'_, P>,
+        ti: usize,
+        window: &mut [u8],
+        probe: Option<usize>,
+        data_cap: usize,
+    ) -> Option<usize> {
         let now = env.now;
         let kind = if self.keys.send.is_some() { Kind::Short } else { Kind::ZeroRtt };
         let suspended_data = self.life.local_asleep.is_some();
@@ -417,6 +505,7 @@ conn_impl! {
             probe: probe.filter(|_| !probes),
             repair: None,
             min_total: 0,
+            data_cap,
         };
         // A probe packet carries only its PING: the repair stays pending for the next packet. The repair is taken
         // when its packet is sealed, or dropped by the fill when nothing is left to repair.
@@ -445,11 +534,13 @@ conn_impl! {
             Kind::ZeroRtt => LONG_HDR_MAX,
         };
         let size_cap = fill.probe.unwrap_or(window.len()).min(window.len());
-        if size_cap < hdr_cap + 16 + 4 {
+        let floor = if kind == Kind::Short { self.control_min(ti, 4) } else { hdr_cap + Aead::TAG_LEN + 4 };
+        if size_cap < floor {
             return None;
         }
         let payload_cap = size_cap - hdr_cap - 16;
         let mut fill = fill;
+        fill.data_cap = fill.data_cap.saturating_sub(hdr_cap + 16);
         if let Some(size) = fill.probe {
             fill.min_total = size;
         }
@@ -655,6 +746,8 @@ conn_impl! {
         let mut out = Filled::default();
         let mut pos = 0usize;
         let cap = payload.len();
+        // Every frame but a PATH frame stays inside the budget the challenge reserve leaves.
+        let limit = fill.data_cap.min(cap);
         #[cfg(feature = "inject")]
         if let Some(raw) = self.inject_raw.0.get(..self.inject_raw.1).filter(|r| !r.is_empty())
             && let Some(dst) = payload.get_mut(..raw.len())
@@ -677,8 +770,8 @@ conn_impl! {
             if let Some(used) = ranges.get(..n)
                 && let it = used.iter().cloned()
                 && let Ok(len) = ack_len(it.clone())
-                && len <= cap - pos
-                && let Some(dst) = payload.get_mut(pos..)
+                && len <= limit.saturating_sub(pos)
+                && let Some(dst) = payload.get_mut(pos..limit)
             {
                 let mut w = Writer::new(dst);
                 if write_ack(&mut w, it).is_ok() {
@@ -688,50 +781,52 @@ conn_impl! {
             }
         }
         if fill.ping_only {
-            if now < self.life.wake_until && put(payload, &mut pos, &Frame::Wake) {
+            if now < self.life.wake_until && put(head(payload, limit), &mut pos, &Frame::Wake) {
                 out.weak();
             }
-            if put(payload, &mut pos, &Frame::Ping) {
+            if put(head(payload, limit), &mut pos, &Frame::Ping) {
                 out.weak();
             }
             out.len = pos;
             return out;
         }
         if let Some(size) = fill.probe {
-            let _ = put(payload, &mut pos, &Frame::Ping);
+            let _ = put(head(payload, limit), &mut pos, &Frame::Ping);
             out.strong();
             let _ = size;
             out.len = pos;
             return out;
         }
         if let Some(repair) = fill.repair {
-            self.fill_repair(payload, &mut pos, &mut out, repair, fill);
+            self.fill_repair(head(payload, limit), &mut pos, &mut out, repair, fill);
             out.len = pos;
             return out;
         }
         // Control frames. Every one of them is recorded in flight, so none is written while the ring has no slot for the
         // packet: the packet would be refused whole and the acknowledgement in it would never leave.
-        let ring_room = self.rec.ring_has_room();
+        let ring_room = self.control_room();
         if ring_room {
-            self.fill_control(payload, &mut pos, &mut out, fill);
+            self.fill_control(head(payload, limit), &mut pos, &mut out, fill);
         }
         // PATH frames.
         self.fill_path(payload, &mut pos, &mut out, ti);
         // Retransmissions and new stream data.
-        if fill.allow_cc {
-            self.fill_streams(payload, &mut pos, &mut out);
-            self.fill_datagrams(payload, &mut pos, &mut out);
+        if fill.allow_cc
+            && let Some(data) = payload.get_mut(..fill.data_cap.min(cap))
+        {
+            self.fill_streams(data, &mut pos, &mut out);
+            self.fill_datagrams(data, &mut pos, &mut out);
         }
         // A peer stream whose answer just left gave its place back: the credit it frees rides in the same packet, so
         // the peer has it when it reads the answer.
         if ring_room && self.streams.take_released() {
             let before = pos;
-            self.fill_stream_control(payload, &mut pos, &mut out);
+            self.fill_stream_control(head(payload, limit), &mut pos, &mut out);
             if pos != before {
                 out.last_stream = None;
             }
         }
-        if fill.force && ring_room && !out.eliciting && put(payload, &mut pos, &Frame::Ping) {
+        if fill.force && ring_room && self.keepalive_room(ti) && !out.eliciting && put(head(payload, limit), &mut pos, &Frame::Ping) {
             if ti == self.paths.active {
                 out.strong();
             } else {
@@ -772,6 +867,7 @@ conn_impl! {
         }
         if out.refs.len() < MAX_FRAME_REFS
             && payload.len().saturating_sub(*pos) >= REKEY_MAX
+            && self.rekey_room(fill.ti)
             && let Some(rekey) = self.poll_rekey(fill.now)
         {
             if put(payload, pos, &Frame::Rekey(rekey)) {
@@ -982,4 +1078,10 @@ fn put_stream_header(dst: &mut [u8], c: &crate::stream::StreamChunk) -> bool {
         && (c.offset == 0 || w.put_varint(c.offset).is_ok())
         && w.put_varint(c.len as u64).is_ok();
     ok && w.remaining() == 0
+}
+
+/// The first `limit` bytes of `payload` (all of it when shorter): the part every frame but a PATH frame may use.
+fn head(payload: &mut [u8], limit: usize) -> &mut [u8] {
+    let n = limit.min(payload.len());
+    payload.split_at_mut(n).0
 }

@@ -294,7 +294,7 @@ fn subscriptions_return_with_the_carrier_and_the_member_learns() {
 #[test]
 fn a_redial_gets_a_snapshot_even_if_the_hub_still_holds_the_attachment() {
     let mut w = started(1, 3);
-    // A hub younger than a lease sends partial snapshots, which say nothing about absence; let it come of age.
+    // Let the hub come of age (older than a lease), as the scenario below assumes.
     w.run(90 * SEC);
     let (m, x) = (1, 2);
     let hub = 0;

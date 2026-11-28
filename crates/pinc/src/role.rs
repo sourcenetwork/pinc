@@ -10,8 +10,8 @@
 //! Invariants: the role is borrowed only inside a call and never across an await or a call of a host closure; the part
 //! is given the relay clock (nanoseconds since the Unix epoch) and the endpoint its own, the driver counting the
 //! relay's from the wall clock at the endpoint's start, so it is wall time whatever the wall clock read then; a wall
-//! clock that goes back across a restart lengthens what the store kept by up to the step back, which the node cannot
-//! know; the in-flight operations of the host's carriers live in the future of `run`, so a role is driven by one `run`
+//! clock that goes back across a restart lengthens what the store kept (records, held packets and sleep marks) by up to
+//! the step back, which the node cannot know; the in-flight operations of the host's carriers live in the future of `run`, so a role is driven by one `run`
 //! at a time and ends when it ends (a later `run` takes the role as it was left, restored once).
 
 use alloc::vec::Vec;
@@ -68,9 +68,13 @@ pub trait Role: sealed::Sealed + Sized {
         None
     }
 
-    /// The next datagram the relay wants to send: its remote and its length in `out`.
+    /// The next datagram the relay wants to send that `allow` passes: its remote and its length in `out`.
     #[doc(hidden)]
-    fn outgoing(&mut self, out: &mut [u8]) -> Option<(SocketAddr, usize)>;
+    fn outgoing<F: FnMut(SocketAddr, usize) -> bool>(
+        &mut self,
+        out: &mut [u8],
+        allow: F,
+    ) -> Option<(SocketAddr, usize)>;
 
     /// When the relay next needs [`Role::tick`], on the relay clock.
     #[doc(hidden)]
@@ -149,7 +153,7 @@ impl Role for () {
 
     fn lost(&mut self) {}
 
-    fn outgoing(&mut self, _: &mut [u8]) -> Option<(SocketAddr, usize)> {
+    fn outgoing<F: FnMut(SocketAddr, usize) -> bool>(&mut self, _: &mut [u8], _: F) -> Option<(SocketAddr, usize)> {
         None
     }
 
@@ -232,8 +236,12 @@ impl<C: Carriers, K: KeyStore, St: Store, A: Access> Role for Part<C, K, St, A> 
         Part::member_addr(self, node)
     }
 
-    fn outgoing(&mut self, out: &mut [u8]) -> Option<(SocketAddr, usize)> {
-        self.poll_transmit(out)
+    fn outgoing<F: FnMut(SocketAddr, usize) -> bool>(
+        &mut self,
+        out: &mut [u8],
+        allow: F,
+    ) -> Option<(SocketAddr, usize)> {
+        self.poll_transmit(out, allow)
     }
 
     fn due(&self, relay_now: u64) -> Option<u64> {

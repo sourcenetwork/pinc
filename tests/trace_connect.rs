@@ -185,6 +185,7 @@ impl Sink for Rec<'_> {
                     }
                 ),
                 Trace::SleepAccepted { node } => format!(r#"["t","sleepok",{}]"#, n(&node)),
+                Trace::SleepEnded { node } => format!(r#"["t","sleepend",{}]"#, n(&node)),
                 Trace::Pulse { node } => format!(r#"["t","pulse",{}]"#, n(&node)),
                 Trace::MailboxStored { node, seq, dropped } => {
                     format!(r#"["t","mstored",{},{seq},{dropped}]"#, n(&node))

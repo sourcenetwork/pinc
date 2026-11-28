@@ -59,15 +59,16 @@ theorem inc_start {r : R} {total : Nat} (h0 : 0 < total) (hinc : Inc r) :
     · exact ⟨n, by omega, hc⟩
 
 /-- A complete set of fragments is handed over: when what the reassembly holds and the fragment that arrives cover
-every byte of the message, `add` returns the message and starts afresh. -/
+every byte of the message, and the fragment is not of another length while runs are held, `add` returns the
+message and starts afresh. -/
 theorem add_hands_over (r : R) (mx nr total off dlen : Nat) (hnr : 0 < nr) (hr : Inv mx nr r)
-    (h0 : ¬ (total = 0 ∨ mx < total)) (hinc : Inc r)
+    (h0 : ¬ (total = 0 ∨ mx < total)) (hk : ¬ (total ≠ r.total ∧ r.runs ≠ [])) (hinc : Inc r)
     (hall : ∀ n, n < total → (Cov (if total ≠ r.total then ({ runs := [], total } : R) else r).runs n ∨
       (off ≤ n ∧ n < min (off + dlen) total))) :
     add r mx nr total off dlen = (some total, {}) := by
   have h0' : 0 < total ∧ total ≤ mx := by omega
   unfold add
-  rw [if_neg h0]
+  rw [if_neg h0, if_neg hk]
   have hr1 : Inv mx nr (if total ≠ r.total then ({ runs := [], total } : R) else r) := by
     split
     · exact ⟨⟨fun iv h => by simp at h, List.Pairwise.nil⟩, by simp, fun iv h => by simp at h, h0'.2⟩
@@ -123,11 +124,13 @@ theorem add_hands_over (r : R) (mx nr total off dlen : Nat) (hnr : 0 < nr) (hr :
   dsimp only
   rw [if_neg (by simp; omega), if_pos ⟨by simp [insertRun], hlo, hhi'⟩]
 
-/-- A fragment that hands nothing over leaves a reassembly of the message's length. -/
-theorem add_none_total (r : R) (mx nr total off dlen : Nat) (h0 : ¬ (total = 0 ∨ mx < total)) (r' : R)
+/-- A fragment that hands nothing over, and is not of another length while runs are held, leaves a reassembly of the
+message's length. -/
+theorem add_none_total (r : R) (mx nr total off dlen : Nat) (h0 : ¬ (total = 0 ∨ mx < total))
+    (hk : ¬ (total ≠ r.total ∧ r.runs ≠ [])) (r' : R)
     (h : add r mx nr total off dlen = (none, r')) : r'.total = total := by
   unfold add at h
-  rw [if_neg h0] at h
+  rw [if_neg h0, if_neg hk] at h
   have ht : (if total ≠ r.total then ({ runs := [], total } : R) else r).total = total := by
     split
     · rfl
@@ -152,12 +155,18 @@ theorem add_inc (r : R) (mx nr total off dlen : Nat) (hnr : 0 < nr) (hr : Inv mx
     obtain ⟨-, rfl⟩ := h
     exact hinc
   · have h0' : 0 < total := by omega
+    by_cases hk : total ≠ r.total ∧ r.runs ≠ []
+    · unfold add at h
+      rw [if_neg h0, if_pos hk] at h
+      simp only [Prod.mk.injEq] at h
+      obtain ⟨-, rfl⟩ := h
+      exact hinc
     cases out with
     | some t =>
       obtain ⟨_, rfl, _⟩ := add_complete r mx nr total off dlen t hr h0 r' h
       exact inc_empty
     | none =>
-      have ht := add_none_total r mx nr total off dlen h0 r' h
+      have ht := add_none_total r mx nr total off dlen h0 hk r' h
       refine Classical.byContradiction fun hni => ?_
       have hfull : ∀ n, n < total → Cov r'.runs n := by
         intro n hn
@@ -168,19 +177,20 @@ theorem add_inc (r : R) (mx nr total off dlen : Nat) (hnr : 0 < nr) (hr : Inv mx
       · -- an empty fragment changes nothing
         have he : r' = (if total ≠ r.total then ({ runs := [], total } : R) else r) := by
           unfold add at h
-          rw [if_neg h0] at h
+          rw [if_neg h0, if_neg hk] at h
           dsimp only at h
           rw [if_pos h1] at h
           simp only [Prod.mk.injEq] at h
           exact h.2.symm
         rw [he] at hfull
         exact hc0 (hfull n0 hn0)
-      · rcases add_cover r mx nr total off dlen hr h0 h1 r' h with ⟨hruns, _⟩ | hcov
+      · rcases add_cover r mx nr total off dlen hr h0 h1 r' h with ⟨hruns, _⟩ | hcov | hc
         · rw [hruns] at hfull
           exact hc0 (hfull n0 hn0)
-        · have := add_hands_over r mx nr total off dlen hnr hr h0 hinc (fun n hn => (hcov n).1 (hfull n hn))
+        · have := add_hands_over r mx nr total off dlen hnr hr h0 hk hinc (fun n hn => (hcov n).1 (hfull n hn))
           rw [this] at h
           simp at h
+        · exact absurd ⟨hc.1, hc.2.1⟩ hk
 
 #audit_axioms Pinc.TransportReasm.add_hands_over
 #audit_axioms Pinc.TransportReasm.add_inc

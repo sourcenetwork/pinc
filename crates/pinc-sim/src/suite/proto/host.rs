@@ -88,7 +88,7 @@ pub enum LayerEvent<'a> {
         /// The stream.
         stream: StreamId,
     },
-    /// Bytes arrived on a stream (already consumed); `fin` says the peer finished it with these bytes.
+    /// Bytes arrived on a stream (already consumed); `fin` says the peer finished it, reported once per stream.
     StreamData {
         /// The session.
         session: SessionId,

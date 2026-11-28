@@ -310,17 +310,19 @@ theorem decode_bytes (f : Frame) (hg : f.Good) (rest : List Nat) (hsep : f.Sep r
     | false =>
       have hlen := hwf.2 rfl
       simp [decode, decodeBody, Frame.bytes, Frame.puts, flat, enc_small, rdVarint_byte, rdLP_enc hlen]
-  | rekey a sh echo spn =>
-    obtain ⟨h1, _, h2, _, h3⟩ := hwf
+  | rekey a sh echo spn roll =>
+    obtain ⟨h1, _, h2, _, h3, h4⟩ := hwf
     have l1 := hv spn (by simp [Frame.varintFields])
+    have l2 := hv roll (by simp [Frame.varintFields])
     cases a with
     | true =>
+      obtain rfl := h4 rfl
       simp [decode, decodeBody, Frame.bytes, Frame.puts, flat, enc_small, rdVarint_byte, rdRekey, rdBytes_cons1,
         rdBytes_app h1, rdBytes_app h2, rdV_enc l1]
     | false =>
       obtain ⟨rfl, rfl⟩ := h3 rfl
       simp [decode, decodeBody, Frame.bytes, Frame.puts, flat, enc_small, rdVarint_byte, rdRekey, rdBytes_cons1,
-        rdBytes_app h1]
+        rdBytes_app h1, rdV_enc l2]
   | newTickets es =>
     obtain ⟨h1, h2⟩ := hwf
     have ht := rdTickets_enc rest es h2
@@ -705,16 +707,19 @@ theorem body_inv (t : Nat) (r0 : List Nat) (f : Frame) (r : List Nat) (ht : t < 
       obtain ⟨rfl, rfl⟩ := h
       obtain ⟨rfl, le, ve, v3⟩ := rdBytes_inv v2 h3
       obtain ⟨rfl, lspn, v4⟩ := rdVarint_inv v3 h4
-      exact ⟨good_of _ ⟨ls, vs, le, ve, by simp⟩ (by simp [Frame.varintFields, lspn, h0]) (by simp) (by simp),
-        trivial, v4, Or.inl (by simp [Frame.bytes, Frame.puts, flat, enc_small])⟩
+      exact ⟨good_of _ ⟨ls, vs, le, ve, by simp, fun _ => rfl⟩ (by simp [Frame.varintFields, lspn, h0]) (by simp)
+        (by simp), trivial, v4, Or.inl (by simp [Frame.bytes, Frame.puts, flat, enc_small])⟩
     · rw [if_neg hk1] at h
       have hk1' : ¬ kb = 1 := hk1
       have hz : kb = 0 := by omega
       subst hz
+      simp only [andThen_eq_ok] at h
+      obtain ⟨roll, r3, h3, h⟩ := h
       simp only [Except.ok.injEq, Prod.mk.injEq] at h
       obtain ⟨rfl, rfl⟩ := h
-      exact ⟨good_of _ ⟨ls, vs, by simp, valid_replicate 8, fun _ => ⟨rfl, rfl⟩⟩
-        (by simp [Frame.varintFields, h0]) (by simp) (by simp), trivial, v2,
+      obtain ⟨rfl, lroll, v3⟩ := rdVarint_inv v2 h3
+      exact ⟨good_of _ ⟨ls, vs, by simp, valid_replicate 8, fun _ => ⟨rfl, rfl⟩, fun h => by cases h⟩
+        (by simp [Frame.varintFields, lroll, h0]) (by simp) (by simp), trivial, v3,
         Or.inl (by simp [Frame.bytes, Frame.puts, flat, enc_small])⟩
   rw [if_neg h_t] at h
   by_cases h_t : t = 0x3e

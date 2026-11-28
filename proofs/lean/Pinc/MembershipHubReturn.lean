@@ -153,16 +153,16 @@ def N.dpMid (n : N) (peer : Nat) : N :=
 theorem dropPeer_notboot (e : Env) (n : N) (now peer : Nat) (h : n.isBoot peer = false) :
     (N.dropPeer e n now peer).roster = n.roster ∧ (N.dropPeer e n now peer).downed = n.downed ∧
     (N.dropPeer e n now peer).outBc = n.outBc ++ (if n.downed.has peer then [] else [.release peer]) := by
-  have hb : (n.dpMid peer).isBoot peer = false := h
+  have hb : ((n.dpMid peer).streamReset peer).isBoot peer = false := by rw [N.streamReset_eq]; exact h
   have hd : N.dropPeer e n now peer =
-      (let n1 := n.dpMid peer
+      (let n1 := (n.dpMid peer).streamReset peer
        let n1 := if !n1.isHub && n1.homeOk == some peer then { n1 with homeOk := none } else n1
        let n1 := if !n1.downed.has peer then n1.bc (.release peer) else n1
        if n1.isBoot peer && n1.primary == some peer then N.reselect e n1 now else n1) := rfl
   rw [hd]
   have h' : n.boot.contains peer = false := h
   have h'' : peer ∉ n.boot := by simpa using h'
-  simp [N.dpMid, N.isBoot, h'']
+  simp [N.dpMid, N.isBoot, h'', N.streamReset_eq]
   split <;> split <;> simp_all
 
 /-- Property 7 at the hub: the leave code on a member's session is `hub_down` with cause `left`: the lease is dropped,

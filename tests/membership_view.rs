@@ -29,6 +29,7 @@
 mod world;
 
 use pinc_membership::codec::{Alive, Down, Entry, Frame, Path, Probe, Proof, Record, Snap, entry_bytes, ty};
+use pinc_membership::consts::{LEASE, NODE_TICK, QUIET, RECHECK_GAP, SLOW_TICK, WAKE_GAP};
 use pinc_membership::event::{QuietCause, Removal};
 use pinc_membership::{Event, NodeId, Trace};
 use world::{Bc, LEAVE, MS, SEC, World, id};
@@ -98,7 +99,7 @@ fn the_view_follows_the_home_snapshot_and_its_epoch_only_increases() {
 
 #[test]
 fn a_hub_view_is_the_union_of_hub_copies_and_the_highest_incarnation_wins() {
-    let mut w = started(2, 0);
+    let mut w = started(3, 0);
     let x = id(30);
     delta(&mut w, 0, 1, &x, rec(7, 0, 1), Alive::Alive);
     let seen = |w: &World| w.nodes[0].m.members().find(|(m, _)| **m == x).map(|(_, r)| *r);
@@ -121,8 +122,9 @@ fn a_hub_view_is_the_union_of_hub_copies_and_the_highest_incarnation_wins() {
     // An older incarnation from the other hub does not take the place back.
     delta(&mut w, 0, 1, &x, rec(8, 0, 1), Alive::Alive);
     assert_eq!(seen(&w).unwrap().inc, 8 << 16, "8 beats 7");
-    delta(&mut w, 0, 1, &x, rec(6, 0, 1), Alive::Alive);
+    delta(&mut w, 0, 2, &x, rec(6, 0, 1), Alive::Alive);
     assert_eq!(seen(&w).unwrap().inc, 8 << 16, "6 does not beat 8");
+    delta(&mut w, 0, 2, &x, rec(6, 0, 1), Alive::Down);
     // Within one epoch a higher record sequence updates the record: a stack change.
     delta(&mut w, 0, 1, &x, rec(8, 1, 5), Alive::Alive);
     assert_eq!((seen(&w).unwrap().inc, seen(&w).unwrap().ver), ((8 << 16) | 1, 5));
@@ -192,11 +194,13 @@ fn a_snapshot_never_removes_it_notes_the_absence_and_a_lease_without_a_listing_e
             raw.extend_from_slice(&entry_bytes(mem, r, Alive::Alive));
         }
     }
-    // A partial snapshot (a young hub) says nothing about absence.
+    // A partial snapshot (a young hub) that omits the member ages it like any completed one: it stays, noted as absent.
     w.inject(m, hub, &Frame::Snap(Snap::new(true, false, &raw).unwrap()));
     assert!(w.has(m, x));
-    assert_eq!(traces(&w, m, |t| matches!(t, Trace::Absent { .. })), 0);
-    // A complete snapshot that omits the member: it stays, noted as absent, and nothing is reported.
+    assert_eq!(traces(&w, m, |t| matches!(t, Trace::Absent { .. })), 1);
+    assert_eq!(w.count_events(m, |e| matches!(e, Event::MemberConfirmedDown { .. })), 0);
+    // A complete snapshot that omits the member: it stays, already absent since the partial snapshot, and nothing is
+    // reported.
     w.inject(m, hub, &Frame::Snap(Snap::new(false, false, &raw).unwrap()));
     assert!(w.has(m, x), "a snapshot never removes a member on its own");
     assert_eq!(traces(&w, m, |t| matches!(t, Trace::Absent { .. })), 1);
@@ -302,6 +306,51 @@ fn a_removal_held_while_no_home_is_confirmed_is_decided_when_the_home_is() {
 }
 
 #[test]
+fn a_member_only_a_stale_hub_listed_is_aged_by_the_new_home_not_removed() {
+    // The hubs never meet, so hub 1 never hears of member 3, which is attached to hub 0 only.
+    let mut w = World::new(2, 2, START);
+    let (m, x) = (2, 3);
+    w.cut.insert((0, 1));
+    w.connect(m, 0);
+    w.connect(m, 1);
+    w.connect(x, 0);
+    w.run(5 * SEC);
+    assert_eq!(w.nodes[m].m.primary(), Some(&id(0)));
+    assert!(w.has(m, x));
+    // The home goes silent: the member switches to hub 1, whose snapshot omits member 3.
+    w.cut.insert((0, m));
+    assert!(w.run_until(120 * SEC, |w| w.nodes[m].m.primary() == Some(&id(1))));
+    w.run(5 * SEC);
+    assert!(
+        w.has(m, x),
+        "a snapshot never removes a member on its own: the omission starts its lease"
+    );
+    assert_eq!(
+        w.count_events(
+            m,
+            |e| matches!(e, Event::MemberConfirmedDown { member } if *member == id(x))
+        ),
+        0
+    );
+    assert!(
+        traces(&w, m, |t| matches!(t, Trace::HubStale { hub } if *hub == id(0))) >= 1,
+        "the stale copy goes once the home is confirmed"
+    );
+    // No hub lists it again: a lease after the omission it leaves, for its lease.
+    assert!(w.run_until(LEASE + 10 * SEC, |w| !w.has(m, x)));
+    assert_eq!(
+        traces(&w, m, |t| matches!(
+            t,
+            Trace::Removed {
+                member,
+                why: Removal::LeaseExpired
+            } if *member == id(x)
+        )),
+        1
+    );
+}
+
+#[test]
 fn a_down_delta_of_the_same_or_a_newer_incarnation_removes_an_older_one_is_ignored() {
     let mut w = started(2, 3);
     let (m, x) = (2, 3);
@@ -358,6 +407,241 @@ fn a_down_delta_of_the_same_or_a_newer_incarnation_removes_an_older_one_is_ignor
     assert_eq!(w.count_events(2, |e| matches!(e, Event::MemberConfirmedDown { .. })), 0);
 }
 
+/// A snapshot body listing every view member of `m` but `x`.
+fn raw_without(w: &World, m: usize, x: usize) -> Vec<u8> {
+    let mut raw = Vec::new();
+    for (mem, r) in w.nodes[m].m.members() {
+        if *mem != id(x) {
+            raw.extend_from_slice(&entry_bytes(mem, r, Alive::Alive));
+        }
+    }
+    raw
+}
+
+fn absent_traces(w: &World, m: usize) -> usize {
+    traces(w, m, |t| matches!(t, Trace::Absent { .. }))
+}
+
+fn down_events(w: &World, m: usize) -> usize {
+    w.count_events(m, |e| matches!(e, Event::MemberConfirmedDown { .. }))
+}
+
+#[test]
+fn a_partial_snapshot_ages_what_it_omits() {
+    let mut w = started(2, 3);
+    let (m, x) = (2, 3);
+    let hub = usize::from(w.nodes[m].m.primary().unwrap()[0]) - 1;
+    let raw = raw_without(&w, m, x);
+    w.inject(m, hub, &Frame::Snap(Snap::new(true, false, &raw).unwrap()));
+    assert!(w.has(m, x));
+    assert_eq!(absent_traces(&w, m), 1);
+    assert_eq!(down_events(&w, m), 0);
+    w.run(75 * SEC);
+    assert!(w.has(m, x), "still inside the lease");
+    assert!(
+        w.run_until(15 * SEC, |w| !w.has(m, x)),
+        "a lease after the omission it is gone"
+    );
+}
+
+#[test]
+fn a_partial_snapshot_omission_is_cleared_by_a_delta() {
+    let mut w = started(2, 3);
+    let (m, x) = (2, 3);
+    let hub = usize::from(w.nodes[m].m.primary().unwrap()[0]) - 1;
+    let raw = raw_without(&w, m, x);
+    let r = *w.nodes[m].m.members().find(|(mem, _)| **mem == id(x)).unwrap().1;
+    w.inject(m, hub, &Frame::Snap(Snap::new(true, false, &raw).unwrap()));
+    delta(&mut w, m, hub, &id(x), r, Alive::Alive);
+    w.run(200 * SEC);
+    assert!(w.has(m, x));
+    assert_eq!(down_events(&w, m), 0);
+}
+
+#[test]
+fn a_home_is_confirmed_only_by_the_last_frame() {
+    let mut w = started(2, 3);
+    let (m, x) = (2, 3);
+    let a = usize::from(w.nodes[m].m.primary().unwrap()[0]) - 1;
+    let b = 1 - a;
+    // Only a's copy lists x; a's session drops and b becomes the home.
+    let r = *w.nodes[m].m.members().find(|(mem, _)| **mem == id(x)).unwrap().1;
+    delta(&mut w, m, b, &id(x), r, Alive::Down);
+    w.with(m, |n, h, now| n.session_down(h, now, &id(a), 0));
+    assert_eq!(w.nodes[m].m.primary(), Some(&id(b)), "b is the home now");
+    let absent_x = |w: &World| traces(w, m, |t| matches!(t, Trace::Absent { member } if *member == id(x)));
+    let before = absent_x(&w);
+    // A first frame of b's snapshot with no entries does not make b's copy the only source: a later look at x (here
+    // a repeated report from b, which always recomputes) holds it. With the home taken at the first frame, b's copy
+    // alone decided and x was removed as Reported.
+    w.inject(m, b, &Frame::Snap(Snap::new(false, true, &[]).unwrap()));
+    delta(&mut w, m, b, &id(x), r, Alive::Down);
+    assert!(w.has(m, x), "the home is not confirmed by an earlier frame");
+    assert_eq!(down_events(&w, m), 0);
+    // The last frame confirms b and ages what it omits: x stays, noted as absent once.
+    w.inject(m, b, &Frame::Snap(Snap::new(false, false, &[]).unwrap()));
+    assert!(w.has(m, x));
+    assert_eq!(down_events(&w, m), 0);
+    assert_eq!(absent_x(&w), before + 1);
+}
+
+/// Three hubs, a member `m` whose home `a` went away, and the hub `b` it moved to, which has not confirmed anything
+/// yet. Returns the world, `b`, the third hub `c`, and x's record in the view.
+fn moved_home() -> (World, usize, usize, Record) {
+    let mut w = started(3, 3);
+    let (m, x) = (3, 5);
+    let a = usize::from(w.nodes[m].m.primary().unwrap()[0]) - 1;
+    let r = *w.nodes[m].m.members().find(|(mem, _)| **mem == id(x)).unwrap().1;
+    w.with(m, |n, h, now| n.session_down(h, now, &id(a), 0));
+    let b = usize::from(w.nodes[m].m.primary().unwrap()[0]) - 1;
+    assert_ne!(a, b);
+    let c = 3 - a - b;
+    (w, b, c, r)
+}
+
+fn x_epoch(w: &World, m: usize, x: usize) -> Option<u64> {
+    w.nodes[m]
+        .m
+        .members()
+        .find(|(k, _)| **k == id(x))
+        .map(|(_, r)| r.inc >> 16)
+}
+
+#[test]
+fn a_confirming_snapshot_takes_the_homes_record_over_a_stale_copy() {
+    let (mut w, b, c, r) = moved_home();
+    let (m, x) = (3, 5);
+    let e = r.inc >> 16;
+    let up = Record {
+        inc: (e + 1) << 16,
+        ..r
+    };
+    let one = |rec: Record| entry_bytes(&id(x), &rec, Alive::Alive);
+    // c, not the home, holds a later life of x; the view follows it while no home is confirmed.
+    w.inject(m, c, &Frame::Snap(Snap::new(false, false, &one(up)).unwrap()));
+    assert_eq!(x_epoch(&w, m, x), Some(e + 1));
+    let joined = |w: &World| w.count_events(m, |ev| matches!(ev, Event::MemberJoined { member } if *member == id(x)));
+    let before = joined(&w);
+    // b, the home, lists x at the earlier life, in one frame: its word is the view's from then on.
+    w.inject(m, b, &Frame::Snap(Snap::new(false, false, &one(r)).unwrap()));
+    assert_eq!(x_epoch(&w, m, x), Some(e), "the home's record, not a stale copy's");
+    assert_eq!(joined(&w), before + 1, "the record moved to another epoch");
+}
+
+#[test]
+fn a_confirming_snapshot_of_two_frames_takes_the_homes_record_over_a_stale_copy() {
+    let (mut w, b, c, r) = moved_home();
+    let (m, x, y) = (3, 5, 4);
+    let e = r.inc >> 16;
+    let up = Record {
+        inc: (e + 1) << 16,
+        ..r
+    };
+    w.inject(
+        m,
+        c,
+        &Frame::Snap(Snap::new(false, false, &entry_bytes(&id(x), &up, Alive::Alive)).unwrap()),
+    );
+    assert_eq!(x_epoch(&w, m, x), Some(e + 1));
+    let ry = *w.nodes[m].m.members().find(|(mem, _)| **mem == id(y)).unwrap().1;
+    w.inject(
+        m,
+        b,
+        &Frame::Snap(Snap::new(false, true, &entry_bytes(&id(x), &r, Alive::Alive)).unwrap()),
+    );
+    w.inject(
+        m,
+        b,
+        &Frame::Snap(Snap::new(false, false, &entry_bytes(&id(y), &ry, Alive::Alive)).unwrap()),
+    );
+    assert_eq!(x_epoch(&w, m, x), Some(e), "the home's record, not a stale copy's");
+}
+
+/// The only hub's snapshot is cut after its first frame, which lists x; `end` is what the member sees of the cut. The
+/// hub let x go meanwhile and sends no delta; its next snapshot lists only y. The one a new session's HELLO asks for
+/// is dropped, so that nothing but this one reaches the member. x must be aged by it and gone a lease later.
+fn a_cut_snapshot_leaves_no_ghost(end: impl FnOnce(&mut World)) {
+    let mut w = started(1, 3);
+    let (m, x, y) = (1, 2, 3);
+    let rx = *w.nodes[m].m.members().find(|(k, _)| **k == id(x)).unwrap().1;
+    let ry = *w.nodes[m].m.members().find(|(k, _)| **k == id(y)).unwrap().1;
+    w.inject(
+        m,
+        0,
+        &Frame::Snap(Snap::new(false, true, &entry_bytes(&id(x), &rx, Alive::Alive)).unwrap()),
+    );
+    end(&mut w);
+    w.drop_once.push((0, m, ty::SNAP));
+    w.inject(
+        m,
+        0,
+        &Frame::Snap(Snap::new(false, false, &entry_bytes(&id(y), &ry, Alive::Alive)).unwrap()),
+    );
+    let absent_x = |w: &World| traces(w, m, |t| matches!(t, Trace::Absent { member } if *member == id(x)));
+    assert_eq!(
+        absent_x(&w),
+        1,
+        "a completed snapshot ages what it did not list, whatever an earlier one listed"
+    );
+    assert!(w.has(m, x), "kept for the lease");
+    assert!(
+        w.run_until(LEASE + SLOW_TICK + SEC, |w| !w.has(m, x)),
+        "a ghost: x is still in the view"
+    );
+    assert_eq!(
+        traces(
+            &w,
+            m,
+            |t| matches!(t, Trace::Removed { member, why: Removal::LeaseExpired } if *member == id(x))
+        ),
+        1
+    );
+}
+
+#[test]
+fn a_snapshot_cut_short_does_not_leave_a_ghost() {
+    a_cut_snapshot_leaves_no_ghost(|w| {
+        w.with(1, |n, h, now| n.session_down(h, now, &id(0), 0));
+        w.with(1, |n, h, now| n.session_up(h, now, &id(0), false));
+    });
+}
+
+#[test]
+fn a_session_that_replaces_another_closes_a_cut_snapshot() {
+    a_cut_snapshot_leaves_no_ghost(|w| w.with(1, |n, h, now| n.session_up(h, now, &id(0), false)));
+}
+
+#[test]
+fn a_reset_stream_closes_a_cut_snapshot() {
+    a_cut_snapshot_leaves_no_ghost(|w| w.with(1, |n, _, _| n.stream_reset(&id(0))));
+}
+
+#[test]
+fn a_view_follows_its_copies_down_to_an_older_epoch() {
+    let mut w = started(2, 0);
+    let x = id(30);
+    let seen = |w: &World| w.nodes[0].m.members().find(|(m, _)| **m == x).map(|(_, r)| *r);
+    delta(&mut w, 0, 1, &x, rec(8, 0, 1), Alive::Alive);
+    delta(&mut w, 0, 1, &x, rec(6, 0, 1), Alive::Alive);
+    assert_eq!(seen(&w).unwrap().inc, 6 << 16);
+    assert_eq!(
+        w.count_events(0, |e| matches!(e, Event::MemberJoined { member } if *member == x)),
+        2
+    );
+}
+
+#[test]
+fn an_older_epoch_from_one_hub_does_not_beat_a_newer_one_from_another() {
+    let mut w = started(3, 0);
+    let x = id(30);
+    delta(&mut w, 0, 1, &x, rec(8, 0, 1), Alive::Alive);
+    delta(&mut w, 0, 2, &x, rec(6, 0, 1), Alive::Alive);
+    assert_eq!(
+        w.nodes[0].m.members().find(|(m, _)| **m == x).map(|(_, r)| r.inc),
+        Some(8 << 16)
+    );
+}
+
 #[test]
 fn a_late_timer_opens_a_quiet_window_and_removals_wait_10_s_plus_5_s() {
     let mut w = started(2, 3);
@@ -393,6 +677,94 @@ fn a_late_timer_opens_a_quiet_window_and_removals_wait_10_s_plus_5_s() {
         took >= 14 * SEC && took <= 16 * SEC,
         "reported {} ms after the wake",
         took / MS
+    );
+}
+
+fn quiet_late_timer(w: &World, m: usize) -> usize {
+    traces(w, m, |t| {
+        matches!(
+            t,
+            Trace::Quiet {
+                cause: QuietCause::LateTimer
+            }
+        )
+    })
+}
+
+#[test]
+fn a_late_first_tick_opens_a_quiet_window() {
+    let mut w = World::new(2, 3, START);
+    w.attach_all();
+    let m = 2;
+    // The host sleeps from the start: the first tick, due at the start, runs just over WAKE_GAP late.
+    w.jump(WAKE_GAP);
+    w.run(50 * MS);
+    assert_eq!(quiet_late_timer(&w, m), 1, "the first tick is due at the start");
+    for hub in 0..2 {
+        let f = hello_flags(&w, m, hub, START);
+        assert!(
+            f.len() >= 2 && f.iter().all(|f| f & 1 == 1),
+            "the session's HELLO and the wake's, both asking for a snapshot, to hub {hub}: {f:?}"
+        );
+    }
+}
+
+#[test]
+fn a_first_tick_on_time_opens_no_window() {
+    let mut w = World::new(2, 3, START);
+    w.attach_all();
+    let m = 2;
+    w.jump(WAKE_GAP - 50 * MS);
+    w.run(50 * MS);
+    assert_eq!(quiet_late_timer(&w, m), 0, "exactly WAKE_GAP late is not a suspension");
+}
+
+#[test]
+fn a_complete_snapshot_does_not_lease_a_deferred_removal_again() {
+    let mut w = started(2, 3);
+    let (m, x) = (2, 3);
+    let hub = usize::from(w.nodes[m].m.primary().unwrap()[0]) - 1;
+    // The hubs have run longer than a lease, so their snapshots are complete.
+    w.run(LEASE + 5 * SEC);
+    assert!(w.has(m, x));
+    w.jump(20 * SEC);
+    w.with(m, |n, h, now| n.on_timeout(h, now));
+    let woke = w.now;
+    // x is gone from the hub after the wake request left: the DOWN is read inside the window, and the snapshot the
+    // wake asked for omits x.
+    w.with(hub, |n, h, now| n.revoke(h, now, &id(x))).unwrap();
+    w.run(100 * MS);
+    assert!(w.has(m, x), "the removal is queued, not believed");
+    assert!(
+        w.run_until(QUIET + RECHECK_GAP + NODE_TICK + 200 * MS, |w| !w.has(m, x)),
+        "removed at the end of its window, not a lease after the snapshot ({} ms after the wake)",
+        (w.now - woke) / MS
+    );
+}
+
+#[test]
+fn an_expiry_found_at_a_late_tick_is_not_leased_again() {
+    let mut w = started(2, 3);
+    let (m, x) = (2, 3);
+    let hub = usize::from(w.nodes[m].m.primary().unwrap()[0]) - 1;
+    // x is gone from the hub, and the member is not told; a snapshot of the hub that omits it starts the clock.
+    w.drop_once.push((hub, m, ty::DELTA));
+    w.with(hub, |n, h, now| n.revoke(h, now, &id(x))).unwrap();
+    w.run(SEC);
+    assert!(w.has(m, x));
+    let raw = raw_without(&w, m, x);
+    w.inject(m, hub, &Frame::Snap(Snap::new(true, false, &raw).unwrap()));
+    assert_eq!(absent_traces(&w, m), 1);
+    // The clock runs out while the host is suspended: the wake tick finds the expiry inside its own window.
+    w.run(LEASE - 3 * SEC);
+    assert!(w.has(m, x), "still inside the lease");
+    w.jump(5 * SEC);
+    w.with(m, |n, h, now| n.on_timeout(h, now));
+    let woke = w.now;
+    assert!(
+        w.run_until(QUIET + RECHECK_GAP + SEC, |w| !w.has(m, x)),
+        "the forced snapshot of the wake leased it again ({} ms after the wake)",
+        (w.now - woke) / MS
     );
 }
 

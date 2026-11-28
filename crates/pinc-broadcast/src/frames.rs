@@ -18,7 +18,7 @@ impl Topics {
             return;
         }
         match t {
-            ty::FLOOR => self.on_floor(h, now, from, rest),
+            ty::FLOOR => self.on_floor(h, now, from, topic, rest),
             ty::PUB | ty::MSG | ty::FAN | ty::FANP | ty::MEMBER_PUSH => self.on_msg(h, now, from, t, topic, rest),
             ty::PACK => self.on_pack(h, from, rest),
             ty::SUB => self.on_sub(h, now, from, topic, rest),

@@ -177,8 +177,8 @@ OpenParts(packet, pnOff, pnLen) ==
 
 (***************************************************************************)
 (* The body of a Handshake packet (conn/send.rs write_handshake, conn/     *)
-(* handshake.rs on_fragment): varint(total) varint(off) fragment. total    *)
-(* and off are u64 words of U64.tla; data is the fragment.                 *)
+(* handshake_rx.rs take_fragment): varint(total) varint(off) fragment.     *)
+(* total and off are u64 words of U64.tla; data is the fragment.           *)
 (***************************************************************************)
 R == INSTANCE ReasmOps
 
@@ -199,7 +199,7 @@ HsRoom(win, dl, sl, total, off) ==
     LET fixed == 1 + 1 + 1 + dl + 1 + sl + 2 + V!EncodedLen(total) + V!EncodedLen(off)
     IN IF win > fixed THEN win - fixed ELSE 0
 
-(* on_fragment's parse: the two varints (usize::try_from is the identity on a u64 here) and the rest *)
+(* the parse of handshake_rx.rs: the two varints (usize::try_from is the identity on a u64 here) and the rest *)
 HsRead(body) ==
     LET v1 == V!Decode(body)
     IN IF v1.kind # "ok" THEN [ok |-> FALSE]
@@ -208,15 +208,18 @@ HsRead(body) ==
             IN IF v2.kind # "ok" THEN [ok |-> FALSE]
                ELSE [ok |-> TRUE, total |-> v1.v, off |-> v2.v, data |-> SubSeq(rest, v2.n + 1, Len(rest))]
 
-(* on_fragment then Reassembly::add with the length of the fragment. The two words are clamped to the integers
-   ReasmOps takes without changing what Add does: a total above mx is refused whatever it is, and an offset at or
-   past the total gives the same result whatever it is (the stop is the total, which is not past the offset). *)
+(* take_fragment then Reassembly::add with the length of the fragment, on a responder without a first message (one
+   reassembly): AddT, so a fragment of another length while runs are held is refused and changes nothing. The bytes
+   are not in the model: a fragment whose bytes disagree with the held ones is refused too, and the trace compares
+   the buffer. The two words are clamped to the integers ReasmOps takes without changing what AddT does: a total
+   above mx is refused whatever it is, and an offset at or past the total gives the same result whatever it is (the
+   stop is the total, which is not past the offset). *)
 HsRecv(r, mx, nr, body) ==
     LET p == HsRead(body)
     IN IF ~p.ok THEN [out |-> -1, r |-> r]
        ELSE LET tI == IF U!Lt(p.total, U!W(mx + 1)) THEN U!Val(p.total) ELSE mx + 1
                 oI == IF U!Lt(p.off, U!W(tI)) THEN U!Val(p.off) ELSE tI
-            IN R!Add(r, mx, nr, tI, oI, Len(p.data))
+            IN R!AddT(r, mx, nr, tI, oI, Len(p.data))
 
 (***************************************************************************)
 (* pad_to (packet/datagram.rs): zero bytes appended in chunks of 64 until  *)

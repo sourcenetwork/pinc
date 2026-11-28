@@ -172,12 +172,16 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `ConnectRelay_full` | Depth 6 -> 4, Times {0, 16, 31} -> {0, 31}, MaxNs 2 -> 1, carrier nodes {1, 2} -> {2} (ClQuick2), peers {5, 6} -> {5} (PeersQuick), MAX_PEERS and ALIAS_MAX 32 -> 2 and 4 (MAXPEERSQuick, AMQuick: the tables never hold more) The UDP table starts full of other nodes (3 and 4, two slots): an uploaded packet from member 1 finds no room for its stamp, which is no refusal, and the datagram goes on. |
 | `ConnectRelay_fwd` | Times {0, 16, 31} -> {0}, MaxNs 2 -> 1, carrier nodes {1, 2} -> {2} (ClQuick2), peers {5, 6} -> {5} (PeersQuick), MAX_PEERS and ALIAS_MAX 32 -> 2 and 4 (MAXPEERSQuick, AMQuick: the tables never hold more) A member that holds mail is no longer asleep, has no route, and is homed at peer relay 5: its packets are forwarded. Peer 5 is present from the start and is the home of node 2's record; the mail comes from a sleep, a close, an SPU packet and the return of the member. |
 | `ConnectRelay_long` | Times {0, 16, 31} -> {0}, MaxNs 2 -> 1, carrier nodes {1, 2} -> {1} (ClQuick1), peers {5, 6} -> {5} (PeersQuick), MAX_PEERS and ALIAS_MAX 32 -> 2 and 4 (MAXPEERSQuick, AMQuick: the tables never hold more) A held message too long for the tunnel (1400 bytes, from a peer relay) stands before a short one; a heard member keeps the long one and gets the short one. Mailbox quota 1600 so that both fit. |
+| `ConnectRelay_mark` | Depth 6 -> 5, Times {0, 9, 31, 40} -> {0, 9, 40}, MBytes 120 -> 53, carrier nodes {1, 2} -> {2} (ClQuick2), peers {5, 6} -> {5} (PeersQuick), MAX_PEERS and ALIAS_MAX 32 -> 2 and 4 (MAXPEERSQuick, AMQuick) |
 | `ConnectRelay_ready` | Times {0, 16, 31} -> {0}, MaxNs 2 -> 1, carrier nodes {1, 2} -> {2} (ClQuick2), peers {5, 6} -> {5} (PeersQuick), MAX_PEERS and ALIAS_MAX 32 -> 2 and 4 (MAXPEERSQuick, AMQuick: the tables never hold more) Readiness and the return of a member are inputs: held messages are kept when the hand-over is refused. |
 | `ConnectRelay_refused` | Times {0, 16, 31} -> {0}, MaxNs 2 -> 1, carrier nodes {1, 2} -> {2} (ClQuick2), peers {5, 6} -> {5} (PeersQuick), MAX_PEERS and ALIAS_MAX 32 -> 2 and 4 (MAXPEERSQuick, AMQuick: the tables never hold more) Witness: a refused hand-over of a held message is reachable, so CallsOk's refusal clause is exercised. |
 | `ConnectRelay_sleep` | Depth 6 -> 5, Times {0, 16, 31} -> {0, 31}, MaxNs 2 -> 1, MBytes 120 -> 53 (one message fills a mailbox), carrier nodes {1, 2} -> {2} (ClQuick2), peers {5, 6} -> {5} (PeersQuick), MAX_PEERS and ALIAS_MAX 32 -> 2 and 4 (MAXPEERSQuick, AMQuick: the tables never hold more) |
+| `ConnectRelay_wcopy` | Depth 4 -> 3, MBytes 120 -> 53, carrier nodes {1, 2} -> {2} (ClQuick2), peers {5, 6} -> {5} (PeersQuick), MAX_PEERS and ALIAS_MAX 32 -> 2 and 4 (MAXPEERSQuick, AMQuick) |
 | `ConnectRelay_wfull` | Depth 6 -> 5 |
 | `ConnectRelay_wfwd` | Times {0, 16, 31} -> {0}, MaxNs 2 -> 1, carrier nodes {1, 2} -> {2} (ClQuick2), peers {5, 6} -> {5} (PeersQuick), MAX_PEERS and ALIAS_MAX 32 -> 2 and 4 (MAXPEERSQuick, AMQuick: the tables never hold more) Witness: with the withdrawn rule (a packet for a member that holds mail is held behind it) the packet of the member homed at peer relay 5 is held and not forwarded, so Forwarded is violated at the 6th call (open 2, sleep, close, SPU 1 to 2, return of 2, SPU 1 to 2). |
 | `ConnectRelay_wheard` | Depth 6 -> 5 (the violation is at the 5th call), Times {0, 16, 31} -> {0}, MaxNs 2 -> 1, carrier nodes {1, 2} -> {2} (ClQuick2), peers {5, 6} -> {5} (PeersQuick), MAX_PEERS and ALIAS_MAX 32 -> 2 and 4 (MAXPEERSQuick, AMQuick: the tables never hold more) Witness: with the old rule (nothing is released) a heard member that is ready still holds messages that fit, so HeardDelivers is violated at the 5th call (open 2, sleep, close, SPU 1 to 2, heard 2). |
+| `ConnectRelay_wlife` | Depth 6 -> 5, MBytes 120 -> 53, carrier nodes {1, 2} -> {2} (ClQuick2), peers {5, 6} -> {5} (PeersQuick), MAX_PEERS and ALIAS_MAX 32 -> 2 and 4 (MAXPEERSQuick, AMQuick) |
+| `ConnectRelay_wmail` | Depth 6 -> 5, MBytes 120 -> 53, carrier nodes {1, 2} -> {2} (ClQuick2), peers {5, 6} -> {5} (PeersQuick), MAX_PEERS and ALIAS_MAX 32 -> 2 and 4 (MAXPEERSQuick, AMQuick) |
 | `ConnectRelay_wstop` | Times {0, 16, 31} -> {0}, MaxNs 2 -> 1, carrier nodes {1, 2} -> {1} (ClQuick1), peers {5, 6} -> {5} (PeersQuick), MAX_PEERS and ALIAS_MAX 32 -> 2 and 4 (MAXPEERSQuick, AMQuick: the tables never hold more) Witness: with the first round's pass (it stops at the first message that does not fit) the short message behind a long one is not handed over, so StepsOver is violated at the 6th call (open 1, sleep, close, long, short from peer 5, heard 1). |
 | `ConnectSleep_beacon` | Times {1, 2, 9} -> {1, 9} (the clocks of ConnectSleep.cfg: a call before every deadline and one at the clock's last instant; no call lands between the first deadline and a later one with beacons on) |
 | `ConnectTable` | N 3 -> 2, KeySet {1, 2, 3, 4} -> {1, 2, 3} |
@@ -188,6 +192,7 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `ConnectWs_ops` | FLs {14000000, 14000002} -> {14000002} (a payload of 2 bytes) |
 | `ConnectWs_reach` | ReadSizes {1, 1000} -> {1} |
 | `ConnectWs_reach_max` | ReadSizes {20, 1000} -> {20} |
+| `CorePairs` | Addrs 7 -> 6 pairs, GMAX 7 -> 5 (the table is exactly full at a command's peak, and fewer pairs are taken in a behaviour); the full config does not finish in 900 s |
 | `CoreRouteIndex` | Slots {1, 2, 3} -> {1, 2} |
 | `CoreRouteIndex_keepold` | Slots {1, 2, 3} -> {1, 2} |
 | `CoreRouteIndex_nofree` | Slots {1, 2, 3} -> {1, 2} |
@@ -285,7 +290,9 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `FacadeRelayCarriers_end` | MAXH 2 -> 1 (one stream accepted in all: a full handshake or carrier table is not reached over the end of a run; the deep FacadeRelayCarriers.cfg reaches them with 3) |
 | `FacadeRelayKeep` | TMAX 3 -> 2, CLOCKS {0, 1, 3} -> {0, 2} (a restart at 0 or later, back in time or ahead), SEQS 2 -> 1 (one record per node, no higher seq), PMAX 3 -> 1 and MBP 2 -> 1 (one packet held; FacadeRelayKeep_mailq keeps the mailbox bounds) |
 | `FacadeRelayKeep_fail` | TMAX 3 -> 2, CLOCKS {0, 1, 3} -> {0, 2} (a restart at 0 or later, back in time or ahead), SEQS 2 -> 1 (one record per node, no higher seq), PMAX 3 -> 1 and MBP 2 -> 1 (one packet held; FacadeRelayKeep_mailq keeps the mailbox bounds), TORN {noverify, prefix} -> {} (a restart loses the write out or lands it whole; the torn writes are the quick FacadeRelayKeep and _rerun profiles') |
+| `FacadeRelayKeep_mailq` | TMAX 3 -> 2, CLOCKS {0, 1, 3} -> {0, 2} (a restart at 0 or later, back in time or ahead; the full profile does not finish in 600 s with one worker) |
 | `FacadeRelayKeep_rerun` | TMAX 3 -> 2, CLOCKS {0, 1, 3} -> {0, 2} (a restart at 0 or later, back in time or ahead), SEQS 2 -> 1 (one record per node, no higher seq), PMAX 3 -> 1 and MBP 2 -> 1 (one packet held; FacadeRelayKeep_mailq keeps the mailbox bounds) |
+| `FacadeRelayKeep_sleep` | TMAX 3 -> 2, CLOCKS {0, 1, 3} -> {0, 1, 2}, MBP 2 -> 1, PMAX 2 -> 1, PUBS 1 -> 0 (no publish) |
 | `FacadeRelayKeep_sweep` | TMAX 3 -> 2, CLOCKS {0, 1, 3} -> {0, 2} (a restart at 0 or later, back in time or ahead), SEQS 2 -> 1 (one record per node, no higher seq), PMAX 3 -> 1 and MBP 2 -> 1 (one packet held; FacadeRelayKeep_mailq keeps the mailbox bounds) |
 | `FacadeRevoke` | Peers {p1, p2} -> {p1}, Slots {1, 2} -> {1} |
 | `FacadeRevoke_failopen` | Peers {p1, p2} -> {p1} |
@@ -307,7 +314,7 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `FinishResend_fixed` | FIRES 6 -> 5 |
 | `FinishResend_nocap` | FIRES 6 -> 5 |
 | `FinishResend_pto` | FIRES 6 -> 5 |
-| `Frame` | the frames: Frames (545) -> FramesQuick (177), the 130-byte payload in 7 frames instead of 81 |
+| `Frame` | the frames: Frames (785) -> FramesQuick (201), the 130-byte payload in 7 frames instead of 81 |
 | `FramePack` | Normal -> NormalQuick (41472 -> 544 normal cases: every source together, every switch apart), Other -> OtherQuick (rooms {24, 40, 64} -> {24, 64}, ACKs 3 -> 2, streams 4 -> 3) |
 | `FramePack_built` | MAXRANGES 3 -> 2 |
 | `FramePack_modes` | Normal -> NormalQuick (41472 -> 544 normal cases: every source together, every switch apart), Other -> OtherQuick (rooms {24, 40, 64} -> {24, 64}, ACKs 3 -> 2, streams 4 -> 3) |
@@ -398,6 +405,12 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `KeystoreStore` | steps MaxSteps 6 -> 3 (MaxSteps <- MaxStepsQuick) |
 | `Layout` | SmallLen 2100 -> 150, PreN 24 -> 9, Seeds -> SeedsQuick (every family over fewer values, the boundary ones kept) |
 | `MembershipConv` | Init -> InitQuick: the second view's starts 9 -> 1 (the empty view; 6561 -> 729 initial states) |
+| `MembershipHomeSnap` | Init -> InitQuick: member 4's cells {0, 1, 2} -> {0, 2} (listed at epoch 2 or not at all; 178605 -> 30240 initial states) |
+| `MembershipHomeSnap_w_open` | Init -> InitQuick: member 4's cells {0, 1, 2} -> {0, 2} (listed at epoch 2 or not at all; 178605 -> 30240 initial states) |
+| `MembershipHomeSnap_w_reage` | Init -> InitQuick: member 4's cells {0, 1, 2} -> {0, 2} (listed at epoch 2 or not at all; 178605 -> 30240 initial states) |
+| `MembershipHomeSnap_w_recompute` | Init -> InitQuick: member 4's cells {0, 1, 2} -> {0, 2} (listed at epoch 2 or not at all; 178605 -> 30240 initial states) |
+| `MembershipHomeSnap_w_skipall` | Init -> InitQuick: member 4's cells {0, 1, 2} -> {0, 2} (listed at epoch 2 or not at all; 178605 -> 30240 initial states) |
+| `MembershipHomeSnap_w_stale` | Init -> InitQuick: member 4's cells {0, 1, 2} -> {0, 2} (listed at epoch 2 or not at all; 178605 -> 30240 initial states) |
 | `MembershipSys_complete` | MaxSec 190 -> 186 (Aware4 applies only when now - crash (at 40) > 145 s, so MaxSec must exceed 185) |
 | `MembershipSys_complete33` | MaxSec 190 -> 186 (Aware4 applies only when now - crash (at 40) > 145 s, so MaxSec must exceed 185) |
 | `MembershipSys_direct` | MaxSec 90 -> 70 |
@@ -461,16 +474,20 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `PathMove_stuck` | NP 3 -> 2, Ids {1, 2, 3} -> {1, 2} (three paths are never held at once; fail_over from a direct path not validated with a relayed path held, the case of fix T5, is still taken) |
 | `PortMapLease` | last tick MaxT 7 -> 4, tries Tries 2 -> 1; bounded by constraint: behaviours of depth 14 (PortMapLeaseQuickBound) |
 | `PortMapLease_announcedrop` | MaxT 7 -> 6 |
+| `PortMapLease_headerdrop` | MaxT 7 -> 6 |
 | `PortMapLease_noepoch` | MaxT 7 -> 6 |
 | `PortMapLease_noexpiry` | MaxT 7 -> 6 |
+| `PortMapLease_noexpirefirst` | MaxT 7 -> 6 |
 | `PortMapLease_nofloor` | MaxT 7 -> 6 |
 | `PortMapLease_norenew` | MaxT 7 -> 6 |
 | `PortMapLease_nostopdrop` | MaxT 7 -> 6 |
+| `PortMapLease_overkeeps` | MaxT 7 -> 6 |
 | `PortMapLease_refusal` | MaxT 7 -> 6 |
 | `PortMapLease_stalefloor` | MaxT 7 -> 6 |
 | `PrekeyCache` | MaxClock 6 -> 4 (the cache fills, a get refreshes the older entry, the next insert evicts the least recently used) |
 | `PrekeyCache_n0` | MaxClock 4 -> 3 |
 | `PrekeyCache_n3` | MaxClock 6 -> 3 (the cache fills; the invariants insert into the full cache) |
+| `PunchChain` | P 3 -> 2, CB 3 -> 2 |
 | `Queue` | PMAX 7 -> 4 |
 | `Queue_deep` | PMAX 8 -> 7 |
 | `Queue_drop` | PMAX 8 -> 7 |
@@ -529,10 +546,11 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `Recovery_flags` | PNMAX 2 -> 1, HOR 90 -> 45, LATEN 2 -> 1 |
 | `Recovery_flushdown` | PNMAX 2 -> 1, SIZES {1, 2} -> {1}, PMAX 1 -> 0, HOR 90 -> 45, LATEN 2 -> 1 (KMAX 4 kept: a probe firing needs send, ack, send, timeout) |
 | `RekeyCodec` | Shares -> SharesQuick: 3 shares -> 1 |
-| `ReplyPath` | NP 4 -> 2 places, Ids {1..5} -> {1, 2, 3} (one more than the places, so a full table meets a new path), HDMAX 2 -> 1 |
+| `ReplyPath` | NP 4 -> 2 places, Ids {1..5} -> {1, 2, 3} (one more than the places, so a full table meets a new path), HDMAX 2 -> 1, HMAX 2 -> 1 (`ReplyPath_one` keeps 2: two held datagrams show their order) |
 | `ReplyPath_coalesced` | Ids {1, 2, 3, 4, 5} -> {1, 2, 3, 4} |
 | `ReplyPath_held` | Ids {1, 2, 3, 4, 5} -> {1, 2, 3, 4} |
 | `ReplyPath_one` | Ids {1, 2} -> {1} |
+| `ReplyPath_nohold` | NP 4 -> 2, Ids {1..5} -> {1, 2, 3} |
 | `Rtt` | CAP 2 -> 1, PEERS {1, 2, 3} -> {1, 2} (one peer past a full table still), DEPTH 4 -> 3 |
 | `Rtt_evict` | DEPTH 4 -> 3 |
 | `Rtt_floor` | DEPTH 7 -> 6 |

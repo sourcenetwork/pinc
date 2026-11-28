@@ -29,8 +29,13 @@
 (*                    record: storeunknown)                                 *)
 (*   StaleAckMovesNothing  a valid ack of a held bundle that is not the     *)
 (*                    outstanding offer (right node but another id, another *)
-(*                    node, or an offer cancelled by a hand-back) is        *)
-(*                    "notoffered" and changes nothing                      *)
+(*                    node, or an offer cancelled by a hand-back), or that  *)
+(*                    is addressed to another node (its previous is not Me, *)
+(*                    the book's node), is "notoffered" and changes nothing *)
+(*   AddressedOnly    no ack addressed to another node ever cleared a       *)
+(*                    record (the history flag misaddr; the witness         *)
+(*                    DtnCustody_w_addressed.cfg, Addressed <- AnyAddressed, *)
+(*                    the rule before, breaks it: repro_dtn.rs)             *)
 (*   CustodyToTransit only an ack relieves                                  *)
 (*   AcceptRefused    a refused accept (full book, custody refused, or an   *)
 (*                    incoming bundle already expired) changes nothing but  *)
@@ -52,10 +57,10 @@
 (***************************************************************************)
 EXTENDS DtnCustodyOps
 
-CONSTANTS N, R, Budget, Bundles, HostKeys, Nodes, ByteVals, ExpVals, NowVals, MaxSeq, MaxNx
+CONSTANTS N, R, Budget, Bundles, HostKeys, Nodes, ByteVals, ExpVals, NowVals, MaxSeq, MaxNx, Me
 
-VARIABLES B, L, nx, handed
-vars == <<B, L, nx, handed>>
+VARIABLES B, L, nx, handed, misaddr
+vars == <<B, L, nx, handed, misaddr>>
 
 \* the offer ids an ack may name: every id up to the counter bound, handed out or not
 OffVals == 0..MaxNx
@@ -66,7 +71,7 @@ HostKeysDef == {<<2, 1>>, <<1, 2>>, <<1, 3>>}
 
 Held(key) == \E i \in RIdx(B) : key = BKey(B[i].bundle)
 
-Init == B = [i \in 1..R |-> BNone] /\ L = New(Budget, N) /\ nx = 0 /\ handed = {}
+Init == B = [i \in 1..R |-> BNone] /\ L = New(Budget, N) /\ nx = 0 /\ handed = {} /\ misaddr = FALSE
 
 LiveKept(pre, post, now, key) ==
     \A e \in Ents(pre) : (e.cls = "custody" /\ e.exp > now /\ e.key # key) => e \in Ents(post)
@@ -96,7 +101,7 @@ AcceptStep == \E b \in Bundles, bytes \in ByteVals, exp \in ExpVals, prev \in No
                     /\ r.B[sl].bundle = b /\ r.B[sl].prev = B1[sl].prev /\ r.B[sl].off = 0 /\ r.B[sl].oid = 0
                     /\ \A j \in RIdx(B1) : j # sl => r.B[j] = B1[j],
                  "a hand-back did not cancel the offer or changed more than it")
-       /\ B' = r.B /\ L' = r.L /\ UNCHANGED <<nx, handed>>
+       /\ B' = r.B /\ L' = r.L /\ UNCHANGED <<nx, handed, misaddr>>
 
 OfferStep == \E b \in Bundles, to \in Nodes :
     LET r == Offer(B, nx, b, to)
@@ -107,12 +112,12 @@ OfferStep == \E b \in Bundles, to \in Nodes :
        /\ Assert((r.err # "ok") => (r.nx = nx /\ r.B = B), "a failed offer changed the book")
        \* a new offer replaces the outstanding one
        /\ Assert((r.err = "ok") => (r.B[i].off = to /\ r.B[i].oid = r.id /\ r.B[i].prev = B[i].prev), "the offer is not recorded")
-       /\ B' = r.B /\ nx' = r.nx /\ handed' = (IF r.err = "ok" THEN handed \cup {r.id} ELSE handed) /\ UNCHANGED L
+       /\ B' = r.B /\ nx' = r.nx /\ handed' = (IF r.err = "ok" THEN handed \cup {r.id} ELSE handed) /\ UNCHANGED <<L, misaddr>>
 
-AckStep == \E b \in Bundles, c \in Nodes, o \in OffVals, v \in BOOLEAN :
-    LET r == OnAck(B, L, b, c, o, v)
+AckStep == \E b \in Bundles, c \in Nodes, p \in Nodes, o \in OffVals, v \in BOOLEAN :
+    LET r == OnAck(B, L, Me, b, c, p, o, v)
         i == SlotOf(B, b)
-        offered == Holds(B, b) /\ B[i].off = c /\ B[i].oid = o
+        offered == Holds(B, b) /\ B[i].off = c /\ B[i].oid = o /\ Addressed(p, Me)
         relief == v /\ offered /\ Contains(L, BKey(b))
     IN /\ Assert((r.err = "ok") = relief, "relief is not exactly valid, held, offered to this node under this id, in the ledger")
        /\ Assert((r.err \notin {"ok", "storeunknown"}) => (r.B = B /\ r.L = L), "a refused ack moved something")
@@ -127,35 +132,35 @@ AckStep == \E b \in Bundles, c \in Nodes, o \in OffVals, v \in BOOLEAN :
                     /\ r.L.used = L.used,
                  "a relief changed more than the class of the item")
        /\ Assert(\A j \in RIdx(B) : B[j].bundle # b => (\E q \in RIdx(r.B) : r.B[q] = B[j]), "an ack cleared another record")
-       /\ B' = r.B /\ L' = r.L /\ UNCHANGED <<nx, handed>>
+       /\ B' = r.B /\ L' = r.L /\ misaddr' = (misaddr \/ (p # Me /\ r.B # B)) /\ UNCHANGED <<nx, handed>>
 
 DeliveredStep == \E b \in Bundles :
     LET r == Delivered(B, L, b) IN
     /\ Assert((r.err = "ok") = Holds(B, b), "delivered ok exactly for a held bundle")
     /\ Assert((r.err = "ok") => (~Holds(r.B, b) /\ ~Contains(r.L, BKey(b)) /\ LiveKept(L, r.L, 0, BKey(b)) /\ \A i \in RIdx(B) : B[i].bundle # b => Holds(r.B, B[i].bundle)),
               "delivery removed more than the bundle")
-    /\ B' = r.B /\ L' = r.L /\ UNCHANGED <<nx, handed>>
+    /\ B' = r.B /\ L' = r.L /\ UNCHANGED <<nx, handed, misaddr>>
 
 BExpireStep == \E now \in NowVals :
     LET r == BExpire(B, L, now) IN
     /\ Assert(r.ev = ExpiredSeq(L, now) /\ r.L = WithoutExpired(L, now), "book expiry removed more than the expired items")
     /\ Assert(\A i \in RIdx(r.B) : Contains(r.L, BKey(r.B[i].bundle)), "a record survived the loss of its item")
     /\ Assert(LiveKept(L, r.L, now, <<0, 0>>), "book expiry evicted live custody")
-    /\ B' = r.B /\ L' = r.L /\ UNCHANGED <<nx, handed>>
+    /\ B' = r.B /\ L' = r.L /\ UNCHANGED <<nx, handed, misaddr>>
 
 HostAdmitStep == \E key \in HostKeys, bytes \in ByteVals, cls \in Classes, exp \in ExpVals, now \in NowVals :
     /\ ~Held(key)
     /\ LET r == Admit(L, key, bytes, cls, exp, now) IN
        /\ Assert(LiveKept(L, r.L, now, <<0, 0>>), "a host admission evicted live custody")
-       /\ L' = r.L /\ UNCHANGED <<B, nx, handed>>
+       /\ L' = r.L /\ UNCHANGED <<B, nx, handed, misaddr>>
 
 HostExpireStep == \E now \in NowVals :
     /\ Assert(LiveKept(L, Expire(L, now).L, now, <<0, 0>>), "a host expiry removed live custody")
-    /\ L' = Expire(L, now).L /\ UNCHANGED <<B, nx, handed>>
+    /\ L' = Expire(L, now).L /\ UNCHANGED <<B, nx, handed, misaddr>>
 
 HostReleaseStep == \E key \in HostKeys :
     /\ ~Held(key)
-    /\ L' = Release(L, key).L /\ UNCHANGED <<B, nx, handed>>
+    /\ L' = Release(L, key).L /\ UNCHANGED <<B, nx, handed, misaddr>>
 
 Next == AcceptStep \/ OfferStep \/ AckStep \/ DeliveredStep \/ BExpireStep \/ HostAdmitStep \/ HostExpireStep \/ HostReleaseStep
 
@@ -185,6 +190,9 @@ OfferIdsBelow == \A i \in RIdx(B) : B[i].off # 0 => B[i].oid < nx
 
 \* the ids handed out so far are exactly 0 .. nx - 1: pairwise distinct, from a strictly increasing counter
 HandedExact == handed = 0..(nx - 1)
+
+\* no ack addressed to another node (its previous is not Me) ever changed the book
+AddressedOnly == ~misaddr
 
 \* the only way custody turns to transit is relief: no state has a record and the item class changed
 \* behind its back (Linked), and a relief clears the record (AckStep)

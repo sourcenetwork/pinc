@@ -1,10 +1,10 @@
 //! Whether the endpoint's ledger holds a path's address. The ledger holds an address to three times what it received
-//! from it until it answers something we sent, and the endpoint says so on every datagram it delivers from that
-//! address; the connection keeps it as the path's `held` flag.
+//! from it until it proves that it receives what we sent, and the endpoint says so on every datagram it delivers from
+//! that address; the connection keeps it as the path's `held` flag.
 //!
 //! Invariants: `Paths::held` equals the number of tracked paths whose flag is set, so a session with none is known by
-//! one read; a flag for a path the connection does not track is ignored; the flag only stops the size probe, nothing
-//! else of what the connection builds.
+//! one read; a flag for a path the connection does not track is ignored; the flag stops the size probe and, in a
+//! validated session, sends past the path's own budget; nothing else of what the connection builds.
 
 use pinc_crypto::Provider;
 

@@ -204,6 +204,15 @@ pub struct Stats {
     pub undecryptable: u64,
     /// Handshake messages dropped because they did not authenticate (forged or damaged): the handshake goes on.
     pub handshake_dropped: u64,
+    /// Handshake fragments refused because they disagree with what the session holds of a message (another length, or
+    /// other bytes at an offset it has), or with the first message a responder accepted: a damaged or forged copy.
+    pub handshake_conflicts: u64,
+    /// Handshake fragments that arrived while the dialer awaited the verdict on a Reply and found no room to be held
+    /// (more than a chunk of them, or one longer than the smallest datagram): dropped; the next flight carries them
+    /// again.
+    pub handshake_held_full: u64,
+    /// Paths not learnt because every path the table could give up is owed the handshake flight.
+    pub paths_owed_full: u64,
     /// Packets kept because they arrived before the handshake gave the keys to open them (0-RTT packets ahead of
     /// the Hello, 1-RTT packets ahead of the message that establishes the session).
     pub early_buffered: u64,

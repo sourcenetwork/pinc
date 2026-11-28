@@ -116,6 +116,7 @@ end AMap
 theorem tick_eq (e : Env) (n : N) (now : Nat) :
     N.tick e n now =
       (let n := N.recheckDue e n now
+       let n := if n.absentDue now then N.sweepAbsent e n now else n
        let n := if n.sent != some (n.ver, n.th) then N.renew e n now false false else n
        let n := if n.isHub || n.nextSlow ≤ now then
            N.slowTick e (if !n.isHub then { n with nextSlow := satAdd now SLOW_TICK } else n) now
@@ -164,9 +165,11 @@ theorem recomputeOne_defers (e : Env) (n : N) (now m : Nat) (hin : n.members.has
 a second look, as a removal inside the quiet window does (commit 6355d7d): no hub copy lists the member to bring it back. -/
 theorem removeFromView_holds (e : Env) (n : N) (now m : Nat) (c : ViewEntry) (src : Source) (x : Bool)
     (hh : src.hold = true) (hr : n.recheck.len < MAX_TABLE) :
-    N.removeFromView e n now m (some c) src x = ({ n with recheck := n.recheck.orIns m (n.quietUntil, n.regrace) }, false) := by
+    N.removeFromView e n now m (some c) src x =
+      ({ n with recheck := n.recheck.orIns m (n.quietUntil, n.regrace),
+                held := if n.recheck.has m then n.held else n.held.ins m }, false) := by
   unfold N.removeFromView
-  simp [hh, hr]
+  by_cases hq : n.recheck.has m = true <;> simp [hh, hr, hq]
 
 /-- Whatever it decides, `remove_from_view` leaves the table, or queues `m` under the window's end and grace state
 unless it already waits. -/
@@ -200,7 +203,7 @@ theorem removeFromView_recheck (e : Env) (n : N) (now m : Nat) (cur : Option Vie
 
 theorem rcKnown_recheck (e : Env) (n : N) (m : Nat) (best : Rec) (c : ViewEntry) : (rcKnown e n m best c).1.recheck = n.recheck := by
   unfold rcKnown
-  by_cases h1 : best.inc / 65536 ≤ c.rc.inc / 65536 <;> by_cases h2 : (best.inc / 65536 == c.rc.inc / 65536 && decide (c.rc.inc ≤ best.inc)) = true <;>
+  by_cases h1 : best.inc / 65536 = c.rc.inc / 65536 <;> by_cases h2 : (best.inc / 65536 == c.rc.inc / 65536 && decide (c.rc.inc ≤ best.inc)) = true <;>
     by_cases h3 : (best.ver != c.rc.ver) = true <;> by_cases h4 : (best.th != c.rc.th) = true <;>
     by_cases h5 : (match (some (c.rc.ver, c.rc.th)).orElse (fun _ => (n.emit (.joined m)).goneVer.get? m) with | some (ver, th) => ver != best.ver | none => false) = true <;>
     simp [h1, h2, h3, h4, h5] <;> split <;> simp_all

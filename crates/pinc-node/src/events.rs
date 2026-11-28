@@ -330,6 +330,14 @@ where
         }
         self.io.drop_session_streams(session);
         let peer = s.peer;
+        // Frames of a session that is not the link's current one are never handed to membership (`parse_stream`), so
+        // only a tracked current session reaches here, and its close is handled below with the link.
+        if self.io.mem_rx.get(&peer).is_some_and(|rx| rx.0 == session) {
+            self.io.mem_rx.remove(&peer);
+            if self.io.links.get(&peer).and_then(|l| l.conn) == Some(session) {
+                self.mem.stream_reset(&peer);
+            }
+        }
         let code = close_code(reason);
         let Some(link) = self.io.links.get(&peer).copied().filter(|l| l.conn == Some(session)) else {
             return;
@@ -431,6 +439,7 @@ where
             return;
         };
         self.io.drop_strm(session, stream);
+        self.mem_stream_ended(session, stream, &peer);
         if let Some(l) = self.io.links.get_mut(&peer).filter(|l| l.conn == Some(session)) {
             if l.out == Some(stream) {
                 l.out = None;
@@ -438,6 +447,16 @@ where
             if l.fan == Some(stream) {
                 l.fan = None;
             }
+        }
+    }
+
+    /// A stream ended: if membership's frames of `peer` last came on it, a snapshot on it may have been cut, and the
+    /// next one comes on a new stream with no session event, so the copy is closed. No other stream of the peer
+    /// touches the copy, whether or not it is the one this node writes on.
+    fn mem_stream_ended(&mut self, session: SessionId, stream: StreamId, peer: &NodeId) {
+        if self.io.mem_rx.get(peer) == Some(&(session, stream)) {
+            self.io.mem_rx.remove(peer);
+            self.mem.stream_reset(peer);
         }
     }
 
@@ -490,6 +509,7 @@ where
                 error: 1,
             });
             self.io.drop_strm(session, stream);
+            self.mem_stream_ended(session, stream, &peer);
             self.io.trace(NodeTrace::StreamReset { peer: tag(&peer) });
         }
     }
@@ -506,8 +526,18 @@ where
             else {
                 return true;
             };
+            // A hub peer's frames come from its current session only: the late tail of a session the peer left
+            // (it restarted or rebound) would complete or open rounds of the snapshot copy of the new one.
+            let stale = self.io.is_hub_id(peer) && self.io.links.get(peer).and_then(|l| l.conn) != Some(session);
             let (m, mut h) = self.mem_host();
-            let used = m.on_bytes(&mut h, now, peer, &buf);
+            let used = if stale {
+                Ok(buf.len())
+            } else {
+                m.on_bytes(&mut h, now, peer, &buf)
+            };
+            if !stale && used.is_ok_and(|u| u > 0) {
+                self.io.mem_rx.insert(*peer, (session, stream));
+            }
             buf.drain(..used.unwrap_or(0).min(buf.len()));
             let more = used.is_ok_and(|u| u > 0) && !buf.is_empty();
             let Some(st) = self.io.strm.get_mut(&(session, stream)) else {
@@ -521,5 +551,227 @@ where
                 return true;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Which stream ends close a hub's snapshot copy: only the one the snapshot frames came on.
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::indexing_slicing,
+        missing_docs,
+        reason = "tests assert freely"
+    )]
+
+    use alloc::boxed::Box;
+    use alloc::vec::Vec;
+
+    use pinc_core::{Event, SessionId};
+    use pinc_membership::codec::{Alive, Snap, entry_bytes};
+    use pinc_membership::{Frame, NodeId, Record, Trace};
+    use pinc_security::Alpn;
+
+    use crate::config::HUB_ALPN;
+    use crate::layer_tests::{TNode, big, hub, node_cfg};
+    use crate::trace::Body;
+
+    const S: u64 = 1_000_000_000;
+    const SID: SessionId = SessionId(5);
+    /// The stream the hub's snapshot comes on, and one that is not.
+    const SNAP_STREAM: u64 = 1;
+    const OTHER: u64 = 7;
+
+    fn rec() -> Record {
+        Record {
+            inc: 1 << 16,
+            ver: 1,
+            thash: [9; 8],
+        }
+    }
+
+    /// One SNAP frame listing `members`, more frames of the snapshot following when `more`.
+    fn snap(more: bool, members: &[NodeId]) -> Vec<u8> {
+        let mut entries = Vec::new();
+        for m in members {
+            entries.extend_from_slice(&entry_bytes(m, &rec(), Alive::Alive));
+        }
+        let mut out = [0u8; 4096];
+        let f = Frame::Snap(Snap::new(false, more, &entries).unwrap());
+        f.encode(&mut out).unwrap().to_vec()
+    }
+
+    /// A member node whose session to the hub has no write stream of its own (the open is refused), so the stream
+    /// the hub opens is the one it answers on.
+    fn member() -> Box<TNode> {
+        let mut n = node_cfg(false, false, true);
+        n.io.ep.fail_open = true;
+        n.on_event(
+            S,
+            Event::Connected {
+                session: SID,
+                node: hub(),
+                alpn: Alpn::new(HUB_ALPN).unwrap(),
+                resumed: false,
+            },
+        );
+        n
+    }
+
+    /// The bytes arrive on `stream` of the hub session.
+    fn arrive(n: &mut TNode, stream: u64, bytes: Vec<u8>) {
+        if !n.io.strm.contains_key(&(SID, stream)) {
+            n.on_event(S, Event::StreamOpened { session: SID, stream });
+        }
+        n.io.ep.chunks.insert((SID, stream), bytes);
+        n.on_event(S, Event::StreamReadable { session: SID, stream });
+    }
+
+    fn arrive_on(n: &mut TNode, session: SessionId, bytes: Vec<u8>) {
+        n.on_event(
+            S,
+            Event::StreamOpened {
+                session,
+                stream: SNAP_STREAM,
+            },
+        );
+        n.io.ep.chunks.insert((session, SNAP_STREAM), bytes);
+        n.on_event(
+            S,
+            Event::StreamReadable {
+                session,
+                stream: SNAP_STREAM,
+            },
+        );
+    }
+
+    fn end(n: &mut TNode, stream: u64) {
+        n.on_event(
+            S,
+            Event::StreamReset {
+                session: SID,
+                stream,
+                error: 0,
+            },
+        );
+    }
+
+    /// The members a complete snapshot has started aging so far.
+    fn absent(n: &mut TNode) -> Vec<NodeId> {
+        n.settle(S);
+        let mut out = Vec::new();
+        while let Some(t) = n.poll_trace() {
+            if let Body::Membership(Trace::Absent { member }) = t.body {
+                out.push(member);
+            }
+        }
+        out
+    }
+
+    const X: NodeId = [0x51; 32];
+    const Y: NodeId = [0x52; 32];
+
+    #[test]
+    fn the_end_of_the_stream_a_snapshot_came_on_closes_its_copy_even_when_it_is_the_write_stream() {
+        big(|| {
+            let mut n = member();
+            arrive(&mut n, SNAP_STREAM, snap(true, &[X]));
+            end(&mut n, SNAP_STREAM);
+            arrive(&mut n, 3, snap(false, &[Y]));
+            assert_eq!(
+                absent(&mut n),
+                [X],
+                "the cut snapshot left the copy open: a ghost stays in the view"
+            );
+        });
+    }
+
+    #[test]
+    fn a_stream_the_snapshot_did_not_come_on_ends_without_closing_its_copy() {
+        big(|| {
+            let mut n = member();
+            arrive(&mut n, SNAP_STREAM, snap(true, &[X]));
+            arrive(&mut n, OTHER, Vec::new());
+            end(&mut n, OTHER);
+            arrive(&mut n, SNAP_STREAM, snap(false, &[Y]));
+            assert!(
+                absent(&mut n).is_empty(),
+                "an unrelated stream's end split the snapshot: a listed member is aged"
+            );
+        });
+    }
+
+    #[test]
+    fn a_stream_that_breaks_its_framing_without_a_snapshot_on_it_leaves_the_copy_open() {
+        big(|| {
+            let mut n = member();
+            arrive(&mut n, SNAP_STREAM, snap(true, &[X]));
+            // A length far past the frame bound: the framing is refused and the stream reset.
+            arrive(&mut n, OTHER, alloc::vec![0xFF; 8]);
+            arrive(&mut n, SNAP_STREAM, snap(false, &[Y]));
+            assert!(
+                absent(&mut n).is_empty(),
+                "an unrelated stream that broke split the snapshot: a listed member is aged"
+            );
+        });
+    }
+
+    /// A second session of the hub peer, still readable, that is not the link's current session.
+    const SID2: SessionId = SessionId(6);
+
+    #[test]
+    fn frames_of_a_hub_session_that_is_not_the_links_current_one_are_not_handed_to_membership() {
+        big(|| {
+            let mut n = member();
+            n.io.sess.insert(
+                SID2,
+                crate::io::Sess {
+                    peer: hub().bytes,
+                    incoming: true,
+                },
+            );
+            arrive(&mut n, SNAP_STREAM, snap(true, &[X]));
+            // The late tail of the superseded session: it must not complete the round the current one opened.
+            arrive_on(&mut n, SID2, snap(false, &[]));
+            arrive(&mut n, SNAP_STREAM, snap(false, &[Y]));
+            assert!(
+                absent(&mut n).is_empty(),
+                "a stale session's frame closed the round of the current one: a listed member is aged"
+            );
+        });
+    }
+
+    #[test]
+    fn the_close_of_a_superseded_session_forgets_its_stream_without_closing_the_copy() {
+        big(|| {
+            let mut n = member();
+            arrive(&mut n, SNAP_STREAM, snap(true, &[X]));
+            assert!(n.io.mem_rx.contains_key(&hub().bytes));
+            // The peer's link moves to a newer session; the old one closes later.
+            n.io.sess.insert(
+                SID2,
+                crate::io::Sess {
+                    peer: hub().bytes,
+                    incoming: true,
+                },
+            );
+            n.io.links.entry(hub().bytes).or_default().conn = Some(SID2);
+            n.on_event(
+                S,
+                Event::Closed {
+                    session: SID,
+                    reason: pinc_core::EndReason::Orphaned,
+                },
+            );
+            assert!(n.io.mem_rx.is_empty(), "the closed session's stream is still tracked");
+            // The round the newer session opens is not cut by the old session's end.
+            arrive_on(&mut n, SID2, snap(true, &[Y]));
+            assert!(
+                absent(&mut n).is_empty(),
+                "the old session's close cut the round of the new one"
+            );
+        });
     }
 }

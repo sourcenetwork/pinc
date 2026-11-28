@@ -7,8 +7,9 @@ import Pinc.TicketsClient
 (unexpired) tickets, orders them by `(stamp, index)`, and writes the newest at most `max`, oldest first, in the format
 of `Pinc.TicketsWire`. `restore` checks the whole input first (`decode`), stores nothing if it is malformed, and
 otherwise inserts, in order, every entry with `expiry >= now` through `cInsert` (the model of `insert`), returning how
-many entries it took (entries counted even when `N = 0` stores nothing or a later entry of the same peer replaces
-them).
+many of them the store holds afterwards: the slots stamped after the clock it started from (`newCount`), so an entry
+replaced or evicted by a later one, or not stored because `N = 0`, is not counted. `export` writes at most
+`MAX_EXPORT_TICKETS` (255) tickets.
 
 `restore_export` is the round trip: restoring an export of a reachable store into an empty store with room for it
 yields exactly the exported tickets, in the order of the export.
@@ -40,26 +41,32 @@ def tkAt (l : Slots) (i : Nat) : Option Tk := ((l[i]?).getD none).map (·.tk)
 /-- The tickets `export` writes, oldest first. -/
 def exportList (l : Slots) (now max : Nat) : List Tk := (exportPairs l now max).filterMap fun p => tkAt l p.2
 
-/-- Why `export` fails: the buffer is too small, or the count does not fit a byte. -/
+/-- The most tickets an export holds (`MAX_EXPORT_TICKETS`): its count is one byte. -/
+def maxExport : Nat := 255
+
+/-- Why `export` fails: the buffer is too small. -/
 inductive ExportErr where
   | small
-  | count
 
-/-- `ClientTickets::export` into a buffer of `cap` bytes: the bytes written, or the error. -/
+/-- `ClientTickets::export` into a buffer of `cap` bytes: the newest at most `min max MAX_EXPORT_TICKETS` live
+tickets, or the error. -/
 def exportBytes (l : Slots) (now max cap : Nat) : Except ExportErr (List Nat) :=
-  let ts := exportList l now max
+  let ts := exportList l now (min max maxExport)
   if cap < 1 then .error .small
-  else if 255 < ts.length then .error .count
   else if (encode ts).length ≤ cap then .ok (encode ts) else .error .small
 
+/-- The slots holding a ticket stamped after `before`: what `restore` counts. -/
+def newCount (l : Slots) (before : Nat) : Nat := (l.filter fun x => x.any fun s => decide (before < s.stamp)).length
+
 /-- `ClientTickets::restore`: nothing is stored unless the whole input decodes; then every entry with
-`expiry >= now` is inserted. Returns the store and the count (`none`: the input was malformed). -/
+`expiry >= now` is inserted. Returns the store and the count of the tickets it holds from this call (`none`: the input
+was malformed). -/
 def restore (st : Store) (bytes : List Nat) (now : Nat) : Store × Option Nat :=
   match decode bytes with
   | none => (st, none)
   | some ts =>
-    let live := ts.filter fun t => decide (now ≤ t.expiry)
-    (live.foldl (fun s t => cInsert s t now) st, some live.length)
+    let st' := (ts.filter fun t => decide (now ≤ t.expiry)).foldl (fun s t => cInsert s t now) st
+    (st', some (newCount st'.slots st.clock))
 
 /-- The tickets in a slot array, in slot order. -/
 def tks (l : Slots) : List Tk := l.filterMap fun x => x.map (·.tk)
@@ -69,12 +76,57 @@ theorem restore_malformed (st : Store) {bytes : List Nat} (h : decode bytes = no
     restore st bytes now = (st, none) := by
   simp [restore, h]
 
-/-- `Tickets.restore_filters`: only the entries that have not expired are inserted, and the count is theirs. -/
+/-- `Tickets.restore_filters`: only the entries that have not expired are inserted, and the count is the slots
+stamped by this call. -/
 theorem restore_live (st : Store) {bytes : List Nat} {ts : List Tk} (h : decode bytes = some ts) (now : Nat) :
     restore st bytes now =
       ((ts.filter fun t => decide (now ≤ t.expiry)).foldl (fun s t => cInsert s t now) st,
-        some (ts.filter fun t => decide (now ≤ t.expiry)).length) := by
+        some (newCount ((ts.filter fun t => decide (now ≤ t.expiry)).foldl (fun s t => cInsert s t now) st).slots
+          st.clock)) := by
   simp [restore, h]
+
+/-- Every ticket stamped after `c0` stays stamped after `c0` through further insertions, and each insertion stamps
+above the clock. -/
+theorem fold_insert_stamps (now c0 : Nat) : ∀ (ts : List Tk) (st : Store), c0 ≤ st.clock →
+    (∀ x ∈ st.slots, ∀ s, x = some s → c0 < s.stamp) →
+    ∀ x ∈ (ts.foldl (fun s t => cInsert s t now) st).slots, ∀ s, x = some s → c0 < s.stamp := by
+  intro ts
+  induction ts with
+  | nil => intro st _ h; exact h
+  | cons t ts ih =>
+    intro st hc h
+    simp only [List.foldl]
+    apply ih
+    · rw [cInsert_clock]; omega
+    · intro x hx s hs
+      unfold cInsert at hx
+      split at hx
+      · rcases List.mem_or_eq_of_mem_set hx with hx | hx
+        · exact h x hx s hs
+        · subst hx
+          simp only [Option.some.injEq] at hs
+          subst hs
+          show c0 < st.clock + 1
+          omega
+      · exact h x hx s hs
+
+theorem newCount_shape (ss : List Slot) (n before : Nat) (h : ∀ s ∈ ss, before < s.stamp) :
+    newCount (ss.map some ++ List.replicate n none) before = ss.length := by
+  unfold newCount
+  rw [List.filter_append, List.length_append]
+  have h1 : (ss.map some).filter (fun x : Option Slot => x.any fun s => decide (before < s.stamp)) = ss.map some := by
+    apply List.filter_eq_self.mpr
+    intro x hx
+    obtain ⟨s, hs, rfl⟩ := List.mem_map.mp hx
+    simpa using h s hs
+  have h2 : (List.replicate n (none : Option Slot)).filter
+      (fun x : Option Slot => x.any fun s => decide (before < s.stamp)) = [] := by
+    apply List.filter_eq_nil_iff.mpr
+    intro a ha
+    cases List.eq_of_mem_replicate ha
+    simp
+  rw [h1, h2]
+  simp
 
 /-- `Tickets.restore_zero`: a store without slots stays without slots, whatever is restored. -/
 theorem restore_zero (clock : Nat) (bytes : List Nat) (now : Nat) : (restore ⟨[], clock⟩ bytes now).1.slots = [] := by
@@ -419,11 +471,22 @@ theorem restore_export {N N' : Nat} {st : Store} (h : CReach N st)
   rw [restore_live _ hdec, hlive]
   obtain ⟨ss, hss, hres⟩ := fold_insert_shape now (exportList st.slots now max) [] 0 N'
     (by simp) (by simp) (exportList_peers (client_one_per_peer h) now max) (by omega)
-  refine ⟨rfl, ?_⟩
   have hres' : ((exportList st.slots now max).foldl (fun s t => cInsert s t now) (Store.empty N')).slots =
       ss.map some ++ List.replicate (N' - (exportList st.slots now max).length) none := by
     have := hres
     simpa [Store.empty] using this
+  have hst : ∀ s ∈ ss, 0 < s.stamp := by
+    intro s hs
+    refine fold_insert_stamps now 0 (exportList st.slots now max) (Store.empty N') (Nat.zero_le _) ?_ (some s)
+      (by rw [hres']; simp [hs]) s rfl
+    intro x hx s' hs'
+    rw [List.eq_of_mem_replicate hx] at hs'
+    cases hs'
+  refine ⟨?_, ?_⟩
+  · simp only
+    rw [hres']
+    simp only [Store.empty]
+    rw [newCount_shape ss _ 0 hst, ← hss, List.length_map]
   simp only
   rw [hres']
   unfold tks
@@ -437,10 +500,38 @@ theorem restore_export {N N' : Nat} {st : Store} (h : CReach N st)
   rw [h1, h2, hss]
   simp
 
+/-- `Tickets.export_cap`: an export holds at most `MAX_EXPORT_TICKETS` (255) tickets, so its count fits its byte,
+whatever `max` and the number of live tickets. -/
+theorem export_cap (l : Slots) (now max : Nat) : (exportList l now (min max maxExport)).length ≤ maxExport := by
+  rw [exportList_length, export_len]; omega
+
+/-- `Tickets.restore_export_bytes`: the bytes `export` writes restore, into an empty store with room for them, to
+exactly the tickets it exported: the round trip of `restore_export` needs no bound on the count. -/
+theorem restore_export_bytes {N N' : Nat} {st : Store} (h : CReach N st)
+    (hv : ∀ (i : Nat) (s : Slot), st.slots[i]? = some (some s) → s.tk.Valid) (now max cap : Nat) {b : List Nat}
+    (hb : exportBytes st.slots now max cap = .ok b)
+    (hcap : min (livePairs now st.slots 0).length (min max maxExport) ≤ N') :
+    b = encode (exportList st.slots now (min max maxExport)) ∧
+    decode b = some (exportList st.slots now (min max maxExport)) ∧
+    tks (restore (Store.empty N') b now).1.slots = exportList st.slots now (min max maxExport) := by
+  have hb' : b = encode (exportList st.slots now (min max maxExport)) := by
+    unfold exportBytes at hb
+    split at hb
+    · cases hb
+    · simp only at hb
+      split at hb
+      · cases hb; rfl
+      · cases hb
+  have hr := restore_export h hv now (min max maxExport) hcap (by unfold maxExport; omega)
+  subst hb'
+  exact ⟨rfl, hr.1, hr.2.2⟩
+
 end Pinc.Tickets
 
 #audit_axioms Pinc.Tickets.restore_malformed
 #audit_axioms Pinc.Tickets.restore_live
+#audit_axioms Pinc.Tickets.fold_insert_stamps
+#audit_axioms Pinc.Tickets.newCount_shape
 #audit_axioms Pinc.Tickets.restore_zero
 #audit_axioms Pinc.Tickets.export_len
 #audit_axioms Pinc.Tickets.export_mem
@@ -450,3 +541,5 @@ end Pinc.Tickets
 #audit_axioms Pinc.Tickets.exportList_length
 #audit_axioms Pinc.Tickets.exportList_peers
 #audit_axioms Pinc.Tickets.restore_export
+#audit_axioms Pinc.Tickets.export_cap
+#audit_axioms Pinc.Tickets.restore_export_bytes

@@ -16,13 +16,21 @@
 (* including ids that are already stored. So the stored ids are unique by  *)
 (* the code, which the invariant UniqueIds checks over every reachable     *)
 (* store. A failure keeps the tickets of the same call that were already   *)
-(* placed (the code stores each ticket as it is drawn).                    *)
+(* placed (the code stores each ticket as it is drawn). A ticket of a      *)
+(* batch never evicts another of the same batch: when the victim holds one *)
+(* of them (the store is full of this batch) the batch ends there, so it   *)
+(* holds min(count, MaxBatch, N) tickets and every one it returns is       *)
+(* stored (BatchStored, BatchLen; Tickets_server1.cfg has a store smaller  *)
+(* than a batch). The model before let a batch evict its own tickets and   *)
+(* return them, and no invariant asked whether a returned ticket was still *)
+(* stored, which is how the bug went through.                              *)
 (*                                                                         *)
 (* ClientTickets: one ticket per peer (the newest replaces the older), at  *)
 (* most N peers; accept_batch inserts the tickets of a batch in order, so  *)
 (* the last is the one kept; take drops the expired tickets and removes    *)
 (* and returns the peer's ticket if the ALPN matches; export lists the     *)
-(* newest at most max unexpired tickets, oldest first; restore checks the *)
+(* newest at most max (and at most 255) unexpired tickets, oldest first    *)
+(* (the stores of the configs hold fewer than 255); restore checks the     *)
 (* whole input before it stores anything and then inserts every entry that *)
 (* has not expired. The byte format is in the Lean model (TicketsWire); a  *)
 (* blob here is its logical content: the version, the entries (a ticket or *)
@@ -78,26 +86,28 @@ FreshId(slots, ds, k, p) ==
 
 Put(slots, at, slot) == IF at = 0 THEN slots ELSE [slots EXCEPT ![at] = slot]
 
-\* issue_batch: the ticket drawn for each of k tickets goes to the victim slot (nothing is stored when there is no
-\* slot; the batch then lacks it). Operators take their pieces as arguments because TLC re-evaluates LET definitions.
-RECURSIVE IssueLoop(_, _, _, _, _, _), IssueStep(_, _, _, _, _, _), IssueFin(_, _, _, _, _, _, _)
-IssueJoin(v, f, rest) ==
-    [sv |-> rest.sv, res |-> rest.res,
-     batch |-> IF rest.res /= "ok" THEN <<>> ELSE IF v = 0 THEN rest.batch ELSE <<f.tid>> \o rest.batch]
+\* issue_batch: the ticket drawn for each of k tickets goes to the victim slot; mine holds the slots of this batch's
+\* tickets. They are the newest and never expired, so the victim is one of them only when every slot is (or there is
+\* no slot, 0): the batch ends there, after the draw and the clock step, as in the code. Operators take their pieces as
+\* arguments because TLC re-evaluates LET definitions.
+RECURSIVE IssueLoop(_, _, _, _, _, _, _), IssueStep(_, _, _, _, _, _, _), IssueFin(_, _, _, _, _, _, _, _)
+IssueJoin(f, rest) ==
+    [sv |-> rest.sv, res |-> rest.res, batch |-> IF rest.res /= "ok" THEN <<>> ELSE <<f.tid>> \o rest.batch]
 
-IssueLoop(sv, ds, now, life, k, p) ==
+IssueLoop(sv, ds, now, life, k, p, mine) ==
     IF k = 0 THEN [sv |-> sv, res |-> "ok", batch |-> <<>>]
-    ELSE IssueStep(sv, ds, now, life, k, FreshId(sv.slots, ds, Attempts, p))
+    ELSE IssueStep(sv, ds, now, life, k, FreshId(sv.slots, ds, Attempts, p), mine)
 
-IssueStep(sv, ds, now, life, k, f) ==
+IssueStep(sv, ds, now, life, k, f, mine) ==
     IF f.res /= "ok" THEN [sv |-> sv, res |-> f.res, batch |-> <<>>]
-    ELSE IssueFin(Victim(sv.slots, now), sv, ds, now, life, k, f)
+    ELSE IssueFin(Victim(sv.slots, now), sv, ds, now, life, k, f, mine)
 
-IssueFin(v, sv, ds, now, life, k, f) ==
-    IssueJoin(v, f, IssueLoop([slots |-> Put(sv.slots, v, SSlot(f.tid, Exp(now, life), sv.clock + 1)),
-                               clock |-> sv.clock + 1], ds, now, life, k - 1, f.p))
+IssueFin(v, sv, ds, now, life, k, f, mine) ==
+    IF v = 0 \/ v \in mine THEN [sv |-> [sv EXCEPT !.clock = @ + 1], res |-> "ok", batch |-> <<>>]
+    ELSE IssueJoin(f, IssueLoop([slots |-> Put(sv.slots, v, SSlot(f.tid, Exp(now, life), sv.clock + 1)),
+                                 clock |-> sv.clock + 1], ds, now, life, k - 1, f.p, mine \cup {v}))
 
-IssueBatch(sv, ds, now, life, count) == IssueLoop(sv, ds, now, life, Min(count, MaxBatch), 1)
+IssueBatch(sv, ds, now, life, count) == IssueLoop(sv, ds, now, life, Min(count, MaxBatch), 1, {})
 
 SRemove(sv, i) == [sv EXCEPT !.slots[i] = None]
 
@@ -262,6 +272,15 @@ CollisionFails ==
     \A ds \in [1..Attempts -> Ids] :
         (\A k \in 1..Attempts : ~Fresh(sv.slots, ds[k]))
             => \A r \in {IssueBatch(sv, ds, 0, 0, 1)} : r.res = "ticketId" /\ r.sv = sv
+
+\* issue_batch never evicts its own tickets: every ticket of a batch it returns is stored, and the batch holds as many
+\* as asked up to MaxBatch and the store's size
+BatchStored ==
+    \A ds \in Streams, now \in Nows, life \in 0..1, count \in 0..MaxBatch : \A r \in {IssueBatch(sv, ds, now, life, count)} :
+        r.res = "ok" => \A k \in 1..Len(r.batch) : \E i \in Occ(r.sv.slots) : r.sv.slots[i].tid = r.batch[k]
+BatchLen ==
+    \A ds \in Streams, now \in Nows, life \in 0..1, count \in 0..MaxBatch : \A r \in {IssueBatch(sv, ds, now, life, count)} :
+        r.res = "ok" => Len(r.batch) = Min(Min(count, MaxBatch), NS)
 
 \* take: a ticket taken is for the peer and ALPN, was not expired, and is not taken again
 TakeOnce ==

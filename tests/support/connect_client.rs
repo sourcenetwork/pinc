@@ -86,6 +86,11 @@ pub enum Cmd {
         count: usize,
         len: usize,
     },
+    /// Send the peer a `REACH_OUT` frame with `body`, as a node does when it punches.
+    ReachOut {
+        session: SessionId,
+        body: Vec<u8>,
+    },
     /// Run the host loop (a new node starts with it).
     Tick,
 }
@@ -437,6 +442,9 @@ impl Client {
                 for _ in 0..count {
                     let _ = self.host.command(now, Command::SendDatagram { session, data: &data });
                 }
+            }
+            Cmd::ReachOut { session, body } => {
+                let _ = self.host.command(now, Command::ReachOut { session, body: &body });
             }
             Cmd::Tick => {}
         }

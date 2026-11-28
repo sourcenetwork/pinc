@@ -6,15 +6,17 @@
 //!
 //! | Type | Datagram | Layout after the type byte |
 //! |---|---|---|
-//! | 1 | QAD | `nonce(8)` |
+//! | 1 | QAD | `nonce(8) zero(10)` |
 //! | 2 | QADR | `nonce(8) addr` (the address the query came from: tag 4 or 6, octets, port) |
-//! | 3 | DNSQ | `peer(33)` |
+//! | 3 | DNSQ | `peer(33) zero(450)` |
 //! | 4 | DNSR | `peer(33) status(1)` then, when status is 1, the signed record. Status: 0 absent, 1 record, 2 too large |
 //! | 6 | SLEEP | the signed sleep notice ([`super::sleep`]) |
 //! | 8 | SPL | `src(33) flag packet`: the hub tunnels a packet down to a member |
 //! | 9 | SPU | `dst(33) flag packet`: a member tunnels a packet up to the hub |
 //!
 //! (Type 5, record replication, and type 7, forwarding, are carrier frames between authenticated relays instead.)
+//! A QAD and a DNSQ are padded with zeros to [`QAD_LEN`] and [`DNSQ_LEN`], so three times the query pays for the
+//! longest answer; a short or nonzero padding is refused.
 //! A SPL or SPU datagram, header included, is at most [`MAX_TUNNEL_DATAGRAM`] bytes, so it fits every UDP path.
 //! A decode never accepts trailing bytes after a fixed-size datagram, an empty packet, or an unknown type.
 
@@ -31,6 +33,19 @@ use crate::record::{MAX_RECORD_LEN, RecordError, read_addr, write_addr};
 pub const MAX_TUNNEL_DATAGRAM: usize = MAX_PACKET_LEN - 28;
 /// The largest lookup answer datagram; a record that does not fit gets the "too large" status.
 pub const MAX_DNS_DATAGRAM: usize = MAX_PACKET_LEN - 28;
+/// The longest QADR: type, nonce, an IPv6 address (tag, 16 octets, port).
+pub const MAX_QADR_LEN: usize = 1 + 8 + 19;
+/// The least length of a query whose answer of `answer` bytes, with its 28 header bytes, is at most three times it:
+/// what the ledger of the answering node lets go to a source that proved nothing.
+#[allow(clippy::cast_possible_truncation, reason = "the overhead is 28 and the factor 3")]
+pub const fn query_len(answer: usize) -> usize {
+    (answer + pinc_core::DATAGRAM_OVERHEAD as usize).div_ceil(pinc_core::FACTOR as usize)
+}
+/// A QAD on the wire: type, nonce, zero padding (19 bytes).
+pub const QAD_LEN: usize = query_len(MAX_QADR_LEN);
+/// A DNSQ on the wire: type, node, zero padding (484 bytes).
+pub const DNSQ_LEN: usize = query_len(MAX_DNS_DATAGRAM);
+const _: () = assert!(QAD_LEN == 19 && DNSQ_LEN == 484);
 
 /// The datagram type bytes.
 pub mod kind {
@@ -113,6 +128,8 @@ pub enum DatagramError {
     Addr(RecordError),
     /// Bytes follow a fixed-size datagram.
     Trailing,
+    /// The padding of a query is not zero.
+    Padding,
     /// A tunnelled packet that is empty or over the datagram bound.
     PacketSize,
 }
@@ -121,6 +138,14 @@ impl From<pinc_wire::WireError> for DatagramError {
     fn from(e: pinc_wire::WireError) -> Self {
         Self::Frame(FrameError::Wire(e))
     }
+}
+
+/// Read the `n` padding bytes of a query and refuse a nonzero one.
+fn zero_padding(r: &mut Reader<'_>, n: usize) -> Result<(), DatagramError> {
+    if r.read_bytes(n)?.iter().any(|b| *b != 0) {
+        return Err(DatagramError::Padding);
+    }
+    Ok(())
 }
 
 fn packet<'a>(r: &mut Reader<'a>, max: usize) -> Result<&'a [u8], DatagramError> {
@@ -155,14 +180,20 @@ impl<'a> Datagram<'a> {
     pub fn decode(buf: &'a [u8]) -> Result<Self, DatagramError> {
         let mut r = Reader::new(buf);
         let d = match r.read_u8()? {
-            kind::QAD => Self::Qad { nonce: r.read_array()? },
+            kind::QAD => {
+                let nonce = r.read_array()?;
+                zero_padding(&mut r, QAD_LEN - 9)?;
+                Self::Qad { nonce }
+            }
             kind::QADR => Self::Qadr {
                 nonce: r.read_array()?,
                 addr: read_addr(&mut r).map_err(DatagramError::Addr)?,
             },
-            kind::DNSQ => Self::DnsQuery {
-                peer: node::read(&mut r)?,
-            },
+            kind::DNSQ => {
+                let peer = node::read(&mut r)?;
+                zero_padding(&mut r, DNSQ_LEN - 34)?;
+                Self::DnsQuery { peer }
+            }
             kind::DNSR => {
                 let peer = node::read(&mut r)?;
                 let answer = match r.read_u8()? {
@@ -222,6 +253,7 @@ impl<'a> Datagram<'a> {
             Self::Qad { nonce } => {
                 w.put_u8(kind::QAD)?;
                 w.put_slice(&nonce)?;
+                w.put_slice(&[0; QAD_LEN - 9])?;
             }
             Self::Qadr { nonce, addr } => {
                 w.put_u8(kind::QADR)?;
@@ -231,6 +263,7 @@ impl<'a> Datagram<'a> {
             Self::DnsQuery { peer } => {
                 w.put_u8(kind::DNSQ)?;
                 node::write(&mut w, &peer)?;
+                w.put_slice(&[0; DNSQ_LEN - 34])?;
             }
             Self::DnsReply { peer, answer } => {
                 w.put_u8(kind::DNSR)?;
@@ -266,5 +299,99 @@ impl<'a> Datagram<'a> {
             }
         }
         Ok(w.written().len())
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "tests assert")]
+mod tests {
+    use alloc::vec;
+    use alloc::vec::Vec;
+
+    use pinc_wire::WireError;
+
+    use super::*;
+
+    fn node() -> NodeId {
+        NodeId {
+            alg: pinc_crypto::IdentityAlg::Ed25519,
+            bytes: [7; 32],
+        }
+    }
+
+    fn qad() -> Vec<u8> {
+        let mut b = vec![0u8; QAD_LEN];
+        let n = Datagram::Qad { nonce: [3; 8] }.encode(&mut b).unwrap();
+        assert_eq!(n, QAD_LEN);
+        b
+    }
+
+    fn dnsq() -> Vec<u8> {
+        let mut b = vec![0u8; DNSQ_LEN];
+        let peer = node();
+        let n = Datagram::DnsQuery { peer }.encode(&mut b).unwrap();
+        assert_eq!(n, DNSQ_LEN);
+        b
+    }
+
+    fn truncated(missing: usize) -> DatagramError {
+        DatagramError::Frame(FrameError::Wire(WireError::Truncated { needed: missing }))
+    }
+
+    #[test]
+    fn a_query_is_padded_with_zeros_to_its_length() {
+        let (q, d) = (qad(), dnsq());
+        assert_eq!((q.len(), d.len()), (19, 484));
+        assert!(q[9..].iter().all(|b| *b == 0) && d[34..].iter().all(|b| *b == 0));
+        assert_eq!(Datagram::decode(&q), Ok(Datagram::Qad { nonce: [3; 8] }));
+        assert!(matches!(Datagram::decode(&d), Ok(Datagram::DnsQuery { .. })));
+    }
+
+    #[test]
+    fn an_unpadded_or_short_query_is_truncated() {
+        assert_eq!(Datagram::decode(&qad()[..9]), Err(truncated(10)));
+        assert_eq!(Datagram::decode(&dnsq()[..34]), Err(truncated(450)));
+        assert_eq!(Datagram::decode(&qad()[..QAD_LEN - 1]), Err(truncated(1)));
+        assert_eq!(Datagram::decode(&dnsq()[..DNSQ_LEN - 1]), Err(truncated(1)));
+    }
+
+    #[test]
+    fn a_nonzero_padding_byte_or_a_trailing_byte_is_refused() {
+        for (q, first) in [(qad(), 9), (dnsq(), 34)] {
+            for at in [first, q.len() - 1] {
+                let mut bad = q.clone();
+                bad[at] = 1;
+                assert_eq!(Datagram::decode(&bad), Err(DatagramError::Padding));
+            }
+            let mut more = q;
+            more.push(0);
+            assert_eq!(Datagram::decode(&more), Err(DatagramError::Trailing));
+        }
+    }
+
+    #[test]
+    fn a_query_that_does_not_fit_the_buffer_fails_with_the_shortfall_and_writes_no_padding() {
+        let peer = node();
+        for (d, len, fixed) in [
+            (Datagram::Qad { nonce: [3; 8] }, QAD_LEN, 9),
+            (Datagram::DnsQuery { peer }, DNSQ_LEN, 34),
+        ] {
+            let mut b = vec![0xAA; len - 1];
+            assert_eq!(
+                d.encode(&mut b),
+                Err(DatagramError::Frame(FrameError::Wire(WireError::BufferTooSmall {
+                    needed: 1
+                })))
+            );
+            assert!(b[fixed..].iter().all(|x| *x == 0xAA), "padding was written");
+        }
+    }
+
+    #[test]
+    fn three_times_a_query_pays_for_its_longest_answer_and_no_shorter_query_does() {
+        for (q, answer) in [(QAD_LEN, MAX_QADR_LEN), (DNSQ_LEN, MAX_DNS_DATAGRAM)] {
+            assert!(q * 3 >= answer + 28);
+            assert!((q - 1) * 3 < answer + 28);
+        }
     }
 }

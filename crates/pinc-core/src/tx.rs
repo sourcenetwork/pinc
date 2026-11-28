@@ -5,7 +5,8 @@
 //! queue as soon as the open is queued, so the open keeps its place). [`Endpoint::poll_transmit`] takes the first
 //! session, asks its connection for a datagram, and sends it through the ledger gate: a datagram the ledger holds back
 //! is dropped, which the connection treats as loss (the size probe is the exception: it is not built for a path whose
-//! address the ledger holds).
+//! address the ledger holds). A datagram whose path has no address left is dropped and its connection is told the
+//! path is lost (`path_lost`).
 //! Between connections the endpoint batches for segmentation offload: after a datagram, the next sessions' datagrams
 //! to the same destination of the same size follow in the same buffer, ending with a shorter one; a datagram for
 //! another destination is kept for the next call. The session just served moves to the back of the queue its class
@@ -94,12 +95,16 @@ ep_impl! {
                 dest,
             });
             let segments = tx.len.div_ceil(tx.segment_size.max(1));
+            // The addresses are read before the settle: it may free the session (the CLOSE just built) and with it
+            // the pair, and a datagram built for an address leaves for it.
+            let dest = self.path_addrs(tx.path);
             self.note_sent(i, now, tx.path);
             self.dirty_rotate(q, now);
             self.settle_core(i, now, false);
-            let Some((local, remote)) = self.path_addrs(tx.path) else {
+            let Some((local, remote)) = dest else {
                 self.counters.dropped_out += 1;
                 trace!(self, now, TxDrop { slot: i as u64 });
+                self.lose_path(i, now, tx.path);
                 continue;
             };
             if !self.gate(now, remote, tx.len, segments) {
@@ -139,12 +144,11 @@ ep_impl! {
         .take(K)
     }
 
-    /// The datagram kept for the next call: the remote of its path (None when the path has no address any more), its
-    /// length and its segment size.
+    /// The datagram kept for the next call: the remote of its path, its length and its segment size.
     #[cfg(feature = "trace")]
-    pub fn trace_stash(&self) -> Option<(Option<SocketAddr>, usize, usize)> {
+    pub fn trace_stash(&self) -> Option<(SocketAddr, usize, usize)> {
         let m = self.stash_meta.as_ref()?;
-        Some((self.path_addrs(m.path).map(|(_, remote)| remote), m.len, m.segment))
+        Some((m.remote, m.len, m.segment))
     }
 
     /// Whether slot `i` is a broadcast session (its `gossip` flag), or None for a slot out of range.
@@ -164,9 +168,14 @@ ep_impl! {
         }
     }
 
-    /// Pass `segments` datagrams totalling `len` bytes to `remote` through the ledger.
-    fn gate(&mut self, now: u64, remote: SocketAddr, len: usize, segments: usize) -> bool {
-        let n = (len + crate::ledger::DATAGRAM_OVERHEAD as usize * segments.saturating_sub(1)) as u64;
+    /// The host wants to send a datagram of `len` bytes to `remote` (the relay role): whether the ledger allows it; a
+    /// refused one must not be sent.
+    pub fn host_send(&mut self, now: u64, remote: SocketAddr, len: usize) -> bool {
+        self.charge(now, remote, len as u64)
+    }
+
+    /// Ask the ledger to send `n` bytes to `remote` and record the call.
+    pub(crate) fn charge(&mut self, now: u64, remote: SocketAddr, n: u64) -> bool {
         let allowed = self.ledger.allow_send(remote, n);
         trace!(self, now, LedgerTx {
             addr: crate::rx::addr_key(&remote),
@@ -174,6 +183,13 @@ ep_impl! {
             rx: self.ledger.get(&remote).map_or(0, |e| e.rx),
             tx: self.ledger.get(&remote).map_or(0, |e| e.tx),
         });
+        allowed
+    }
+
+    /// Pass `segments` datagrams totalling `len` bytes to `remote` through the ledger.
+    fn gate(&mut self, now: u64, remote: SocketAddr, len: usize, segments: usize) -> bool {
+        let n = (len + crate::ledger::DATAGRAM_OVERHEAD as usize * segments.saturating_sub(1)) as u64;
+        let allowed = self.charge(now, remote, n);
         trace!(self, now, TxGate {
             dest: crate::rx::addr_key(&remote),
             len: len as u64,
@@ -189,13 +205,22 @@ ep_impl! {
         allowed
     }
 
+    /// A datagram of session `i` on `path` found no address: no pair is held for the path. The connection is told
+    /// the path is lost, so it leaves it for a usable path at once or as soon as one validates. A slot the settle
+    /// freed meanwhile is left alone.
+    fn lose_path(&mut self, i: usize, now: u64, path: PathId) {
+        let Some(conn) = self.slots.get_mut(i).filter(|s| s.m.in_use).and_then(|s| s.conn.as_mut()) else {
+            return;
+        };
+        // `Unknown`: the connection no longer tracks the path, so there is nothing to leave.
+        if conn.path_lost(path).is_ok() {
+            self.settle_core(i, now, false);
+        }
+    }
+
     /// Send the datagram kept from the last call.
     fn send_stash(&mut self, now: u64, out: &mut [u8], m: &StashMeta) -> Option<Transmit> {
-        let Some((local, remote)) = self.path_addrs(m.path) else {
-            self.counters.dropped_out += 1;
-            trace!(self, now, TxDrop { slot: u64::MAX });
-            return None;
-        };
+        let (local, remote) = (m.local, m.remote);
         let (Some(src), Some(dst)) = (self.stash.get(..m.len), out.get_mut(..m.len)) else {
             self.counters.dropped_out += 1;
             trace!(self, now, TxDrop { slot: u64::MAX });
@@ -257,10 +282,17 @@ ep_impl! {
                 dest,
             });
             let more = tx.len.div_ceil(tx.segment_size.max(1));
+            let resolved = self.path_addrs(tx.path);
             self.note_sent(j, now, tx.path);
             self.dirty_rotate(q, now);
             self.settle_core(j, now, false);
-            let same_dest = self.path_addrs(tx.path) == Some((first.local, first.remote));
+            let Some((local, remote)) = resolved else {
+                self.counters.dropped_out += 1;
+                trace!(self, now, TxDrop { slot: j as u64 });
+                self.lose_path(j, now, tx.path);
+                continue;
+            };
+            let same_dest = (local, remote) == (first.local, first.remote);
             // A run of segments of the first's size, or one shorter datagram that ends the run, may join.
             let full = tx.segment_size == seg && tx.len % seg.max(1) == 0;
             let last = tx.segment_size == tx.len && tx.len < seg;
@@ -268,7 +300,12 @@ ep_impl! {
                 // Another destination or size: keep it for the next call.
                 if let (Some(s), Some(w)) = (self.stash.get_mut(..tx.len), out.get(first.len..first.len + tx.len)) {
                     s.copy_from_slice(w);
-                    self.stash_meta = Some(StashMeta { path: tx.path, len: tx.len, segment: tx.segment_size });
+                    self.stash_meta = Some(StashMeta {
+                        local,
+                        remote,
+                        len: tx.len,
+                        segment: tx.segment_size,
+                    });
                 }
                 return;
             }

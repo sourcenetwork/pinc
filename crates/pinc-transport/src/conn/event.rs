@@ -151,7 +151,8 @@ pub enum Event<'a> {
         /// The application error code the peer gave.
         error: u64,
     },
-    /// A stream has bytes to read.
+    /// A stream has bytes to read or its end: raised when a frame brought bytes or the end; a copy of a frame already
+    /// received raises nothing.
     StreamReadable(StreamId),
     /// A stream may accept more writes.
     StreamWritable(StreamId),

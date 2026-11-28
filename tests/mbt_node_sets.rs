@@ -535,9 +535,10 @@ impl Run {
                         self.ep().inbound.insert((s, x), (tx, RecvStatus::Finished));
                     }
                     "bad" => {
-                        self.ep()
-                            .inbound
-                            .insert((s, x), (vec![0x00, 0x20, 0x01], RecvStatus::Open));
+                        // a head one byte over the longest body the node reads
+                        let over = limits().max_body() + 1;
+                        let head = over.to_be_bytes()[size_of::<usize>() - 3..].to_vec();
+                        self.ep().inbound.insert((s, x), (head, RecvStatus::Open));
                     }
                     "fin" => {
                         self.ep().inbound.insert((s, x), (Vec::new(), RecvStatus::Finished));

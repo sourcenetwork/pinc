@@ -101,6 +101,7 @@ pub use self::cost::{HANDLER_CALL_NS, SuiteCost};
 pub use self::layer::{NodeLayer, NodeSets, NodeValues};
 pub use self::mem::{CHUNKS_PER_CONN, Ep, SESSIONS};
 pub use self::shared::{SetupError, Shared, identity_seed, iface_ip};
+use crate::sim::stuck;
 use crate::suite::proto::host::Layers;
 use crate::suite::world::model::Intent;
 use crate::{Clock, IfaceEvent, Node, StreamEvent, StreamId, StreamOp, Time, Transmit, Work};
@@ -227,7 +228,7 @@ impl<L: Layers> SuiteNode<L> {
         self.core.seed
     }
 
-    /// Timeouts the endpoint left at or before its own call time (each is a defect of the endpoint).
+    /// Timer calls that left the endpoint's deadline due twice in a row (each is a defect of the endpoint).
     pub fn timer_violations(&self) -> u64 {
         self.core.timer_violations
     }
@@ -415,14 +416,12 @@ impl<L: Layers> Node for SuiteNode<L> {
             return None;
         }
         if std::mem::take(&mut self.core.timer_check) {
-            // A deadline that is already due is normal while the host has not yet called back; one that the call just
-            // made did not move is a timer the endpoint cannot act on.
-            let local = self.core.local;
-            let due = self.core.endpoint().and_then(Ep::poll_timeout).filter(|d| *d <= local);
-            if due.is_some() && due == self.core.stale_deadline {
+            // A deadline that is already due is normal while the host has not yet called back; one that two timer
+            // calls in a row left due is a timer the endpoint cannot act on.
+            let (local, d) = (self.core.local, self.core.endpoint().and_then(Ep::poll_timeout));
+            if stuck(&mut self.core.timer_last, &mut self.core.timer_left, local, d) {
                 self.core.timer_violations += 1;
             }
-            self.core.stale_deadline = due;
         }
         let layers = self.layers.poll_timeout().filter(|_| self.core.deliver());
         self.core.next_deadline().into_iter().chain(layers).min()

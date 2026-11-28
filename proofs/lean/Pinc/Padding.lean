@@ -220,6 +220,8 @@ theorem reply_sendable (f : Form) (a : Alg)
   rw [hov, hfh] at hcov
   rw [hfh] at hs
   have hmin : minInitialLen f a ≤ Amp.u64max := by cases f <;> cases a <;> decide
+  -- three times what was received is below `u64::MAX`, so `tx` is never saturated while the budget allows a send
+  have hsm : 3 * minInitialLen f a < Amp.u64max := by cases f <;> cases a <;> decide
   have hrx : (Amp.onReceive Amp.Budget.new (minInitialLen f a)).rx = minInitialLen f a := by
     show Amp.satAdd 0 (minInitialLen f a) = _
     unfold Amp.satAdd
@@ -237,6 +239,8 @@ theorem reply_sendable (f : Form) (a : Alg)
         rw [Amp.canSend_iff b n hv]
         unfold Amp.factor Amp.overhead
         simp only [List.sum_cons] at hle
+        refine ⟨?_, by omega⟩
+        rw [hr] at hle
         omega
       refine ⟨hc, ih _ ?_ ?_ ?_ ?_⟩
       · exact hv
@@ -270,37 +274,42 @@ def sendableCharged : Amp.Budget → List Nat → Bool
 
 /-- From any unvalidated budget, datagrams whose sizes plus 48 bytes each fit in what is left are all sent. -/
 theorem charged_from (ns : List Nat) : ∀ b : Amp.Budget, b.validated = false →
-    b.tx + ns.sum + ns.length * Amp.overhead ≤ b.rx * Amp.factor → sendableCharged b ns = true := by
+    b.tx + ns.sum + ns.length * Amp.overhead ≤ b.rx * Amp.factor →
+    b.tx + ns.sum + ns.length * Amp.overhead < Amp.u64max → sendableCharged b ns = true := by
   induction ns with
-  | nil => intro _ _ _; rfl
+  | nil => intro _ _ _ _; rfl
   | cons n ns ih =>
-    intro b hv h
+    intro b hv h hu
     simp only [sendableCharged, Bool.and_eq_true]
-    simp only [List.sum_cons, List.length_cons, Nat.add_mul, Nat.one_mul] at h
-    refine ⟨(Amp.canSend_iff b n hv).2 (by omega), ih _ hv ?_⟩
-    have hx := Amp.onSend_tx_le b (n + Amp.overhead)
-    have hr : (Amp.onSend b (n + Amp.overhead)).rx = b.rx := rfl
-    rw [hr]
-    omega
+    simp only [List.sum_cons, List.length_cons, Nat.add_mul, Nat.one_mul] at h hu
+    refine ⟨(Amp.canSend_iff b n hv).2 ⟨by omega, by omega⟩, ih _ hv ?_ ?_⟩
+    · have hx := Amp.onSend_tx_le b (n + Amp.overhead)
+      have hr : (Amp.onSend b (n + Amp.overhead)).rx = b.rx := rfl
+      rw [hr]
+      omega
+    · have hx := Amp.onSend_tx_le b (n + Amp.overhead)
+      omega
 
-/-- A path that received `rx` bytes lets the transport send any datagrams whose sizes plus 48 bytes each total at
-most three times `rx`. -/
-theorem charged_sendable (rx : Nat) (hrx : rx ≤ Amp.u64max) (ns : List Nat)
+/-- A path that received `rx` bytes (three times `rx` below `u64::MAX`, so the sent counter never saturates) lets
+the transport send any datagrams whose sizes plus 48 bytes each total at most three times `rx`. -/
+theorem charged_sendable (rx : Nat) (hrx : 3 * rx < Amp.u64max) (ns : List Nat)
     (h : ns.sum + ns.length * Amp.overhead ≤ 3 * rx) :
     sendableCharged (Amp.onReceive Amp.Budget.new rx) ns = true := by
-  apply charged_from ns _ rfl
   have hr : (Amp.onReceive Amp.Budget.new rx).rx = rx := by
     show Amp.satAdd 0 rx = rx
     unfold Amp.satAdd
     omega
   have ht : (Amp.onReceive Amp.Budget.new rx).tx = 0 := rfl
-  rw [hr, ht]
-  unfold Amp.factor
-  omega
+  apply charged_from ns _ rfl
+  · rw [hr, ht]
+    unfold Amp.factor
+    omega
+  · rw [ht]
+    omega
 
 /-- The step shared by both cuts: `d` datagrams with `k` bytes of framing each carry a message of `q` bytes within
 three times `rx`, so any at most `d` datagrams that carry the message with their framing are sent. -/
-theorem cut_sendable (rx q d k : Nat) (hrx : rx ≤ Amp.u64max) (hcov : q + d * (Amp.overhead + k) ≤ 3 * rx)
+theorem cut_sendable (rx q d k : Nat) (hrx : 3 * rx < Amp.u64max) (hcov : q + d * (Amp.overhead + k) ≤ 3 * rx)
     (ns : List Nat) (hlen : ns.length ≤ d) (hs : ns.sum ≤ q + ns.length * k) :
     sendableCharged (Amp.onReceive Amp.Budget.new rx) ns = true := by
   apply charged_sendable rx hrx ns

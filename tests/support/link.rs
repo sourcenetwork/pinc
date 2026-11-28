@@ -478,6 +478,17 @@ impl World {
         ticket: Option<pinc_security::Ticket>,
         tickets: ClientTickets<8>,
     ) -> Node<'a, C, F> {
+        self.client_at(T0, store, ticket, tickets)
+    }
+
+    /// As [`Self::client`], the connection starting at `now` (its prekeys are made at `T0`).
+    pub fn client_at<'a, const C: usize, const F: usize>(
+        &self,
+        now: u64,
+        store: &'a mut Store<C, F>,
+        ticket: Option<pinc_security::Ticket>,
+        tickets: ClientTickets<8>,
+    ) -> Node<'a, C, F> {
         let prov = Caps(Software, self.hw);
         let mut drbg = Drbg::new(&[0x11 ^ self.seed; 32]);
         let kp = Keypair::from_seed(self.alg, &vec![0x21; self.alg.seed_len()]).unwrap();
@@ -488,6 +499,7 @@ impl World {
         };
         let mut prekeys = SoftPrekeys::new(&mut env, PrekeyPolicy::default()).unwrap();
         let prekey = prekeys.acquire(&mut env).unwrap();
+        env.now = now;
         let conn = Conn::<C, F>::client(
             self.client_cfg.unwrap_or(self.cfg),
             ClientParams {

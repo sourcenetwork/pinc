@@ -382,6 +382,7 @@ impl Core {
             Sess {
                 peer: peer.unwrap_or(usize::MAX),
                 hidden: hide,
+                ended: std::collections::BTreeSet::new(),
             },
         );
         let Some(peer) = peer.filter(|_| !hide) else {
@@ -467,6 +468,9 @@ impl Core {
         }
         if !fin && let Ok(v) = self.cmd(Command::Consume { session, stream, n: 0 }) {
             fin = v == Value::Recv(RecvStatus::Finished);
+        }
+        if fin && let Some(s) = self.sessions.get_mut(&session) {
+            fin = s.ended.insert(stream);
         }
         if self.deliver() && (!buf.is_empty() || fin) {
             let local = self.now;

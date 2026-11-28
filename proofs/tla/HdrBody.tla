@@ -42,9 +42,11 @@
 (*   RecvOK        what reaches the reassembly: a message length of 0 or   *)
 (*                 above the largest is refused and changes nothing, an    *)
 (*                 offset at or past the length is refused (a message of   *)
-(*                 another length starts the count over), a fragment that  *)
-(*                 runs past the length is cut at it, and a body written   *)
-(*                 by the writer is added as the fragment it carries;      *)
+(*                 another length starts the count over when no runs are   *)
+(*                 held and changes nothing when some are), a fragment     *)
+(*                 that runs past the length is cut at it, and a body      *)
+(*                 written by the writer is added as the fragment it       *)
+(*                 carries (ReasmOps AddT);                                *)
 (*   PadOK         pad_to appends exactly the zeros that bring the writer  *)
 (*                 to min_len, leaves what was written, and refuses with   *)
 (*                 the shortfall and writes nothing when min_len does not  *)
@@ -213,10 +215,10 @@ RecvOK ==
         IN /\ HsRead(body) = [ok |-> TRUE, total |-> c.tw, off |-> c.ow, data |-> data]
            /\ ~ValidTotal(c.tw) => x = [out |-> -1, r |-> c.r]
            /\ (ValidTotal(c.tw) /\ ~U!Lt(c.ow, c.tw)) =>
-                 x = [out |-> -1, r |-> IF tI # c.r.total THEN [runs |-> <<>>, total |-> tI] ELSE c.r]
+                 x = [out |-> -1, r |-> IF tI # c.r.total /\ c.r.runs = <<>> THEN [runs |-> <<>>, total |-> tI] ELSE c.r]
            /\ (ValidTotal(c.tw) /\ U!Lt(c.ow, c.tw)) =>
-                 /\ x = R!Add(c.r, MX, NR, tI, oI, c.dl)
-                 /\ x = R!Add(c.r, MX, NR, tI, oI, IF c.dl < tI - oI THEN c.dl ELSE tI - oI)
+                 /\ x = R!AddT(c.r, MX, NR, tI, oI, c.dl)
+                 /\ x = R!AddT(c.r, MX, NR, tI, oI, IF c.dl < tI - oI THEN c.dl ELSE tI - oI)
 PastRefused ==
     (c.t = "recv" /\ ValidTotal(c.tw) /\ U!Lt(c.ow, c.tw) /\ U!Val(c.ow) + c.dl > U!Val(c.tw)) =>
         RecvX = [out |-> -1, r |-> c.r]

@@ -99,7 +99,7 @@ AmpAfter(ev, b0) ==
 AmpOK(ev, b0, b1) ==
     LET n == U!FromLimbs(ev.n)
     IN /\ ev.op \in {"rx", "tx", "val", "can"}
-       /\ (ev.op = "can") => (A!CanSend(b0.valid, b0.tx, b0.rx, n) = ev.can)
+       /\ (ev.op = "can") => (A!BudgetCanSend(b0.valid, b0.tx, b0.rx, n) = ev.can)
        /\ b1.rx = U!FromLimbs(ev.rx)
        /\ b1.tx = U!FromLimbs(ev.tx)
        /\ b1.valid = ev.valid

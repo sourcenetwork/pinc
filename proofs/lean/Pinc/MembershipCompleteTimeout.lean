@@ -28,6 +28,7 @@ def N.tkRecheck (e : Env) (n : N) (now : Nat) : N := N.recheckDue e n now
 /-- Everything in `tick` but `hub_tick`. -/
 def N.tkPre (e : Env) (n : N) (now : Nat) : N :=
   let n := N.tkRecheck e n now
+  let n := if n.absentDue now then N.sweepAbsent e n now else n
   let n := if n.sent != some (n.ver, n.th) then N.renew e n now false false else n
   if n.isHub || n.nextSlow ≤ now then
     N.slowTick e (if !n.isHub then { n with nextSlow := satAdd now SLOW_TICK } else n) now
@@ -48,9 +49,9 @@ def N.otPre (e : Env) (n : N) (now : Nat) : N :=
 
 /-- The node the tick branch of `on_timeout` hands to `tick`. -/
 def N.otTickPre (e : Env) (n : N) (now : Nat) : N :=
-  let n := match n.nextTick with
-    | some t => if !n.isHub && WAKE_GAP < now - t then N.renew e (n.beginQuiet now 0) now true false else n
-    | none => n
+  let n := if !n.isHub && WAKE_GAP < now - n.nextTick.getD n.born then
+      N.renew e (n.beginQuiet now 0) now true false
+    else n
   { n with nextTick := some (satAdd now (if n.isHub then HUB_TICK else NODE_TICK)) }
 
 /-- The tick branch of `on_timeout`. -/
@@ -63,7 +64,7 @@ theorem onTimeout_split (e : Env) (n : N) (now : Nat) :
 
 theorem tkPre_roster (e : Env) (n : N) (now : Nat) : (N.tkPre e n now).roster = n.roster := by
   unfold N.tkPre N.tkRecheck
-  simp only [ite_roster, recheckDue_roster, renew_roster, slowTick_roster, ite_self]
+  simp only [ite_roster, recheckDue_roster, sweepAbsent_roster, renew_roster, slowTick_roster, ite_self]
 
 theorem carrierWatch_none (e : Env) (n : N) (now m : Nat) (h : n.roster.get? m = none) :
     (N.carrierWatch e n now m).roster.get? m = none := by
@@ -133,9 +134,7 @@ theorem otTickPre_roster (e : Env) (n : N) (now : Nat) : (N.otTickPre e n now).r
   unfold N.otTickPre
   dsimp only
   split
-  · split
-    · simp only [renew_roster, beginQuiet_roster]
-    · rfl
+  · simp only [renew_roster, beginQuiet_roster]
   · rfl
 
 theorem otTick_held (t0 m : Nat) (e : Env) (n : N) (now : Nat) (hs : Silent t0 e m) (hh : Held t0 m n) :

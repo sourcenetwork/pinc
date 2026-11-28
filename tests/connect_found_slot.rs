@@ -20,11 +20,15 @@ type Conn = Connectivity<Software, 1, 4>;
 const RELAY_UDP: &str = "203.0.113.10:4433";
 
 fn conn() -> Box<Conn> {
+    conn_at(RELAY_UDP.parse().unwrap())
+}
+
+fn conn_at(relay_udp: SocketAddr) -> Box<Conn> {
     let host = Box::new(Host::new(0x41, "192.168.1.2:4433".parse().unwrap(), 1000 * SEC));
     let mut relays = [None; 1];
     relays[0] = Some(RelayCfg {
         id: id(&ed(0x77)),
-        udp: Some(RELAY_UDP.parse().unwrap()),
+        udp: Some(relay_udp),
         tcp: None,
         ws: None,
     });
@@ -43,6 +47,11 @@ fn conn() -> Box<Conn> {
 
 /// The relay answers a lookup of `kp`'s node with a record homed on `home`, numbered `seq`.
 fn answer(c: &mut Conn, now: u64, kp: &Keypair, home: NodeId, seq: u64) {
+    answer_from(c, now, RELAY_UDP.parse().unwrap(), kp, home, seq);
+}
+
+/// As `answer`, the datagram arriving from `from`.
+fn answer_from(c: &mut Conn, now: u64, from: SocketAddr, kp: &Keypair, home: NodeId, seq: u64) {
     let rec = record_bytes(kp, home, seq);
     let mut out = [0u8; 1500];
     let n = Datagram::DnsReply {
@@ -51,7 +60,22 @@ fn answer(c: &mut Conn, now: u64, kp: &Keypair, home: NodeId, seq: u64) {
     }
     .encode(&mut out)
     .unwrap();
-    assert!(c.handle_udp(now, RELAY_UDP.parse::<SocketAddr>().unwrap(), &out[..n]));
+    assert!(c.handle_udp(now, from, &out[..n]), "{from} is not a relay's address");
+}
+
+#[test]
+fn a_relay_configured_in_mapped_form_is_matched_from_its_plain_v4_source() {
+    big_stack(|| {
+        let mapped: SocketAddr = "[::ffff:203.0.113.10]:4433".parse().unwrap();
+        let mut c = conn_at(mapped);
+        let (kp, home) = (ed(0x79), id(&ed(0x81)));
+        answer_from(&mut c, 1001 * SEC, RELAY_UDP.parse().unwrap(), &kp, home, 1);
+        assert_eq!(c.found(&id(&kp)).unwrap().home, home);
+        // and the plain form configured, the datagram arriving from the mapped form
+        let mut c = conn();
+        answer_from(&mut c, 1001 * SEC, mapped, &kp, home, 1);
+        assert_eq!(c.found(&id(&kp)).unwrap().home, home);
+    });
 }
 
 #[test]

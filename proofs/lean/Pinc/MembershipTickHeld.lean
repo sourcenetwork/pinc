@@ -86,7 +86,7 @@ theorem cwMain_rd (e : Env) (n : N) (now m since : Nat) (l : Lease) (ev : Option
         | some rp =>
           obtain ⟨route, path⟩ := rp
           simp only []
-          by_cases hdl : max (max (sp0.since + CONFIRM) (sp0.probeA + sp0.wait)) (now + sp0.wait) ≤ now
+          by_cases hdl : max (max (sp0.since + CONFIRM) (sp0.probeA + sp0.wait)) (now + waitB sp0.wait (N.relaySrtt e route)) ≤ now
           · simp only [hr, hdl, ite_true, rewatch_indep]
             refine RD.trans (b := _) ?_ (confirm_rd _ _ _ _ _ _)
             exact RD.of_eq (by simp [rewatch_downed])
@@ -95,7 +95,7 @@ theorem cwMain_rd (e : Env) (n : N) (now m since : Nat) (l : Lease) (ev : Option
       | some tbp =>
         obtain ⟨tb, path⟩ := tbp
         simp only [hb, Option.isNone_some, Bool.false_eq_true, ite_false, rewatch_indep]
-        by_cases hdl : max (max (sp0.since + CONFIRM) (sp0.probeA + sp0.wait)) (tb + sp0.wait) ≤ now
+        by_cases hdl : max (max (sp0.since + CONFIRM) (sp0.probeA + sp0.wait)) (tb + waitB sp0.wait sp0.srttB) ≤ now
         · rw [if_pos hdl]; exact RD.trans (b := _) (RD.of_eq (rewatch_downed ..)) (confirm_rd _ _ _ _ _ _)
         · rw [if_neg hdl]; exact RD.of_eq (by simp [N.scheduleConfirm, rewatch_downed])
     · simp only [show (sp0.since == since) = false by simpa using hsi]

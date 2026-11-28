@@ -52,7 +52,7 @@ def resumeLoop (o : Oracle) (S : List Item) : Nat → Core → Except Err Core
 
 /-- `turn`: process the `nparts` parts of a message and build the reply parts. -/
 def Core.turn (o : Oracle) (S : List Item) (c : Core) (r : List Nat) (nparts : Nat) : Except Err (Core × Ans) := do
-  let c := { c with out := c.out.reset, blast := [], ans := {} }
+  let c := { c with out := c.out.reset, blast := [], ans := {}, msgFloor := {} }
   let (c, rest, left) ← answerLoop o S c r nparts
   let c ← if left > 0 then c.pushFrame rest left
     else if !rest.isEmpty then throw (.malformed .frame) else pure c
@@ -107,7 +107,7 @@ def Core.start (o : Oracle) (S : List Item) (c : Core) (ref : Item) : Except Err
 
 /-- `restart_exact`: restart from the root with items in place of ids, after the final check disagreed. -/
 def Core.restartExact (o : Oracle) (S : List Item) (c : Core) : Except Err (Core × List Nat) := do
-  let c := { c with exact := true, leafed := false, frames := [], here := [], there := [] }
+  let c := { c with exact := true, leafed := false, frames := [], here := [], there := [], msgFloor := {}, coldFloor := {} }
   let (c, cnt) ← c.root o S
   pure (c, ← c.finish false cnt false)
 

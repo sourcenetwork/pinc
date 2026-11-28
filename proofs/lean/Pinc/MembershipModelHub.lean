@@ -36,6 +36,13 @@ def N.sendFloor (e : Env) (n : N) (peer : Nat) : N :=
   let body := (e.floorBody peer).take FLOOR_MAX
   if body.isEmpty then n else (N.tx e n peer .session (.other 14 [] body)).1
 
+/-- The later life of `peer` the view holds, in an epoch above the one its HELLO announces (a clock that went back
+while the hub that held its last life went away): `on_hello` tells the node of it and waits for its HELLO from above. -/
+def N.viewAhead (n : N) (peer : Nat) (rc : Rec) : Option Rec :=
+  match n.members.get? peer with
+  | some s => if rc.inc / 65536 < s.rc.inc / 65536 then some s.rc else none
+  | none => none
+
 /-- A HELLO from `peer`. -/
 def N.onHello (e : Env) (n : N) (now peer : Nat) (rc : Rec) (snap homed : Bool) : N :=
   let n := if homed && !n.isBoot peer then
@@ -51,6 +58,10 @@ def N.onHello (e : Env) (n : N) (now peer : Nat) (rc : Rec) (snap homed : Bool) 
     if rc.inc < held.rc.inc then
       let n := { n with roster := n.roster.modify peer (fun l => { l with renewed := now }) }
       N.deltaTo e n peer peer held.rc .alive
+    else if (n.viewAhead peer rc).isSome then
+      let s := (n.viewAhead peer rc).getD rc
+      let n := { n with roster := n.roster.modify peer (fun l => { l with renewed := now }) }
+      N.deltaTo e n peer peer s .alive
     else if held.rc == rc then
       { n with roster := n.roster.modify peer (fun l => { l with renewed := now }) }
     else if MAX_TABLE ≤ n.roster.len && !n.roster.has peer then n
@@ -58,7 +69,8 @@ def N.onHello (e : Env) (n : N) (now peer : Nat) (rc : Rec) (snap homed : Bool) 
       let n := { n with roster := n.roster.insert peer ⟨rc, now⟩ }
       N.pushDelta e n now peer rc .alive
   | none =>
-    if MAX_TABLE ≤ n.roster.len then n
+    if (n.viewAhead peer rc).isSome then N.deltaTo e n peer peer ((n.viewAhead peer rc).getD rc) .alive
+    else if MAX_TABLE ≤ n.roster.len then n
     else
       let n := { n with roster := n.roster.insert peer ⟨rc, now⟩ }
       N.pushDelta e n now peer rc .alive
@@ -145,6 +157,22 @@ def N.onLeft (e : Env) (n : N) (now m : Nat) (rc : Rec) : N :=
       (match n.roster.get? m with | none => true | some l => l.rc.inc / 65536 != rc.inc / 65536) then n
   else N.hubDown e (n.trace (.leaveSeen m)) now m .left
 
+/-- The smoothed round trip the host holds for the hub whose relay `route` goes through (0 when it has none, or the
+route is no relay): `probe_second`'s second value. -/
+def N.relaySrtt (e : Env) (route : Route) : Nat :=
+  match route with
+  | .via x => match e.evidence x with | some ev => ev.srtt | none => 0
+  | _ => 0
+
+/-- The relay's round trip of the second probe `independentRoute` gives (0 when there is none). -/
+def N.srttFor (e : Env) (n : N) (now m : Nat) (ev : Option Evid) : Nat :=
+  match n.independentRoute e now m ev with
+  | some (route, _) => N.relaySrtt e route
+  | none => 0
+
+/-- `wait_b`: the second probe waits the first's wait and three round trips of the hub whose relay carries it. -/
+def waitB (wait srtt : Nat) : Nat := satAdd wait (min (srtt * 3) U64MAX)
+
 def N.scheduleConfirm (n : N) (now at_ : Nat) : N :=
   let at_ := max at_ (now + 1)
   { n with nextConf := some (match n.nextConf with | some c => min c at_ | none => at_) }
@@ -172,17 +200,18 @@ def N.newSusp (e : Env) (n : N) (now m since : Nat) (ev : Option Evid) : N :=
     let wait := max PROBE_WAIT_MIN (match ev with | some x => min (x.srtt * 3) U64MAX | none => 0)
     let n := (N.tx e n m .session .probe).1
     let n := n.trace (.probeSent m 0)
+    let srttB := N.srttFor e n now m ev
     let (n, probeB) : N × Option (Nat × Nat) :=
       match n.independentRoute e now m ev with
       | some (route, path) =>
         let n := (N.tx e n m route .probe).1
         (n.trace (.probeSent m path), some (now, path))
       | none => (n, none)
-    let sp : Susp := ⟨since, now, probeB, wait⟩
+    let sp : Susp := ⟨since, now, probeB, wait, srttB⟩
     let n := { n with susp := n.susp.insert m sp }
     let n := n.scheduleConfirm now (now + wait)
     match probeB with
-    | some (tb, _) => n.scheduleConfirm now (max (max (since + CONFIRM) (now + wait)) (tb + wait))
+    | some (tb, _) => n.scheduleConfirm now (max (max (since + CONFIRM) (now + wait)) (tb + waitB wait srttB))
     | none => n.trace (.noIndependentPath m)
 
 
@@ -213,13 +242,13 @@ def N.carrierWatch (e : Env) (n : N) (now m : Nat) : N :=
                 | some (route, path) =>
                   let n := (N.tx e n m route .probe).1
                   let n := n.trace (.probeSent m path)
-                  let sp := { sp0 with probeB := some (now, path) }
+                  let sp := { sp0 with probeB := some (now, path), srttB := N.relaySrtt e route }
                   ({ n with susp := n.susp.insert m sp }, sp)
                 | none => (n, sp0)
               else (n, sp0)
             match sp.probeB with
             | some (tb, _) =>
-              let dl := max (max (sp.since + CONFIRM) (sp.probeA + sp.wait)) (tb + sp.wait)
+              let dl := max (max (sp.since + CONFIRM) (sp.probeA + sp.wait)) (tb + waitB sp.wait sp.srttB)
               if dl ≤ now then N.confirm e n now m sp l else n.scheduleConfirm now dl
             | none => n
           else N.newSusp e n now m since ev

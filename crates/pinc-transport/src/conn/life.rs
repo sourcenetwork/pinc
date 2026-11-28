@@ -2,11 +2,12 @@
 //!
 //! Invariants: a connection ends exactly once and reports it with one [`Event::Closed`]; a local close or a violation
 //! queues one CLOSE, which leaves with the next `poll_transmit`, and the state is freed (there is no closing or
-//! draining wait); a `handle_timeout` that runs before that `poll_transmit` ends the connection without the CLOSE, so
-//! at most one CLOSE is ever sent; a peer's CLOSE and every silent end (idle, dead path) send nothing. Any
-//! authenticated packet from the peer that it has not received before ends its sleep; only a peer that announced
-//! its sleep is held past the idle timeout, for 120 s, and the probe backoff does not grow while the peer sleeps or
-//! the link is down.
+//! draining wait); a `handle_timeout` ends a closing connection only once the host asked for a datagram since the
+//! close (the CLOSE was offered, whether or not it could be written), so a host held up past the endpoint's grace
+//! still sends it, and at most one CLOSE is ever sent; a peer's CLOSE and every silent end (idle, dead path) send
+//! nothing. Any authenticated packet from the peer that it has not received before ends its sleep; only a peer that
+//! announced its sleep is held past the idle timeout, for 120 s, and the probe backoff does not grow while the peer
+//! sleeps or the link is down.
 
 use pinc_crypto::Provider;
 use pinc_security::Env;
@@ -39,6 +40,8 @@ pub(crate) struct Life {
     pub(crate) keepalive: Option<u64>,
     /// The code of the CLOSE to send, until it left.
     pub(crate) close: Option<u64>,
+    /// Whether the host has asked for a datagram since the close began, so the CLOSE was offered to it.
+    pub(crate) close_offered: bool,
     pub(crate) peer_asleep: Option<u64>,
     pub(crate) local_asleep: Option<u64>,
     pub(crate) sleep_tx: u8,
@@ -56,6 +59,9 @@ pub(crate) struct Life {
     pub(crate) rejoined: Option<(super::PathId, u64)>,
     /// The last datagram only added a part to a handshake message and finished none.
     pub(crate) hs_part: bool,
+    /// The last datagram was a part of the first message a responder already holds, again, or added no byte to the
+    /// one it is still assembling.
+    pub(crate) hs_repeat: bool,
     pub(crate) ping_owed: bool,
     /// An acknowledgement must leave in the next packet.
     pub(crate) ack_now: bool,
@@ -87,6 +93,7 @@ impl Life {
             last_sent: now,
             keepalive: None,
             close: None,
+            close_offered: false,
             peer_asleep: None,
             local_asleep: None,
             sleep_tx: 0,
@@ -99,6 +106,7 @@ impl Life {
             probes: 0,
             rejoined: None,
             hs_part: false,
+            hs_repeat: false,
             ping_owed: false,
             ack_now: false,
             small_ping: None,
@@ -118,8 +126,8 @@ impl Life {
 
 conn_impl! {
     /// Close the connection with `error`. One CLOSE goes out with the next `poll_transmit` and the connection is
-    /// over; nothing waits afterwards. Call `poll_transmit` before `handle_timeout`: the timer ends a closing
-    /// connection, and a CLOSE that has not left by then is not sent.
+    /// over; nothing waits afterwards. `handle_timeout` ends a closing connection only once `poll_transmit` was called
+    /// after the close: a CLOSE that could not be written then is not sent, and one never offered still leaves.
     pub fn close(&mut self, env: &mut Env<'_, P>, lent: &mut super::Lent<'_, 'a>, error: u64) {
         self.with_lent(lent, |c| c.begin_close(env.now, error, CloseReason::Local { error }));
     }
@@ -229,6 +237,7 @@ conn_impl! {
         let established = self.phase == Phase::Connected;
         self.release_buffers();
         self.life.close = Some(error);
+        self.life.close_offered = false;
         self.phase = if established && self.keys.send.is_some() { Phase::Closing } else { Phase::Closed };
         self.push(Ev::Closed(reason));
     }

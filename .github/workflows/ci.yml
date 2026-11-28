@@ -1,8 +1,9 @@
 # CI runs the gate (`just gate`) through the same justfile recipes as a local run, split into jobs that run side by
 # side: the static checks, the tests, the stack and harness tests, and the quick proofs. A pull request runs the
-# first three. The quick proofs take about two hours on a two-core runner, so they run on every push to master, every
-# night and by hand, not on a pull request: a broken proof shows after it lands. `just proofs-deep` (every model over
-# its full bounds, hours of processor time) is not part of the gate and does not run here.
+# first three, and the property tests (`just pbt`, a workspace of its own that is not part of the gate). The quick
+# proofs take about two hours on a two-core runner, so they run on every push to master, every night and by hand, not
+# on a pull request: a broken proof shows after it lands. `just proofs-deep` (every model over its full bounds, hours
+# of processor time) is not part of the gate and does not run here.
 name: ci
 
 on:
@@ -83,6 +84,23 @@ jobs:
       - run: echo "$HOME/.elan/bin" >> "$GITHUB_PATH" && echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - run: just unoptimised
       - run: just test-distributed
+
+  pbt:
+    name: property tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - name: free disk space
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL && df -h / | tail -1
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: pbt
+      - run: just _rust
+      - run: just pbt
 
   proofs:
     name: quick proofs

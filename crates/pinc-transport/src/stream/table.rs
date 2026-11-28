@@ -635,7 +635,8 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
 
     // ---- receive ----------------------------------------------------------------------------------------------
 
-    /// A stream data frame arrived.
+    /// A stream data frame arrived. Whether it brought anything to read: a byte not held before (beyond a hole too),
+    /// the final size for the first time. A copy of a frame already received brings nothing.
     ///
     /// # Errors
     /// A violation by the peer ([`StreamError::StreamLimit`], [`StreamError::StreamState`], [`StreamError::FlowControl`],
@@ -649,11 +650,13 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         offset: u64,
         data: &[u8],
         fin: bool,
-    ) -> Result<(), StreamError> {
+    ) -> Result<bool, StreamError> {
         if is_uni(id) && self.is_local(id) {
             return Err(StreamError::StreamState);
         }
-        let Some(i) = self.locate(pool, id)? else { return Ok(()) };
+        let Some(i) = self.locate(pool, id)? else {
+            return Ok(false);
+        };
         let slot = self.slots.get_mut(i).ok_or(StreamError::UnknownStream)?;
         let result = slot.recv.on_data(pool, offset, data, fin);
         self.stats.range_spills += slot.recv.take_spills();
@@ -730,8 +733,10 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
 
     /// Move the limit of slot `first`, and of every slot whose grant was deferred, to a window ahead of its read position
     /// (the window its own reader's rate sized in `consume`). A grant is
-    /// queued only while the credit already granted and not yet received, plus the increase, fits in the pool;
-    /// otherwise the slot stays deferred and is tried again after a later consume.
+    /// queued only while the credit already granted and not yet received, plus the increase, fits in the pool. When
+    /// the whole window does not fit, the largest limit that does is granted if it adds at least half a window, or
+    /// if the peer has no credit left on the stream (nothing would ever make it grow again); the slot then stays
+    /// deferred for the rest, and any other slot is tried again after a later consume or release.
     fn grant(&mut self, pool: &BufferPool<'_>, first: usize) {
         let mut granted: Option<u64> = None;
         let reserve = self.reserved();
@@ -751,13 +756,24 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
             let demand = sum
                 .saturating_sub(slot.recv.unreceived())
                 .saturating_add(slot.recv.charged_demand(candidate));
-            if demand.saturating_add(reserve) <= pool.available_bytes() {
+            let room = pool.available_bytes();
+            if demand.saturating_add(reserve) <= room {
                 slot.recv.win.limit = candidate;
                 slot.recv.win.pending = true;
                 slot.recv.win.deferred = false;
                 granted = Some(demand);
             } else {
                 slot.recv.win.deferred = true;
+                let rest = sum.saturating_sub(slot.recv.unreceived());
+                let limit = slot.recv.win.limit;
+                let budget = room.checked_sub(rest.saturating_add(reserve));
+                let fit = budget.map_or(limit, |b| slot.recv.fit_limit(candidate, b));
+                let enough = fit >= limit.saturating_add(slot.recv.win.size / 2) || slot.recv.unreceived() == 0;
+                if fit > limit && enough {
+                    granted = Some(rest.saturating_add(slot.recv.charged_demand(fit)));
+                    slot.recv.win.limit = fit;
+                    slot.recv.win.pending = true;
+                }
             }
             self.refresh(i);
         }

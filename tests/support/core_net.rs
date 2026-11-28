@@ -506,6 +506,9 @@ pub struct CoreNet {
     /// A NAT in front of one node: `(inside, outside)`. Datagrams the node sends carry the outside address as their
     /// source, datagrams to the outside address reach the node, and datagrams to the inside address reach nobody.
     pub nat: Option<(SocketAddr, SocketAddr)>,
+    /// A node that answers from another address: `(real, shown)`. Datagrams the node sends carry `shown` as their
+    /// source, and datagrams to `shown` reach the node as do those to `real`.
+    pub shown: Option<(SocketAddr, SocketAddr)>,
     pub rng: SplitMix64,
     pub delivered: u64,
     /// Transmits that carried more than one datagram.
@@ -528,6 +531,7 @@ impl CoreNet {
             loss: None,
             rate: None,
             nat: None,
+            shown: None,
             rng: SplitMix64::new(1),
             delivered: 0,
             batches: 0,
@@ -634,8 +638,9 @@ impl CoreNet {
                 };
                 if let Some(left) = left {
                     self.seq += 1;
-                    let from = match self.nat {
-                        Some((inside, outside)) if local == inside => outside,
+                    let from = match (self.nat, self.shown) {
+                        (Some((inside, outside)), _) if local == inside => outside,
+                        (_, Some((real, shown))) if local == real => shown,
                         _ => local,
                     };
                     let extra = if self.jitter > 0 {
@@ -708,9 +713,10 @@ impl CoreNet {
             self.now = t;
             while self.wires.peek().is_some_and(|w| w.at <= self.now) {
                 let w = self.wires.pop().unwrap();
-                let to = match self.nat {
-                    Some((inside, outside)) if w.to == outside => inside,
-                    Some((inside, _)) if w.to == inside => SocketAddr::from(([0, 0, 0, 0], 0)),
+                let to = match (self.nat, self.shown) {
+                    (Some((inside, outside)), _) if w.to == outside => inside,
+                    (Some((inside, _)), _) if w.to == inside => SocketAddr::from(([0, 0, 0, 0], 0)),
+                    (_, Some((real, shown))) if w.to == shown => real,
                     _ => w.to,
                 };
                 if let Some(i) = self.node_at(to) {

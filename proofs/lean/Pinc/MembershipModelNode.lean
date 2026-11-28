@@ -13,10 +13,23 @@ set_option linter.unusedVariables false
 namespace Pinc.Membership
 open Pinc.MemInc
 
+/-- `stream_reset`: a snapshot of `peer` cut short will not be finished, so its copy is closed and the next snapshot
+starts a new round. -/
+def N.streamReset (n : N) (peer : Nat) : N :=
+  match n.hv.get? peer with
+  | some c => { n with hv := n.hv.insert peer { c with open_ := false } }
+  | none => n
+
+/-- `stream_reset` changes only the copies. -/
+@[simp] theorem N.streamReset_eq (n : N) (peer : Nat) :
+    n.streamReset peer =
+      { n with hv := match n.hv.get? peer with | some c => n.hv.insert peer { c with open_ := false } | none => n.hv } := by
+  unfold N.streamReset; split <;> rfl
+
 /-- `drop_peer`. -/
 def N.dropPeer (e : Env) (n : N) (now peer : Nat) : N :=
-  let n := { n with up := n.up.erase peer, attached := n.attached.del peer, homed := n.homed.del peer,
-                    helloAt := n.helloAt.unset peer, hsent := n.hsent.unset peer }
+  let n := ({ n with up := n.up.erase peer, attached := n.attached.del peer, homed := n.homed.del peer,
+                     helloAt := n.helloAt.unset peer, hsent := n.hsent.unset peer }).streamReset peer
   let n := if !n.isHub && n.homeOk == some peer then { n with homeOk := none } else n
   let n := if !n.downed.has peer then n.bc (.release peer) else n
   if n.isBoot peer && n.primary == some peer then N.reselect e n now else n
@@ -59,10 +72,11 @@ def N.sampleSessionRtts (e : Env) (n : N) (now : Nat) : N :=
        | none => false))
   if better then N.reselect e n now else n
 
-/-- `drop_stale_hubs`: a stale hub's copy is dropped while another hub is fresh, and its session is closed. -/
+/-- `drop_stale_hubs`: a stale hub's copy is dropped while another hub is fresh, and its session is closed; while
+removals are held (`N.source`, a member with no confirmed home) the copies are kept. -/
 def N.dropStaleHubs (e : Env) (n : N) (now : Nat) : N :=
   let stale := (n.hv.keys.filter (fun k => !n.hubUp now k)).length
-  if stale == 0 || n.hv.len ≤ stale then n
+  if stale == 0 || n.hv.len ≤ stale || (n.source now).hold then n
   else
     let (n, changed) := n.hv.keys.foldl
       (fun (a : N × Bool) hub =>
@@ -103,9 +117,14 @@ def N.slowTick (e : Env) (n : N) (now : Nat) : N :=
   let primaryDown := match n.primary with | none => true | some p => !n.hubUp now p
   if primaryDown then N.reselect e n now else n
 
+/-- Whether an omission clock has run out by `now` (`next_absent` is due): the tick sweeps then. -/
+def N.absentDue (n : N) (now : Nat) : Bool :=
+  match n.nextAbsent with | some t => decide (t ≤ now) | none => false
+
 /-- `tick`. -/
 def N.tick (e : Env) (n : N) (now : Nat) : N :=
   let n := N.recheckDue e n now
+  let n := if n.absentDue now then N.sweepAbsent e n now else n
   let n := if n.sent != some (n.ver, n.th) then N.renew e n now false false else n
   let n := if n.isHub || n.nextSlow ≤ now then
       N.slowTick e (if !n.isHub then { n with nextSlow := satAdd now SLOW_TICK } else n) now
@@ -124,9 +143,10 @@ def N.onTimeout (e : Env) (n : N) (now : Nat) : N :=
         if n.isHub then forKeys n.susp.keys (fun m n => N.carrierWatch e n now m) n else n
       else n
     if (n.nextTick.getD 0) ≤ now then
-      let n := match n.nextTick with
-        | some t => if !n.isHub && WAKE_GAP < now - t then N.renew e (n.beginQuiet now 0) now true false else n
-        | none => n
+      -- The first tick is due at the start (`poll_timeout` gives `born`), so a late first tick is late too.
+      let n := if !n.isHub && WAKE_GAP < now - n.nextTick.getD n.born then
+          N.renew e (n.beginQuiet now 0) now true false
+        else n
       let n := { n with nextTick := some (satAdd now (if n.isHub then HUB_TICK else NODE_TICK)) }
       N.tick e n now
     else n
@@ -201,7 +221,7 @@ def N.sessionUp (e : Env) (n : N) (now peer : Nat) (incoming : Bool) : N :=
     let n := if !n.isHub && n.isBoot peer && silent then n.beginQuiet now 1 else n
     if MAX_TABLE ≤ n.up.len && !n.up.has peer then n.close peer .stale
     else
-      let n := { n with up := n.up.insert peer now }
+      let n := ({ n with up := n.up.insert peer now }).streamReset peer
       let n := if incoming then { n with attached := n.attached.del peer } else n
       if n.isBoot peer && (!incoming || n.isHub) then
         let n := if !n.isHub && n.primary == some peer then n.bc (.resub peer) else n
@@ -277,7 +297,7 @@ def N.start (e : Env) (me : Nat) (isHub : Bool) (hubs : List Nat) (tracing : Boo
         th := th, sent := none, sealFailed := false, maxFrame := Pinc.MemCodec.maxBody, up := [], heard := [], revoked := [],
         hv := if isHub then [(me, ⟨[], 0, false⟩)] else [], members := [], epoch := 0, hrtt := [], hsent := [],
         helloAt := [], primary := if isHub then some me else none, homeOk := none, homeSeen := false, recheck := [],
-        quietUntil := 0, regrace := false, goneVer := [], left := [], nextRenew := now, nextTick := none,
+        quietUntil := 0, regrace := false, held := [], nextAbsent := none, goneVer := [], left := [], nextRenew := now, nextTick := none,
         nextSlow := now, own := ⟨inc.word, e.ver, th⟩, roster := [], attached := [], homed := [], susp := [],
         downed := [], nextConf := none, events := [], lostEvents := 0, tracing := tracing, traces := [],
         lostTraces := 0, loc := loc, outSent := [], outBc := [], outClose := [] }

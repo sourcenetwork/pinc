@@ -247,3 +247,102 @@ fn a_lost_path_arms_no_more_probes() {
         );
     });
 }
+
+/// The client moves onto a second route (a relay path for it, so valid at once): the server follows the packet to the
+/// new address and challenges it. The first datagram the server sends there is lost, and with it the challenge: the
+/// challenge is sent again, on the probe cadence, and its answer validates the path.
+#[test]
+fn a_lost_challenge_to_a_moved_client_is_sent_again_and_its_answer_validates() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let mut link = two_routes(50);
+        link.route(PathId(3)).ba.drop_next(1);
+        let mut net = connected(&mut w, &mut sa, &mut sb, link);
+        let now = net.now;
+        net.a.with_env(now, |c, env| c.add_path(env, PathId(3), RELAY)).unwrap();
+        net.a.conn.set_active(PathId(3)).unwrap();
+        let id = net.a.conn.open_uni().unwrap();
+        net.a.conn.write(id, &pattern(1000, 51)).unwrap();
+        let moved = net.now;
+        assert!(
+            net.run(net.now + 2 * SEC, |n| n.b.conn.path_validated(PathId(4))),
+            "the moved client's path never validated: the lost challenge was not sent again"
+        );
+        // One probe timeout of the connection after the lost challenge (about a second here), not the idle timeout.
+        assert!(
+            net.now - moved < 3 * SEC / 2,
+            "the retry took {} ms",
+            (net.now - moved) / MS
+        );
+    });
+}
+
+/// A challenge to a path a punch is already probing keeps the punch's cadence: the probes are not started over.
+#[test]
+fn a_challenge_to_a_path_being_punched_keeps_the_cadence_of_the_punch() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let mut link = two_routes(52);
+        link.route(PathId(3)).ba.drop_next(u32::MAX);
+        let mut net = connected(&mut w, &mut sa, &mut sb, link);
+        let now = net.now;
+        net.b
+            .with_env(now, |c, env| c.punch(env, PathId(4), PathInfo::default()))
+            .unwrap();
+        net.a.with_env(now, |c, env| c.add_path(env, PathId(3), RELAY)).unwrap();
+        net.a.conn.set_active(PathId(3)).unwrap();
+        let id = net.a.conn.open_uni().unwrap();
+        net.a.conn.write(id, &pattern(1000, 53)).unwrap();
+        net.run(net.now + 120 * MS, |_| false);
+        let slot = net
+            .b
+            .conn
+            .trace_paths()
+            .slots
+            .into_iter()
+            .flatten()
+            .find(|s| s.id == 4)
+            .expect("the punched path is held");
+        // The punch's own gaps are 33.3 ms, doubling: probes at 0, 33, 100 ms leave 6 of 9. A cadence started over by
+        // the challenge would wait a probe timeout (over 100 ms) for its first.
+        assert!(
+            slot.probes_left <= 6,
+            "{} probes left: the punch's cadence was reset",
+            slot.probes_left
+        );
+    });
+}
+
+/// The peer punches a direct path while this end sits on a relay path: this end sends its own challenge with the
+/// response, so both ends validate the direct path in the round trip of the peer's challenge (the purpose of
+/// `challenge_back`; the budget that bounds it is `Paths::back_left`). With an endpoint-independent translator the
+/// answer comes from the address the probe went to, so the path validates.
+#[test]
+fn a_direct_path_the_peer_punches_validates_at_both_ends_in_the_round_trip_of_its_challenge() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let mut link = two_routes(54);
+        link.add_route(PathId(5), PathId(6), Params::new(10 * MS), Params::new(10 * MS));
+        let mut net = connected(&mut w, &mut sa, &mut sb, link);
+        let now = net.now;
+        net.a.with_env(now, |c, env| c.add_path(env, PathId(3), RELAY)).unwrap();
+        net.a.conn.set_active(PathId(3)).unwrap();
+        let id = net.a.conn.open_uni().unwrap();
+        net.a.conn.write(id, &pattern(1000, 55)).unwrap();
+        net.run(net.now + 100 * MS, |_| false);
+        let punched = net.now;
+        net.b
+            .with_env(punched, |c, env| c.punch(env, PathId(6), PathInfo::default()))
+            .unwrap();
+        assert!(
+            net.run(punched + 500 * MS, |n| n.a.conn.path_validated(PathId(5))
+                && n.b.conn.path_validated(PathId(6))),
+            "the direct path did not validate at both ends"
+        );
+        // Probe out, response with the challenge back, response to it: three one-way trips of 10 ms.
+        assert!(net.now - punched <= 100 * MS, "it took {} ms", (net.now - punched) / MS);
+    });
+}

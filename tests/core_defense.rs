@@ -16,13 +16,15 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 
 use pinc_core::{
-    Answer, Command, Endpoint, EndpointConfig, Event, LEDGER_ENTRIES, MAX_HALF_OPEN, Query, Role, Slot, TraceEvent,
+    Answer, Command, Endpoint, EndpointConfig, Event, IfaceEvent, IfaceId, LEDGER_ENTRIES, MAX_HALF_OPEN, Query, Role,
+    Slot, TraceEvent,
 };
 use pinc_crypto::identity::MAX_SIGNATURE_LEN;
 use pinc_crypto::{Aead, Drbg, IdentityAlg, Keypair, Software};
 use pinc_security::message::{FULL_INITIAL_MIN, Initial, MessageType, PrekeyField, ResumeHello, SHORT_INITIAL_MIN};
 use pinc_security::{
-    AeadSet, ConnId, CreditRecord, Env, KeyHandle, KeyResponse, LocalIdentity, SoftKeys, SoftPrekeys, VERSION,
+    AeadSet, ConnId, CreditRecord, Env, KeyHandle, KeyResponse, LocalIdentity, PrekeyPolicy, SoftKeys, SoftPrekeys,
+    VERSION,
 };
 use pinc_tests::*;
 use pinc_transport::conn::{Resources, Tables};
@@ -642,14 +644,19 @@ fn a_hello_with_a_forged_binder_is_not_exempt() {
 }
 
 #[test]
-fn a_charge_near_the_top_of_the_range_saturates_instead_of_overflowing() {
+fn a_charge_past_the_end_of_the_counter_is_refused() {
     use pinc_core::Ledger;
     let v: SocketAddr = "10.9.9.8:1000".parse().unwrap();
     let mut l = Ledger::new(1);
     l.on_receive(v, u64::MAX);
     assert!(l.allow_send(v, u64::MAX - 28));
     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| l.allow_send(v, 0)));
-    assert_eq!(r.ok(), Some(true), "the second charge must not overflow the total");
+    // A charge past the end of the counter is held, not let through uncounted: the entry stays at its end.
+    assert_eq!(
+        r.ok(),
+        Some(false),
+        "the second charge must neither overflow nor pass uncounted"
+    );
     assert_eq!(l.get(&v).unwrap().tx, u64::MAX);
 }
 
@@ -873,6 +880,29 @@ fn one_address_is_answered_every_time_and_sent_at_most_three_times_what_it_sent(
 }
 
 #[test]
+fn a_forged_source_that_was_sent_a_datagram_stays_held_when_it_sends_one_byte() {
+    big_stack(|| {
+        let mut d = Duo::new();
+        let (now, x): (u64, SocketAddr) = (d.net.now, "10.7.7.8:9".parse().unwrap());
+        let mut out = vec![0u8; 65_536];
+        let mut dg = first_datagram(1, &forged_hello(1), 0);
+        d.srv.handle_datagram(now, d.addr, x, &mut dg);
+        let mut sent = 0;
+        while let Some(t) = d.srv.poll_transmit(now, &mut out) {
+            assert_eq!(t.remote, x);
+            sent += 1;
+        }
+        assert!(sent > 0, "the forged source was sent nothing");
+        d.srv.handle_datagram(now, d.addr, x, &mut [0u8]);
+        let Answer::Ledger(e) = d.srv.query(Query::Ledger(x)) else {
+            panic!("no ledger answer")
+        };
+        assert!(!e.validated, "one byte from the source validated it: {e:?}");
+        assert!(e.tx > 0 && e.tx <= 3 * e.rx, "{e:?}");
+    });
+}
+
+#[test]
 fn rejects_wait_in_a_queue_of_sixteen_and_the_seventeenth_is_dropped() {
     big_stack(|| {
         let mut d = Duo::new();
@@ -909,7 +939,7 @@ fn rejects_wait_in_a_queue_of_sixteen_and_the_seventeenth_is_dropped() {
 }
 
 #[test]
-fn a_forged_hello_naming_an_expired_ticket_is_rejected_and_the_ticket_is_gone() {
+fn a_forged_hello_naming_an_expired_ticket_is_rejected_and_the_store_is_unchanged() {
     big_stack(|| {
         let mut d = Duo::new();
         let first = d.dial();
@@ -931,7 +961,8 @@ fn a_forged_hello_naming_an_expired_ticket_is_rejected_and_the_ticket_is_gone() 
             (1, 0),
             "{ns:?}"
         );
-        assert_eq!(d.srv.stores().tickets.len(), 0, "the expired ticket stayed");
+        // The screen runs on a datagram that proved nothing: it takes no ticket and keeps no state.
+        assert_eq!(d.srv.stores().tickets.len(), 1, "the screen removed a ticket");
     });
 }
 
@@ -1074,5 +1105,595 @@ fn a_half_open_session_of_a_thin_node_ends_strictly_past_60_s() {
             0,
             "60 s: still there one tick past the limit"
         );
+    });
+}
+
+/// Datagrams to `net.nodes[s]` from more forged sources than its table of address pairs holds, each a real short
+/// datagram of the session taken from the capture with its last byte flipped: it is routed by its id, is opened by
+/// no key and must leave no pair behind.
+fn flood_forged_sources(net: &mut CoreNet, s: usize, from_clients: &[SocketAddr]) {
+    let (addr, now) = (net.nodes[s].addr, net.now);
+    let reals: Vec<Vec<u8>> = from_clients
+        .iter()
+        .map(|c| {
+            net.captured
+                .iter()
+                .rev()
+                .find(|(l, r, d)| l == c && *r == addr && d[0] & 0x80 == 0)
+                .map(|(_, _, d)| d.clone())
+                .expect("a short datagram of the session")
+        })
+        .collect();
+    for k in 0..=(CD * 2) {
+        let from: SocketAddr = ([10, 77, (k / 200) as u8, (k % 200) as u8 + 1], 5000).into();
+        let mut d = reals[k % reals.len()].clone();
+        *d.last_mut().unwrap() ^= 0xFF;
+        net.nodes[s].ep.handle_datagram(now, addr, from, &mut d);
+    }
+}
+
+/// Fault injection: the pairs of `net.nodes[s]` towards `from_clients` leave its table whatever holds them, as a full
+/// table used to push them out.
+fn evict_address_pairs(net: &mut CoreNet, s: usize, from_clients: &[SocketAddr]) {
+    let addr = net.nodes[s].addr;
+    for c in from_clients {
+        assert!(net.nodes[s].ep.trace_remove_pair(addr, *c), "no pair of {c} to remove");
+    }
+}
+
+/// Open a unidirectional stream on `session` of node `n` and write `data` on it.
+fn written_to(net: &mut CoreNet, n: usize, session: pinc_core::SessionId, data: &[u8]) {
+    let now = net.now;
+    let pinc_core::Value::Stream(stream) = net.nodes[n]
+        .cmd(now, Command::OpenStream { session, bidi: false })
+        .unwrap()
+        .value
+    else {
+        panic!("no stream")
+    };
+    net.nodes[n].cmd(now, Command::Write { session, stream, data }).unwrap();
+}
+
+fn stats_of(net: &CoreNet, n: usize, session: pinc_core::SessionId) -> pinc_core::SessionStats {
+    match net.nodes[n].ep.query(Query::Stats(session)) {
+        Answer::Stats(st) => st,
+        _ => panic!("no stats"),
+    }
+}
+
+fn got(net: &CoreNet, n: usize, data: &[u8]) -> bool {
+    net.nodes[n].read.values().any(|v| v == data)
+}
+
+#[test]
+fn an_evicted_path_is_left_at_the_first_drop() {
+    big_stack(|| {
+        let mut net = CoreNet::new(5 * MS_NS);
+        let (s, c) = (net.add(1), net.add(2));
+        net.capture = true;
+        let (sc, sb) = net.connect_pair(c, s, ALPN_A, Role::Other);
+        net.run_for(SEC_NS);
+        let client = net.nodes[c].addr;
+        assert!(stats_of(&net, s, sb).path_validated, "no validated path to start");
+        evict_address_pairs(&mut net, s, &[client]);
+        assert_eq!(stats_of(&net, s, sb).route, None, "the pair was not evicted");
+        written_to(&mut net, s, sb, b"after the eviction");
+        let (now, before) = (net.now, net.nodes[s].ep.node_stats().dropped_out);
+        let mut buf = vec![0u8; 65_536];
+        while net.nodes[s].ep.poll_transmit(now, &mut buf).is_some() {}
+        assert_eq!(
+            net.nodes[s].ep.node_stats().dropped_out - before,
+            1,
+            "the datagram on the evicted path was not dropped once"
+        );
+        assert!(
+            !stats_of(&net, s, sb).path_validated,
+            "the first drop did not tell the session its path is lost"
+        );
+        // The client sends from its real address: its data names a new path, which the session moves to.
+        written_to(&mut net, c, sc, b"from the client");
+        let deadline = net.now + 20 * SEC_NS;
+        net.run(deadline, |n| got(n, c, b"after the eviction"));
+        assert!(
+            got(&net, c, b"after the eviction"),
+            "the bytes never arrived: {:?}",
+            net.nodes[c].read
+        );
+        assert!(
+            stats_of(&net, s, sb).route.is_some(),
+            "the session stayed on the evicted path"
+        );
+    });
+}
+
+/// The datagram kept for the next call leaves for the address it was built for, though its pair left the table
+/// meanwhile and nothing is dropped for it; the session is told its path is lost at its next datagram.
+#[test]
+fn a_kept_datagram_leaves_for_its_built_address_and_the_next_one_tells_its_session() {
+    big_stack(|| {
+        let mut net = CoreNet::new(5 * MS_NS);
+        let (s, a, c) = (net.add(1), net.add(2), net.add(3));
+        net.capture = true;
+        let (ca, sa) = net.connect_pair(a, s, ALPN_A, Role::Other);
+        let (cc, sc) = net.connect_pair(c, s, ALPN_A, Role::Other);
+        net.run_for(SEC_NS);
+        written_to(&mut net, s, sa, b"to the first");
+        written_to(&mut net, s, sc, b"to the second");
+        let (now, mut buf) = (net.now, vec![0u8; 65_536]);
+        let clients = [net.nodes[a].addr, net.nodes[c].addr];
+        // One destination leaves; the other session's datagram is kept for the next call.
+        let first = net.nodes[s].ep.poll_transmit(now, &mut buf).expect("a datagram");
+        evict_address_pairs(&mut net, s, &clients);
+        let before = net.nodes[s].ep.node_stats().dropped_out;
+        let kept = net.nodes[s].ep.poll_transmit(now, &mut buf).expect("the kept datagram");
+        assert_ne!(
+            kept.remote, first.remote,
+            "the second datagram was not kept for another address"
+        );
+        assert!(
+            clients.contains(&kept.remote),
+            "the kept datagram left for {}",
+            kept.remote
+        );
+        assert_eq!(
+            net.nodes[s].ep.node_stats().dropped_out,
+            before,
+            "the kept datagram was dropped"
+        );
+        let kept_session = if kept.remote == clients[0] { sa } else { sc };
+        assert!(
+            stats_of(&net, s, kept_session).path_validated,
+            "the session was told before its next datagram"
+        );
+        // Its next datagram finds no address: dropped once, and the session is told.
+        written_to(&mut net, s, kept_session, b"after the kept one");
+        while net.nodes[s].ep.poll_transmit(now, &mut buf).is_some() {}
+        assert!(
+            net.nodes[s].ep.node_stats().dropped_out > before,
+            "the next datagram on the removed pair was not dropped"
+        );
+        assert!(
+            !stats_of(&net, s, kept_session).path_validated,
+            "the session was not told its path is lost"
+        );
+        written_to(&mut net, a, ca, b"from the first");
+        written_to(&mut net, c, cc, b"from the second");
+        let deadline = net.now + 20 * SEC_NS;
+        net.run(deadline, |n| got(n, a, b"to the first") && got(n, c, b"to the second"));
+        assert!(
+            got(&net, a, b"to the first") && got(&net, c, b"to the second"),
+            "bytes never arrived"
+        );
+    });
+}
+
+/// Datagrams from forged sources that carry a session's id add no pair, evict none, and leave the table as it was.
+#[test]
+fn forged_sources_leave_the_table_of_address_pairs_as_it_was() {
+    big_stack(|| {
+        let mut net = CoreNet::new(5 * MS_NS);
+        let (s, a, c) = (net.add(1), net.add(2), net.add(3));
+        net.capture = true;
+        let (_, sa) = net.connect_pair(a, s, ALPN_A, Role::Other);
+        let (_, sc) = net.connect_pair(c, s, ALPN_A, Role::Other);
+        net.run_for(SEC_NS);
+        let pairs = net.nodes[s].ep.trace_path_count();
+        let clients = [net.nodes[a].addr, net.nodes[c].addr];
+        flood_forged_sources(&mut net, s, &clients);
+        assert_eq!(net.nodes[s].ep.trace_path_count(), pairs, "a forged source left a pair");
+        assert_eq!(net.nodes[s].ep.node_stats().pair_evictions, 0);
+        assert_eq!(net.nodes[s].ep.node_stats().pair_refs_unbalanced, 0);
+        assert!(stats_of(&net, s, sa).path_validated && stats_of(&net, s, sc).path_validated);
+    });
+}
+
+/// A session that closes gives its pair back.
+#[test]
+fn a_session_that_closes_gives_its_pairs_back() {
+    big_stack(|| {
+        let mut net = CoreNet::new(5 * MS_NS);
+        let (s, c) = (net.add(1), net.add(2));
+        let (_, ss) = net.connect_pair(c, s, ALPN_A, Role::Other);
+        net.run_for(SEC_NS);
+        assert_eq!(net.nodes[s].ep.trace_path_count(), 1);
+        let now = net.now;
+        net.nodes[s].cmd(now, Command::Close { session: ss, error: 0 }).unwrap();
+        net.run_for(SEC_NS);
+        assert_eq!(
+            net.nodes[s].ep.trace_path_count(),
+            0,
+            "the closed session kept its pair"
+        );
+    });
+}
+
+/// Two sessions to one address share one pair, and it leaves only when both have let go.
+#[test]
+fn two_sessions_to_one_address_share_a_pair_until_both_let_go() {
+    big_stack(|| {
+        let mut net = CoreNet::new(5 * MS_NS);
+        let (s, c) = (net.add(1), net.add(2));
+        let (_, s1) = net.connect_pair(c, s, ALPN_A, Role::Other);
+        let (_, s2) = net.connect_pair(c, s, ALPN_B, Role::Other);
+        net.run_for(SEC_NS);
+        assert_ne!(s1, s2);
+        assert_eq!(
+            net.nodes[s].ep.trace_path_count(),
+            1,
+            "two sessions to one address hold two pairs"
+        );
+        let now = net.now;
+        net.nodes[s].cmd(now, Command::Close { session: s2, error: 0 }).unwrap();
+        net.run_for(SEC_NS);
+        assert_eq!(
+            net.nodes[s].ep.trace_path_count(),
+            1,
+            "the pair left with the first session to close"
+        );
+        net.nodes[s]
+            .cmd(net.now, Command::Close { session: s1, error: 0 })
+            .unwrap();
+        net.run_for(SEC_NS);
+        assert_eq!(net.nodes[s].ep.trace_path_count(), 0, "the pair outlived both sessions");
+    });
+}
+
+/// A session the host closes and then holds past the close's grace, its timer served again and again before it asks
+/// for a datagram, keeps its CLOSE: each timer call leaves the next deadline later than the call (no spin), the
+/// session stays, and the first datagram asked for is the CLOSE, which frees it and ends the peer's session.
+#[test]
+fn a_closing_session_held_past_the_grace_keeps_its_close_and_does_not_spin() {
+    big_stack(|| {
+        let mut buf = vec![0u8; 65_536];
+        let mut net = CoreNet::new(5 * MS_NS);
+        let (s, c) = (net.add(1), net.add(2));
+        let (_, ss) = net.connect_pair(c, s, ALPN_A, Role::Other);
+        net.run_for(SEC_NS);
+        let (saddr, caddr) = (net.nodes[s].addr, net.nodes[c].addr);
+        let mut now = net.now;
+        net.nodes[s].cmd(now, Command::Close { session: ss, error: 7 }).unwrap();
+        for _ in 0..5 {
+            now += 2 * SEC_NS;
+            net.nodes[s].ep.handle_timeout(now);
+            let next = net.nodes[s].ep.poll_timeout();
+            assert!(
+                next.is_some_and(|t| t > now),
+                "the closing session's timer is due again at once: {next:?}"
+            );
+            assert_eq!(
+                net.nodes[s].ep.trace_path_count(),
+                1,
+                "the session was freed before its CLOSE was offered"
+            );
+        }
+        let t = net.nodes[s].ep.poll_transmit(now, &mut buf).expect("the CLOSE");
+        assert_eq!(t.remote, caddr);
+        assert_eq!(net.nodes[s].ep.trace_path_count(), 0, "the session outlived its CLOSE");
+        net.now = now;
+        net.inject(saddr, caddr, buf[..t.len].to_vec(), 0);
+        let want = pinc_core::EndReason::Transport(pinc_transport::conn::CloseReason::Peer { error: 7 });
+        let ended = net.run(now + SEC_NS, |n| {
+            n.nodes[c].saw(|e| matches!(e, Event::Closed { reason, .. } if *reason == want))
+        });
+        assert!(ended, "the peer did not take the CLOSE");
+    });
+}
+
+/// The CLOSE of a session freed in the same call leaves for the peer's address: alone, batched with another datagram
+/// to the same address, and as the datagram kept for another destination.
+#[test]
+fn a_close_leaves_for_the_peers_address_whatever_the_settle_released() {
+    big_stack(|| {
+        let mut buf = vec![0u8; 65_536];
+        // Alone.
+        let mut net = CoreNet::new(5 * MS_NS);
+        let (s, c) = (net.add(1), net.add(2));
+        let (_, ss) = net.connect_pair(c, s, ALPN_A, Role::Other);
+        net.run_for(SEC_NS);
+        let (now, caddr) = (net.now, net.nodes[c].addr);
+        let dropped = net.nodes[s].ep.node_stats().dropped_out;
+        net.nodes[s].cmd(now, Command::Close { session: ss, error: 0 }).unwrap();
+        let t = net.nodes[s].ep.poll_transmit(now, &mut buf).expect("the CLOSE");
+        assert_eq!(t.remote, caddr);
+        assert_eq!(net.nodes[s].ep.trace_path_count(), 0, "the pair stayed");
+        assert_eq!(net.nodes[s].ep.node_stats().dropped_out, dropped);
+        // Batched: two sessions to one address close in one call.
+        let mut net = CoreNet::new(5 * MS_NS);
+        let (s, c) = (net.add(1), net.add(2));
+        let (_, s1) = net.connect_pair(c, s, ALPN_A, Role::Other);
+        let (_, s2) = net.connect_pair(c, s, ALPN_B, Role::Other);
+        net.run_for(SEC_NS);
+        let (now, caddr) = (net.now, net.nodes[c].addr);
+        let dropped = net.nodes[s].ep.node_stats().dropped_out;
+        net.nodes[s].cmd(now, Command::Close { session: s1, error: 0 }).unwrap();
+        net.nodes[s].cmd(now, Command::Close { session: s2, error: 0 }).unwrap();
+        let mut out = 0;
+        while let Some(t) = net.nodes[s].ep.poll_transmit(now, &mut buf) {
+            assert_eq!(t.remote, caddr);
+            out += t.len.div_ceil(t.segment_size.max(1));
+        }
+        assert_eq!(out, 2, "a CLOSE was lost");
+        assert_eq!(net.nodes[s].ep.trace_path_count(), 0);
+        assert_eq!(net.nodes[s].ep.node_stats().dropped_out, dropped);
+        // Kept: two peers, the second CLOSE is built for another destination.
+        let mut net = CoreNet::new(5 * MS_NS);
+        let (s, a, c) = (net.add(1), net.add(2), net.add(3));
+        let (_, sa) = net.connect_pair(a, s, ALPN_A, Role::Other);
+        let (_, sc) = net.connect_pair(c, s, ALPN_A, Role::Other);
+        net.run_for(SEC_NS);
+        let (now, peers) = (net.now, [net.nodes[a].addr, net.nodes[c].addr]);
+        let dropped = net.nodes[s].ep.node_stats().dropped_out;
+        net.nodes[s].cmd(now, Command::Close { session: sa, error: 0 }).unwrap();
+        net.nodes[s].cmd(now, Command::Close { session: sc, error: 0 }).unwrap();
+        let mut to = Vec::new();
+        while let Some(t) = net.nodes[s].ep.poll_transmit(now, &mut buf) {
+            to.push(t.remote);
+        }
+        to.sort();
+        let mut want = peers.to_vec();
+        want.sort();
+        assert_eq!(to, want, "each CLOSE leaves for its own peer");
+        assert_eq!(net.nodes[s].ep.trace_path_count(), 0);
+        assert_eq!(net.nodes[s].ep.node_stats().dropped_out, dropped);
+    });
+}
+
+/// A command that mints address pairs the session cannot keep leaves them out of the table: a flight of relay paths
+/// beyond the session's room, and a punch the connection refuses.
+#[test]
+fn a_command_whose_paths_are_refused_leaves_no_pair_behind() {
+    big_stack(|| {
+        let mut net = CoreNet::new(5 * MS_NS);
+        let (s, c) = (net.add(1), net.add(2));
+        let (_, ss) = net.connect_pair(c, s, ALPN_A, Role::Other);
+        net.run_for(SEC_NS);
+        let pairs = net.nodes[s].ep.trace_path_count();
+        let relay = |n: u8| -> SocketAddr { ([240, 0, 0, n], 0).into() };
+        let now = net.now;
+        let three = [relay(1), relay(2), relay(3)];
+        net.nodes[s]
+            .cmd(
+                now,
+                Command::FlightPaths {
+                    session: ss,
+                    addrs: &three,
+                    skip_primary: false,
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            net.nodes[s].ep.trace_path_count(),
+            pairs + 3,
+            "a pair a session holds was dropped"
+        );
+        // The table of the session is full of valid paths now: a fourth relay path and a punch are refused.
+        let four = [relay(4)];
+        net.nodes[s]
+            .cmd(
+                now,
+                Command::FlightPaths {
+                    session: ss,
+                    addrs: &four,
+                    skip_primary: false,
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            net.nodes[s].ep.trace_path_count(),
+            pairs + 3,
+            "a refused path left its pair"
+        );
+        let direct: SocketAddr = ([203, 0, 113, 7], 4433).into();
+        assert!(
+            net.nodes[s]
+                .cmd(
+                    now,
+                    Command::Punch {
+                        session: ss,
+                        addr: direct
+                    }
+                )
+                .is_err()
+        );
+        assert_eq!(
+            net.nodes[s].ep.trace_path_count(),
+            pairs + 3,
+            "a refused punch left its pair"
+        );
+        assert_eq!(net.nodes[s].ep.node_stats().pair_evictions, 0);
+    });
+}
+
+/// A dialer whose hybrid server answers from another address keeps the pair of that address until the handshake
+/// ends: nothing it sends on the reply's path is dropped for want of a pair.
+#[test]
+fn a_dialer_keeps_the_pair_of_a_reply_from_another_address_until_the_handshake_ends() {
+    big_stack(|| {
+        let mut net = CoreNet::new(5 * MS_NS);
+        let (c, s) = (net.add(1), net.add_with_alg(2, IdentityAlg::Hybrid));
+        net.shown = Some((net.nodes[s].addr, "10.8.8.8:4433".parse().unwrap()));
+        let t0 = net.now;
+        let (peer, to) = (net.nodes[s].node, net.nodes[s].addr);
+        net.nodes[c].connect(t0, peer, ALPN_A, to, Role::Other).unwrap();
+        let connected = net.run(t0 + 10 * SEC_NS, |n| {
+            n.nodes[c].count(|e| matches!(e, Event::Connected { .. })) > 0
+        });
+        assert!(connected, "the handshake did not complete: {:?}", net.nodes[c].events);
+        assert_eq!(
+            net.nodes[c].ep.node_stats().dropped_out,
+            0,
+            "the dialer dropped a datagram for want of the reply path's pair"
+        );
+    });
+}
+
+/// A session whose active path's address goes keeps its pair until a new path validates: its datagrams in between
+/// leave, and the data written after the move arrives.
+#[test]
+fn a_session_whose_active_address_goes_keeps_its_pair_until_a_new_path_validates() {
+    big_stack(|| {
+        let mut net = CoreNet::new(5 * MS_NS);
+        let (s, c) = (net.add(1), net.add(2));
+        let (sc, _) = net.connect_pair(c, s, ALPN_A, Role::Other);
+        net.run_for(SEC_NS);
+        let (old, elsewhere) = (net.nodes[c].addr, "10.0.9.9:4433".parse().unwrap());
+        net.nodes[c].addr = elsewhere;
+        net.loss = Some(Box::new(move |from, _, _| from == old));
+        let now = net.now;
+        net.nodes[c].ep.iface_event(now, IfaceId(0), IfaceEvent::Down);
+        net.nodes[c]
+            .ep
+            .iface_event(now, IfaceId(0), IfaceEvent::AddrChange(elsewhere));
+        net.nodes[c].ep.iface_event(now, IfaceId(0), IfaceEvent::Up);
+        let dropped = net.nodes[c].ep.node_stats().dropped_out;
+        written_to(&mut net, c, sc, b"after the move");
+        net.run_for(6 * SEC_NS);
+        assert!(
+            net.nodes[s].ep.session_from(&elsewhere, |_| true).is_some(),
+            "the server never saw the new address"
+        );
+        assert!(got(&net, s, b"after the move"), "the bytes never arrived");
+        assert_eq!(
+            net.nodes[c].ep.node_stats().dropped_out,
+            dropped,
+            "a datagram of the moved session was dropped for want of a pair"
+        );
+    });
+}
+
+type TinyEp = Endpoint<'static, 'static, Caps, NoSource, 1, 2, 16, 2, 1, 4, 4, 4, 2>;
+type TinySlot = Slot<'static, Caps, NoSource, 1, 2, 16, 2>;
+
+/// A command that mints a pair for every one of its paths while the session still holds its own never makes the
+/// table push out a held pair: the table holds `NP * (K + 1)` entries (here 2 * 2 = 4).
+#[test]
+fn a_command_that_mints_every_path_anew_evicts_no_held_pair() {
+    big_stack(|| {
+        let now = 100 * SEC_NS;
+        let kp = Keypair::from_seed(IdentityAlg::Ed25519, &[7u8; 32]).unwrap();
+        let id = LocalIdentity::from_keypair(&kp, KeyHandle(1)).unwrap();
+        let peer = LocalIdentity::from_keypair(
+            &Keypair::from_seed(IdentityAlg::Ed25519, &[8u8; 32]).unwrap(),
+            KeyHandle(1),
+        )
+        .unwrap()
+        .node_id();
+        let slots: Box<[TinySlot; 1]> = vec![Slot::new(small_memory())]
+            .into_boxed_slice()
+            .try_into()
+            .ok()
+            .unwrap();
+        let prov = Caps(Software, true);
+        let mut ep: Box<TinyEp> = Box::new(Endpoint::new(
+            now,
+            prov,
+            Drbg::new(&[3; 32]),
+            id,
+            EndpointConfig::new(5),
+            Box::leak(slots),
+        ));
+        let mut drbg = Drbg::new(&[4; 32]);
+        let mut env = Env {
+            provider: &prov,
+            now,
+            drbg: &mut drbg,
+        };
+        let mut prekeys = SoftPrekeys::new(&mut env, PrekeyPolicy::default()).unwrap();
+        ep.set_prekey(prekeys.acquire(&mut env).unwrap());
+        assert!(ep.register_alpn(ALPN_A));
+        ep.add_iface("10.0.0.1:4433".parse().unwrap()).unwrap();
+        let first: SocketAddr = "203.0.113.1:4433".parse().unwrap();
+        let second: SocketAddr = "203.0.113.2:4433".parse().unwrap();
+        let reply = ep
+            .command(
+                now,
+                Command::Connect {
+                    node: peer,
+                    alpn: ALPN_A,
+                    addrs: &[first, second],
+                    role: Role::Other,
+                },
+            )
+            .unwrap();
+        let session = match reply.value {
+            pinc_core::Value::Session(s) => s,
+            v => panic!("not a session: {v:?}"),
+        };
+        assert_eq!(ep.trace_path_count(), 2);
+        let relay = |n: u8| -> SocketAddr { ([240, 0, 0, n], 0).into() };
+        let new = [relay(1), relay(2)];
+        ep.command(
+            now,
+            Command::FlightPaths {
+                session,
+                addrs: &new,
+                skip_primary: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(ep.node_stats().pair_evictions, 0, "a held pair was pushed out");
+        let mut buf = vec![0u8; 65_536];
+        while ep.poll_transmit(now, &mut buf).is_some() {}
+        assert_eq!(ep.node_stats().dropped_out, 0, "a datagram of the session had no path");
+    });
+}
+
+/// A dial that fails after its paths were minted (the pool has no chunk for the handshake) leaves the table of address
+/// pairs as it was: it mints a pair for each of its two addresses and gives both back.
+#[test]
+fn a_dial_that_fails_leaves_no_pair_behind() {
+    big_stack(|| {
+        let now = 100 * SEC_NS;
+        let kp = Keypair::from_seed(IdentityAlg::Ed25519, &[7u8; 32]).unwrap();
+        let id = LocalIdentity::from_keypair(&kp, KeyHandle(1)).unwrap();
+        let peer = LocalIdentity::from_keypair(
+            &Keypair::from_seed(IdentityAlg::Ed25519, &[8u8; 32]).unwrap(),
+            KeyHandle(1),
+        )
+        .unwrap()
+        .node_id();
+        let pool = BufferPool::new_boxed(0);
+        let streams: &'static mut Streams<NoSource, 1, 2> =
+            Box::leak(Box::new(Streams::new(&stream::Config::new(false), &pool)));
+        let memory = Resources {
+            pool,
+            streams: streams.into(),
+            loss: (&*Box::leak(Box::new(LossEstimate::new()))).into(),
+            tables: Tables::new(),
+        };
+        let slots: Box<[TinySlot; 1]> = vec![Slot::new(memory)].into_boxed_slice().try_into().ok().unwrap();
+        let prov = Caps(Software, true);
+        let mut ep: Box<TinyEp> = Box::new(Endpoint::new(
+            now,
+            prov,
+            Drbg::new(&[3; 32]),
+            id,
+            EndpointConfig::new(5),
+            Box::leak(slots),
+        ));
+        let mut drbg = Drbg::new(&[4; 32]);
+        let mut env = Env {
+            provider: &prov,
+            now,
+            drbg: &mut drbg,
+        };
+        let mut prekeys = SoftPrekeys::new(&mut env, PrekeyPolicy::default()).unwrap();
+        ep.set_prekey(prekeys.acquire(&mut env).unwrap());
+        assert!(ep.register_alpn(ALPN_A));
+        ep.add_iface("10.0.0.1:4433".parse().unwrap()).unwrap();
+        let addrs: [SocketAddr; 2] = ["203.0.113.1:4433".parse().unwrap(), "203.0.113.2:4433".parse().unwrap()];
+        let before = ep.trace_path_count();
+        let r = ep.command(
+            now,
+            Command::Connect {
+                node: peer,
+                alpn: ALPN_A,
+                addrs: &addrs,
+                role: Role::Other,
+            },
+        );
+        assert!(r.is_err(), "a dial with no memory for its handshake went through");
+        assert_eq!(ep.trace_path_count(), before, "the failed dial left a pair");
+        assert_eq!(ep.node_stats().pair_refs_unbalanced, 0);
     });
 }

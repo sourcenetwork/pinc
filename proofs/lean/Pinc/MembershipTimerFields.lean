@@ -190,9 +190,8 @@ macro "tm_tac" : tactic => `(tactic| first
     rcases hR : snapRound n1 hub with ⟨n2, round⟩
     rw [hR] at h3
     simp only [] at h3 ⊢
-    generalize hn3 : (if (!n2.isHub && n2.primary == some hub) = true then
-        ({ n2 with homeOk := some hub, homeSeen := true } : N) else n2) = n3
-    have h4 : TM[n2, n3] := by rw [← hn3]; split <;> simp
+    generalize hn3 : n2 = n3
+    have h4 : TM[n2, n3] := by rw [← hn3]; simp
     have h5 : TM[n3, (List.foldl (snapStep e now hub round) (n3, false, 0) es).1] :=
       foldl_tm3 (snapStep e now hub round) es (n3, false, 0) (fun b x => by
         obtain ⟨b1, c, k⟩ := b; unfold snapStep; dsimp only; repeat' split
@@ -208,7 +207,7 @@ macro "tm_tac" : tactic => `(tactic| first
     exact h2
 @[simp] theorem sweepAbsent_tm (e : Env) (n : N) (now : Nat) : TM[n, N.sweepAbsent e n now] := by
   rw [sweepAbsent_eq]
-  have h : TM[n, (n.hv.keys.foldl (swOut e now) (n, false)).1] := by
+  have h : TM[n, (n.hv.keys.foldl (swOut e now) ({ n with nextAbsent := none }, false)).1] := by
     apply foldl_tm2
     intro b hub
     unfold swOut
@@ -219,7 +218,8 @@ macro "tm_tac" : tactic => `(tactic| first
     dsimp only
     repeat' split
     all_goals simp
-  generalize n.hv.keys.foldl (swOut e now) (n, false) = F at h ⊢
+  dsimp only
+  generalize n.hv.keys.foldl (swOut e now) ({ n with nextAbsent := none }, false) = F at h ⊢
   obtain ⟨f1, f2⟩ := F
   dsimp only at h ⊢
   split <;> simp [h]
@@ -249,6 +249,10 @@ def N.hlRoster (e : Env) (n : N) (now peer : Nat) (rc : Rec) : N :=
     if rc.inc < held.rc.inc then
       let n := { n with roster := n.roster.modify peer (fun l => { l with renewed := now }) }
       N.deltaTo e n peer peer held.rc .alive
+    else if (n.viewAhead peer rc).isSome then
+      let s := (n.viewAhead peer rc).getD rc
+      let n := { n with roster := n.roster.modify peer (fun l => { l with renewed := now }) }
+      N.deltaTo e n peer peer s .alive
     else if held.rc == rc then
       { n with roster := n.roster.modify peer (fun l => { l with renewed := now }) }
     else if MAX_TABLE ≤ n.roster.len && !n.roster.has peer then n
@@ -256,13 +260,28 @@ def N.hlRoster (e : Env) (n : N) (now peer : Nat) (rc : Rec) : N :=
       let n := { n with roster := n.roster.insert peer ⟨rc, now⟩ }
       N.pushDelta e n now peer rc .alive
   | none =>
-    if MAX_TABLE ≤ n.roster.len then n
+    if (n.viewAhead peer rc).isSome then N.deltaTo e n peer peer ((n.viewAhead peer rc).getD rc) .alive
+    else if MAX_TABLE ≤ n.roster.len then n
     else
       let n := { n with roster := n.roster.insert peer ⟨rc, now⟩ }
       N.pushDelta e n now peer rc .alive
 
 theorem onHello_eq3 (e : Env) (n : N) (now peer : Nat) (rc : Rec) (snap homed : Bool) :
     N.onHello e n now peer rc snap homed = N.hlRoster e (N.hlAttach e (N.hlHomed n peer homed) now peer snap) now peer rc := rfl
+
+/-- A HELLO from below the epoch of the life the view holds of the node (`viewAhead`) registers nothing: the roster
+keeps its records, and only a lease it already holds is renewed. -/
+theorem hlRoster_ahead (e : Env) (n : N) (now peer : Nat) (rc : Rec) (hv : (n.viewAhead peer rc).isSome = true) :
+    (N.hlRoster e n now peer rc).roster = n.roster.modify peer (fun l => { l with renewed := now }) ∨
+    (N.hlRoster e n now peer rc).roster = n.roster := by
+  unfold N.hlRoster
+  cases hg : n.roster.get? peer with
+  | none => right; simp only []; rw [if_pos hv, deltaTo_roster]
+  | some held =>
+    left; simp only []
+    by_cases h1 : rc.inc < held.rc.inc
+    · rw [if_pos h1, deltaTo_roster]
+    · rw [if_neg h1, if_pos hv, deltaTo_roster]
 
 @[simp] theorem hlHomed_tm (n : N) (peer : Nat) (homed : Bool) : TM[n, N.hlHomed n peer homed] := by
   unfold N.hlHomed; dsimp only; repeat' split

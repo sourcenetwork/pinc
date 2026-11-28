@@ -254,11 +254,11 @@ impl Tracer {
         Some(s)
     }
 
-    fn stash_json(&mut self, s: Option<(Option<SocketAddr>, usize, usize)>, fresh: bool) -> String {
+    fn stash_json(&mut self, s: Option<(SocketAddr, usize, usize)>, fresh: bool) -> String {
         s.map_or_else(
             || "[]".to_string(),
             |(a, len, seg)| {
-                let d = a.map_or(0, |a| self.id(key(a), fresh));
+                let d = self.id(key(a), fresh);
                 format!(r#"[{{"d":{d},"len":{len},"seg":{seg}}}]"#)
             },
         )

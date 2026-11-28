@@ -18,6 +18,7 @@ use core::net::SocketAddr;
 use core::pin::Pin;
 use core::task::{Context, Poll, Waker};
 
+use pinc_core::Ledger;
 use pinc_keystore::KeyStore;
 
 use super::access::Access;
@@ -25,6 +26,7 @@ use super::hub::Hub;
 use super::io::Hosted;
 use super::part::Part;
 use super::store::Store;
+use crate::drive::wire;
 use crate::error::Result;
 
 /// The most passes one wake makes before the loop yields.
@@ -52,6 +54,13 @@ async fn send_owned<H: Hosted>(h: &H, buf: Vec<u8>, to: SocketAddr) -> (Result<u
     (r, buf)
 }
 
+/// The ledger every uncharged datagram of the relay passes: the hub endpoint's (fixed at build), or one the loop keeps
+/// when the relay has no hub. A datagram the hub endpoint built is charged by its own gate and is never charged here.
+enum Gate {
+    Hub,
+    Own(Box<Ledger>),
+}
+
 fn poll_opt<F: Future>(slot: &mut Option<Pin<Box<F>>>, cx: &mut Context<'_>) -> Option<F::Output> {
     let f = slot.as_mut()?;
     match f.as_mut().poll(cx) {
@@ -60,6 +69,22 @@ fn poll_opt<F: Future>(slot: &mut Option<Pin<Box<F>>>, cx: &mut Context<'_>) -> 
             Some(v)
         }
         Poll::Pending => None,
+    }
+}
+
+/// Whether the socket is IPv6: a dual-stack one hands IPv4 senders over in mapped form and takes that form back.
+// vertexia: the family is learned from the first datagram received, so a send before any receive on a dual-stack
+// socket outside Linux goes out unmapped; pass the family at `relay::Udp::new` to know it from the start
+#[derive(Default)]
+struct Family(bool);
+
+impl Family {
+    fn heard(&mut self, from: SocketAddr) {
+        self.0 |= from.is_ipv6();
+    }
+
+    fn wire(&self, to: SocketAddr) -> SocketAddr {
+        wire(to, self.0)
     }
 }
 
@@ -83,12 +108,21 @@ where
         inner.part.borrow_mut().restore(h.now(), &kept);
     }
 
+    // vertexia: the table is about 60 KB, built only on a relay without a hub, and empty after a restart (every address
+    // is held afresh); a hub endpoint's ledger replaces it when the relay has one.
+    let mut gate = if inner.hub.borrow().is_none() {
+        let seed = inner.part.borrow_mut().core.ledger_seed()?;
+        Gate::Own(Box::new(Ledger::new(seed)))
+    } else {
+        Gate::Hub
+    };
     let mut driver = Box::pin(inner.part.borrow().drive());
     let mut recv = None;
     let mut rbuf = Some(alloc::vec![0u8; DATAGRAM_BUF]);
     let mut send = None;
     let mut persist: Option<Pin<Box<_>>> = None;
     let mut sleep: Option<(u64, Pin<Box<_>>)> = None;
+    let mut family = Family::default();
 
     poll_fn(|cx| {
         *inner.waker.borrow_mut() = Some(cx.waker().clone());
@@ -115,17 +149,23 @@ where
                 progressed = true;
                 let mut b = b;
                 if let Ok((n, from)) = r {
+                    family.heard(from);
+                    let from = pinc_connect::client::netcheck::canonical(from);
                     let dgram = b.get_mut(..n).unwrap_or_default();
-                    match hub.as_mut() {
-                        Some(hub) => {
-                            if !part.datagram(hub.ep(), now, from, dgram) {
-                                hub.handle_datagram(now, from, dgram);
-                                part.after_datagram(hub.ep(), now, from);
-                            }
+                    if let Some(hub) = hub.as_mut() {
+                        if part.datagram(hub.ep(), now, from, dgram) {
+                            // The relay's own datagram counts as received from its source in the hub endpoint's
+                            // ledger, so the answer to it is held to three times what it sent.
+                            hub.ep_mut().host_received(now, from, n);
+                        } else {
+                            hub.handle_datagram(now, from, dgram);
+                            part.after_datagram(hub.ep(), now, from);
                         }
-                        None => {
-                            part.core.on_datagram(now, from, None, dgram);
+                    } else {
+                        if let Gate::Own(own) = &mut gate {
+                            own.on_receive(from, n as u64);
                         }
+                        part.core.on_datagram(now, from, None, dgram);
                     }
                 }
                 rbuf = Some(b);
@@ -135,10 +175,17 @@ where
                 hub.cycle(&mut part, now);
             }
 
-            if send.is_none()
-                && let Some((to, buf)) = part.core.take_udp()
-            {
-                send = Some(Box::pin(send_owned(h, buf, to)));
+            // Every datagram the relay sends passes the ledger of the endpoint that owns the address: the hub
+            // endpoint's, or the loop's own when the relay has no hub.
+            let next = match (send.is_some(), &mut gate) {
+                (true, _) => None,
+                (false, Gate::Own(own)) => part.core.take_udp(|to, n| own.allow_send(to, n as u64)),
+                (false, Gate::Hub) => hub
+                    .as_mut()
+                    .and_then(|hub| part.core.take_udp(|to, n| hub.ep_mut().host_send(now, to, n))),
+            };
+            if let Some((to, buf)) = next {
+                send = Some(Box::pin(send_owned(h, buf, family.wire(to))));
             }
             if let Some((r, buf)) = poll_opt(&mut send, cx) {
                 progressed = true;
@@ -195,4 +242,20 @@ where
         Poll::Pending
     })
     .await
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, reason = "tests assert")]
+mod tests {
+    use super::*;
+
+    /// After a mapped IPv4 source was received an IPv4 destination goes out mapped; before any receive it goes as given.
+    #[test]
+    fn an_ipv4_destination_is_mapped_once_an_ipv6_source_was_heard() {
+        let v4: SocketAddr = "192.0.2.7:9".parse().unwrap();
+        let mut f = Family::default();
+        assert_eq!(f.wire(v4), v4);
+        f.heard("[::ffff:192.0.2.1]:5".parse().unwrap());
+        assert_eq!(f.wire(v4), "[::ffff:192.0.2.7]:9".parse::<SocketAddr>().unwrap());
+    }
 }

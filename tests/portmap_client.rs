@@ -389,7 +389,7 @@ fn a_renewal_refused_by_a_restarted_gateway_drops_the_mapping() {
     pm.handle_datagram(T0, gw(), &pcp_grant(1000, 4433, 7200));
     pm.handle_timeout(T0 + 3600 * SEC);
     assert!(pcp::decode_request(&sent(&mut pm)[0].1).is_ok(), "the renewal goes out");
-    // the gateway restarted (epoch 3, not 4600) and refuses the renewal: the mapping it lost is not kept
+    // a header-form refusal carries no nonce, so nothing ties it to the renewal: the mapping stays
     let mut b = [0u8; 24];
     let refusal = pcp::Response::Header {
         opcode: pcp::OP_MAP,
@@ -397,6 +397,22 @@ fn a_renewal_refused_by_a_restarted_gateway_drops_the_mapping() {
         lifetime: 30,
         epoch: 3,
     };
+    let n = pcp::encode_response(&refusal, &mut b).unwrap();
+    pm.handle_datagram(T0 + 3600 * SEC, gw(), &b[..n]);
+    assert!(pm.mapped().is_some());
+    // the gateway restarted (epoch 3, not 4600) and refuses the renewal with the request's nonce: the mapping it lost
+    // is not kept
+    let refusal = pcp::Response::Map {
+        result: 8,
+        lifetime: 30,
+        epoch: 3,
+        nonce: NONCE,
+        protocol: pcp::UDP,
+        internal_port: 4433,
+        external_port: 1000,
+        external_ip: EXT.into(),
+    };
+    let mut b = [0u8; 60];
     let n = pcp::encode_response(&refusal, &mut b).unwrap();
     pm.handle_datagram(T0 + 3600 * SEC, gw(), &b[..n]);
     assert_eq!(pm.mapped(), None);

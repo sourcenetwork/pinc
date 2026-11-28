@@ -351,7 +351,8 @@ fn a_signed_sleep_notice_makes_the_following_close_a_suspension() {
             .iter()
             .filter(|t| matches!(t, Trace::SleepAccepted { .. }))
             .count(),
-        2
+        1,
+        "the copy of a notice is not accepted again"
     );
     assert_eq!(fx.r.node_state(&n), NodeState::Open);
     fx.r.carrier_closed(T0 + 2 * SEC, &n, s, &mut fx.s);

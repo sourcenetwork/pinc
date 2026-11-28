@@ -39,7 +39,8 @@ pub(crate) const ADDRS_MAX: usize = 8;
 /// What a restore loaded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Restored {
-    /// Resumption tickets stored.
+    /// Resumption tickets of the input the client store holds after the restore (one replaced or evicted by a later
+    /// one of the same input is not counted).
     pub tickets: usize,
     /// Peers with a remembered handshake round trip.
     pub peers: usize,

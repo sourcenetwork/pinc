@@ -26,7 +26,7 @@ open Pinc.MemInc
 theorem rcKnown_has (e : Env) (n : N) (m : Nat) (best : Rec) (c : ViewEntry) (h : n.members.has m = true) :
     (rcKnown e n m best c).1.members.has m = true := by
   unfold rcKnown
-  by_cases h1 : best.inc / 65536 ≤ c.rc.inc / 65536 <;> by_cases h2 : (best.inc / 65536 == c.rc.inc / 65536 && decide (c.rc.inc ≤ best.inc)) = true <;>
+  by_cases h1 : best.inc / 65536 = c.rc.inc / 65536 <;> by_cases h2 : (best.inc / 65536 == c.rc.inc / 65536 && decide (c.rc.inc ≤ best.inc)) = true <;>
     by_cases h3 : (best.ver != c.rc.ver) = true <;> by_cases h4 : (best.th != c.rc.th) = true <;>
     simp [h1, h2, h3, h4, AMap.has_modify, AMap.has_insert_self, h] <;> repeat' split
   all_goals simp_all [AMap.has_modify, AMap.has_insert_self]

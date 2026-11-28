@@ -57,7 +57,7 @@ Outs == {-1, T2, T1, MX}
 
 CallAdd(total, off, len, out) ==
     /\ <<total, off, len>> \in Calls
-    /\ LET x == Add(r, MX, NR, total, off, len) IN out = x.out /\ r' = x.r
+    /\ LET x == AddT(r, MX, NR, total, off, len) IN out = x.out /\ r' = x.r
 
 Next == \E t \in Totals, o \in Offs, l \in Lens, out \in Outs : CallAdd(t, o, l, out)
 Spec == Init /\ [][Next]_vars
@@ -66,7 +66,7 @@ Spec == Init /\ [][Next]_vars
 \* are the shape the code states
 Complete ==
     /\ \A c \in Calls : c[1] \in Totals /\ c[2] \in Offs /\ c[3] \in Lens
-                        /\ Add(r, MX, NR, c[1], c[2], c[3]).out \in Outs
+                        /\ AddT(r, MX, NR, c[1], c[2], c[3]).out \in Outs
     /\ Len(r.runs) <= NR
     /\ \A i \in DOMAIN r.runs : r.runs[i][1] < r.runs[i][2] /\ r.runs[i][2] <= r.total
     /\ \A i \in 1..(Len(r.runs) - 1) : r.runs[i][2] < r.runs[i + 1][1]

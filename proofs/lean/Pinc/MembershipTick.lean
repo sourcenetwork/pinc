@@ -128,7 +128,7 @@ theorem cwMain_rm (e : Env) (n : N) (now m since : Nat) (l : Lease) (ev : Option
         | some rp =>
           obtain ⟨route, path⟩ := rp
           simp only []
-          by_cases hdl : max (max (since + CONFIRM) (sp0.probeA + sp0.wait)) (now + sp0.wait) ≤ now
+          by_cases hdl : max (max (since + CONFIRM) (sp0.probeA + sp0.wait)) (now + waitB sp0.wait (N.relaySrtt e route)) ≤ now
           · simp only [hr, hdl, ite_true, rewatch_indep]
             exact (key _ (by simp [rewatch_roster])).trans (confirm_rm ..)
           · simp only [hr, hdl, ite_false, rewatch_indep]
@@ -136,7 +136,7 @@ theorem cwMain_rm (e : Env) (n : N) (now m since : Nat) (l : Lease) (ev : Option
       | some tbp =>
         obtain ⟨tb, path⟩ := tbp
         simp only [hb, Option.isNone_some, Bool.false_eq_true, ite_false, rewatch_indep]
-        by_cases hdl : max (max (sp0.since + CONFIRM) (sp0.probeA + sp0.wait)) (tb + sp0.wait) ≤ now
+        by_cases hdl : max (max (sp0.since + CONFIRM) (sp0.probeA + sp0.wait)) (tb + waitB sp0.wait sp0.srttB) ≤ now
         · rw [if_pos hdl]; exact (key _ (rewatch_roster ..)).trans (confirm_rm ..)
         · rw [if_neg hdl]; exact key _ (by simp [scheduleConfirm_roster, rewatch_roster])
     · simp only [show (sp0.since == since) = false by simpa using hsi]

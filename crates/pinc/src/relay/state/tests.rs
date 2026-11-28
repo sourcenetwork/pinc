@@ -93,3 +93,47 @@ fn a_second_session_of_a_node_closes_the_first_carrier_by_its_slot() {
     assert_eq!(core.by_node.get(&node_key(&node)), Some(&second));
     assert_eq!(core.sm.sessions(), 1, "the node holds more than one session");
 }
+
+/// A refusing gate drops the datagram and counts it, keeps the order of the others, and keeps the buffer for the next.
+#[test]
+fn take_udp_drops_and_counts_what_the_gate_refuses_and_keeps_the_order() {
+    let mut core = core(Limits::default());
+    let (a, b, c): (SocketAddr, SocketAddr, SocketAddr) = (
+        "198.51.100.1:1".parse().unwrap(),
+        "198.51.100.2:2".parse().unwrap(),
+        "198.51.100.3:3".parse().unwrap(),
+    );
+    core.queue_udp(a, &[1; 10]);
+    core.queue_udp(b, &[2; 20]);
+    core.queue_udp(c, &[3; 30]);
+    let mut asked = Vec::new();
+    let first = core.take_udp(|to, n| {
+        asked.push((to, n));
+        to != a && to != b
+    });
+    assert_eq!(asked, [(a, 10), (b, 20), (c, 30)]);
+    assert_eq!(first.map(|(to, buf)| (to, buf.len())), Some((c, 30)));
+    assert_eq!(core.counters.datagrams_held, 2);
+    assert_eq!(core.udp_pool.len(), 2, "the refused buffers were not kept");
+    assert!(core.take_udp(|_, _| true).is_none());
+    assert_eq!(core.counters.datagrams_dropped, 0, "a refusal is not a socket failure");
+}
+
+/// A datagram the hub endpoint's gate charged is taken without asking the ledger again; an uncharged one is asked.
+#[test]
+fn take_udp_asks_the_gate_only_for_what_is_not_charged() {
+    let mut core = core(Limits::default());
+    let (a, b): (SocketAddr, SocketAddr) = ("198.51.100.1:1".parse().unwrap(), "198.51.100.2:2".parse().unwrap());
+    core.queue_charged(a, &[1; 10]);
+    let taken = core.take_udp(|_, _| unreachable!("a charged datagram is not charged twice"));
+    assert_eq!(taken.map(|(to, buf)| (to, buf.len())), Some((a, 10)));
+    core.queue_udp(b, &[2; 20]);
+    let mut asked = Vec::new();
+    let taken = core.take_udp(|to, n| {
+        asked.push((to, n));
+        true
+    });
+    assert_eq!(asked, [(b, 20)]);
+    assert_eq!(taken.map(|(to, buf)| (to, buf.len())), Some((b, 20)));
+    assert_eq!(core.counters.datagrams_held, 0);
+}

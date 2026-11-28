@@ -554,6 +554,89 @@ fn an_ended_endpoint_gives_its_table_back_with_every_session_closed() {
     });
 }
 
+/// The send queue is state of the endpoint: a table given back while sessions waited to send carries no mark into the
+/// next endpoint, so a dial on each of those slots sends its first flight at once.
+#[test]
+fn a_table_given_back_with_sessions_queued_to_send_carries_no_send_mark() {
+    use pinc_core::{Endpoint, EndpointConfig};
+    use pinc_crypto::Drbg;
+    use pinc_security::{Env, KeyHandle, LocalIdentity};
+
+    big_stack(|| {
+        let mut net = CoreNet::new(5 * MS_NS);
+        let (a, b) = (net.add(1), net.add(2));
+        let (to, peer, now) = (net.nodes[b].addr, net.nodes[b].node, net.now);
+        // Three dials queue three slots; the first is closed again while it waits.
+        let mut ids = Vec::new();
+        for _ in 0..3 {
+            let r = net.nodes[a].ep.command(
+                now,
+                Command::Connect {
+                    node: peer,
+                    alpn: ALPN_A,
+                    addrs: &[to],
+                    role: Role::Other,
+                },
+            );
+            let Ok(Value::Session(id)) = r.map(|r| r.value) else {
+                panic!("the dial was refused")
+            };
+            ids.push(id);
+        }
+        let _ = net.nodes[a].ep.command(
+            now,
+            Command::Close {
+                session: ids[0],
+                error: 0,
+            },
+        );
+        let TNode {
+            ep,
+            prov,
+            kp,
+            mut prekeys,
+            addr,
+            mut drbg,
+            ..
+        } = net.nodes.swap_remove(a);
+        let table = (*ep).into_slots().expect("every slot has its memory back");
+        let identity = LocalIdentity::from_keypair(&kp, KeyHandle(1)).unwrap();
+        let mut ep2: CoreEp = Endpoint::new(now, prov, Drbg::new(&[9; 32]), identity, EndpointConfig::new(1), table);
+        let mut env = Env {
+            provider: &prov,
+            now,
+            drbg: &mut drbg,
+        };
+        ep2.set_prekey(prekeys.acquire(&mut env).unwrap());
+        assert!(ep2.register_alpn(ALPN_A));
+        assert!(ep2.add_iface(addr).is_some());
+        for _ in 0..3 {
+            let r = ep2.command(
+                now,
+                Command::Connect {
+                    node: peer,
+                    alpn: ALPN_A,
+                    addrs: &[to],
+                    role: Role::Other,
+                },
+            );
+            assert!(
+                matches!(r.map(|r| r.value), Ok(Value::Session(_))),
+                "the dial was refused"
+            );
+        }
+        let mut buf = vec![0u8; 65_536];
+        let mut sent = 0;
+        while ep2.poll_transmit(now, &mut buf).is_some() {
+            sent += 1;
+        }
+        assert!(
+            sent >= 3,
+            "each of three dials on a handed-back table sends its first flight, saw {sent}"
+        );
+    });
+}
+
 /// An endpoint that owns its table holds the memory of the most sessions it has had at once, not of every slot.
 #[test]
 fn an_owned_endpoint_makes_the_memory_of_a_slot_when_the_slot_is_first_taken() {

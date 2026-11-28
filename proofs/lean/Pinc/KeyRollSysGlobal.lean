@@ -51,7 +51,8 @@ structure Inv (P : Params) (S : Sys) : Prop where
     ∃ p ∈ S.net, ∃ r, p.pl = some r ∧ r.answer = false ∧ c.ans.to = .id r.share
   outAns : ∀ n a, (S.nd n).out = some a → a.answer = true → ∃ c ∈ S.stl, c.ans = a ∧ c.n = n
   lastAnsStl : ∀ n sh a, (S.nd n).roll.last = some (sh, a) → ∃ c ∈ S.stl, c.ans = a ∧ c.n = n
-  unsent : ∀ n m, (S.nd n).out = some m → m.answer = false → ∀ p ∈ S.net, p.pl ≠ some m
+  unsent : ∀ n m, (S.nd n).out = some m → m.answer = false → ∀ p ∈ S.net, ∀ r, p.pl = some r → r.answer = false →
+    r.share ≠ m.share
   -- the completions
   compOK : ∀ c ∈ S.comp, (∃ k, c.req = .pub (atomOf c.n k) ∧ k < (S.nd c.n).ctr) ∧ (S.nd c.n).roll.pending.map Msg.share ≠ some c.req
   compUniq : ∀ c ∈ S.comp, ∀ c' ∈ S.comp, c.req = c'.req → c = c'

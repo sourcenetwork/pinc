@@ -146,6 +146,11 @@ impl KeepProbe {
         out
     }
 
+    /// The time the sleep mark of `node` was set and the clock of the notice that set it, if it has one.
+    pub fn sleeper(&self, node: &NodeId) -> Option<(u64, u64)> {
+        self.core.sm.sleeper(node)
+    }
+
     /// How many records the machine holds.
     pub fn record_count(&self) -> usize {
         self.core.sm.record_count()

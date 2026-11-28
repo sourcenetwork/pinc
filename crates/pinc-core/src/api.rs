@@ -127,7 +127,8 @@ pub enum Event {
         /// The stream.
         stream: StreamId,
     },
-    /// A stream has bytes to read.
+    /// A stream has bytes to read or its end: raised when a frame brought bytes or the end; a copy of a frame already
+    /// received raises nothing.
     StreamReadable {
         /// The session.
         session: SessionId,
@@ -781,6 +782,8 @@ pub struct NodeStats {
     /// First flights dropped because the id they name already has four half-open sessions (also counted in
     /// `dropped_in`).
     pub holders_refused: u64,
+    /// First-message starts held because a session already had the same first message (counted in `fragments_held`).
+    pub starts_held: u64,
     /// First handshake messages dropped before admission because their datagram was shorter than the least a first
     /// packet of their type is (also counted in `dropped_in`).
     pub first_too_short: u64,
@@ -791,6 +794,12 @@ pub struct NodeStats {
     /// With today's sizes it stays 0, as a first message of the floor's size pays for its reject three times over; it
     /// guards the bound should a reject ever grow.
     pub stateless_refused: u64,
+    /// Address pairs a full table pushed out. The table holds the pairs sessions hold and the `NP` a command mints
+    /// for one (`NP * (K + 1)` entries at most, checked at construction), so it stays 0.
+    pub pair_evictions: u64,
+    /// Times a session's count of an address pair would have gone below 0 or past its type (the pair stays), or a
+    /// session held or let go of an id that names no pair (an evicted one, or a generation that wrapped). It stays 0.
+    pub pair_refs_unbalanced: u64,
     /// Events waiting for the host now.
     pub events_queued: usize,
     /// Events dropped because the event queue was full.

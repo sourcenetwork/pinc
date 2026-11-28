@@ -16,7 +16,7 @@ TLA_HOME="${TLA_HOME:-$HOME/.local/share/tla}"
 mkdir -p proofs/tla/states/tmp
 export JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS:-} -Djava.io.tmpdir=$PWD/proofs/tla/states/tmp"
 # The trace check reads ndjson with the CommunityModules Json module, which needs a TLC of the same era as the jar.
-TRACE_TLC="$TLA_HOME/tla2tools-2026.11.19.jar"
+TRACE_TLC="$TLA_HOME/tla2tools-2026.11.27.jar"
 COMMUNITY="$TLA_HOME/CommunityModules-deps-202611060952.jar"
 # TLC unpacks its standard modules into the JVM's temporary directory; runs that share one race on those files, so
 # every run gets its own. The JVM's default heap bound is a quarter of the memory it sees, so 3 parallel runs could

@@ -156,8 +156,9 @@ fn frames_have_the_documented_bytes() {
                 share: [7; 32],
                 echo: [0; 8],
                 switch_pn: 0,
+                roll: 0,
             }),
-            [vec![0x3d, 0], vec![7; 32]].concat(),
+            [vec![0x3d, 0], vec![7; 32], vec![0]].concat(),
         ),
         (
             Frame::Rekey(Rekey {
@@ -165,6 +166,7 @@ fn frames_have_the_documented_bytes() {
                 share: [8; 32],
                 echo: [5; 8],
                 switch_pn: 300,
+                roll: 0,
             }),
             [vec![0x3d, 1], vec![8; 32], vec![5; 8], vec![0xac, 0x02]].concat(),
         ),
@@ -596,6 +598,7 @@ fn frame(s: &Spec) -> Frame<'_> {
             share: s.token_share(),
             echo: if s.flag { [3; 8] } else { [0; 8] },
             switch_pn: if s.flag { a } else { 0 },
+            roll: 0,
         }),
         18 => Frame::Datagram {
             data: &s.data,
@@ -723,6 +726,7 @@ fn frame_paths_allocate_nothing() {
             share: [3; 32],
             echo: [4; 8],
             switch_pn: 9,
+            roll: 0,
         }),
         Frame::Datagram {
             data: &data,

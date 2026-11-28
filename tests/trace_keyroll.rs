@@ -269,10 +269,11 @@ impl Run {
         let eid = self.ids.id(K_ECHO, &msg.echo);
         let as_answer = msg.answer != wrong;
         let head = format!(
-            r#""run":{},"n":{n},"ans":{},"zero":{},"share":{sid},"echo":{eid},"spn":{}"#,
+            r#""run":{},"n":{n},"ans":{},"zero":{},"share":{sid},"echo":{eid},"roll":{},"spn":{}"#,
             self.id,
             b(msg.answer),
             b(zero),
+            if msg.answer { 0 } else { msg.roll },
             if as_answer { msg.switch_pn } else { spn }
         );
         if as_answer {
@@ -520,6 +521,12 @@ fn run(rng: &mut SplitMix64, tr: &mut Trace, id: u32) {
             _ => r.forge(rng),
         }
     }
+    // Late copies of every request the run made reach both nodes: a settled or an unreached roll is refused.
+    for msg in r.pool.clone().into_iter().filter(|m| !m.answer).take(6) {
+        for n in 0..2 {
+            r.deliver(tr, n, msg, false, 1 + below(rng, 1000));
+        }
+    }
     // Every run ends with traffic from both nodes.
     r.traffic(rng, tr, 0);
     r.traffic(rng, tr, 1);
@@ -596,25 +603,26 @@ fn edge_numbers() -> Vec<u64> {
 }
 
 fn decode_event(tr: &mut Trace, bytes: &[u8]) {
-    let (res, ans, share, echo, spn) = match Rekey::decode(bytes) {
+    let (res, ans, share, echo, spn, roll) = match Rekey::decode(bytes) {
         Ok(m) => {
             // An accepted body re-encodes to itself.
             let mut buf = [0u8; MAX_REKEY_LEN];
             let n = m.encode(&mut buf).unwrap();
             assert_eq!(&buf[..n], bytes);
-            ("ok", m.answer, m.share.to_vec(), m.echo.to_vec(), m.switch_pn)
+            ("ok", m.answer, m.share.to_vec(), m.echo.to_vec(), m.switch_pn, m.roll)
         }
-        Err(WireError::Unexpected("rekey kind")) => ("kind", false, vec![], vec![], 0),
-        Err(WireError::Unexpected("trailing bytes")) => ("trailing", false, vec![], vec![], 0),
-        Err(_) => ("other", false, vec![], vec![], 0),
+        Err(WireError::Unexpected("rekey kind")) => ("kind", false, vec![], vec![], 0, 0),
+        Err(WireError::Unexpected("trailing bytes")) => ("trailing", false, vec![], vec![], 0, 0),
+        Err(_) => ("other", false, vec![], vec![], 0, 0),
     };
     tr.line(&format!(
-        r#"{{"t":"kr","op":"dec","bytes":{},"res":"{res}","ans":{},"share":{},"echo":{},"sl":{}}}"#,
+        r#"{{"t":"kr","op":"dec","bytes":{},"res":"{res}","ans":{},"share":{},"echo":{},"sl":{},"rl":{}}}"#,
         list(bytes),
         b(ans),
         list(&share),
         list(&echo),
-        limbs(spn)
+        limbs(spn),
+        limbs(roll)
     ));
 }
 
@@ -624,12 +632,14 @@ fn codec_events(rng: &mut SplitMix64, tr: &mut Trace) {
     let mut echo = [0u8; ECHO_LEN];
     rng.fill(&mut echo);
     for answer in [false, true] {
-        for (i, &spn) in edge_numbers().iter().enumerate() {
+        // The number under test is the answer's switch number or the request's roll count.
+        for (i, &num) in edge_numbers().iter().enumerate() {
             let m = Rekey {
                 answer,
                 share,
                 echo: if answer { echo } else { [0; ECHO_LEN] },
-                switch_pn: if answer { spn } else { 0 },
+                switch_pn: if answer { num } else { 0 },
+                roll: if answer { 0 } else { num },
             };
             let mut buf = [0u8; MAX_REKEY_LEN];
             let e = m.encode(&mut buf);
@@ -638,30 +648,31 @@ fn codec_events(rng: &mut SplitMix64, tr: &mut Trace) {
                     assert_eq!(
                         n,
                         if answer {
-                            33 + ECHO_LEN + pinc_wire::varint::encoded_len(spn)
+                            33 + ECHO_LEN + pinc_wire::varint::encoded_len(m.switch_pn)
                         } else {
-                            33
+                            33 + pinc_wire::varint::encoded_len(m.roll)
                         }
                     );
                     assert_eq!(Rekey::decode(&buf[..n]).unwrap(), m, "decode (encode m) = m");
                     ("ok", buf[..n].to_vec())
                 }
                 Err(WireError::VarintOverflow) => {
-                    assert!(answer && spn >= 1 << 63);
+                    assert!(num >= 1 << 63);
                     ("overflow", vec![])
                 }
                 Err(other) => panic!("unexpected {other:?}"),
             };
             tr.line(&format!(
-                r#"{{"t":"kr","op":"enc","ans":{},"share":{},"echo":{},"sl":{},"res":"{res}","bytes":{}}}"#,
+                r#"{{"t":"kr","op":"enc","ans":{},"share":{},"echo":{},"sl":{},"rl":{},"res":"{res}","bytes":{}}}"#,
                 b(answer),
                 list(&share),
                 list(&m.echo),
-                limbs(spn),
+                limbs(m.switch_pn),
+                limbs(m.roll),
                 list(&out)
             ));
             // The refusals are tried on every seventh number and on the largest ones.
-            if res != "ok" || (i % 7 != 0 && spn < 1 << 62) {
+            if res != "ok" || (i % 7 != 0 && num < 1 << 62) {
                 continue;
             }
             // The refusals: every cut, a trailing byte, a changed kind, and a non-minimal switch number.
@@ -682,13 +693,11 @@ fn codec_events(rng: &mut SplitMix64, tr: &mut Trace) {
             let mut flipped = out.clone();
             flipped[0] ^= 1;
             decode_event(tr, &flipped);
-            if answer {
-                let mut padded = out.clone();
-                let last = padded.len() - 1;
-                padded[last] |= 0x80;
-                padded.push(0);
-                decode_event(tr, &padded);
-            }
+            let mut padded = out.clone();
+            let last = padded.len() - 1;
+            padded[last] |= 0x80;
+            padded.push(0);
+            decode_event(tr, &padded);
         }
     }
     // Random bodies of random length.

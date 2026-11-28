@@ -40,7 +40,7 @@ use pinc_crypto::{Aead, IdentityAlg};
 use pinc_wire::{Reader, WireError, Writer};
 
 use crate::credit::{CREDIT_RECORD_LEN, CreditRecord};
-use crate::ids::{AeadSet, ConnId, MAX_CID_LEN, aead_from_tag, aead_tag, alpn_len_ok};
+use crate::ids::{AeadSet, ConnId, MAX_ALPN_LEN, MAX_CID_LEN, aead_from_tag, aead_tag, alpn_len_ok};
 use crate::keys::prekey_hash;
 use crate::tickets::TicketBatch;
 
@@ -114,6 +114,19 @@ pub const fn min_initial_len(form: InitialForm, responder: IdentityAlg) -> usize
         InitialForm::Short => SHORT_INITIAL_MIN,
     };
     if needed > floor { needed } else { floor }
+}
+
+/// The longest first message a responder takes (a full Initial with the longest ids and ALPN; a Hello is shorter): the
+/// room a responder keeps to compare the repeats of its first message against.
+pub const fn max_first_len() -> usize {
+    1 + 1 + 2 * (1 + MAX_CID_LEN) + (1 + MAX_ALPN_LEN) + 1 + 32 + KEM_ENCAPS_KEY_LEN + CREDIT_RECORD_LEN
+}
+
+/// The longest Reply of a responder whose identity is Ed25519 or ECDSA P-256: the message a second candidate of the
+/// reassembly holds beside the first (a post-quantum Reply is longer and keeps one candidate).
+pub const fn classical_reply_len() -> usize {
+    let (a, b) = (reply_len(IdentityAlg::Ed25519), reply_len(IdentityAlg::EcdsaP256));
+    if a > b { a } else { b }
 }
 
 /// The longest message this crate produces: the largest Reply.

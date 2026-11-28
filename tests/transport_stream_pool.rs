@@ -76,7 +76,7 @@ proptest! {
             match op {
                 Op::Open(k) => {
                     match t.on_stream_frame(&mut pool, 4 * k as u64, sent[k], &[], false) {
-                        Ok(()) | Err(StreamError::Exhausted | StreamError::StreamLimit) => {}
+                        Ok(_) | Err(StreamError::Exhausted | StreamError::StreamLimit) => {}
                         Err(e) => prop_assert!(false, "unexpected {e}"),
                     }
                     if t.open_streams() > opened_before {
@@ -86,7 +86,7 @@ proptest! {
                 Op::Frame(k, n) => {
                     let data = vec![1u8; n];
                     match t.on_stream_frame(&mut pool, 4 * k as u64, sent[k], &data, false) {
-                        Ok(()) => sent[k] += n as u64,
+                        Ok(_) => sent[k] += n as u64,
                         Err(StreamError::Exhausted | StreamError::StreamLimit
                             | StreamError::FlowControl | StreamError::Fragmented) => {}
                         Err(e) => prop_assert!(false, "unexpected {e}"),

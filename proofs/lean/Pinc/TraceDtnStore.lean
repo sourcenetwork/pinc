@@ -134,7 +134,8 @@ def replayEvent (j : J) (w : W) : Except String W := do
     bookSeen j r.B
     pure { w with book := r.B, nx := r.nx }
   | "cu_ack" =>
-    let o := onAck w.book w.cl (← natF j "b") (← natF j "c") (← natF j "o") (← boolF j "v")
+    -- The trace's book is node 1's; `p` is the node the ack is addressed to.
+    let o := onAckTo 1 (← natF j "p") w.book w.cl (← natF j "b") (← natF j "c") (← natF j "o") (← boolF j "v")
     cuSeen j o
     pure { w with book := o.B, cl := o.L }
   | "cu_del" =>

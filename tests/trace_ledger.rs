@@ -1,9 +1,9 @@
 //! Trace generation for the amplification ledger: scripted and seeded runs of the real `Ledger` of `pinc-core`,
 //! recorded as ndjson (`ledger.ndjson`) for the TLA+ trace check (`TraceLedger.tla`).
 //!
-//! A run starts with a fresh ledger and makes calls to `on_receive`, `open` and `allow_send`: a table filled past its
-//! capacity, held and validated addresses, zero sizes, counters at `u64::MAX`, and 16 seeded runs (4 of them over more
-//! addresses than the table holds). Every call is written with its answer, the length of the table and the entry of
+//! A run starts with a fresh ledger and makes calls to `on_receive`, `open`, `validate` and `allow_send`: a table
+//! filled past its capacity, held and validated addresses, zero sizes, counters at `u64::MAX`, and 16 seeded runs (4 of
+//! them over more addresses than the table holds). Every call is written with its answer, the length of the table and the entry of
 //! the address called and of a second address; a `u64` is written as four 16-bit limbs (TLC cannot read a number above
 //! 2^31) and an address as its id.
 //!
@@ -31,6 +31,7 @@ use pinc_tests::SplitMix64;
 enum Op {
     Rx,
     Open,
+    Valid,
     Tx,
 }
 
@@ -93,9 +94,6 @@ impl Naive {
         if let Some(i) = self.find(a) {
             let e = &mut self.v[i].1;
             e.rx = e.rx.saturating_add(n);
-            if e.tx > 0 {
-                e.validated = true;
-            }
             return !e.validated;
         }
         self.insert(
@@ -123,6 +121,12 @@ impl Naive {
         }
     }
 
+    fn validate(&mut self, a: SocketAddr) {
+        if let Some(i) = self.find(a) {
+            self.v[i].1.validated = true;
+        }
+    }
+
     fn allow_send(&mut self, a: SocketAddr, n: u64) -> bool {
         let charge = n.saturating_add(DATAGRAM_OVERHEAD);
         let Some(i) = self.find(a) else {
@@ -141,10 +145,13 @@ impl Naive {
             e.tx = e.tx.saturating_add(charge);
             return true;
         }
-        if u128::from(e.tx) + u128::from(charge) > u128::from(e.rx) * u128::from(FACTOR) {
+        let Some(tx) = e.tx.checked_add(charge) else {
+            return false;
+        };
+        if u128::from(tx) > u128::from(e.rx) * u128::from(FACTOR) {
             return false;
         }
-        e.tx = e.tx.saturating_add(charge);
+        e.tx = tx;
         true
     }
 }
@@ -195,6 +202,11 @@ fn run(seed: u64, calls: &[Call], out: &mut String, st: &mut Stats) {
                 ledger.open(a);
                 naive.open(a);
                 (false, false, "open", 0)
+            }
+            Op::Valid => {
+                ledger.validate(a);
+                naive.validate(a);
+                (false, false, "valid", 0)
             }
             Op::Tx => (ledger.allow_send(a, n), naive.allow_send(a, n), "tx", n),
         };
@@ -257,6 +269,9 @@ fn tx(x: u32, n: u64) -> Call {
 fn open(x: u32) -> Call {
     (Op::Open, x, 0)
 }
+fn valid(x: u32) -> Call {
+    (Op::Valid, x, 0)
+}
 
 /// 1: fill and evict.
 fn fill_and_evict() -> Vec<Call> {
@@ -275,6 +290,10 @@ fn held_and_validated() -> Vec<Call> {
         tx(1, 0),
         rx(1, 1),
         tx(1, 100_000),
+        valid(1),
+        tx(1, 100_000),
+        valid(9),
+        tx(9, 100),
         rx(2, 10),
         rx(2, 10),
         tx(2, 32),
@@ -290,7 +309,7 @@ fn held_and_validated() -> Vec<Call> {
     ]
 }
 
-/// 6: saturation.
+/// 6: saturation, and the end of the counter of an entry not validated.
 fn saturation() -> Vec<Call> {
     let m = u64::MAX;
     vec![
@@ -305,6 +324,14 @@ fn saturation() -> Vec<Call> {
         rx(9, m / 3 + 1),
         tx(9, m - 28),
         tx(9, 0),
+        // the counter's end: a charge that would pass it is held, one that reaches it exactly is charged
+        rx(10, m),
+        tx(10, m - 56),
+        tx(10, 0),
+        tx(10, 0),
+        rx(11, m),
+        tx(11, m - 38),
+        tx(11, 0),
     ]
 }
 
@@ -315,9 +342,10 @@ fn seeded(seed: u64, ids: u64) -> Vec<Call> {
     (0..180)
         .map(|_| {
             let op = match rng.next_u64() % 100 {
-                0..45 => Op::Rx,
-                45..90 => Op::Tx,
-                _ => Op::Open,
+                0..40 => Op::Rx,
+                40..78 => Op::Tx,
+                78..88 => Op::Open,
+                _ => Op::Valid,
             };
             let x = 1 + (rng.next_u64() % ids) as u32;
             let n = if rng.next_u64().is_multiple_of(16) {

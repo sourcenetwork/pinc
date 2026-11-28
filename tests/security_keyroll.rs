@@ -42,16 +42,18 @@ fn rekey_bodies_encode_and_decode_exactly() {
         share: [7; 32],
         echo: [0; 8],
         switch_pn: 0,
+        roll: 0,
     };
     let ans = Rekey {
         answer: true,
         share: [9; 32],
         echo: [3; 8],
         switch_pn: 1 << 40,
+        roll: 0,
     };
     let mut buf = [0u8; MAX_REKEY_LEN];
     let n = req.encode(&mut buf).unwrap();
-    assert_eq!((n, buf[0]), (33, 0));
+    assert_eq!((n, buf[0]), (34, 0));
     assert_eq!(Rekey::decode(&buf[..n]).unwrap(), req);
     let n = ans.encode(&mut buf).unwrap();
     assert_eq!((n, buf[0]), (1 + 32 + 8 + 6, 1), "2^40 takes six varint bytes");
@@ -225,6 +227,7 @@ fn a_request_with_a_weak_share_is_refused() {
         share: [0; 32],
         echo: [0; 8],
         switch_pn: 0,
+        roll: 0,
     };
     assert_eq!(
         b.on_request(&mut env(&p, &mut db), &weak, 1).unwrap_err(),
@@ -322,3 +325,110 @@ fn rolling_allocates_nothing() {
 }
 
 pinc_tests::install_counting_allocator!();
+
+#[test]
+fn a_request_carries_its_roll_number_on_the_wire() {
+    let mut buf = [0u8; MAX_REKEY_LEN];
+    for (roll, len) in [(0u64, 34), (63, 34), (64, 34), (127, 34), (128, 35), (1 << 62, 42)] {
+        let req = Rekey {
+            answer: false,
+            share: [7; 32],
+            echo: [0; 8],
+            switch_pn: 0,
+            roll,
+        };
+        let n = req.encode(&mut buf).unwrap();
+        assert_eq!(n, len, "roll {roll}");
+        assert_eq!(Rekey::decode(&buf[..n]).unwrap(), req);
+        assert!(Rekey::decode(&buf[..=n]).is_err(), "a trailing byte is refused");
+        assert!(n <= MAX_REKEY_LEN);
+    }
+    let req = Rekey {
+        answer: false,
+        share: [7; 32],
+        echo: [0; 8],
+        switch_pn: 0,
+        roll: 1 << 63,
+    };
+    assert!(req.encode(&mut buf).is_err(), "2^63 does not fit a varint");
+}
+
+#[test]
+fn a_late_copy_of_an_old_request_changes_nothing() {
+    let p = Software;
+    let mut d = Drbg::new(&[5; 32]);
+    let mut e = env(&p, &mut d);
+    let (mut dialer, mut acceptor) = (Roll::new(true), Roll::new(false));
+    let r1 = dialer.start(&mut e).unwrap();
+    let a1 = acceptor.on_request(&mut e, &r1, 10).unwrap();
+    dialer.on_answer(&e, &a1.answer).unwrap();
+    let r2 = dialer.start(&mut e).unwrap();
+    let a2 = acceptor.on_request(&mut e, &r2, 20).unwrap();
+    dialer.on_answer(&e, &a2.answer).unwrap();
+    assert_eq!((r1.roll, r2.roll, acceptor.rolls()), (0, 1, 2));
+    // The late copy of r1 is refused; the late copy of r2 (the last answered) gets the same answer and no key.
+    assert_eq!(
+        acceptor.on_request(&mut e, &r1, 30).unwrap_err(),
+        Failure::UnexpectedMessage
+    );
+    let again = acceptor.on_request(&mut e, &r2, 30).unwrap();
+    assert!(again.dh.is_none());
+    assert_eq!(again.answer, a2.answer);
+    assert_eq!(acceptor.rolls(), 2);
+}
+
+#[test]
+fn crossing_requests_roll_each_side_once_in_either_order() {
+    let p = Software;
+    let mut d = Drbg::new(&[6; 32]);
+    let mut e = env(&p, &mut d);
+    // Both ask at roll n: the dialer's request wins, the acceptor drops its own and answers.
+    let (mut dialer, mut acceptor) = (Roll::new(true), Roll::new(false));
+    let rd = dialer.start(&mut e).unwrap();
+    let ra = acceptor.start(&mut e).unwrap();
+    assert_eq!(
+        dialer.on_request(&mut e, &ra, 1).unwrap_err(),
+        Failure::UnexpectedMessage
+    );
+    let ans = acceptor.on_request(&mut e, &rd, 2).unwrap();
+    let theirs = ans.dh.unwrap();
+    let mine = dialer.on_answer(&e, &ans.answer).unwrap();
+    assert_eq!(mine.dh.expose(), theirs.expose());
+    assert_eq!((dialer.rolls(), acceptor.rolls()), (1, 1));
+    // The acceptor asks, the dialer answers, then asks itself before that answer arrives.
+    let ra = acceptor.start(&mut e).unwrap();
+    let a1 = dialer.on_request(&mut e, &ra, 3).unwrap();
+    let dialer_first = *a1.dh.unwrap().expose();
+    let rd = dialer.start(&mut e).unwrap();
+    assert_eq!(rd.roll, 2);
+    // The request written after the answer is refused until the answer arrives; the acceptor's own stays out.
+    assert_eq!(
+        acceptor.on_request(&mut e, &rd, 4).unwrap_err(),
+        Failure::UnexpectedMessage
+    );
+    assert_eq!(acceptor.pending(), Some(ra));
+    let done = acceptor.on_answer(&e, &a1.answer).unwrap();
+    assert_eq!(*done.dh.expose(), dialer_first);
+    // The repeated request is now answered, and the second rolls agree too.
+    let a2 = acceptor.on_request(&mut e, &rd, 5).unwrap();
+    let second = dialer.on_answer(&e, &a2.answer).unwrap();
+    assert_eq!(second.dh.expose(), a2.dh.unwrap().expose());
+    assert_eq!((dialer.rolls(), acceptor.rolls()), (3, 3));
+}
+
+#[test]
+fn a_repeated_request_with_the_answerers_own_request_out_gets_the_same_answer() {
+    let p = Software;
+    let mut d = Drbg::new(&[7; 32]);
+    let mut e = env(&p, &mut d);
+    let (mut dialer, mut acceptor) = (Roll::new(true), Roll::new(false));
+    let rd = dialer.start(&mut e).unwrap();
+    let a1 = acceptor.on_request(&mut e, &rd, 1).unwrap();
+    // The answer is lost; the acceptor starts a request of its own and the dialer's request is repeated.
+    let ra = acceptor.start(&mut e).unwrap();
+    let a2 = acceptor.on_request(&mut e, &rd, 1).unwrap();
+    assert!(a2.dh.is_none());
+    assert_eq!(a2.answer, a1.answer);
+    assert_eq!(acceptor.pending(), Some(ra), "its own request stays out");
+    assert_eq!(acceptor.rolls(), 1);
+}

@@ -56,26 +56,25 @@ def _root_.Pinc.KeyRoll.Roll.completed (r : Roll) : Roll := { r with st := .idle
 
 /-- The answer a node `me` with counter `c` and next number `spn` gives to a request with share `sh` of atom `b`. -/
 def answerTo (me : Bool) (c spn : Nat) (sh : T) (b : Atom) : Msg :=
-  ⟨true, .pub (atomOf me c), spn, .id sh, .bound (.id sh) (Dh (atomOf me c) b)⟩
+  ⟨true, .pub (atomOf me c), spn, .id sh, .bound (.id sh) (Dh (atomOf me c) b), 0⟩
 
 theorem isIdle_st (r : Roll) : r.isIdle = true ↔ r.st = .idle := by
   unfold Roll.isIdle; cases r.st <;> simp
 
 theorem onRequest_fresh (r : Roll) (req : Msg) (spn : Nat) (a b : Atom) (hk : req.answer = false)
-    (hn : r.isDup req = false) (hc : (!r.isIdle && r.dialer) = false) (hsh : req.share = .pub b) :
+    (hn : r.isDup req = false) (hc : r.blocks req = false) (hsh : req.share = .pub b) :
     r.onRequest req spn (some a) =
-      (r.answeredWith req.share ⟨true, .pub a, spn, .id req.share, .bound (.id req.share) (Dh a b)⟩,
-       .ok (⟨true, .pub a, spn, .id req.share, .bound (.id req.share) (Dh a b)⟩,
+      (r.answeredWith req.share ⟨true, .pub a, spn, .id req.share, .bound (.id req.share) (Dh a b), 0⟩,
+       .ok (⟨true, .pub a, spn, .id req.share, .bound (.id req.share) (Dh a b), 0⟩,
          some (.bound (.id req.share) (Dh a b)))) := by
   by_cases hi : r.isIdle = true
   · have := (isIdle_st r).1 hi
     simp [Roll.onRequest, Roll.answeredWith, hk, hn, hc, hsh, dhOf, hi, this]
   · have hi' : r.isIdle = false := by simpa using hi
-    have hd : r.dialer = false := by simpa [hi'] using hc
-    simp [Roll.onRequest, Roll.answeredWith, hk, hn, hsh, dhOf, hi', hd]
+    simp [Roll.onRequest, Roll.answeredWith, hk, hn, hc, hsh, dhOf, hi']
 
 theorem onRequest_busy (r : Roll) (req : Msg) (spn : Nat) (fresh : Option Atom) (hk : req.answer = false)
-    (hn : r.isDup req = false) (hc : (!r.isIdle && r.dialer) = true) :
+    (hn : r.isDup req = false) (hc : r.blocks req = true) :
     r.onRequest req spn fresh = (r, .error .unexpected) := by
   simp [Roll.onRequest, hk, hn, hc]
 
@@ -109,12 +108,12 @@ theorem onAnswer_ok_st (r : Roll) (a : Msg) (c : T × Nat) (h : (r.onAnswer a).2
 
 /-- Whatever `onRequest` does to a request that is not an answer, it does one of these three things. -/
 theorem onRequest_split (r : Roll) (req : Msg) (hk : req.answer = false) :
-    r.isDup req = true ∨ (r.isDup req = false ∧ (!r.isIdle && r.dialer) = true) ∨
-      (r.isDup req = false ∧ (!r.isIdle && r.dialer) = false) := by
+    r.isDup req = true ∨ (r.isDup req = false ∧ r.blocks req = true) ∨
+      (r.isDup req = false ∧ r.blocks req = false) := by
   by_cases h1 : r.isDup req = true
   · exact Or.inl h1
   · have h1' : r.isDup req = false := by simpa using h1
-    by_cases h2 : (!r.isIdle && r.dialer) = true
+    by_cases h2 : r.blocks req = true
     · exact Or.inr (Or.inl ⟨h1', h2⟩)
     · exact Or.inr (Or.inr ⟨h1', by simpa using h2⟩)
 
@@ -132,7 +131,8 @@ theorem isDup_iff (r : Roll) (req : Msg) :
   · rintro ⟨ans, h⟩; simp [Roll.isDup, h]
 
 theorem start_spec (r : Roll) (a : Atom) (h : r.isIdle = true) :
-    (r.start (some a)).1 = { r with st := .req a (Msg.req (.pub a)) } ∧ (r.start (some a)).2 = .ok (Msg.req (.pub a)) :=
+    (r.start (some a)).1 = { r with st := .req a (Msg.req (.pub a) r.rolls) } ∧
+      (r.start (some a)).2 = .ok (Msg.req (.pub a) r.rolls) :=
   ⟨by simp [Roll.start, h], by simp [Roll.start, h]⟩
 
 /-! ## `rekeyRx`, case by case -/
@@ -180,13 +180,13 @@ theorem rekeyRx_dup (s : Node) (m : Msg) (me : Bool) (lvl : Nat) (hm : m.answer 
   simp [rekeyRx, hm, hg, this]
 
 theorem rekeyRx_busy (s : Node) (m : Msg) (me : Bool) (lvl : Nat) (hm : m.answer = false)
-    (hg : gated s m = false) (hn : s.roll.isDup m = false) (hc : (!s.roll.isIdle && s.roll.dialer) = true) :
+    (hg : gated s m = false) (hn : s.roll.isDup m = false) (hc : s.roll.blocks m = true) :
     rekeyRx s m me lvl = ⟨s, none, none⟩ := by
   have := onRequest_busy s.roll m s.npn (some (atomOf me s.ctr)) hm hn hc
   simp [rekeyRx, hm, hg, this]
 
 theorem rekeyRx_stage (s : Node) (m : Msg) (me : Bool) (lvl : Nat) (b : Atom) (hm : m.answer = false)
-    (hg : gated s m = false) (hn : s.roll.isDup m = false) (hc : (!s.roll.isIdle && s.roll.dialer) = false)
+    (hg : gated s m = false) (hn : s.roll.isDup m = false) (hc : s.roll.blocks m = false)
     (hsh : m.share = .pub b) :
     rekeyRx s m me lvl =
       ⟨s.staged (s.roll.answeredWith m.share (answerTo me s.ctr s.npn m.share b)) (answerTo me s.ctr s.npn m.share b)

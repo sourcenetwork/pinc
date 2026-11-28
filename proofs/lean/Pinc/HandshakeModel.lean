@@ -343,20 +343,26 @@ def FreshFrom (sl : List Slot) : List Nat → Option Term
   | [] => none
   | c :: r => if StoredIn sl (tidT c) then FreshFrom sl r else some (tidT c)
 
-/-- One ticket of issue_batch. -/
+/-- One ticket of issue_batch: whether the draw succeeded, whether the batch ends here (no slot, or only one of the
+batch's own), the slots, the id stored and the slot it went to. -/
 structure One where
   ok : Bool
+  stop : Bool
   sl : List Slot
   tid : Option Term
+  idx : Option Nat
 
-def IssueOne (sl : List Slot) (c : List Nat) (rs cr : Term) (peer : Nat) (al ad : Term) : One :=
+/-- `mine` holds the slots of the batch's earlier tickets, the newest and unexpired, so the victim is one of them only
+when the store is full of the batch (or none when it has no slot): the batch then ends and stores nothing more. -/
+def IssueOne (sl : List Slot) (c : List Nat) (rs cr : Term) (peer : Nat) (al ad : Term) (mine : List Nat) : One :=
   match FreshFrom sl c with
-  | none => ⟨false, sl, none⟩
+  | none => ⟨false, false, sl, none, none⟩
   | some tid =>
     let slot : Slot := { occ := true, tid := tid, psk := psk rs tid cr, peer := peer, al := al, ad := ad, cr := cr,
                          exp := false, stamp := Stamp sl }
-    let v := Victim sl
-    ⟨true, Put sl v slot, if v = none then none else some tid⟩
+    match Victim sl with
+    | none => ⟨true, true, sl, none, none⟩
+    | some v => if v ∈ mine then ⟨true, true, sl, none, none⟩ else ⟨true, false, Put sl (some v) slot, some tid, some v⟩
 
 /-- The result of issue_batch: success, the slots, the ids of the tickets that did get stored. -/
 structure Iss where
@@ -365,15 +371,18 @@ structure Iss where
   tids : List Term
 
 /-- issue_batch: `cs` holds the draws of each ticket asked for. -/
-def IssueAll (sl : List Slot) (rs cr : Term) (peer : Nat) (al ad : Term) (tids : List Term) : List (List Nat) → Iss
+def IssueAll (sl : List Slot) (rs cr : Term) (peer : Nat) (al ad : Term) (tids : List Term) (mine : List Nat) :
+    List (List Nat) → Iss
   | [] => ⟨true, sl, tids⟩
   | c :: cs =>
-    let r := IssueOne sl c rs cr peer al ad
+    let r := IssueOne sl c rs cr peer al ad mine
     if !r.ok then ⟨false, r.sl, tids⟩
-    else IssueAll r.sl rs cr peer al ad (match r.tid with | none => tids | some t => tids ++ [t]) cs
+    else if r.stop then ⟨true, r.sl, tids⟩
+    else IssueAll r.sl rs cr peer al ad (match r.tid with | none => tids | some t => tids ++ [t])
+      (match r.idx with | none => mine | some v => v :: mine) cs
 
 def Issue (sl : List Slot) (cs : List (List Nat)) (rs cr : Term) (peer : Nat) (al ad : Term) : Iss :=
-  IssueAll sl rs cr peer al ad [] cs
+  IssueAll sl rs cr peer al ad [] [] cs
 
 /-- The tickets an issue produced, for the ledger. -/
 def IssuedOf (tids : List Term) (rs cr : Term) (peer : Nat) (al ad : Term) : List Tk :=
@@ -729,7 +738,8 @@ def rInitSt (st : RState) (n k : Nat) (m : Msg) : RState :=
             al := m.al, ad := rAd n m, dc := m.dc, sc := m.sc, pcr := m.cr }
 
 /-- Responder::on_initial for the session `(n, k)`. The bytes of a resumed responder count whether or not the Reply
-goes out again. -/
+goes out again. The same Initial while its Reply waits for the signature is taken and sends nothing: the signed Reply
+answers it. -/
 def RInitial (st : RState) (n k : Nat) (sto : Store) (m : Msg) : RRes :=
   let sp := st.spent + m.len
   let st1 : RState := { st with spent := sp }
@@ -741,6 +751,7 @@ def RInitial (st : RState) (n k : Nat) (sto : Store) (m : Msg) : RRes :=
       (if st.reply.len ≤ 3 * m.len ∧ sp ≤ LB then ROk { st1 with nre := st1.nre + 1 } [st.reply] [] sto
        else { st := st1, err := .drop, sto := sto })
      else RDrop st sto)
+  else if st.ph = .sign ∧ st.th0 = rT0 m then ROk st [] [] sto
   else if st.ph ≠ .idle then RDrop st sto
   else if m.ver ≠ ok then RFatal st sto
   else if ¬ Served m.al then RFatal st sto
@@ -810,6 +821,12 @@ def rhUsable (sto : Store) (m : Msg) : Prop :=
   (rhI0 sto m).isSome = true ∧ (rhSlot sto m).exp = false ∧ (rhSlot sto m).al = m.al ∧ (rhSlot sto m).ad = m.ad ∧
     binder (rhSlot sto m).psk (rhThh m) = m.binder
 instance (sto : Store) (m : Msg) : Decidable (rhUsable sto m) := by unfold rhUsable; infer_instance
+/-- A live ticket that fits the Hello but whose binder does not verify: the Hello proved nothing
+(`Failure::Authentication`, which the screen drops as well), so it gets no answer and nothing changes. -/
+def rhBadBinder (sto : Store) (m : Msg) : Prop :=
+  (rhI0 sto m).isSome = true ∧ (rhSlot sto m).exp = false ∧ (rhSlot sto m).al = m.al ∧ (rhSlot sto m).ad = m.ad ∧
+    binder (rhSlot sto m).psk (rhThh m) ≠ m.binder
+instance (sto : Store) (m : Msg) : Decidable (rhBadBinder sto m) := by unfold rhBadBinder; infer_instance
 def rhThr (n k : Nat) (m : Msg) : Term := thR (rhThh m) m.binder (RCid n k) (pub (ry n k)) (RCr n)
 def rhCk2 (n k : Nat) (sto : Store) (m : Msg) : Term :=
   ck2 (ck1r (ckpsk (rhSlot sto m).psk) (Dh (ry n k) (atomOf m.e))) (rhThr n k m)
@@ -842,6 +859,7 @@ def RHello (st : RState) (n k : Nat) (sto : Store) (m : Msg) (cs : List (List Na
   else if st.ph ≠ .idle then RDrop st sto
   else if m.ver ≠ ok then RFatal st sto
   else if ¬ Served m.al then RFatal st sto
+  else if rhBadBinder sto m then RDrop st sto
   else if ¬ rhUsable sto m then ROk st [{ ty := .rrej, echo := rhThh m }] [] (rhStoRej sto m)
   else if (rhIs n k sto m cs).ok = false then
     { st := { st with ph := .failed }, ev := [.failed], err := .fatal, sto := rhSto1 n k sto m cs,

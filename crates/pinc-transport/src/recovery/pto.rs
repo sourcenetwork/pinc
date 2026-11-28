@@ -54,7 +54,7 @@ impl<const N: usize> Recovery<N> {
 
     fn pto_deadline(&self) -> Option<u64> {
         let newest = self.ring.newest_in_flight_time()?;
-        Some(newest.max(self.last_pto).saturating_add(self.pto_duration()))
+        super::deadline_after(newest.max(self.last_pto), self.pto_duration())
     }
 
     /// The next time [`Self::on_timeout`] must run: the earlier of the loss timer and the probe timer.
@@ -108,5 +108,68 @@ impl<const N: usize> Recovery<N> {
         }
         let newest = self.lose_at(idx, now, s, on_event);
         self.settle_losses(now, newest, s);
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, reason = "tests assert")]
+mod tests {
+    use super::super::{FrameRef, FrameRefs, Sent};
+    use super::*;
+
+    /// The deadline is `None` (never), not `u64::MAX`, when the probe timeout passes the end of the clock, so a
+    /// timer that fired is not due again at once.
+    #[test]
+    fn the_probe_timer_never_saturates_at_the_end_of_the_clock() {
+        let mut rec = Recovery::<48>::new(1200);
+        let start = u64::MAX - SECOND / 2;
+        for _ in 0..3 {
+            let pn = rec.next_pn();
+            let mut frames = FrameRefs::new();
+            frames
+                .push(FrameRef::Stream {
+                    id: 0,
+                    offset: pn * 100,
+                    len: 100,
+                    fin: false,
+                })
+                .unwrap();
+            rec.on_packet_sent(Sent {
+                pn,
+                time: start,
+                size: 100,
+                path: 0,
+                is_repair: false,
+                is_mtu_probe: false,
+                frames,
+            })
+            .unwrap();
+        }
+        assert_eq!(rec.next_timeout(), None, "the deadline passes the end of the clock");
+        // A probe timer that is due before the end still fires, and the next one is later or never.
+        let before = start - SECOND;
+        let mut rec2 = Recovery::<48>::new(1200);
+        let pn = rec2.next_pn();
+        let mut frames = FrameRefs::new();
+        frames
+            .push(FrameRef::Stream {
+                id: 0,
+                offset: 0,
+                len: 100,
+                fin: false,
+            })
+            .unwrap();
+        rec2.on_packet_sent(Sent {
+            pn,
+            time: before,
+            size: 100,
+            path: 0,
+            is_repair: false,
+            is_mtu_probe: false,
+            frames,
+        })
+        .unwrap();
+        let t = rec2.next_timeout().unwrap();
+        assert!(t > before && t < u64::MAX);
     }
 }

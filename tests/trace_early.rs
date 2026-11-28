@@ -448,6 +448,7 @@ fn established_only() -> Vec<(&'static str, Vec<u8>)> {
         share: [1; 32],
         echo: [0; pinc_security::keyroll::ECHO_LEN],
         switch_pn: 0,
+        roll: 0,
     };
     vec![
         ("ACK", ack),

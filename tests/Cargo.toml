@@ -245,6 +245,14 @@ name = "transport_rules"
 path = "transport_rules.rs"
 
 [[test]]
+name = "transport_fan"
+path = "transport_fan.rs"
+
+[[test]]
+name = "transport_reply_frag"
+path = "transport_reply_frag.rs"
+
+[[test]]
 name = "transport_dgram_size"
 path = "transport_dgram_size.rs"
 
@@ -1302,6 +1310,10 @@ name = "mbt_reasm"
 path = "mbt_reasm.rs"
 
 [[test]]
+name = "reasm_agrees"
+path = "reasm_agrees.rs"
+
+[[test]]
 name = "trace_standby"
 path = "trace_standby.rs"
 
@@ -1622,6 +1634,10 @@ name = "mbt_endpoint"
 path = "mbt_endpoint.rs"
 
 [[test]]
+name = "node_sets_stream"
+path = "node_sets_stream.rs"
+
+[[test]]
 name = "mbt_node_sets"
 path = "mbt_node_sets.rs"
 
@@ -1857,3 +1873,7 @@ path = "portmap_noalloc.rs"
 [[test]]
 name = "keystore_noalloc"
 path = "keystore_noalloc.rs"
+
+[[test]]
+name = "sim_connect_reach"
+path = "sim_connect_reach.rs"

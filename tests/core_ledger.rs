@@ -13,7 +13,8 @@ use std::cell::Cell;
 use std::net::SocketAddr;
 use std::rc::Rc;
 
-use pinc_core::{Answer, Command, LedgerEntry, Query, Role, SessionId};
+use pinc_core::{Answer, Command, Event, LedgerEntry, Query, Role, SessionId};
+use pinc_crypto::IdentityAlg;
 use pinc_tests::*;
 
 fn ledger_of(net: &mut CoreNet, node: usize, a: SocketAddr) -> Option<LedgerEntry> {
@@ -156,8 +157,11 @@ fn a_client_that_moves_mid_transfer_gets_its_size_probe_on_the_new_path() {
     });
 }
 
+/// The connection holds a moved client's new address to its own budget (rule B), which is stricter than the ledger's,
+/// so the ledger refuses nothing here: the server stops by itself at three times what it received, and goes on once the
+/// client answers the challenge. The ledger's own refusal is covered by `core_defense.rs` and the ledger unit tests.
 #[test]
-fn the_ledger_refuses_what_a_server_builds_past_three_times_what_a_moved_client_sent_and_counts_it() {
+fn a_server_sends_a_moved_client_at_most_three_times_what_it_sent_until_the_challenge_is_answered() {
     big_stack(|| {
         let mut net = CoreNet::new(5 * MS_NS);
         let (s, c) = (net.add(1), net.add(2));
@@ -203,7 +207,11 @@ fn the_ledger_refuses_what_a_server_builds_past_three_times_what_a_moved_client_
             .filter(|t| t.2 == outside)
             .map(|t| t.3 as u64 + 28)
             .sum();
-        assert!(ns.held_by_ledger > held0, "the ledger refused nothing: {e:?}");
+        assert_eq!(
+            ns.held_by_ledger, held0,
+            "the connection stops before the ledger refuses anything: {e:?}"
+        );
+        assert!(to_new > 0, "nothing was sent to the new address: {e:?}");
         assert_eq!(ns.datagrams_out - out0, left, "a refused datagram never counts as out");
         assert_eq!(to_new, e.tx, "every datagram that left was charged");
         assert!(e.tx <= 3 * e.rx, "charged {} for {} received", e.tx, e.rx);
@@ -216,5 +224,114 @@ fn the_ledger_refuses_what_a_server_builds_past_three_times_what_a_moved_client_
             w.nodes[c].read.values().any(|v| v.len() >= size)
         });
         assert!(done, "the transfer did not complete once the client answered");
+    });
+}
+
+/// A client that resumes with early data, from its own address or from a new one (`moved`), and the server's answer of
+/// `size` bytes, many times the Hello: the time from the dial to the client holding every byte, and the datagrams the
+/// server's ledger held back meanwhile.
+fn resumed_answer(moved: bool, size: usize) -> (u64, u64) {
+    let mut net = CoreNet::new(5 * MS_NS);
+    let (s, c) = (net.add(1), net.add(2));
+    let (sa, _) = net.connect_pair(c, s, ALPN_A, Role::Other);
+    net.run_for(SEC_NS);
+    let now = net.now;
+    net.nodes[c].cmd(now, Command::Close { session: sa, error: 0 }).unwrap();
+    net.run_for(SEC_NS);
+    if moved {
+        net.nat = Some((net.nodes[c].addr, "10.7.7.7:5555".parse().unwrap()));
+    }
+    net.nodes[c].read.clear();
+    net.nodes[c].write_on_connect = Some(vec![1u8; 40]);
+    let held0 = net.nodes[s].ep.node_stats().held_by_ledger;
+    let incoming0 = net.nodes[s].count(|e| matches!(e, Event::Incoming { .. }));
+    let (peer, to, t0) = (net.nodes[s].node, net.nodes[s].addr, net.now);
+    net.nodes[c].connect(t0, peer, ALPN_A, to, Role::Other).unwrap();
+    let payload = vec![7u8; size];
+    let mut answer: Option<(SessionId, u64, usize)> = None;
+    let done = net.run(t0 + 30 * SEC_NS, |n| {
+        if answer.is_none() && n.nodes[s].count(|e| matches!(e, Event::Incoming { .. })) > incoming0 {
+            let sb = n.nodes[s]
+                .events
+                .iter()
+                .rev()
+                .find_map(|(_, e)| {
+                    if let Event::Incoming { session, .. } = e {
+                        Some(*session)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap();
+            let (stream, taken) = open_and_write(n, s, sb, &payload);
+            answer = Some((sb, stream, taken));
+        }
+        if let Some((sb, stream, taken)) = answer.as_mut()
+            && *taken < size
+        {
+            *taken += write_more(n, s, *sb, *stream, &payload[*taken..]);
+        }
+        n.nodes[c].read.values().any(|v| v.len() >= size)
+    });
+    assert!(done, "moved {moved}: the answer did not arrive within 30 s");
+    (net.now - t0, net.nodes[s].ep.node_stats().held_by_ledger - held0)
+}
+
+/// An honest resumed dial loses no round trip to the rule that a resumption Hello validates nothing: from its own
+/// address the server's answer is not limited at all, and from a new address it waits for the answer to the challenge
+/// that rides the packets already sent, which is one round trip (10 ms on this link) and no more.
+#[test]
+fn a_resumption_with_early_data_gets_an_answer_over_three_times_its_hello_without_a_lost_round_trip() {
+    big_stack(|| {
+        let size = 30_000;
+        let (home, home_held) = resumed_answer(false, size);
+        let (moved, moved_held) = resumed_answer(true, size);
+        eprintln!(
+            "resumed answer of {size} bytes: home {} ms held {home_held}; moved {} ms held {moved_held}",
+            home / MS_NS,
+            moved / MS_NS
+        );
+        assert_eq!(home_held, 0, "an address the ledger validated earlier was held");
+        assert_eq!(moved_held, 0, "the connection stops before the ledger refuses anything");
+        let rtt = 10 * MS_NS;
+        assert!(
+            moved <= home + 2 * rtt,
+            "a new address waited {} ms more than the client's own: more than the challenge's round trip",
+            (moved - home) / MS_NS
+        );
+    });
+}
+
+/// A server that answers from an address the dial did not use, with a hybrid identity (the Finish and the Reply are
+/// several datagrams), completes the handshake: the dialer's budget for that address is three times the Reply it
+/// received there, which funds the Finish.
+#[test]
+fn a_hybrid_server_that_answers_from_another_address_completes_its_handshake() {
+    big_stack(|| {
+        let mut net = CoreNet::new(5 * MS_NS);
+        let (c, s) = (net.add(1), net.add_with_alg(2, IdentityAlg::Hybrid));
+        net.shown = Some((net.nodes[s].addr, "10.8.8.8:4433".parse().unwrap()));
+        let t0 = net.now;
+        let (peer, to) = (net.nodes[s].node, net.nodes[s].addr);
+        net.nodes[c].connect(t0, peer, ALPN_A, to, Role::Other).unwrap();
+        let both = |n: &mut CoreNet| {
+            n.nodes[c].count(|e| matches!(e, Event::Connected { .. })) > 0
+                && n.nodes[s].count(|e| matches!(e, Event::Incoming { .. })) > 0
+        };
+        let ok = net.run(t0 + 10 * SEC_NS, both);
+        eprintln!(
+            "hybrid reply from another address: {ok} after {} ms",
+            (net.now - t0) / MS_NS
+        );
+        assert!(
+            ok,
+            "the handshake did not complete: {:?} / {:?}",
+            net.nodes[c].events, net.nodes[s].events
+        );
+        assert!(
+            net.now - t0 <= 2 * SEC_NS,
+            "the handshake took {} ms",
+            (net.now - t0) / MS_NS
+        );
     });
 }

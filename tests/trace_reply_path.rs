@@ -200,6 +200,29 @@ fn active(net: &Net<'_, '_>) -> u64 {
     net.a.conn.active_path().map_or(0, |p| p.0)
 }
 
+/// A Reply proves its path only when the dial held it: that path is validated and the session moves to it. A path the
+/// dial did not hold is learnt, unvalidated with a challenge queued, and the session stays where it was: anyone can
+/// send a copy of the Reply from any source.
+fn followed(net: &Net<'_, '_>, p: u64, dialed: bool, before: u64) {
+    assert!(held(net, p), "the path of the Reply is not held");
+    assert_eq!(net.a.conn.path_validated(PathId(p)), dialed);
+    if dialed {
+        assert_eq!(active(net), p, "the session did not move to the path the dial held");
+    } else {
+        assert_eq!(active(net), before, "the session moved to a path the dial did not hold");
+        let slot = net
+            .a
+            .conn
+            .trace_paths()
+            .slots
+            .into_iter()
+            .flatten()
+            .find(|s| s.id == p)
+            .unwrap();
+        assert!(slot.challenge.is_some(), "no challenge queued on the path of the Reply");
+    }
+}
+
 /// The table holds at most its 4 places and no path twice.
 fn bounded(net: &Net<'_, '_>) {
     let ids: Vec<u64> = net.a.conn.path_list().map(|(id, _, _)| id.0).collect();
@@ -222,21 +245,23 @@ fn full(l: &mut Log, alg: IdentityAlg, seed: u64, added: &[u64], removed: &[u64]
     for &q in removed {
         rm(l, &mut net, q);
     }
+    let (dialed, before) = (held(&net, p), active(&net));
     let reply = answer(&mut net);
     for d in &reply {
         rx(l, &mut net, p, d);
     }
     keys(l, &mut net);
     assert!(net.a.conn.is_connected(), "the Reply on path {p} was not taken");
-    assert!(held(&net, p) && active(&net) == p && net.a.conn.path_validated(PathId(p)));
+    followed(&net, p, dialed, before);
     // Once established, a dialing side takes no handshake packet: the Reply again, on a path it does not hold.
+    let at = active(&net);
     rx(l, &mut net, 7, &reply[0]);
-    assert!(!held(&net, 7) && active(&net) == p);
+    assert!(!held(&net, 7) && active(&net) == at);
     bounded(&net);
 }
 
-/// A Reply cut over two paths: the datagrams before the last one of the message on `p`, the rest on `q`; the session
-/// goes where the message completed.
+/// A Reply cut over two paths: the datagrams before the last one of the message on `p`, the rest on `q`; the path the
+/// message completed on decides, by the same rule as a Reply on one path.
 fn split(l: &mut Log, seed: u64, p: u64, q: u64) {
     let mut w = World::new(IdentityAlg::Hybrid);
     let (mut sa, mut sb) = (Store::new(true), Store::new(false));
@@ -245,12 +270,13 @@ fn split(l: &mut Log, seed: u64, p: u64, q: u64) {
     let reply = answer(&mut net);
     let n = message_len(&reply);
     assert!(n > 1, "the Reply fits one datagram");
+    let (dialed, before) = (held(&net, q), active(&net));
     for (i, d) in reply.iter().enumerate() {
         rx(l, &mut net, if i + 1 < n { p } else { q }, d);
     }
     keys(l, &mut net);
     assert!(net.a.conn.is_connected());
-    assert_eq!(active(&net), q, "the session is not on the path the Reply completed on");
+    followed(&net, q, dialed, before);
     bounded(&net);
 }
 
@@ -278,14 +304,15 @@ fn forged(l: &mut Log, seed: u64) {
     );
     rx(l, &mut net, 9, &zero_key);
     rx(l, &mut net, 8, &zero_sig);
-    // While that Reply waits for the key host another one is refused, uncounted, on a path the dial does not hold.
+    // While that Reply waits for the key host another one arrives on a path the dial does not hold. The others are
+    // held, uncounted, and each is tried in turn once the verdict before it fails.
     rx(l, &mut net, 7, &zero_key);
     assert!(!held(&net, 7));
     keys(l, &mut net);
     assert_eq!(
         net.a.conn.stats().handshake_dropped,
-        2,
-        "the forged Replies were not both counted"
+        3,
+        "each forged Reply was tried and counted once"
     );
     assert!(!held(&net, 9) && !held(&net, 8) && active(&net) == 1);
     assert!(!net.a.conn.rtt_estimate().has_sample() && !net.a.conn.is_connected());
@@ -294,7 +321,7 @@ fn forged(l: &mut Log, seed: u64) {
         rx(l, &mut net, 9, d);
     }
     keys(l, &mut net);
-    assert!(net.a.conn.is_connected() && active(&net) == 9 && !held(&net, 8));
+    assert!(net.a.conn.is_connected() && active(&net) == 1 && held(&net, 9) && !held(&net, 8));
     bounded(&net);
 }
 
@@ -333,6 +360,7 @@ fn resume(l: &mut Log, seed: u64, added: &[u64], p: u64, coalesce: bool) {
     for &q in added {
         add(l, &mut net, q);
     }
+    let (dialed, before) = (held(&net, p), active(&net));
     let mut reply = answer(&mut net);
     if coalesce {
         assert!(
@@ -347,7 +375,7 @@ fn resume(l: &mut Log, seed: u64, added: &[u64], p: u64, coalesce: bool) {
     }
     keys(l, &mut net);
     assert!(net.a.conn.is_connected(), "the resume Reply on path {p} was not taken");
-    assert!(held(&net, p) && active(&net) == p && net.a.conn.path_validated(PathId(p)));
+    followed(&net, p, dialed, before);
     if p != 1 {
         assert!(held(&net, 1), "the path the session left was given up");
     }

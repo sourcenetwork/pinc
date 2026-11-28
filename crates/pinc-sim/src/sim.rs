@@ -62,6 +62,9 @@ pub(crate) struct Slot<N: Node> {
     pub(crate) log: Vec<(Time, N::Event)>,
     pub(crate) timer_gen: u64,
     pub(crate) timer_at: Option<Time>,
+    /// The time of the node's last timer call, and whether that call left its deadline due (see `stuck`).
+    pub(crate) timer_last: Option<Time>,
+    pub(crate) timer_left: bool,
     pub(crate) busy_until: Time,
     pub(crate) cpu: Option<Cpu>,
     pub(crate) clock: Clock,
@@ -469,7 +472,8 @@ impl<N: Node, R: Random, C: CostModel> Sim<N, R, C> {
     }
 
     /// Collects a node's events and transmits after one of its calls at `now`, sends the transmits at `send_at`, and
-    /// re-arms its timer. `after_timeout` applies the rule that a timeout must lie strictly after a timer call.
+    /// re-arms its timer. `after_timeout` applies the rule that a deadline left due by two timer calls in a row does
+    /// not move (`stuck`).
     pub(crate) fn drive(&mut self, n: usize, now: Time, send_at: Time, after_timeout: bool) {
         let mut buf = std::mem::take(&mut self.buf);
         self.drain_events(n, now);
@@ -509,11 +513,15 @@ impl<N: Node, R: Random, C: CostModel> Sim<N, R, C> {
     }
 
     /// Arms the node's timer at its next timeout, no earlier than now or the end of its busy period. A timeout that
-    /// is not strictly after a timer call is a violation: it is counted and replaced by `now + 1 ms`.
+    /// `stuck` finds is a violation: it is counted and replaced by `now + 1 ms`; one at the call's own time that is
+    /// not stuck is served at once. A node is called by its timer at most twice at one instant before it is counted,
+    /// and every counted call moves it 1 ms, so a live-lock advances virtual time and ends the run.
     pub(crate) fn rearm(&mut self, n: usize, now: Time, after_timeout: bool) {
         let slot = &mut self.nodes[n];
-        let Some(mut d) = slot.node.poll_timeout() else { return };
-        if after_timeout && d <= now {
+        let polled = slot.node.poll_timeout();
+        let stuck = after_timeout && stuck(&mut slot.timer_last, &mut slot.timer_left, now, polled);
+        let Some(mut d) = polled else { return };
+        if stuck {
             self.metrics.timer_violations += 1;
             d = now + 1_000_000;
         }
@@ -694,4 +702,55 @@ fn escape(s: &str) -> String {
         }
     }
     o
+}
+
+/// pinc-node's rule for a timer call at `now` that left the deadline `d` (`crates/pinc-node/src/timers.rs`): a
+/// deadline may be the call's own time once (a layer asking to be called again at once); one that was due at the
+/// timer call before, which left it due, and is left due again by this one does not move.
+pub(crate) fn stuck(last: &mut Option<Time>, left: &mut bool, now: Time, d: Option<Time>) -> bool {
+    let due = d.filter(|d| *d <= now);
+    let prev = last.replace(now);
+    let stuck = *left && prev.is_some_and(|l| due.is_some_and(|d| d <= l));
+    *left = due.is_some();
+    stuck
+}
+
+#[cfg(test)]
+mod tests {
+    use super::stuck;
+
+    fn call(st: &mut (Option<u64>, bool), now: u64, d: Option<u64>) -> bool {
+        stuck(&mut st.0, &mut st.1, now, d)
+    }
+
+    #[test]
+    fn a_deadline_at_the_calls_time_is_allowed_once_and_stuck_the_second_time() {
+        let mut st = (None, false);
+        assert!(!call(&mut st, 10, Some(10)));
+        assert!(call(&mut st, 10, Some(10)));
+    }
+
+    #[test]
+    fn a_deadline_that_moved_is_not_stuck() {
+        let mut st = (None, false);
+        assert!(!call(&mut st, 10, Some(10)));
+        assert!(!call(&mut st, 11, Some(11)));
+    }
+
+    #[test]
+    fn an_older_due_deadline_left_again_is_stuck() {
+        let mut st = (None, false);
+        assert!(!call(&mut st, 10, Some(5)));
+        assert!(call(&mut st, 11, Some(5)));
+    }
+
+    #[test]
+    fn a_deadline_that_is_not_due_resets_the_rule() {
+        let mut st = (None, false);
+        assert!(!call(&mut st, 10, Some(10)));
+        assert!(!call(&mut st, 11, Some(50)));
+        assert!(!call(&mut st, 12, Some(12)));
+        assert!(!call(&mut st, 13, None));
+        assert!(!call(&mut st, 14, Some(14)));
+    }
 }

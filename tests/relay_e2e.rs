@@ -36,6 +36,7 @@ use pinc::{CarrierKind, Error, ErrorKind, Identity, Relay};
 use pinc_common::{ECHO, SINK, eventually, lo, serve_conn, within};
 use pinc_connect::carrier::session::ALPN;
 use pinc_connect::relay::Quota;
+use pinc_connect::relay::datagram::Datagram;
 use relay_members::{Member, on_big_stack};
 
 fn failed(_: io::Error) -> Error {
@@ -695,4 +696,36 @@ rows! {
     cost_relayed_completions: "relayed, completions", true, 0, true;
     cost_relayed_completions_250: "relayed, completions, 250 idle carriers", true, 250, true;
     cost_relayed_completions_1000: "relayed, completions, 1000 idle carriers", true, 1000, true;
+}
+
+/// A relay host on a dual-stack `[::]` socket answers an IPv4 peer: the run loop maps the peer's address back to the
+/// mapped form the socket takes, where the platform needs it. Where there is no IPv6 socket there is nothing to test.
+#[cfg(target_os = "linux")]
+#[nuclei::test]
+async fn a_relay_host_on_a_dual_stack_socket_answers_an_ipv4_peer() {
+    let v6: SocketAddr = "[::]:0".parse().unwrap();
+    let Ok(sock) = Handle::<UdpSocket>::bind(v6).await else {
+        return;
+    };
+    let port = sock.get_ref().local_addr().unwrap().port();
+    let ports = Ports {
+        listener: Rc::new(Handle::<TcpListener>::bind(lo()).await.unwrap()),
+        sock: Rc::new(sock),
+        addr: SocketAddr::new(lo().ip(), port),
+    };
+    let mut host = Host::start_limits(&ports, 0x71, &[], Limits::default(), false);
+    let peer = Handle::<UdpSocket>::bind(lo()).await.unwrap();
+    let mut buf = [0u8; 64];
+    let n = Datagram::Qad { nonce: [9; 8] }.encode(&mut buf).unwrap();
+    within(30, async {
+        peer.send_to(&buf[..n], ports.addr).await.unwrap();
+        let (got, _) = peer.recv_from(&mut buf).await.unwrap();
+        let reply = Datagram::decode(&buf[..got]).unwrap();
+        assert!(
+            matches!(reply, Datagram::Qadr { nonce: [9, 9, 9, 9, 9, 9, 9, 9], addr } if addr == peer.get_ref().local_addr().unwrap()),
+            "{reply:?}"
+        );
+    })
+    .await;
+    host.stop().await;
 }

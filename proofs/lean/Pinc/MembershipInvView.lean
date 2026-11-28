@@ -125,6 +125,13 @@ theorem inv_snapAbsent {e : Env} {n : N} (hx : Inv B n) (now hub round : Nat) : 
   inv_go
 macro_rules | `(tactic| inv_apply) => `(tactic| apply inv_snapAbsent)
 
+theorem inv_confirmHome {n : N} (hx : Inv B n) (hub : Nat) : Inv B (n.confirmHome hub) := by
+  unfold N.confirmHome
+  split
+  · inv_keep hx
+  · exact hx
+macro_rules | `(tactic| inv_apply) => `(tactic| apply inv_confirmHome)
+
 theorem inv_applySnap {e : Env} {n : N} (hx : Inv B n) (now hub : Nat) (partial_ more : Bool) (es : List (Nat × Rec)) : Inv B (N.applySnap e n now hub partial_ more es) := by
   unfold N.applySnap
   inv_go

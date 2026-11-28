@@ -87,9 +87,12 @@ def N.removeFromView (e : Env) (n : N) (now m : Nat) (cur : Option ViewEntry) (s
   | none => (n, false)
   | some c =>
     if src.hold then
-      ((if n.recheck.len < MAX_TABLE then { n with recheck := n.recheck.orIns m (n.quietUntil, n.regrace) } else n), false)
+      ((if n.recheck.len < MAX_TABLE then
+          { n with recheck := n.recheck.orIns m (n.quietUntil, n.regrace),
+                   held := if n.recheck.has m then n.held else n.held.ins m } else n), false)
     else if now < n.quietUntil && n.recheck.len < MAX_TABLE then
-      ((({ n with recheck := n.recheck.orIns m (n.quietUntil, n.regrace) }).trace (.deferred m)), false)
+      ((({ n with recheck := n.recheck.orIns m (n.quietUntil, n.regrace),
+                  held := if n.recheck.has m then n.held else n.held.del m }).trace (.deferred m)), false)
     else
       let n := { n with members := n.members.erase m }
       let n := if n.goneVer.len < MAX_TABLE || n.goneVer.has m then
@@ -115,7 +118,7 @@ def N.recomputeOne (e : Env) (n : N) (now m : Nat) : N × Bool :=
     let (n, changed, early) : N × Bool × Bool :=
       match cur with
       | some c =>
-        if best.inc / 65536 ≤ c.rc.inc / 65536 then
+        if best.inc / 65536 = c.rc.inc / 65536 then
           if best.inc / 65536 == c.rc.inc / 65536 && c.rc.inc ≤ best.inc then
             let n := { n with members := n.members.modify m (fun x => { x with rc := { x.rc with inc := best.inc } }) }
             let (n, ch1) := if best.ver != c.rc.ver then
@@ -273,6 +276,11 @@ def N.dropGone (n : N) (hub round : Nat) : N :=
   | some c => { n with hv := n.hv.insert hub { c with entries := c.entries.filter (fun p => p.2.round == round || n.members.has p.1) } }
   | none => n
 
+/-- `note_absent`: an omission clock started at `since`, so the sweep is due a lease later. -/
+@[simp] def N.noteAbsent (n : N) (since : Nat) : N :=
+  let due := satAdd since LEASE
+  { n with nextAbsent := some (match n.nextAbsent with | some t => min t due | none => due) }
+
 /-- `mark_absent`: a complete snapshot of `hub` listed round `round`; everything else in its copy is omitted. -/
 def N.markAbsent (e : Env) (n : N) (now hub round : Nat) : N × Bool :=
   let ks := match n.hv.get? hub with | some c => c.entries.keys | none => []
@@ -285,18 +293,25 @@ def N.markAbsent (e : Env) (n : N) (now hub round : Nat) : N × Bool :=
           let n := match n.hv.get? hub with
             | some c => { n with hv := n.hv.insert hub { c with entries := c.entries.modify m (fun x => { x with absentSince := some now }) } }
             | none => n
-          let n := n.trace (.absent m)
+          let n := (n.noteAbsent now).trace (.absent m)
           let (n, ch) := N.recomputeOne e n now m
           (n, changed || ch)
         else a
       | none => a)
     (n, false)
 
-/-- `mark_view_absent`: a complete snapshot of the confirmed home listed round `round`. It is the whole view, so a
-view member the home's copy does not hold, whichever hub's copy listed it, gets an entry there carrying the view's
-record, one round before `round` (`round - 1`: a snapshot's round is at least 1 here), with the omission clock started;
-with the copy full there is no room and the member is recomputed at once. The members are walked in key order, each
-recomputed by itself, so the keys taken at the start are the ones the code's cursor visits. -/
+/-- The skip of `mark_view_absent`: `m` waits in the recheck table, deferred by a window, or held while no copy
+holds it. -/
+def N.viewSkip (n : N) (m : Nat) : Bool :=
+  n.recheck.has m && (!n.held.has m || !n.hv.any (fun p => p.2.entries.has m))
+
+/-- `mark_view_absent`: a complete snapshot of the confirmed home listed round `round`. It is the whole view, and the
+frames were applied under the union of the copies, so every view member is recomputed under the home alone. A view
+member the home's copy does not hold, whichever hub's copy listed it, gets an entry there carrying the view's record,
+one round before `round` (`round - 1`: a snapshot's round is at least 1 here), with the omission clock started; with
+the copy full there is no room, and a member that waits (`viewSkip`) gets none: both are recomputed at once. The
+members are walked in key order, each recomputed by itself, so the keys taken at the start are the ones the code's
+cursor visits. -/
 def N.markViewAbsent (e : Env) (n : N) (now hub round : Nat) : N × Bool :=
   n.members.keys.foldl
     (fun (a : N × Bool) m =>
@@ -305,13 +320,12 @@ def N.markViewAbsent (e : Env) (n : N) (now hub round : Nat) : N × Bool :=
       | some v =>
         match n.hv.get? hub with
         | some c =>
-          if c.entries.has m then a
-          else if MAX_TABLE ≤ c.entries.len && !c.entries.has m then
+          if c.entries.has m || MAX_TABLE ≤ c.entries.len || n.viewSkip m then
             let (n, ch) := N.recomputeOne e n now m
             (n, changed || ch)
           else
             let n := { n with hv := n.hv.insert hub { c with entries := c.entries.insert m ⟨v.rc, round - 1, some now⟩ } }
-            let n := n.trace (.absent m)
+            let n := (n.noteAbsent now).trace (.absent m)
             let (n, ch) := N.recomputeOne e n now m
             (n, changed || ch)
         | none => a
@@ -327,6 +341,20 @@ def N.snapAbsent (e : Env) (n : N) (now hub round : Nat) : N × Bool :=
     (b.1, a.2 || b.2)
   else a
 
+/-- The last frame of the primary's snapshot confirms the home (`home_ok`), at a member only. -/
+def N.confirmHome (n : N) (hub : Nat) : N :=
+  if !n.isHub && n.primary == some hub then { n with homeOk := some hub, homeSeen := true } else n
+
+/-- `confirmHome` writes only `homeOk` and `homeSeen`. -/
+@[simp] theorem N.confirmHome_eq (n : N) (hub : Nat) :
+    n.confirmHome hub =
+      { n with homeOk := if (!n.isHub && n.primary == some hub) = true then some hub else n.homeOk,
+               homeSeen := if (!n.isHub && n.primary == some hub) = true then true else n.homeSeen } := by
+  unfold N.confirmHome
+  by_cases h : (!n.isHub && n.primary == some hub) = true
+  · rw [if_pos h, if_pos h, if_pos h]
+  · rw [if_neg h, if_neg h, if_neg h]
+
 /-- `apply_snap`: a snapshot frame from `hub`. -/
 def N.applySnap (e : Env) (n : N) (now hub : Nat) (partial_ more : Bool) (es : List (Nat × Rec)) : N :=
   let (n, ok) : N × Bool :=
@@ -340,7 +368,6 @@ def N.applySnap (e : Env) (n : N) (now hub : Nat) (partial_ more : Bool) (es : L
         let c := if !c.open_ then { c with round := c.round + 1, open_ := true } else c
         ({ n with hv := n.hv.insert hub c }, c.round)
       | none => (n, 0)
-    let n := if !n.isHub && n.primary == some hub then { n with homeOk := some hub, homeSeen := true } else n
     let (n, changed, cnt) := es.foldl
       (fun (a : N × Bool × Nat) (p : Nat × Rec) =>
         let (n, changed, cnt) := a
@@ -368,17 +395,26 @@ def N.applySnap (e : Env) (n : N) (now hub : Nat) (partial_ more : Bool) (es : L
         let n := match n.hv.get? hub with
           | some c => { n with hv := n.hv.insert hub { c with open_ := false } }
           | none => n
-        let (n, changed) := if !partial_ then
-            let (n', ch) := N.snapAbsent e (n.dropGone hub round) now hub round
-            (n', changed || ch)
-          else (n, changed)
+        -- the last frame confirms the home, before the omissions are aged; every completed snapshot ages them
+        let (n, ch) := N.snapAbsent e ((n.confirmHome hub).dropGone hub round) now hub round
         let n := if n.primary == some hub then n.bc (.resub hub) else n
-        (n, changed)
+        (n, changed || ch)
       else (n, changed)
     if changed then n.bump else n
 
-/-- `sweep_absent`: drop copy entries whose omission has lasted a full lease. -/
+/-- Where `next_absent` goes when the sweep keeps the entry of `m` in the copy of `hub`: at the earliest expiry. -/
+def N.keepNext (n : N) (hub m : Nat) : Option Nat :=
+  match (n.hv.get? hub).bind (fun c => c.entries.get? m) with
+  | some ce => (match ce.absentSince with | some t => (n.noteAbsent t).nextAbsent | none => n.nextAbsent)
+  | none => n.nextAbsent
+
+/-- The sweep keeps the entry of `m` in the copy of `hub`: only `next_absent` moves. -/
+@[simp] def N.keepAbsent (n : N) (hub m : Nat) : N := { n with nextAbsent := n.keepNext hub m }
+
+/-- `sweep_absent`: drop copy entries whose omission has lasted a full lease, and leave `next_absent` at the earliest
+expiry that remains. -/
 def N.sweepAbsent (e : Env) (n : N) (now : Nat) : N :=
+  let n := { n with nextAbsent := none }
   let (n, changed) := n.hv.keys.foldl
     (fun (a : N × Bool) hub =>
       let ks := match a.1.hv.get? hub with | some c => c.entries.keys | none => []
@@ -394,7 +430,7 @@ def N.sweepAbsent (e : Env) (n : N) (now : Nat) : N :=
               | some c => { n with hv := n.hv.insert hub { c with entries := c.entries.erase m } }
               | none => n
             (n, changed || ch)
-          else a)
+          else (n.keepAbsent hub m, changed))
         a)
     (n, false)
   if changed then n.bump else n

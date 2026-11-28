@@ -145,11 +145,11 @@ def replayEvent (j : J) (st : KState) : Except String KState := do
     let sh := inShare r.sOm sid zero
     check (zero == (sh == .junk)) "onreq: zero share"
     let som1 ← bind r.sOm sh sid
-    let m : Msg := ⟨ans, sh, 0, .junk, .junk⟩
+    let m : Msg := ⟨ans, sh, 0, .junk, .junk, ← natF j "roll"⟩
     let spn ← natF j "spn"
     let (r1, out) := r.rolls[n]!.onRequest m spn (some (freshAtom r n))
     let res ← strF j "res"
-    let drew := !(ans || r.rolls[n]!.isDup m || (!r.rolls[n]!.isIdle && r.rolls[n]!.dialer))
+    let drew := !(ans || r.rolls[n]!.isDup m || r.rolls[n]!.blocks m)
     let (som, dom, eom) ← match out with
       | .ok (a, dh) =>
         check (res == "ok") s!"onreq: model ok, code {res}"
@@ -180,7 +180,7 @@ def replayEvent (j : J) (st : KState) : Except String KState := do
     check (zero == (sh == .junk)) "onans: zero share"
     let som ← bind r.sOm sh sid
     let eid ← intF j "echo"
-    let m : Msg := ⟨ans, sh, ← natF j "spn", if ans then inEcho r.eOm eid else .junk, .junk⟩
+    let m : Msg := ⟨ans, sh, ← natF j "spn", if ans then inEcho r.eOm eid else .junk, .junk, ← natF j "roll"⟩
     let (r1, out) := r.rolls[n]!.onAnswer m
     let res ← strF j "res"
     let dom ← match out with
@@ -243,7 +243,8 @@ def replayEvent (j : J) (st : KState) : Except String KState := do
     check (limitReached sk == (← boolF j "lrs") && limitReached rk == (← boolF j "lrr")) "due: limit_reached"
     pure st
   | "enc" =>
-    let m : Rekey := ⟨← boolF j "ans", ← natList (← field j "share"), ← natList (← field j "echo"), ← limbsVal (← field j "sl")⟩
+    let m : Rekey := ⟨← boolF j "ans", ← natList (← field j "share"), ← natList (← field j "echo"), ← limbsVal (← field j "sl"),
+      ← limbsVal (← field j "rl")⟩
     let res ← strF j "res"
     match m.encode with
     | some bs =>
@@ -258,7 +259,8 @@ def replayEvent (j : J) (st : KState) : Except String KState := do
     | .ok m =>
       check (res == "ok") "dec: model ok, code refused"
       check (m.answer == (← boolF j "ans") && m.share == (← natList (← field j "share")) &&
-        m.echo == (← natList (← field j "echo")) && m.switchPn == (← limbsVal (← field j "sl"))) "dec: message"
+        m.echo == (← natList (← field j "echo")) && m.switchPn == (← limbsVal (← field j "sl")) &&
+        m.roll == (← limbsVal (← field j "rl"))) "dec: message"
     | .error e =>
       let name := match e with | .kind => "kind" | .trailing => "trailing" | _ => "other"
       check (res == name) s!"dec: model {name}, code {res}"

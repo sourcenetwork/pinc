@@ -137,7 +137,7 @@ fn store_custody_and_forwarding_do_not_allocate() {
         bytes: [n; 32],
     };
     let mut ledger = Ledger::<16>::new(1_000);
-    let mut book = CustodyBook::<16>::new();
+    let mut book = CustodyBook::<16>::new(node(1));
     let mut fwd = Forwarder::<8, 8, 32, 64>::new(
         Policy {
             retry_ms: 50,

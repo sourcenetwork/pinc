@@ -84,7 +84,7 @@ def saInner (e : Env) (now hub : Nat) (a : N × Bool) (m : Nat) : N × Bool :=
       | some c => { n with hv := n.hv.insert hub { c with entries := c.entries.erase m } }
       | none => n
     (n, changed || ch)
-  else a
+  else (n.keepAbsent hub m, changed)
 
 /-- The visit of `hub` in `sweep_absent`. -/
 def saStep (e : Env) (now : Nat) (a : N × Bool) (hub : Nat) : N × Bool :=
@@ -93,13 +93,14 @@ def saStep (e : Env) (now : Nat) (a : N × Bool) (hub : Nat) : N × Bool :=
 
 theorem sweepAbsent_eq_c (e : Env) (n : N) (now : Nat) :
     N.sweepAbsent e n now =
-      (let (n, changed) := n.hv.keys.foldl (saStep e now) (n, false)
+      (let n0 : N := { n with nextAbsent := none }
+       let (n, changed) := n0.hv.keys.foldl (saStep e now) (n0, false)
        if changed then n.bump else n) := rfl
 
 theorem dropStaleHubs_eq (e : Env) (n : N) (now : Nat) :
     N.dropStaleHubs e n now =
       (let stale := (n.hv.keys.filter (fun k => !n.hubUp now k)).length
-       if stale == 0 || n.hv.len ≤ stale then n
+       if stale == 0 || n.hv.len ≤ stale || (n.source now).hold then n
        else
          let (n, changed) := n.hv.keys.foldl (dshStep e now) (n, false)
          if changed then n.bump else n) := rfl
@@ -163,9 +164,9 @@ theorem dropStaleHubs_roster (e : Env) (n : N) (now : Nat) : (N.dropStaleHubs e 
 theorem sweepAbsent_roster (e : Env) (n : N) (now : Nat) : (N.sweepAbsent e n now).roster = n.roster := by
   rw [sweepAbsent_eq_c]
   dsimp only
-  have hX : (n.hv.keys.foldl (saStep e now) (n, false)).1.roster = n.roster :=
+  have hX : (n.hv.keys.foldl (saStep e now) ({ n with nextAbsent := none }, false)).1.roster = n.roster :=
     foldl_inv (fun x : N × Bool => x.1.roster = n.roster) _ _ _ (fun b a hb => by rw [saStep_roster]; exact hb) rfl
-  generalize n.hv.keys.foldl (saStep e now) (n, false) = Y at hX ⊢
+  generalize n.hv.keys.foldl (saStep e now) ({ n with nextAbsent := none }, false) = Y at hX ⊢
   obtain ⟨n1, ch⟩ := Y
   simp only [] at hX ⊢
   split <;> simp [hX]

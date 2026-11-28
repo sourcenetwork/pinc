@@ -48,7 +48,7 @@ SlotOf(s) ==
     IF s.id = 0 THEN None
     ELSE [id |-> s.id, k |-> s.k, six |-> s.six, v |-> s.v, ch |-> s.ch, sent |-> [y \in 1..CH |-> s.sent[y]],
           nx |-> s.nx, sc |-> s.sc, pr |-> s.pr, rj |-> s.rj, gone |-> s.gone, hd |-> s.hd, r |-> V(s.r),
-          o |-> {}, ps |-> {}, lf |-> FALSE]
+          o |-> {}, ps |-> {}, lf |-> FALSE, vl |-> FALSE]
 Toks(w) == UNION {{w.paths[y].ch} \cup {w.paths[y].sent[z] : z \in 1..CH} : y \in 1..NP}
 \* tokens are numbered by the test in the order they first appear, so the last drawn is the largest
 FromView(w) == [t |-> [y \in 1..NP |-> SlotOf(w.paths[y])], act |-> w.act, srtt |-> SrttOf(w),
@@ -94,9 +94,9 @@ ReturnedEv == Ev0.op = "returned" /\ LET a == Returned(C1, Ev0.id, V(Ev0.rtt)) I
 RespEv == Ev0.op = "resp" /\ Rr(Ev0.id) = Ev0.r /\ Check(Resp(C1, Ev0.id, Ev0.tok, V(Ev0.rtt)))
 \* challenge_back and follow_peer read the host's declaration (decl), the timers the session's thinness (thin)
 ChalEv == /\ Ev0.op = "chal" /\ Rr(Ev0.id) = Ev0.r
-          /\ \E cb \in (IF Ev0.pre.decl THEN {FALSE} ELSE BOOLEAN) : Check(Chal(C1, Ev0.id, cb, TRUE))
+          /\ \E cb \in (IF Ev0.pre.decl THEN {FALSE} ELSE BOOLEAN) : Check(Chal(C1, Ev0.id, cb, TRUE, FALSE))
 DataEv == /\ Ev0.op = "data" /\ Rr(Ev0.id) = Ev0.r
-          /\ \E fresh \in (IF Ev0.pre.decl THEN BOOLEAN ELSE {FALSE}) : Check(Data(C1, Ev0.id, Ev0.hi, Ev0.wake, fresh, TRUE))
+          /\ \E fresh \in (IF Ev0.pre.decl THEN BOOLEAN ELSE {FALSE}) : Check(Data(C1, Ev0.id, Ev0.hi, Ev0.wake, fresh, TRUE, FALSE))
 SendEv == Ev0.op = "send" /\ \E S \in SUBSET {y \in 1..NP : C1.t[y].id # 0 /\ C1.t[y].sc} : Check(SendSet(C1, S))
 \* handle_timeout: fail_over when the probe timeouts in a row (after the call) are 3 or more, then on_path_timers
 TimerEv ==

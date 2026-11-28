@@ -181,14 +181,16 @@ conn_impl! {
     /// leaves on the active path first, then on each listed path in turn; paths the connection does not track are
     /// ignored. An empty list turns the fan-out off. A dialing side turns it off itself when its session is
     /// established (the reply came back on one path, and the Finish and its resends go there only), and a later call
-    /// is ignored.
+    /// is ignored. A responder keeps every path its first message completed on, and adds the listed ones.
     pub fn set_flight_fanout(&mut self, ids: &[PathId]) {
         let ids: &[PathId] = if self.client && self.phase != Phase::Handshaking { &[] } else { ids };
-        self.fan_set = ids
+        let named = ids
             .iter()
             .filter_map(|id| self.paths.find(*id))
             .filter(|i| *i != self.paths.active && *i < 16)
             .fold(0u16, |m, i| m | (1 << i));
+        // A responder's owed paths are the ones its first message completed on, not the host's to take back.
+        self.fan_set = if self.client { named } else { self.fan_set | named };
         self.fan_mask = if self.hs.has_tx() { self.fan_set } else { 0 };
         if self.fan_set == 0 {
             self.fan_target = None;
@@ -203,8 +205,19 @@ conn_impl! {
     }
 
     /// Whether the flight leaves only on the fan-out paths right now.
+    ///
+    /// A responder owes its flight to the paths its first message completed on (`fan_set`, the active path's bit
+    /// included when it is owed): when the active path is not one of them, the flight skips it.
     pub(super) fn flight_skips_primary(&self) -> bool {
-        self.fan_skip && self.phase == Phase::Handshaking
+        self.phase == Phase::Handshaking
+            && (self.fan_skip || (!self.client && self.fan_set != 0 && self.fan_set & (1 << self.paths.active) == 0))
+    }
+
+    /// The handshake flight is done being owed to any path (the session is confirmed, or its dialer is validated).
+    pub(super) fn end_fan(&mut self) {
+        self.fan_set = 0;
+        self.fan_mask = 0;
+        self.fan_target = None;
     }
 
     /// A keepalive that is not a transport PING stood for this connection's (an authenticated carrier answered for
@@ -223,8 +236,20 @@ conn_impl! {
         }
     }
 
-    /// Replay the flight on the next fan-out path once the current one is fully out.
+    /// Replay the flight on the next fan-out path once the current one is fully out. A responder's target whose
+    /// budget cannot carry even the smallest datagram is skipped this round, so it cannot hold the flight back from
+    /// the paths that can take it; the next retransmission tries it again. The only target is never skipped: the flight
+    /// waits there for budget and goes on from where it stopped.
     pub(super) fn fan_step(&mut self) {
+        let owed = !self.client && self.fan_set != 0;
+        if self.hs.has_tx()
+            && let Some(t) = self.fan_target.or((owed || self.flight_skips_primary()).then_some(self.paths.active))
+            && self.amp_room(t) < self.control_min(t, 4)
+            && (owed || self.fan_target.is_some())
+            && self.fan_mask & !(1u16 << self.paths.active) != 0
+        {
+            self.hs.stop_flight();
+        }
         if self.hs.has_tx() && !(self.flight_skips_primary() && self.fan_target.is_none() && self.fan_mask != 0) {
             return;
         }
@@ -290,6 +315,28 @@ conn_impl! {
     /// The paths this connection tracks: the id, what the endpoint said of it, and whether it is validated.
     pub fn path_list(&self) -> impl Iterator<Item = (PathId, PathInfo, bool)> + '_ {
         self.paths.iter().map(|(_, p)| (p.id, p.info, p.validated))
+    }
+
+    /// The ids of the paths this connection can still name in a datagram or adopt: every tracked path, the active one
+    /// also when its address is gone, and a handshake reply's path not yet followed. The set the endpoint's table of
+    /// address pairs counts the session as holding.
+    pub fn path_ids(&self) -> [Option<PathId>; NP] {
+        let mut ids = self.paths.slots.map(|s| s.map(|p| p.id));
+        // A reply that finds no free slot cannot be adopted (`learn_path` refuses at a full table), so needs no pair.
+        if let Some((id, ..)) = self.reply_from
+            && !ids.contains(&Some(id))
+            && let Some(free) = ids.iter_mut().find(|s| s.is_none())
+        {
+            *free = Some(id);
+        }
+        for id in self.hold_ids.into_iter().flatten() {
+            if !ids.contains(&Some(id))
+                && let Some(free) = ids.iter_mut().find(|s| s.is_none())
+            {
+                *free = Some(id);
+            }
+        }
+        ids
     }
 
     /// Run where the parent session runs: take its paths with their validation, and its active path. A path of this
@@ -383,6 +430,7 @@ conn_impl! {
         self.hs.retire_machine();
         self.on_hs_event(env, SecEvent::Established(est));
         self.confirmed = true;
+        self.end_fan();
         self.hs.confirm(&mut self.pool);
     }
 }

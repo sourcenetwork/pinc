@@ -151,6 +151,7 @@ ep_impl! {
     /// As [`settle`](Self::settle); `queue` says whether to put the session on the send queue.
     pub(crate) fn settle_core(&mut self, i: usize, now: u64, queue: bool) {
         self.drain(i, now);
+        self.sync_pairs(i);
         let Some(slot) = self.slots.get_mut(i) else { return };
         if !slot.m.in_use {
             return;
@@ -305,6 +306,24 @@ ep_impl! {
         self.sync_route(i);
         if queue {
             self.mark_dirty(i, now);
+        }
+    }
+
+    /// Bring the table of address pairs in line with the paths session `i`'s connection holds: a pair the session
+    /// took is retained, one it let go is released (the last holder removes it).
+    fn sync_pairs(&mut self, i: usize) {
+        let Some(slot) = self.slots.get_mut(i).filter(|s| s.m.in_use) else { return };
+        let Some(conn) = slot.conn.as_ref() else { return };
+        let ids = conn.path_ids();
+        if ids == slot.m.pair_ids {
+            return;
+        }
+        let old = core::mem::replace(&mut slot.m.pair_ids, ids);
+        for id in ids.iter().flatten().filter(|n| !old.contains(&Some(**n))) {
+            self.retain_pair(*id);
+        }
+        for id in old.iter().flatten().filter(|o| !ids.contains(&Some(**o))) {
+            self.release_pair(*id);
         }
     }
 

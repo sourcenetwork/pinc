@@ -86,6 +86,14 @@
 (* (KeptBounded: a failed removal waits behind a put that lands, so the    *)
 (* store holds more records than the table until the removal lands, or,   *)
 (* given up, until a restart marks it again).                              *)
+(* Sleep marks (_sleep, every config: one notice per behaviour): a        *)
+(* member's blob keeps its mark as a trailer after its packets;            *)
+(* MarkRestored (a restart neither lengthens nor shortens a kept mark,     *)
+(* but one ahead of the clock is set at the restart; an ended mark brings  *)
+(* back no packet), MarkSynced (the store keeps the machine's marks, a     *)
+(* mark the restore moved back written again), MarkOneLife (a mark and its *)
+(* packets share one life); witnesses _w_mtime, _w_mark, _w_mlife and      *)
+(* _w_clamp put the old rule back.                                         *)
 (***************************************************************************)
 EXTENDS FacadeRelayKeepOps
 
@@ -117,8 +125,9 @@ Init == /\ s = Restore(Machine0(0), 0, St0)
         /\ job = NoJob
         /\ writing = FALSE
         /\ failed = FALSE
-        /\ rs = [at |-> 0, recs |-> {}, pks |-> {}, fit |-> TRUE, over |-> FALSE]
-        /\ g = [full |-> FALSE, tear |-> FALSE, back |-> FALSE, ticked |-> FALSE, pubs |-> 0, pid |-> 0, rst |-> 0,
+        /\ rs = [at |-> 0, recs |-> {}, pks |-> {}, fit |-> TRUE, over |-> FALSE, sl |-> [k \in Members |-> -1],
+                mk |-> [k \in Members |-> -1], nh |-> [k \in Members |-> 0], first |-> [k \in Members |-> -1]]
+        /\ g = [full |-> FALSE, tear |-> FALSE, back |-> FALSE, ticked |-> FALSE, pubs |-> 0, pid |-> 0, rst |-> 0, nt |-> 0,
                wf |-> 0, gu |-> 0, gv |-> {}, gt |-> FALSE, gq |-> FALSE, gx |-> {}, dr |-> {}, nd |-> 0]
 
 Publish(n, q) ==
@@ -135,9 +144,21 @@ HoldA(m) ==
     /\ g' = [g EXCEPT !.pid = @ + 1]
     /\ UNCHANGED <<st, job, writing, failed, rs>>
 
+\* one accepted sleep notice with a new clock per behaviour (SleepAccepted marks the member for a write)
+NoticeA(m) ==
+    /\ g.nt < 1
+    /\ s' = Notice(Called(s), m)
+    /\ g' = [g EXCEPT !.nt = @ + 1]
+    /\ UNCHANGED <<st, job, writing, failed, rs>>
+
 HeardA(m) ==
     /\ s.mb[m] # <<>>
     /\ s' = Heard(Called(s), m)
+    /\ UNCHANGED <<st, job, writing, failed, rs, g>>
+
+ReturnA(m) ==
+    /\ s.mb[m] # <<>> \/ s.sl[m] # -1
+    /\ s' = Return(Called(s), m)
     /\ UNCHANGED <<st, job, writing, failed, rs, g>>
 
 \* note_sweep takes the records the machine dropped out of held and marks their removal; one with no room is lost
@@ -209,7 +230,9 @@ Restored(m, t, st1) ==
      recs |-> {[n |-> n, rcv |-> m.rec[n].rcv, bad |-> st1.rec[n].bad] : n \in {k \in Nodes : m.rec[k].seq # 0}},
      pks |-> UNION {{m.mb[k][j] : j \in 1..Len(m.mb[k])} : k \in Members},
      fit |-> RestoreFit(m, t, st1),
-     over |-> Cardinality(Takeable(t, st1)) > RCAP]
+     over |-> Cardinality(Takeable(t, st1)) > RCAP,
+     sl |-> m.sl, mk |-> [k \in Members |-> st1.mail[k].mk], nh |-> [k \in Members |-> Len(m.mb[k])],
+     first |-> [k \in Members |-> IF m.mb[k] = <<>> THEN -1 ELSE m.mb[k][1].at]]
 
 \* the process stops (in the middle of the write out, if one is) and starts again with the same identity and store
 Restart(t, mode) ==
@@ -220,11 +243,13 @@ Restart(t, mode) ==
            \* the kept records restore neither takes nor marks for removal: bytes that do not parse, or a mark with
            \* no room; each counted once
            lost == {n \in Nodes : st1.rec[n].seq # 0 /\ m.rec[n].seq = 0 /\ n \notin m.kx}
+           \* the kept blobs with a torn remainder, each counted once by the restore
+           torn == {k \in Members : st1.mail[k].has /\ st1.mail[k].gb}
        IN /\ st' = st1
           /\ s' = m
           /\ rs' = Restored(m, t, st1)
           /\ g' = [g EXCEPT !.rst = @ + 1, !.ticked = FALSE, !.wf = 0, !.gu = 0, !.gv = {}, !.gx = {}, !.dr = lost,
-                            !.nd = Cardinality(lost),
+                            !.nd = Cardinality(lost) + Cardinality(torn),
                             !.tear = @ \/ (mode \in {"noparse", "noverify", "prefix"}),
                             !.back = @ \/ (t < s.now /\ (rs'.recs # {} \/ rs'.pks # {}))]
     /\ job' = NoJob /\ writing' = FALSE
@@ -244,7 +269,7 @@ Rerun(mode) ==
     /\ UNCHANGED <<failed, rs>>
 
 Next == \/ \E n \in Nodes, q \in 1..SEQS : Publish(n, q)
-        \/ \E m \in Members : HoldA(m) \/ HeardA(m)
+        \/ \E m \in Members : HoldA(m) \/ HeardA(m) \/ ReturnA(m) \/ NoticeA(m)
         \/ TickA \/ Advance \/ Take \/ WriteOk \/ WriteFail
         \/ \E t \in CLOCKS, mode \in TORN \cup {"lost", "whole"} : Restart(t, mode) \/ Rerun(mode)
 
@@ -271,7 +296,8 @@ Quiet == ~writing /\ s.kr = {} /\ s.kx = {} /\ s.km = <<>> /\ s.fq = <<>>
 RecOk(n) == /\ (s.rec[n].seq = 0) = (st.rec[n].seq = 0)
             /\ s.rec[n].seq # 0 => st.rec[n].seq = s.rec[n].seq /\ st.rec[n].bad = "ok"
 LifeOk(n) == s.rec[n].seq # 0 /\ st.rec[n].seq = s.rec[n].seq => st.rec[n].rcv = s.rec[n].rcv
-MailOk(m) == Live(st.mail[m].pk, s.now) = Live(s.mb[m], s.now)
+\* the store and the machine agree on what a restart now would bring back: nothing under a mark that ended
+MailOk(m) == KeptLive(st.mail[m], s.now) = IF Ended(s.sl[m], s.now) THEN <<>> ELSE Live(s.mb[m], s.now)
 
 RecSynced == Quiet => \A n \in Nodes : RecOk(n)
 
@@ -321,6 +347,23 @@ RoleBounded == /\ Count(s.rec) <= RCAP /\ Cardinality(s.slot) <= MCAP /\ \A m \i
                /\ MarksBounded /\ FailedBounded /\ TriesBounded
 
 WritingHasJob == writing = (job.k # "none")
+
+\* a restart brings a kept mark back with the time it was set at, neither longer nor shorter, unless that time is ahead
+\* of the clock (it went back): then the mark is set at the restart and ends one AGE later, never later than its own
+\* time would end it; a kept mark that ended brings back no packet; packets kept with no mark (a blob of the code
+\* before, or a torn trailer) bring the member back asleep since the oldest of them, at most the clock (witness _w_mtime:
+\* the mark starts again at the restart)
+MarkRestored == \A k \in Members :
+    /\ rs.mk[k] # -1 => rs.sl[k] = MarkAt(Min(rs.mk[k], rs.at), rs.at)
+    /\ Ended(rs.mk[k], rs.at) => rs.nh[k] = 0
+    /\ (rs.mk[k] = -1 /\ rs.nh[k] > 0) => rs.sl[k] = Min(rs.first[k], rs.at)
+\* with every write done the store keeps each member's mark as the machine holds it, so a sleeping member's wake is not
+\* lost by a restart while its mark lives, and a mark the machine ended is not brought back by one (witness _w_mark: the
+\* blob keeps no mark; _w_clamp: a kept mark moved back to the clock by the restore is not written again)
+MarkSynced == Quiet => \A m \in Members : MarkAt(st.mail[m].mk, s.now) = MarkAt(s.sl[m], s.now)
+\* a mark and the packets held under it share one life: no mark is older than AGE at the last sweep, and every held
+\* packet is held under a mark (witness _w_mlife: the sweep ends the mark and keeps its packets)
+MarkOneLife == \A m \in Members : (s.sl[m] # -1 => SatSub(s.ls, s.sl[m]) < AGE) /\ (s.mb[m] # <<>> => s.sl[m] # -1)
 
 \* witnesses: each must be violated
 NoFull == ~g.full

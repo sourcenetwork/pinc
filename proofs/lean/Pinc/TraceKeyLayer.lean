@@ -23,22 +23,30 @@ open Pinc.Json Pinc.KeyRoll Pinc.KeyRollSys Pinc.TraceKeyRoll
 
 instance : Inhabited Node := ⟨Node.init false⟩
 
-/-- The replay state of a run: its number, the two nodes (empty outside a run) and the oracle. -/
+/-- The replay state of a run: its number, the two nodes (empty outside a run), the oracle and the roll count each
+request was sent with (the trace does not record it; the model message at the send does). -/
 structure KL where
   run : Nat := 0
   nd : Array Node := #[]
   om : List (T × Int) := []
+  rq : List (T × Nat) := []
 
-/-- The message of a packet from the recorded ids (the ghost field is not recorded). -/
-def msgOf (om : List (T × Int)) (k : Nat) (sh to : Int) (spn : Nat) : Except String (Option Msg) := do
+/-- The message of a packet from the recorded ids (the ghost field is not recorded; the roll count of a request is
+the one it was sent with). -/
+def msgOf (om : List (T × Int)) (rq : List (T × Nat)) (k : Nat) (sh to : Int) (spn : Nat) :
+    Except String (Option Msg) := do
   let term (id : Int) : Except String T :=
     match om.find? (·.2 == id) with
     | some p => pure p.1
     | none => throw s!"id {id} was never produced"
   match k with
   | 0 => pure none
-  | 1 => pure (some (Msg.req (← term sh)))
-  | _ => pure (some ⟨true, ← term sh, spn, ← term to, .junk⟩)
+  | 1 =>
+    let t ← term sh
+    match rq.find? (·.1 == t) with
+    | some p => pure (some (Msg.req t p.2))
+    | none => throw s!"request {sh} was never sent"
+  | _ => pure (some ⟨true, ← term sh, spn, ← term to, .junk, 0⟩)
 
 def msgPairs (m : Option Msg) (k : Nat) (sh to : Int) : List (T × Int) :=
   match m with
@@ -125,7 +133,7 @@ def replayEvent (j : J) (st : KL) : Except String KL := do
     let n1 := { Node.init true with npn := ← natF vb "npn", first := ← natF vb "first" }
     let om ← viewOK [] n0 va []
     let om ← viewOK om n1 vb []
-    pure ⟨← natF j "run", #[n0, n1], om⟩
+    pure ⟨← natF j "run", #[n0, n1], om, []⟩
   | "begin" =>
     inRun
     let n ← natF j "n"
@@ -148,7 +156,10 @@ def replayEvent (j : J) (st : KL) : Except String KL := do
     let s2 := { q.2 with npn := q.2.npn + 1 }
     let extra := (q.2.sk.sec, ← intF j "key") :: msgPairs q.1 k (← intF j "msh") (← intF j "mto")
     let om ← viewOK st.om s2 (← field j "v") extra
-    pure { setNodeAt st n s2 with om := om }
+    let rq := match q.1 with
+      | some m => if m.answer then st.rq else (m.share, m.roll) :: st.rq
+      | none => st.rq
+    pure { setNodeAt st n s2 with om := om, rq := rq }
   | "recv" =>
     inRun
     let n ← natF j "n"
@@ -156,7 +167,7 @@ def replayEvent (j : J) (st : KL) : Except String KL := do
     let k ← natF j "mk"
     let msh ← intF j "msh"
     let mto ← intF j "mto"
-    let m ← msgOf st.om k msh mto (← natF j "mspn")
+    let m ← msgOf st.om st.rq k msh mto (← natF j "mspn")
     let key ← intF j "key"
     let sec ← match st.om.find? (·.2 == key) with
       | some p => pure p.1

@@ -19,15 +19,19 @@
 //!
 //! # Wire form of a REKEY body
 //!
-//! `kind(1)`: 0 request, 1 answer; `share(32)`: the sender's X25519 public value; for an answer only,
+//! `kind(1)`: 0 request, 1 answer; `share(32)`: the sender's X25519 public value; for a request only,
+//! `roll(varint)`, the number of rolls its sender has completed when it asks ([`Roll::rolls`]); for an answer only,
 //! `echo(8)`, the first eight bytes of the hash of the request's share ([`request_id`]), and `switch_pn(varint)`. A
-//! request is 33 bytes, an answer 42 to 50. The frame type that carries it belongs to the transport's frame codec.
+//! request is 34 to 42 bytes, an answer 42 to 50. The frame type that carries it belongs to the transport's frame codec.
 //!
 //! # State machine
 //!
 //! [`Roll`] holds one roll at a time. If both sides ask at once, the dialing side's request wins and the other side
 //! drops its own and answers. A duplicate request (the answer was lost) gets the same answer again and no new
-//! key. A request is sent again until it is answered ([`Roll::pending`]). Invariants: no I/O, clock or randomness
+//! key. A request is sent again until it is answered ([`Roll::pending`]). A request names its roll number: one below
+//! the receiver's count is a late copy of a request answered before, one above is a request written after an answer
+//! to the receiver's own request that is still on its way; both are refused and change nothing (the peer repeats the
+//! second until it is answered). Invariants: no I/O, clock or randomness
 //! of its own; the Diffie-Hellman secret never leaves [`Roll`]; each request share is used for one roll.
 
 use pinc_crypto::{Provider, Secret, Transcript, ct_eq};
@@ -73,20 +77,24 @@ pub struct Rekey {
     pub echo: [u8; ECHO_LEN],
     /// For an answer: the first packet number the sender seals under the new keys. Zero in a request.
     pub switch_pn: u64,
+    /// For a request: how many rolls its sender had completed when it asked ([`Roll::rolls`]). Zero in an answer.
+    pub roll: u64,
 }
 
 impl Rekey {
     /// Append the body.
     ///
     /// # Errors
-    /// [`WireError::BufferTooSmall`] if it does not fit; [`WireError::VarintOverflow`] for a switch number of 2^63
-    /// or more.
+    /// [`WireError::BufferTooSmall`] if it does not fit; [`WireError::VarintOverflow`] for a switch or roll number
+    /// of 2^63 or more.
     pub fn write(&self, w: &mut Writer<'_>) -> Result<(), WireError> {
         w.put_u8(u8::from(self.answer))?;
         w.put_slice(&self.share)?;
         if self.answer {
             w.put_slice(&self.echo)?;
             w.put_varint(self.switch_pn)?;
+        } else {
+            w.put_varint(self.roll)?;
         }
         Ok(())
     }
@@ -102,16 +110,17 @@ impl Rekey {
             _ => return Err(WireError::Unexpected("rekey kind")),
         };
         let share = r.read_array::<32>()?;
-        let (echo, switch_pn) = if answer {
-            (r.read_array::<ECHO_LEN>()?, r.read_varint()?)
+        let (echo, switch_pn, roll) = if answer {
+            (r.read_array::<ECHO_LEN>()?, r.read_varint()?, 0)
         } else {
-            ([0; ECHO_LEN], 0)
+            ([0; ECHO_LEN], 0, r.read_varint()?)
         };
         Ok(Self {
             answer,
             share,
             echo,
             switch_pn,
+            roll,
         })
     }
 
@@ -245,6 +254,7 @@ impl Roll {
             share: p.x25519_public(&p.x25519_secret(&seed)),
             echo: [0; ECHO_LEN],
             switch_pn: 0,
+            roll: self.rolls,
         };
         self.state = State::Requested {
             seed: Secret::new(seed),
@@ -257,10 +267,13 @@ impl Roll {
     /// Answer a request. `switch_pn` is the first packet number this side will seal under the new keys.
     ///
     /// If this side has its own request out, the dialer's wins: the dialing side ignores the peer's request, the
-    /// accepting side drops its own and answers.
+    /// accepting side drops its own and answers. A request whose roll number is not this side's count is refused
+    /// and nothing changes: below it, a late copy of a request answered before; above it, the peer already rolled
+    /// with an answer to this side's own request that is still on its way (this side's request stays out).
     ///
     /// # Errors
-    /// [`Failure::UnexpectedMessage`] for an answer, or for a request the dialing side ignores;
+    /// [`Failure::UnexpectedMessage`] for an answer, for a request of another roll number, or for a request the
+    /// dialing side ignores;
     /// [`Failure::InvalidPeerKey`] for a share that gives no shared secret; [`Failure::Randomness`] if the
     /// generator refuses.
     pub fn on_request<P: Provider>(
@@ -279,6 +292,9 @@ impl Roll {
                 answer: *answer,
                 dh: None,
             });
+        }
+        if request.roll != self.rolls {
+            return Err(Failure::UnexpectedMessage);
         }
         if !self.is_idle() {
             if self.dialer {
@@ -301,6 +317,7 @@ impl Roll {
             share: p.x25519_public(&secret),
             echo,
             switch_pn,
+            roll: 0,
         };
         self.last = Some((request.share, answer));
         self.rolls = self.rolls.saturating_add(1);

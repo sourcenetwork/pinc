@@ -317,6 +317,10 @@ def replayEvent (j : J) (w : W) : Except String W := do
       | "mv" => pure (N.addressChanged n0 now)
       | "sn" => pure (N.snapshotTo e n0 now (← natF j "peer"))
       | "sm" => pure (N.setMaxFrame n0 (← u64F j "mf"))
+      | "sr" => pure (n0.streamReset (← natF j "peer"))
+      -- frames of a hub peer read from a session that is not the link's current one: the node drops them, the
+      -- machine is not called and must be as it was
+      | "xs" => pure n0
       | _ => throw s!"unknown node op {op}"
     checkOut j n now
     pure (slotSet w k n.drained.clearOut)

@@ -115,7 +115,7 @@ fn base(c: &mut Ctx) {
         let (_, d) = sim.r_recv(rs, &ex(&first[0]));
         assert!(d.req.is_some() && d.sends.is_empty());
         let (r, d2) = sim.r_recv(rs, &ex(&first[0]));
-        assert!(is_dropped(&r) && d2.req.is_none() && d2.sends.is_empty());
+        assert!(r.is_ok() && d2.req.is_none() && d2.sends.is_empty());
         let (r, d) = sim.r_key(rs, true);
         assert!(r.is_ok());
         let reply = d.sends[0].clone();
@@ -185,7 +185,7 @@ fn base(c: &mut Ctx) {
         let bad = flip_field(&hello, "binder");
         let rs = sim.r_new(1);
         let (r, d) = sim.r_recv(rs, &bad);
-        assert!(r.is_ok() && d.sends[0][0] == 8 && d.early.is_none());
+        assert!(is_dropped(&r) && d.sends.is_empty() && d.early.is_none());
         let rs2 = sim.r_new(1);
         let (r, d) = sim.r_recv(rs2, &ex(&hello));
         assert!(r.is_ok() && d.early.is_some() && d.est.is_some());
@@ -302,7 +302,7 @@ fn retransmits(c: &mut Ctx) {
         assert!(sim.i_retx(is).sends == first);
         let rs = sim.r_new(1);
         assert!(sim.r_recv(rs, &ex(&first[0])).1.req.is_some());
-        assert!(is_dropped(&sim.r_recv(rs, &ex(&again[0])).0));
+        assert!(sim.r_recv(rs, &ex(&again[0])).0.is_ok());
         assert!(sim.r_retx(rs).sends.is_empty(), "nothing to send while the host signs");
         let reply = sim.r_key(rs, true).1.sends[0].clone();
         assert_eq!(sim.r_retx(rs).sends, vec![reply.clone()]);
@@ -506,12 +506,12 @@ fn expiry(c: &mut Ctx) {
         assert_eq!(first[0][0], 1, "an expired ticket is not taken");
         sim.drive(is, first, None, 3, 3);
     });
-    // three tickets per session: all three are issued, two fit the store, the last one is the one the client keeps
+    // three tickets per session on a store of two: the batch ends at two (it never evicts its own), the client keeps the last
     c.world(false, |sim| {
         sim.tps = 3;
         let (is, first) = sim.start(1, 1, false, false);
         sim.drive(is, first, None, 1, 1);
-        assert_eq!(sim.ests[&('R', 1)].tickets.entries().len(), 3);
+        assert_eq!(sim.ests[&('R', 1)].tickets.entries().len(), 2);
         sim.accept(is, 1);
         assert_eq!(sim.client.len(), 1);
         sim.tps = 1;

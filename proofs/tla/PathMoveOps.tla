@@ -17,7 +17,9 @@
 (* 15 s, "stale": silent for more than 15 s), r its round trip (ns).       *)
 (* Ghosts the properties read: o the challenges that left on the slot,     *)
 (* ps those pushed since its table was last cleared, lf the path was left  *)
-(* while gone.                                                             *)
+(* while gone, vl a validation challenge_path started on the slot is       *)
+(* running (until the path is validated, lost, emptied, or its last probe  *)
+(* left).                                                                  *)
 (* A connection c: t (NP slots), act the active slot, srtt the smoothed   *)
 (* round trip (-1 before a sample), hi the last challenge token drawn     *)
 (* (tokens are 1, 2, ... in drawing order: the random draw never repeats,  *)
@@ -40,7 +42,8 @@ PO == INSTANCE PathOps
 
 New(id, k, six, hd) ==
     [id |-> id, k |-> k, six |-> six, v |-> (k = "r"), ch |-> 0, sent |-> [x \in 1..CH |-> 0], nx |-> 1,
-     sc |-> FALSE, pr |-> FALSE, rj |-> FALSE, gone |-> FALSE, hd |-> hd, r |-> 0, o |-> {}, ps |-> {}, lf |-> FALSE]
+     sc |-> FALSE, pr |-> FALSE, rj |-> FALSE, gone |-> FALSE, hd |-> hd, r |-> 0, o |-> {}, ps |-> {}, lf |-> FALSE,
+     vl |-> FALSE]
 None == New(0, "d", FALSE, "never")
 
 Max2(a, b) == IF a >= b THEN a ELSE b
@@ -98,7 +101,7 @@ IsChal(p, tok) == tok > 0 /\ \E x \in 1..CH : p.sent[x] = tok
 \* what an answer (or path_returned) does to the slot: the table cleared, validated, no probe left, not rejoining
 Clear(p, r) ==
     [p EXCEPT !.sent = [x \in 1..CH |-> 0], !.ch = 0, !.sc = FALSE, !.v = TRUE, !.pr = FALSE, !.rj = FALSE,
-              !.r = r, !.ps = {}]
+              !.r = r, !.ps = {}, !.vl = FALSE]
 
 \* on_path_response: an answer to any challenge in the table validates the slot it arrived on, then choose_path; a
 \* gone path is never validated again (fix T6)
@@ -157,7 +160,8 @@ Lost(c, id) ==
     LET f == PO!Find(c.t, id)
     IN IF f = 0 THEN [c |-> c, r |-> "unknown"]
        ELSE [c |-> ForgetGone(Choose([c EXCEPT !.t[f].gone = TRUE, !.t[f].v = FALSE, !.t[f].pr = FALSE,
-                                               !.t[f].rj = FALSE, !.t[f].sc = FALSE])), r |-> "ok"]
+                                               !.t[f].rj = FALSE, !.t[f].sc = FALSE, !.t[f].vl = FALSE])),
+                r |-> "ok"]
 
 \* set_active
 SetActive(c, id) ==
@@ -175,14 +179,21 @@ SetInfo(c, id, k, six) ==
                 e == IF OpenToMove(d) THEN Choose(d) ELSE d
             IN TakeInfo(e, f, k, six)
 
+\* challenge_path: the challenge follow_peer or challenge_back queued is retried on the probe cadence of a new path
+\* (a punch already running keeps its own), so a lost challenge or answer is sent again; once: the rule before, one
+\* challenge never repeated (the validation is still marked, so the witness sees it left with nothing armed)
+Arm(d, i, once) ==
+    IF d.t[i].ch = 0 THEN d
+    ELSE [d EXCEPT !.t[i].vl = TRUE, !.t[i].pr = (@ \/ ~once), !.t[i].rj = IF d.t[i].pr THEN @ ELSE FALSE]
+
 \* A packet with a PATH_CHALLENGE on path id (process_payload, on_frame, challenge_back). cb: the node is not declared
-\* thin and the session moved application data within 20 s.
-Chal(c, id, cb, rn) ==
+\* thin and the session moved application data within 20 s. The challenge back is retried like any other (Arm).
+Chal(c, id, cb, rn, once) ==
     LET l == Learn(c, id)
         d == Heard(l.c, l.i)
     IN IF l.i = 0 THEN c
        ELSE IF cb /\ (d.t[d.act].id = 0 \/ d.t[d.act].k = "r") /\ d.t[l.i].k = "d" /\ ~d.t[l.i].v /\ d.t[l.i].ch = 0
-            THEN QueueChal(d, l.i, rn) ELSE d
+            THEN Arm(QueueChal(d, l.i, rn), l.i, once) ELSE d
 
 \* A packet with a PATH_RESPONSE answering tok on path id
 Resp(c, id, tok, r) == LET l == Learn(c, id) IN IF l.i = 0 THEN c ELSE OnResp(Heard(l.c, l.i), l.i, tok, r)
@@ -190,12 +201,12 @@ Resp(c, id, tok, r) == LET l == Learn(c, id) IN IF l.i = 0 THEN c ELSE OnResp(He
 \* A packet with STREAM or DATAGRAM data (wake: or a WAKE) on path id (process_payload, follow_peer). hi: its number
 \* is not below the largest received. fresh: the node is declared thin and the path's challenge was drawn within
 \* max(1 s, 2 x the node's round trip).
-Data(c, id, hi, wake, fresh, rn) ==
+Data(c, id, hi, wake, fresh, rn, once) ==
     LET l == Learn(c, id)
         d == Heard(l.c, l.i)
         p == d.t[l.i]
         a == d.t[d.act]
-        q == IF p.k = "d" /\ ~p.v /\ ~(fresh /\ p.ch # 0) THEN QueueChal(d, l.i, rn) ELSE d
+        q == IF p.k = "d" /\ ~p.v /\ ~(fresh /\ p.ch # 0) THEN Arm(QueueChal(d, l.i, rn), l.i, once) ELSE d
     IN IF l.i = 0 THEN c
        ELSE IF ~hi \/ l.i = d.act \/ p.gone THEN d                                  \* fix T6: a gone path is not followed
        ELSE IF a.id = 0 \/ a.k = "r" \/ p.k = "d" \/ wake THEN Follow(q, l.i) ELSE q
@@ -240,12 +251,14 @@ Timers(c, thin, rn) ==
 
 \* on_path_timers, second half: fire_probe for each unvalidated path with a probe left that is due (F), in slot order.
 \* A thin session's re-join waiting for its floor (W) sends nothing; otherwise the challenge is queued and a probe
-\* spent (L: it was the last), a thin direct re-join being re-armed with one.
+\* spent (L: it was the last), a thin direct re-join being re-armed with one; a validation whose last probe left
+\* is given up (vl).
 FireDue(p) == p.id # 0 /\ ~p.v /\ p.pr
 Fire(c, x, wait, last, thin) ==
     LET p == c.t[x]
     IN IF p.rj /\ thin /\ wait THEN c
-       ELSE [c EXCEPT !.t[x].pr = (~last \/ (p.rj /\ p.k = "d" /\ thin)), !.t[x].sc = (p.ch # 0)]
+       ELSE LET pr == ~last \/ (p.rj /\ p.k = "d" /\ thin)
+            IN [c EXCEPT !.t[x].pr = pr, !.t[x].sc = (p.ch # 0), !.t[x].vl = (@ /\ pr)]
 RECURSIVE FireFrom(_, _, _, _, _, _)
 FireFrom(c, x, F, W, L, thin) ==
     IF x > NP THEN c

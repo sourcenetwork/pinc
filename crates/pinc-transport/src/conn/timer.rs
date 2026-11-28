@@ -2,10 +2,11 @@
 //!
 //! Invariants: a timer is reported only while it can still act (a stale deadline would make a driver spin); the
 //! recovery timer keeps running while the peer sleeps or the link is down (it declares the oldest packet lost and
-//! pings, without growing the count); a connection that is closing ends at its next timer. A session on a relay path
-//! is closed, with a CLOSE, at a probe timeout once 4 have fired in a row, it heard nothing for 4 round trips and the
-//! relay's carrier was heard within 6 s: the carrier works, so the peer no longer holds the session, and the layers
-//! above dial again instead of waiting for the probes to give up.
+//! pings, without growing the count); a connection that is closing ends at its next timer once its CLOSE was offered
+//! (`poll_transmit` was called since the close), and until then its timer, due at once, waits for that call. A session
+//! on a relay path is closed, with a CLOSE, at a probe timeout once 4 have fired in a row, it heard nothing for 4
+//! round trips and the relay's carrier was heard within 6 s: the carrier works, so the peer no longer holds the
+//! session, and the layers above dial again instead of waiting for the probes to give up.
 
 use pinc_crypto::Provider;
 use pinc_security::Env;
@@ -15,7 +16,7 @@ use super::event::{CloseReason, Ev};
 use super::life::LINK_DOWN_MAX;
 use super::path::PTO_FALLBACK;
 use super::{Connection, Phase};
-use crate::recovery::{Health, INITIAL_RTT, PathKind, SECOND};
+use crate::recovery::{Health, INITIAL_RTT, PathKind, SECOND, deadline_after};
 use crate::stream::StreamSource;
 
 /// Probe timeouts in a row on a relay path whose carrier answers after which the session is closed.
@@ -53,9 +54,13 @@ conn_impl! {
         if !self.confirmed {
             add(self.hs.retransmit_at());
         }
-        add(self.rekey_deadline());
+        // The request is a control frame: with no room to write one, its deadline would stay due and wake the host
+        // for nothing. An acknowledgement that frees a slot wakes it, and the deadline, by then past, is offered again.
+        if self.rekey_room(self.paths.active) {
+            add(self.rekey_deadline());
+        }
         add(self.rec.next_timeout());
-        if self.amp_room(self.paths.active) >= 64 {
+        if self.ack_room(self.paths.active) {
             add(self.rx.ack_deadline());
         }
         add(self.paced_until);
@@ -63,7 +68,10 @@ conn_impl! {
         add(self.life.wake_deadline);
         add(self.life.link_down.map(|s| s.saturating_add(LINK_DOWN_MAX)));
         if self.phase == Phase::Connected {
-            add(self.life.keepalive.map(|k| self.life.last_sent.saturating_add(k)));
+            // The PING is a forced packet, written only with room in the ring like any control frame.
+            if self.keepalive_room(self.paths.active) {
+                add(self.life.keepalive.and_then(|k| deadline_after(self.life.last_sent, k)));
+            }
             add(self.mtu_deadline());
         }
         Some(t)
@@ -80,7 +88,11 @@ conn_impl! {
         match self.phase {
             Phase::Closed => return,
             Phase::Closing => {
-                self.phase = Phase::Closed;
+                // The grace runs from the close, but a host that has not asked for a datagram yet still owes the peer
+                // its CLOSE; a CLOSE that cannot leave is freed by the grace after the first attempt.
+                if self.life.close.is_none() || self.life.close_offered {
+                    self.phase = Phase::Closed;
+                }
                 return;
             }
             Phase::Handshaking | Phase::Connected => {}
@@ -188,6 +200,8 @@ pub(super) mod trace {
         pub phase: u8,
         /// The code of the CLOSE to send, until it left.
         pub close: Option<u64>,
+        /// Whether the host has asked for a datagram since the close began, so the CLOSE was offered to it.
+        pub close_offered: bool,
         /// Whether the 1-RTT sending keys are installed.
         pub send_keys: bool,
         /// When the peer was last heard (or the connection last resumed).
@@ -218,8 +232,12 @@ pub(super) mod trace {
         pub rec: Option<u64>,
         /// When the acknowledgement is due.
         pub ack: Option<u64>,
-        /// Whether the active path may still be sent at least 64 bytes (the acknowledgement deadline is read only then).
+        /// Whether the acknowledgement due can leave on the active path (the acknowledgement deadline is read only then).
         pub amp_ok: bool,
+        /// Whether the REKEY resend may be offered: a REKEY datagram can leave on the active path.
+        pub rr: bool,
+        /// Whether the keepalive may be offered: a PING datagram can leave on the active path.
+        pub kr: bool,
         /// When the pacer releases the data that waits.
         pub paced: Option<u64>,
         /// The earliest path deadline: a probe of an unvalidated path, the idle-out of a validated direct one.
@@ -309,6 +327,7 @@ pub(super) mod trace {
                     Phase::Closed => 3,
                 },
                 close: self.life.close,
+                close_offered: self.life.close_offered,
                 send_keys: self.keys.send.is_some(),
                 last_activity: self.life.last_activity,
                 last_sent: self.life.last_sent,
@@ -324,7 +343,9 @@ pub(super) mod trace {
                 rekey: self.rekey_deadline(),
                 rec: self.rec.next_timeout(),
                 ack: self.rx.ack_deadline(),
-                amp_ok: self.amp_room(self.paths.active) >= 64,
+                amp_ok: self.ack_room(self.paths.active),
+                rr: self.rekey_room(self.paths.active),
+                kr: self.keepalive_room(self.paths.active),
                 paced: self.paced_until,
                 path: self.path_deadline(),
                 mtu: self.mtu_deadline(),

@@ -149,6 +149,7 @@ import Pinc.TraceMtu
 import Pinc.TransportDgramSize
 import Pinc.TransportPath
 import Pinc.TransportPathJoined
+import Pinc.Ledger
 import Pinc.TraceReplyPath
 import Pinc.TransportTimers
 import Pinc.TransportTimersThm

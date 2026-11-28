@@ -61,15 +61,17 @@ EXTENDS Integers, Sequences, TLC, Json, IOUtils, TraceEnd
 
 VARIABLES now, boot, restarts, gmap, gexp, req, resp, cstep, tries, renewing, pub, started, renewAt, cexp,
           prevAt, prevSrv, heardBoot, grantBoot, renewTried, lapseUntried, floorEnd, annNext, lastBrought, fast,
-          dropBad, i
+          dropBad, hdrBad, overtaken, staleGrants, i
 
 \* every variable, listed here: UNCHANGED of the instance's nested M!vars stopped TLC with an evaluation error at
 \* the ghosts
 tv == <<now, boot, restarts, gmap, gexp, req, resp, cstep, tries, renewing, pub, started, renewAt, cexp,
-        prevAt, prevSrv, heardBoot, grantBoot, renewTried, lapseUntried, floorEnd, annNext, lastBrought, fast, dropBad>>
+        prevAt, prevSrv, heardBoot, grantBoot, renewTried, lapseUntried, floorEnd, annNext, lastBrought, fast, dropBad,
+        hdrBad, overtaken, staleGrants>>
 M == INSTANCE PortMapLease WITH L <- 8, Sec <- 5, MaxT <- 1000000000, MaxRestarts <- 1000000000, Tries <- 3,
                                 Renew <- TRUE, Epoch <- TRUE, Expiry <- TRUE, StopDrop <- TRUE, RefusalDrops <- TRUE,
-                                AnnounceDrops <- FALSE, Floor <- 2, FloorOn <- TRUE, KeepFloor <- TRUE, Spoofs <- TRUE
+                                AnnounceDrops <- FALSE, Floor <- 2, FloorOn <- TRUE, KeepFloor <- TRUE, Spoofs <- TRUE,
+                                HeaderDrops <- FALSE, ExpireFirst <- TRUE, OverEnds <- TRUE
 
 Trace == ndJsonDeserialize(IOEnv.PINC_TRACE_DIR \o "/portmap/lease.ndjson")
 
@@ -97,7 +99,8 @@ TraceNext ==
        /\ IF Trace[i + 1].ev = "new"
           \* a new run: the ghosts start empty and the recorded state must be the model's initial state
           THEN /\ heardBoot' = 0 /\ grantBoot' = 0 /\ renewTried' = FALSE /\ lapseUntried' = FALSE
-               /\ lastBrought' = -1 /\ fast' = FALSE /\ dropBad' = FALSE
+               /\ lastBrought' = -1 /\ fast' = FALSE /\ dropBad' = FALSE /\ hdrBad' = FALSE
+               /\ overtaken' = FALSE /\ staleGrants' = {}
                /\ (M!Init)'
           ELSE M!Next \/ UNCHANGED tv
     \* the end of the trace
@@ -107,7 +110,7 @@ TraceSpec == TraceInit /\ [][TraceNext]_<<i, tv>>
 
 TraceInv ==
     /\ M!TypeOK /\ M!HeldByGateway /\ M!StoppedUnpublished /\ M!LeaseLive /\ M!RenewedBeforeLapse
-    /\ M!AnnounceKeeps /\ M!AnnounceSpaced
+    /\ M!AnnounceKeeps /\ M!AnnounceSpaced /\ M!HeaderKeeps
 \* the end check (TraceEnd.tla): some behaviour consumed every line of a trace that has one
 ReplayAtEnd == ReplaySeen(i = Len(Trace))
 ReplayEnded == ReplayRead(Len(Trace))

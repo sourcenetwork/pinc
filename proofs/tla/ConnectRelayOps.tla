@@ -24,10 +24,15 @@
 (*  - the session table is the exact Table of ConnectTableOps.tla (so the  *)
 (*    sweep closes sessions in the order of the real slots); the sessions  *)
 (*    themselves are in cd;                                                *)
-(*  - gone, sl (sleeping), udp, rec and the member table of the mailbox    *)
-(*    are finite functions that are full at their capacity (a new key is   *)
+(*  - sl (sleeping), udp, rec and the member table of the mailbox are     *)
+(*    finite functions that are full at their capacity (a new key is       *)
 (*    refused when full), which is all the code observes of them           *)
-(*    (ConnectTable.tla proves the table is that map);                     *)
+(*    (ConnectTable.tla proves the table is that map); a mark of sl is     *)
+(*    [at, ts, woke]: when the notice was accepted, the notice's clock in  *)
+(*    ms and the last wake-up asked for;                                   *)
+(*  - gone is that function too, and gt the exact Table that holds the     *)
+(*    same entries, so a full table drops the entry the code drops (the    *)
+(*    first with the oldest time in slot order, record_gone);              *)
 (*  - fb is the direct mapped Cache of the reply routes (bk gives the      *)
 (*    bucket of each node: the hash of the code, as recorded).             *)
 (* Seams, stated: signatures are an oracle (the call says whether the      *)
@@ -69,13 +74,43 @@ Learn(a, al, node) == IF al < AM THEN [a EXCEPT !.sl[al] = node] ELSE a
 Resolve(a, al) == IF al < AM THEN a.sl[al] ELSE 0
 
 NewRelay(cf) == [bk |-> [x \in {} |-> 0], tb |-> NewTable(cf.C), cd |-> [x \in {} |-> 0], gone |-> [x \in {} |-> 0],
+                 gt |-> NewTable(cf.C),
                  sl |-> [x \in {} |-> 0], udp |-> [x \in {} |-> 0], nr |-> {},
                  fb |-> [i \in 0..(cf.C - 1) |-> [n |-> 0, rel |-> 0, at |-> 0]],
                  peers |-> [i \in 1..MAXPEERS |-> 0], rec |-> [x \in {} |-> 0], mb |-> Empty, ns |-> 0, ls |-> 0, np |-> 0]
 
 HasC(cf, R, n) == Find(cf.C, R.bk, R.tb, n) >= 0
+
+(* relay/mod.rs mark_live: a sleep mark lasts as long as the mailbox keeps a message (cf.Age, mailbox_max_age_ns),
+   counted from the notice that set it; routing, the hold and the sweep read this one rule *)
+Live(cf, R, now, n) == n \in DOMAIN R.sl /\ Sat(now - R.sl[n].at) < cf.Age
 IsPeer(R, n) == \E i \in 1..MAXPEERS : R.peers[i] = n
 CanPut(f, k, cap) == k \in DOMAIN f \/ Cardinality(DOMAIN f) < cap
+
+\* the key of the first entry with the oldest time of a non-empty sequence of slots (Iterator::min_by_key)
+OldestKey(es) == es[CHOOSE i \in 1..Len(es) : (\A j \in 1..Len(es) : es[i].v <= es[j].v) /\ \A j \in 1..(i - 1) : es[j].v > es[i].v].k
+
+\* clients.rs record_gone: node closed at now; a full table first drops its entry with the oldest time (a node already in
+\* it only has its time refreshed), so the close is never lost
+RecordGone(cf, R, node, now) ==
+    LET R1 == IF Find(cf.C, R.bk, R.gt, node) < 0 /\ R.gt.len >= cf.C
+              THEN LET old == OldestKey(Entries(cf.C, R.gt, 0))
+                   IN [R EXCEPT !.gone = Del(R.gone, old), !.gt = Remove(cf.C, R.bk, R.gt, old).t]
+              ELSE R
+    IN [R1 EXCEPT !.gone = Put(R1.gone, node, now), !.gt = Insert(cf.C, R1.bk, R1.gt, node, now).t]
+\* the old rule, for the witness ConnectRelay_wgone (a definition override): a full table forgets the close
+RecordGoneForget(cf, R, node, now) ==
+    IF CanPut(R.gone, node, cf.C)
+    THEN [R EXCEPT !.gone = Put(R.gone, node, now), !.gt = Insert(cf.C, R.bk, R.gt, node, now).t]
+    ELSE R
+
+\* the gone.retain of the sweep, on the slots: the entries closed GONET or more ago go
+RECURSIVE RetainGone(_, _, _, _, _)
+RetainGone(n, bk, t, i, now) ==
+    IF i >= n THEN t
+    ELSE IF t.s[i].k = 0 THEN RetainGone(n, bk, t, i + 1, now)
+    ELSE IF Sat(now - t.s[i].v) < GONET THEN RetainGone(n, bk, t, i + 1, now)
+    ELSE RetainGone(n, bk, RemoveAt(n, bk, t, i), i, now)
 
 RoutedE(s, d, rt, b) == <<"t", "routed", s, d, rt, b>>
 RejE(why, node) == <<"t", "rej", why, node>>
@@ -178,7 +213,7 @@ RouteBehind(cf, R, now, src, dst, flag, len, origin) ==
              td == TunnelDown(R2, now, dst, src, flag, len)
          IN IF rh.more THEN After(rh.ef, Hold(cf, R2, now, dst, src, flag, len))
     ELSE IF td.ok THEN [R |-> R2, res |-> "ok", ef |-> rh.ef \o td.ef]
-    ELSE IF dst \in DOMAIN R2.sl THEN After(rh.ef, Hold(cf, R2, now, dst, src, flag, len))
+    ELSE IF Live(cf, R2, now, dst) THEN After(rh.ef, Hold(cf, R2, now, dst, src, flag, len))
     ELSE IF origin = "peer" THEN After(rh.ef, Fail(R2, "noroute", src))
     ELSE After(rh.ef, Forward(cf, R2, now, src, dst, flag, len))
 
@@ -192,9 +227,12 @@ Route(cf, R, now, src, dst, flag, len, origin) ==
     IF dc.ok THEN [R |-> dc.R, res |-> "ok", ef |-> dc.ef]
     ELSE LET td == TunnelDown(R, now, dst, src, flag, len) IN
     IF td.ok THEN [R |-> R, res |-> "ok", ef |-> td.ef]
-    ELSE IF dst \in DOMAIN R.sl THEN Hold(cf, R, now, dst, src, flag, len)
+    ELSE IF Live(cf, R, now, dst) THEN Hold(cf, R, now, dst, src, flag, len)
     ELSE IF origin = "peer" THEN Fail(R, "noroute", src)
     ELSE Forward(cf, R, now, src, dst, flag, len)
+
+(* the end of a member's mark by its return (a carrier opened, or member_returned): traced, so the host writes it *)
+SleepEnd(R, node) == IF node \in DOMAIN R.sl THEN <<<<"t", "sleepend", node>>>> ELSE <<>>
 
 (* clients.rs carrier_opened *)
 CarrierOpened(cf, R, now, node) ==
@@ -205,17 +243,17 @@ CarrierOpened(cf, R, now, node) ==
         ins == Insert(cf.C, R.bk, R.tb, node, 0)
     IN IF ins.res = "full" THEN [R |-> R, res |-> "full", ef |-> pre \o <<RejE("full", node)>>]
        ELSE LET R1 == [R EXCEPT !.tb = ins.t, !.cd = Put(R.cd, node, cl), !.ns = id + 1,
-                               !.gone = Del(R.gone, node), !.sl = Del(R.sl, node)]
+                               !.gone = Del(R.gone, node), !.gt = Remove(cf.C, R.bk, R.gt, node).t, !.sl = Del(R.sl, node)]
                 dh == DeliverHeld(cf, R1, now, node)
-            IN [R |-> dh.R, res |-> "ok", ef |-> pre \o <<<<"t", "opened", node, id>>>> \o dh.ef]
+            IN [R |-> dh.R, res |-> "ok", ef |-> pre \o <<<<"t", "opened", node, id>>>> \o SleepEnd(R, node) \o dh.ef]
 
 (* clients.rs carrier_closed *)
 CarrierClosed(cf, R, now, node, sid) ==
     IF ~HasC(cf, R, node) \/ R.cd[node].id # sid THEN [R |-> R, res |-> "ok", ef |-> <<>>]
     ELSE LET rm == Remove(cf.C, R.bk, R.tb, node)
-             gone1 == IF CanPut(R.gone, node, cf.C) THEN Put(R.gone, node, now) ELSE R.gone
-             asleep == node \in DOMAIN gone1 /\ node \in DOMAIN R.sl /\ R.sl[node].at >= Sat(now - SWIN)
-         IN [R |-> [R EXCEPT !.tb = rm.t, !.cd = Del(R.cd, node), !.gone = gone1], res |-> "ok",
+             R2 == RecordGone(cf, [R EXCEPT !.tb = rm.t, !.cd = Del(R.cd, node)], node, now)
+             asleep == node \in DOMAIN R2.gone /\ node \in DOMAIN R.sl /\ R.sl[node].at >= Sat(now - SWIN)
+         IN [R |-> R2, res |-> "ok",
              ef |-> <<<<"t", "closed", node, IF asleep THEN 1 ELSE 0>>>>]
 
 (* clients.rs charge *)
@@ -247,14 +285,32 @@ Publish(cf, R, now, node, k, seq, home, rlen) ==
     ELSE LET a == Accept(cf, R, now, k, seq, home, "publish") IN
          IF a.res # "ok" THEN a ELSE [R |-> a.R, res |-> "ok", ef |-> a.ef \o Replicate(a.R, 1, rlen, <<>>)]
 
-(* discovery.rs sleep_notice; sender is 0 for a notice over UDP; ts is the notice's clock in ms *)
+(* discovery.rs sleep_notice; sender is 0 for a notice over UDP; ts is the notice's clock in ms. A copy of the notice
+   that set a live mark (the same clock) is accepted and changes nothing: the mark keeps its time and its wake-up; a
+   mark past its life is no mark (a copy of its notice sets a new one, with no wake-up kept). The eviction of a mark
+   with no mail from a full table (put_sleeper: the oldest goes, traced sleepend and counted in marks_evicted; the
+   notice is refused only when every mark holds mail) is not modelled: with C 2 and two clients no config fills the
+   table, and no notice of the recorded trace (C 3) evicts one *)
 SleepNotice(cf, R, now, k, ts, good, sender) ==
     IF sender # 0 /\ sender # k THEN Fail(R, "wrongsender", k)
     ELSE IF Abs(now * 1000 - ts) >= SKEWMS THEN Fail(R, "skew", k)
     ELSE IF ~(HasC(cf, R, k) \/ k \in DOMAIN R.gone) THEN Fail(R, "unknown", k)
     ELSE IF good = 0 THEN Fail(R, "sig", k)
+    ELSE IF Live(cf, R, now, k) /\ R.sl[k].ts = ts THEN [R |-> R, res |-> "ok", ef |-> <<>>]
     ELSE IF ~CanPut(R.sl, k, cf.C) THEN Fail(R, "full", k)
-    ELSE [R |-> [R EXCEPT !.sl = Put(R.sl, k, [at |-> now, woke |-> IF k \in DOMAIN R.sl THEN R.sl[k].woke ELSE 0])],
+    ELSE [R |-> [R EXCEPT !.sl = Put(R.sl, k, [at |-> now, ts |-> ts,
+                                              woke |-> IF Live(cf, R, now, k) THEN R.sl[k].woke ELSE 0])],
+          res |-> "ok", ef |-> <<<<"t", "sleepok", k>>>>]
+(* the old rule, for the witness ConnectRelay_wcopy (a definition override): every accepted notice sets the mark at now,
+   so a copy of it moves the mark and a crash after the copy reads as a suspension *)
+SleepNoticeMove(cf, R, now, k, ts, good, sender) ==
+    IF sender # 0 /\ sender # k THEN Fail(R, "wrongsender", k)
+    ELSE IF Abs(now * 1000 - ts) >= SKEWMS THEN Fail(R, "skew", k)
+    ELSE IF ~(HasC(cf, R, k) \/ k \in DOMAIN R.gone) THEN Fail(R, "unknown", k)
+    ELSE IF good = 0 THEN Fail(R, "sig", k)
+    ELSE IF ~CanPut(R.sl, k, cf.C) THEN Fail(R, "full", k)
+    ELSE [R |-> [R EXCEPT !.sl = Put(R.sl, k, [at |-> now, ts |-> ts,
+                                              woke |-> IF k \in DOMAIN R.sl THEN R.sl[k].woke ELSE 0])],
           res |-> "ok", ef |-> <<<<"t", "sleepok", k>>>>]
 
 (* the packet bytes a frame is charged for *)
@@ -325,7 +381,7 @@ UdpGone(R, node) == [R EXCEPT !.udp = Del(R.udp, node)]
 MemberReturned(cf, R, now, node) ==
     LET R1 == [R EXCEPT !.sl = Del(R.sl, node)]
         dh == DeliverHeld(cf, R1, now, node)
-    IN [R |-> dh.R, res |-> "ok", ef |-> dh.ef]
+    IN [R |-> dh.R, res |-> "ok", ef |-> SleepEnd(R, node) \o dh.ef]
 
 (* discovery.rs datagram, the SPU case; m is the validated member or 0. The member is heard first (its effects come
    first, a full table is traced and the datagram goes on) *)
@@ -344,8 +400,7 @@ SweepC(cf, R, now, i, acc, dummy) ==
          IF k = 0 THEN SweepC(cf, R, now, i + 1, acc, 0)
          ELSE LET c == R.cd[k] IN
               IF Sat(now - c.opened) < cf.SessT THEN SweepC(cf, R, now, i + 1, acc, 0)
-              ELSE LET R1 == [R EXCEPT !.tb = RemoveAt(cf.C, R.bk, R.tb, i), !.cd = Del(R.cd, k),
-                                       !.gone = IF CanPut(R.gone, k, cf.C) THEN Put(R.gone, k, now) ELSE R.gone]
+              ELSE LET R1 == RecordGone(cf, [R EXCEPT !.tb = RemoveAt(cf.C, R.bk, R.tb, i), !.cd = Del(R.cd, k)], k, now)
                    IN SweepC(cf, R1, now, i, acc \o <<<<"t", "expired", k>>, <<"close", k, c.id, "session">>>>, 0)
 
 (* clients.rs handle_timeout: every client carrier is written a PING, in slot order, every PING seconds *)
@@ -353,6 +408,22 @@ RECURSIVE PingC(_, _, _, _)
 PingC(cf, R, i, acc) ==
     IF i >= cf.C THEN acc
     ELSE LET k == R.tb.s[i].k IN PingC(cf, R, i + 1, IF k = 0 THEN acc ELSE Append(acc, <<"car", k, "ping">>))
+
+RECURSIVE ClearSet(_, _)
+ClearSet(mb, S) == IF S = {} THEN mb ELSE LET x == CHOOSE y \in S : TRUE IN ClearSet(Clear(mb, x), S \ {x})
+
+(* clients.rs handle_timeout, the marks: a mark past its life (Live) ends, and the messages held under it end with it
+   (Mailbox::clear, counted expired), so no message outlives the mark it was held under *)
+MarkSweep(cf, R, now) ==
+    LET ended == {y \in DOMAIN R.sl : ~Live(cf, R, now, y)}
+    IN [sl |-> [x \in DOMAIN R.sl \ ended |-> R.sl[x]], mb |-> ClearSet(R.mb, ended)]
+(* the old rule's shape, for the witness ConnectRelay_wlife: a mark lives less than the mailbox keeps a message (the
+   gone life of 600 s against a day; 16 s against cf.Age here) *)
+MarkSweepShort(cf, R, now) ==
+    [sl |-> [x \in {y \in DOMAIN R.sl : Sat(now - R.sl[y].at) < 16} |-> R.sl[x]], mb |-> R.mb]
+(* for the witness ConnectRelay_wmail: the mark ends at its life and the messages held under it stay *)
+MarkSweepKeepMail(cf, R, now) ==
+    [sl |-> [x \in {y \in DOMAIN R.sl : Live(cf, R, now, y)} |-> R.sl[x]], mb |-> R.mb]
 
 Timeout(cf, R0, now) ==
     LET due == now >= R0.np
@@ -362,10 +433,12 @@ Timeout(cf, R0, now) ==
     IF Sat(now - R.ls) < SWEEP THEN [R |-> R, res |-> "ok", ef |-> pf]
     ELSE LET sw == SweepC(cf, R, now, 0, pf, 0)
              R1 == sw.R
+             ms == MarkSweep(cf, R1, now)
              R2 == [R1 EXCEPT !.ls = now,
                     !.gone = [x \in {y \in DOMAIN R1.gone : Sat(now - R1.gone[y]) < GONET} |-> R1.gone[x]],
-                    !.sl = [x \in {y \in DOMAIN R1.sl : Sat(now - R1.sl[y].at) < GONET} |-> R1.sl[x]],
+                    !.gt = RetainGone(cf.C, R1.bk, R1.gt, 0, now),
+                    !.sl = ms.sl,
                     !.rec = [x \in {y \in DOMAIN R1.rec : Sat(now - R1.rec[y].rcv) < RECTTL} |-> R1.rec[x]],
-                    !.mb = Sweep(MC(cf), R1.mb, now)]
+                    !.mb = Sweep(MC(cf), ms.mb, now)]
          IN [R |-> R2, res |-> "ok", ef |-> sw.ef]
 =============================================================================

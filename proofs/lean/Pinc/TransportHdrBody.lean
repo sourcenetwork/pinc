@@ -205,15 +205,33 @@ theorem hsRecv_bad_total (r : R) (mx nr : Nat) (body : List Nat) (total off : Na
     hsRecv r mx nr body = (none, r) := by
   rw [hsRecv_parsed r mx nr body total off data h]; exact add_refused r mx nr total off data.length ht
 
-/-- An offset at or past the message length is refused too, but a message of another length has by then started the
-count over (the length check passed, so the state is a fresh one for this length). -/
+/-- An offset at or past the message length is refused too, but a message of another length, with no runs held, has
+by then started the count over (the length check passed, so the state is a fresh one for this length); with runs
+held it is refused as of another length and changes nothing. -/
 theorem hsRecv_past (r : R) (mx nr : Nat) (body : List Nat) (total off : Nat) (data : List Nat)
     (h : hsRead body = some (total, off, data)) (ht : ¬ (total = 0 ∨ mx < total)) (ho : total ≤ off) :
-    hsRecv r mx nr body = (none, if total ≠ r.total then { runs := [], total := total } else r) := by
+    hsRecv r mx nr body =
+      (none, if total ≠ r.total ∧ r.runs = [] then { runs := [], total := total } else r) := by
   rw [hsRecv_parsed r mx nr body total off data h]
   unfold add
   have : min (off + data.length) total ≤ off := by omega
-  simp [ht, this]
+  rw [if_neg ht]
+  by_cases ht2 : total = r.total
+  · have n1 : ¬ (total ≠ r.total ∧ r.runs ≠ []) := fun h => h.1 ht2
+    have n2 : ¬ (total ≠ r.total ∧ r.runs = []) := fun h => h.1 ht2
+    have n3 : ¬ (total ≠ r.total) := fun h => h ht2
+    rw [if_neg n1, if_neg n2]
+    dsimp only
+    rw [if_pos this, if_neg n3]
+  · by_cases hr : r.runs = []
+    · have n1 : ¬ (total ≠ r.total ∧ r.runs ≠ []) := fun h => h.2 hr
+      have p2 : total ≠ r.total ∧ r.runs = [] := ⟨ht2, hr⟩
+      rw [if_neg n1, if_pos p2]
+      dsimp only
+      rw [if_pos this, if_pos ht2]
+    · have p1 : total ≠ r.total ∧ r.runs ≠ [] := ⟨ht2, hr⟩
+      have n2 : ¬ (total ≠ r.total ∧ r.runs = []) := fun h => hr h.2
+      rw [if_pos p1, if_neg n2]
 
 /-- A fragment that runs past the message length is cut at it, not refused: `add` keeps `total - off` bytes of it. -/
 theorem add_trim (r : R) (mx nr total off dlen : Nat) (ho : off < total) :

@@ -184,11 +184,13 @@ DeliverBun(m) ==
             /\ UNCHANGED <<released, delivered, met, nx, lo, fins>>
     /\ UNCHANGED t
 
+\* the custodian addresses its ack to the node that handed it the bundle and sends it there, so the node it reaches is
+\* both the book's node and the ack's previous (CustodyBook::on_ack takes only acks addressed to its own node)
 DeliverAck(m) ==
     /\ m \in msgs /\ m.kind = "ack"
     /\ LET p == m.to
            s == F!Step(nf[p], t, [k |-> "ack", peer |-> m.from, id |-> 1])
-           o == C!OnAck(cb[p], lg[p], 1, m.from, m.off, TRUE) IN
+           o == C!OnAck(cb[p], lg[p], p, 1, m.from, m.to, m.off, TRUE) IN
        /\ nf' = [nf EXCEPT ![p] = s.f]
        /\ cb' = [cb EXCEPT ![p] = o.B]
        /\ lg' = [lg EXCEPT ![p] = o.L]

@@ -44,7 +44,7 @@ tlc_check() { # tlc_check <dir> : the TLC trace checks of the gate over the ndjs
         lower=$(echo "${spec#Trace}" | tr 'A-Z' 'a-z')
         case "$skip" in *,"$lower",*) continue ;; esac
         out=$(PINC_TRACE_DIR="$1" java -Xss256m -XX:+UseParallelGC -Djava.io.tmpdir="$st" \
-            -cp "$tla/tla2tools-2026.11.19.jar:$tla/CommunityModules-deps-202611060952.jar" tlc2.TLC -workers 2 \
+            -cp "$tla/tla2tools-2026.11.27.jar:$tla/CommunityModules-deps-202611060952.jar" tlc2.TLC -workers 2 \
             -metadir "$st/$spec" -config "proofs/tla/$spec.cfg" "proofs/tla/$spec.tla" 2>&1) \
             || {
                 # TLC's integers are 32-bit: a recorded value beyond them is TLC's limit (the Lean replay has none), not a mismatch.

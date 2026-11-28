@@ -102,6 +102,9 @@ impl<H: Hosted> Shared<H> {
             // An answer to one of the node's own requests (as a client of other relays) is the node's, not the relay's.
             let answer = d.first().is_some_and(|b| *b < 0x40) && !pinc_node::is_relay_request(d);
             if !answer && role.offer(core.node.endpoint(), rnow, from, d) {
+                // The role took it: the ledger counts it as received from its source, as every datagram the endpoint
+                // reads, so the role's answer to it is held to three times what it sent.
+                core.node.endpoint_mut().host_received(now, from, d.len());
                 continue;
             }
             core.node.handle_batch(now, self.local, from, d, usize::MAX);
@@ -149,11 +152,18 @@ impl<H: Hosted> Shared<H> {
     }
 
     /// The next datagram the relay itself sends: its remote, its length in `buf` and its segment size.
-    pub(super) fn role_outgoing(&self, buf: &mut [u8]) -> Option<(SocketAddr, usize, usize)> {
+    pub(super) fn role_outgoing(
+        &self,
+        core: &mut Core<H::Keys, H::Access>,
+        now: u64,
+        buf: &mut [u8],
+    ) -> Option<(SocketAddr, usize, usize)> {
         if !self.role_ready.get() {
             return None;
         }
-        self.role()?.outgoing(buf).map(|(to, n)| (to, n, n))
+        self.role()?
+            .outgoing(buf, |to, n| core.node.endpoint_mut().host_send(now, to, n))
+            .map(|(to, n)| (to, n, n))
     }
 
     /// The role's own work as one future that never completes; the driving future polls it. It restores what the
