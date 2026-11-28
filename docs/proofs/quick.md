@@ -314,7 +314,7 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `FinishResend_fixed` | FIRES 6 -> 5 |
 | `FinishResend_nocap` | FIRES 6 -> 5 |
 | `FinishResend_pto` | FIRES 6 -> 5 |
-| `Frame` | the frames: Frames (545) -> FramesQuick (177), the 130-byte payload in 7 frames instead of 81 |
+| `Frame` | the frames: Frames (785) -> FramesQuick (201), the 130-byte payload in 7 frames instead of 81 |
 | `FramePack` | Normal -> NormalQuick (41472 -> 544 normal cases: every source together, every switch apart), Other -> OtherQuick (rooms {24, 40, 64} -> {24, 64}, ACKs 3 -> 2, streams 4 -> 3) |
 | `FramePack_built` | MAXRANGES 3 -> 2 |
 | `FramePack_modes` | Normal -> NormalQuick (41472 -> 544 normal cases: every source together, every switch apart), Other -> OtherQuick (rooms {24, 40, 64} -> {24, 64}, ACKs 3 -> 2, streams 4 -> 3) |
@@ -405,6 +405,12 @@ the bounds it changes and what the smaller bounds no longer reach.
 | `KeystoreStore` | steps MaxSteps 6 -> 3 (MaxSteps <- MaxStepsQuick) |
 | `Layout` | SmallLen 2100 -> 150, PreN 24 -> 9, Seeds -> SeedsQuick (every family over fewer values, the boundary ones kept) |
 | `MembershipConv` | Init -> InitQuick: the second view's starts 9 -> 1 (the empty view; 6561 -> 729 initial states) |
+| `MembershipHomeSnap` | Init -> InitQuick: member 4's cells {0, 1, 2} -> {0, 2} (listed at epoch 2 or not at all; 178605 -> 30240 initial states) |
+| `MembershipHomeSnap_w_open` | Init -> InitQuick: member 4's cells {0, 1, 2} -> {0, 2} (listed at epoch 2 or not at all; 178605 -> 30240 initial states) |
+| `MembershipHomeSnap_w_reage` | Init -> InitQuick: member 4's cells {0, 1, 2} -> {0, 2} (listed at epoch 2 or not at all; 178605 -> 30240 initial states) |
+| `MembershipHomeSnap_w_recompute` | Init -> InitQuick: member 4's cells {0, 1, 2} -> {0, 2} (listed at epoch 2 or not at all; 178605 -> 30240 initial states) |
+| `MembershipHomeSnap_w_skipall` | Init -> InitQuick: member 4's cells {0, 1, 2} -> {0, 2} (listed at epoch 2 or not at all; 178605 -> 30240 initial states) |
+| `MembershipHomeSnap_w_stale` | Init -> InitQuick: member 4's cells {0, 1, 2} -> {0, 2} (listed at epoch 2 or not at all; 178605 -> 30240 initial states) |
 | `MembershipSys_complete` | MaxSec 190 -> 186 (Aware4 applies only when now - crash (at 40) > 145 s, so MaxSec must exceed 185) |
 | `MembershipSys_complete33` | MaxSec 190 -> 186 (Aware4 applies only when now - crash (at 40) > 145 s, so MaxSec must exceed 185) |
 | `MembershipSys_direct` | MaxSec 90 -> 70 |
