@@ -101,7 +101,7 @@ fn coalesced_resume(held: &[u64], seed: u64) -> Vec<(PathId, bool)> {
     deliver_on(&mut net, OTHER, &reply);
     assert!(net.a.conn.is_connected());
     no_duplicate_paths(&net);
-    assert_eq!(net.a.conn.active_path(), Some(OTHER));
+    assert_eq!(net.a.conn.active_path(), Some(PathId(1)));
     net.a.conn.path_list().map(|(id, _, v)| (id, v)).collect()
 }
 
@@ -110,8 +110,9 @@ fn sent_on(net: &Net<'_, '_>, path: PathId, since: u64) -> bool {
     net.a.tx_log.iter().any(|(t, _, p)| *t >= since && *p == path)
 }
 
-/// A Reply that arrives on a path the dial does not hold establishes the session, the path is held afterwards and
-/// the Finish leaves on it.
+/// A Reply that arrives on a path the dial does not hold establishes the session and the path is held afterwards,
+/// unvalidated with a challenge queued: the session stays on the path it was on, and the Finish goes there and is
+/// copied to the new path.
 fn reply_on_unheld_path(mut w: World, ticket: bool) {
     let mut tickets = if ticket {
         first_session(&mut w)
@@ -133,7 +134,7 @@ fn reply_on_unheld_path(mut w: World, ticket: bool) {
         "the Reply on a path the dial does not hold was not taken"
     );
     assert!(net.a.conn.has_path(OTHER), "the path of the Reply is not held");
-    assert_eq!(net.a.conn.active_path(), Some(OTHER));
+    assert_eq!(net.a.conn.active_path(), Some(PathId(1)));
     // Anyone can send a copy of the Reply from any source: a path the dial did not hold proves nothing, its budget
     // counts the datagram and a challenge goes out on it.
     assert!(!net.a.conn.path_validated(OTHER));
@@ -155,8 +156,8 @@ fn reply_on_unheld_path(mut w: World, ticket: bool) {
     let _ = net.flush();
     assert!(sent_on(&net, OTHER, at), "nothing left on the path of the Reply");
     assert!(
-        !sent_on(&net, PathId(1), at),
-        "a packet left on the path the Reply did not use"
+        sent_on(&net, PathId(1), at),
+        "the Finish did not leave on the path the session stayed on"
     );
     no_duplicate_paths(&net);
 }
@@ -187,7 +188,7 @@ fn a_reply_in_several_datagrams_on_a_path_the_dial_does_not_hold_establishes() {
             "the Reply in {} datagrams was not taken",
             reply.len()
         );
-        assert_eq!(net.a.conn.active_path(), Some(OTHER));
+        assert_eq!(net.a.conn.active_path(), Some(PathId(1)));
         no_duplicate_paths(&net);
     });
 }
@@ -255,7 +256,7 @@ fn a_reply_on_a_new_path_at_a_full_table_takes_the_place_of_an_unvalidated_stand
         deliver_on(&mut net, OTHER, &reply);
         assert!(net.a.conn.is_connected(), "the Reply at a full table was not taken");
         assert!(net.a.conn.has_path(OTHER));
-        assert_eq!(net.a.conn.active_path(), Some(OTHER));
+        assert_eq!(net.a.conn.active_path(), Some(PathId(1)));
         let held = [1, 3, 4, 5, 6, 9]
             .into_iter()
             .filter(|p| net.a.conn.has_path(PathId(*p)))
@@ -285,7 +286,7 @@ fn a_reply_on_a_path_the_dial_gave_up_establishes_and_the_path_is_held_again() {
             "the Reply on a path the table gave up was not taken"
         );
         assert!(net.a.conn.has_path(OTHER));
-        assert_eq!(net.a.conn.active_path(), Some(OTHER));
+        assert_eq!(net.a.conn.active_path(), Some(PathId(1)));
         no_duplicate_paths(&net);
     });
 }

@@ -24,7 +24,7 @@ use pinc_core::{
     Role, SessionId, Taken, Transmit, Value, event_queue,
 };
 use pinc_crypto::{Drbg, IdentityAlg, Keypair, NodeId, Software};
-use pinc_security::{Env, KeyHandle, KeyResponse, LocalIdentity, PrekeyPolicy, SoftKeys, SoftPrekeys};
+use pinc_security::{Env, Failure, KeyHandle, KeyResponse, LocalIdentity, PrekeyPolicy, SoftKeys, SoftPrekeys};
 use pinc_transport::stream::{NoSource, RecvStatus};
 
 pub const CN: usize = 8;
@@ -212,11 +212,13 @@ impl Host {
     }
 
     /// Apply a command, record its events and perform the host duties they ask for. "A command that fails changes no
-    /// session and queues no event ... with two exceptions: a dial of the node's own id queues `ConnectFailed`, and a
-    /// sub-session whose open cannot be queued ... may queue events" (commands.rs): a failed command other than a dial
-    /// must leave the event queue as it was.
+    /// session and queues no event ... with three exceptions: a dial of the node's own id queues `ConnectFailed`, a
+    /// sub-session whose open cannot be queued ... may queue events, and a key answer whose message did not
+    /// authenticate goes on with the held handshake fragments" (commands.rs): a failed command other than a dial or
+    /// such a key answer must leave the event queue as it was.
     pub fn cmd(&mut self, now: u64, c: Command<'_, NoSource>) -> Result<Reply2, CommandError> {
         let dial = matches!(c, Command::Connect { .. });
+        let key_answer = matches!(c, Command::KeyResponse { .. });
         let before = self.ep.node_stats();
         let r = self.ep.command(now, c);
         match &r {
@@ -233,7 +235,8 @@ impl Host {
             }
             Err(e) => {
                 let after = self.ep.node_stats();
-                if !dial && after.events_queued > before.events_queued {
+                let replay = key_answer && matches!(e, CommandError::Failure(Failure::Authentication));
+                if !dial && !replay && after.events_queued > before.events_queued {
                     self.violate(
                         "a failed command queued an event",
                         format!("{e:?}: queued {} -> {}", before.events_queued, after.events_queued),

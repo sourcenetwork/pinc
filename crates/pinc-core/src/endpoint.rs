@@ -683,6 +683,7 @@ ep_impl! {
             events_dropped: self.events.dropped,
             events_lost: self.events.lost,
             fragments_held: self.orphans.counts.held,
+            starts_held: self.orphans.counts.starts_held,
             fragments_replayed: self.orphans.counts.replayed,
             fragments_expired: self.orphans.counts.expired,
             fragments_evicted: self.orphans.counts.evicted,

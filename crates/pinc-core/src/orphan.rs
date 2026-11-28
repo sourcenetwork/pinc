@@ -1,4 +1,4 @@
-//! Handshake fragments that arrive ahead of the first one.
+//! Handshake fragments that arrive ahead of the first one, and first-message starts that no session took.
 //!
 //! A first handshake message can span datagrams, and a path may deliver them out of order. The datagram that starts
 //! the message creates the session; one that carries a later part of it, if it comes first, names an id no session
@@ -11,11 +11,18 @@
 //! it is younger than [`ORPHAN_LIFE`], and only to the session that the first part of the same message (the same
 //! destination id and message length) from the same address created. Holding a datagram never sends anything.
 //!
+//! A start (the part at offset 0 of a first message) that every session holding its id already had as a repeat of its
+//! own first message is held too, flagged: it is never replayed, and a later part that no session agrees with makes a
+//! session of its own from it ([`Orphans::start_of`]), so a forged first message that took the id first cannot keep
+//! the genuine one out. A part a new session refuses stays held (`next` and `done`).
+//!
 //! Invariants: `held = replayed + expired + evicted + waiting` after every call; nothing is allocated.
 
 use core::net::SocketAddr;
 
 use pinc_security::ConnId;
+
+use crate::rx::fragment;
 
 /// The most datagrams held.
 pub(crate) const ORPHANS: usize = 4;
@@ -34,6 +41,25 @@ struct Held {
     local: SocketAddr,
     remote: SocketAddr,
     len: usize,
+    /// The datagram starts the message (offset 0) instead of continuing it.
+    start: bool,
+}
+
+/// Whether the fragments in the datagrams `a` and `b` of one message carry the same bytes at every offset both cover.
+fn agree(a: &[u8], b: &[u8]) -> bool {
+    fn at(d: &[u8], o: u64, lo: u64, hi: u64) -> Option<&[u8]> {
+        let (from, to) = (usize::try_from(lo - o).ok()?, usize::try_from(hi - o).ok()?);
+        d.get(from..to)
+    }
+    let (Some((_, total, ao, ad)), Some((_, _, bo, bd))) = (fragment(a), fragment(b)) else {
+        return false;
+    };
+    let end = |o: u64, d: &[u8]| o.saturating_add(d.len() as u64);
+    let (lo, hi) = (ao.max(bo), end(ao, ad).min(end(bo, bd)).min(total));
+    if lo >= hi {
+        return true;
+    }
+    at(ad, ao, lo, hi).is_some_and(|x| Some(x) == at(bd, bo, lo, hi))
 }
 
 /// What the table did, for [`NodeStats`](crate::NodeStats).
@@ -43,6 +69,8 @@ pub(crate) struct OrphanCounts {
     pub(crate) replayed: u64,
     pub(crate) expired: u64,
     pub(crate) evicted: u64,
+    /// Starts held (counted in `held` too).
+    pub(crate) starts_held: u64,
 }
 
 /// The held datagrams.
@@ -64,6 +92,7 @@ impl Orphans {
                 replayed: 0,
                 expired: 0,
                 evicted: 0,
+                starts_held: 0,
             },
         }
     }
@@ -88,6 +117,49 @@ impl Orphans {
         local: SocketAddr,
         remote: SocketAddr,
         buf: &[u8],
+    ) -> bool {
+        self.put(now, dcid, total, local, remote, buf, false)
+    }
+
+    /// Hold `buf`, the start of a message of `total` bytes for `dcid`, unless the same bytes from `remote` are held
+    /// already (a repeat of a start adds nothing).
+    pub(crate) fn hold_start(
+        &mut self,
+        now: u64,
+        dcid: ConnId,
+        total: u64,
+        local: SocketAddr,
+        remote: SocketAddr,
+        buf: &[u8],
+    ) -> bool {
+        if self.held.iter().enumerate().any(|(k, h)| {
+            h.is_some_and(|x| {
+                x.start
+                    && x.dcid == dcid
+                    && x.total == total
+                    && x.remote == remote
+                    && x.len == buf.len()
+                    && now.saturating_sub(x.at) <= ORPHAN_LIFE
+                    && self.data.get(k).and_then(|d| d.get(..x.len)) == Some(buf)
+            })
+        }) {
+            return true;
+        }
+        let ok = self.put(now, dcid, total, local, remote, buf, true);
+        self.counts.starts_held += u64::from(ok);
+        ok
+    }
+
+    #[allow(clippy::too_many_arguments, reason = "the fields of one entry")]
+    fn put(
+        &mut self,
+        now: u64,
+        dcid: ConnId,
+        total: u64,
+        local: SocketAddr,
+        remote: SocketAddr,
+        buf: &[u8],
+        start: bool,
     ) -> bool {
         if buf.len() > ORPHAN_MAX {
             return false;
@@ -116,20 +188,63 @@ impl Orphans {
             local,
             remote,
             len: buf.len(),
+            start,
         });
         self.order += 1;
         self.counts.held += 1;
         true
     }
 
-    /// Give out the oldest fresh datagram that came from `remote` with a part of the message of `total` bytes for
-    /// `dcid`: its bytes are copied into `out`; returns the local address it arrived on and its length.
-    pub(crate) fn take(
+    /// Copy the oldest fresh part (not a start) from `remote` of the message of `total` bytes for `dcid` whose order
+    /// is at least `min_order` into `out`, and leave it held: returns its order, the local address it arrived on and
+    /// its length. [`Self::done`] lets it go once a session took it.
+    pub(crate) fn next(
         &mut self,
         now: u64,
         dcid: &ConnId,
         total: u64,
         remote: &SocketAddr,
+        min_order: u64,
+        out: &mut [u8; ORPHAN_MAX],
+    ) -> Option<(u64, SocketAddr, usize)> {
+        self.expire(now);
+        let (k, _) = self
+            .held
+            .iter()
+            .enumerate()
+            .filter_map(|(k, h)| {
+                h.filter(|x| {
+                    !x.start && x.order >= min_order && x.dcid == *dcid && x.total == total && x.remote == *remote
+                })
+                .map(|x| (k, x.order))
+            })
+            .min_by_key(|(_, order)| *order)?;
+        let h = self.held.get(k).copied().flatten()?;
+        let src = self.data.get(k)?.get(..h.len)?;
+        out.get_mut(..h.len)?.copy_from_slice(src);
+        Some((h.order, h.local, h.len))
+    }
+
+    /// Let go of the part of order `order`: a session took it.
+    pub(crate) fn done(&mut self, order: u64) {
+        if let Some(h) = self.held.iter_mut().find(|h| h.is_some_and(|x| x.order == order)) {
+            *h = None;
+            self.counts.replayed += 1;
+        }
+    }
+
+    /// Copy the newest fresh start from `remote` of the message of `total` bytes for `dcid` that agrees with `part`
+    /// (a datagram with a later part of that message) into `out`, leaving it held; returns the local address it
+    /// arrived on and its length. A start agrees when it carries the same bytes as the part at every offset both
+    /// cover: every resend of the genuine message carries the same bytes at the same offsets, so a forged start that
+    /// differs from the part is not the one the part belongs to.
+    pub(crate) fn start_of(
+        &mut self,
+        now: u64,
+        dcid: &ConnId,
+        total: u64,
+        remote: &SocketAddr,
+        part: &[u8],
         out: &mut [u8; ORPHAN_MAX],
     ) -> Option<(SocketAddr, usize)> {
         self.expire(now);
@@ -138,21 +253,33 @@ impl Orphans {
             .iter()
             .enumerate()
             .filter_map(|(k, h)| {
-                h.filter(|x| x.dcid == *dcid && x.total == total && x.remote == *remote)
-                    .map(|x| (k, x.order))
+                h.filter(|x| {
+                    x.start
+                        && x.dcid == *dcid
+                        && x.total == total
+                        && x.remote == *remote
+                        && self
+                            .data
+                            .get(k)
+                            .and_then(|d| d.get(..x.len))
+                            .is_some_and(|d| agree(d, part))
+                })
+                .map(|x| (k, x.order))
             })
-            .min_by_key(|(_, order)| *order)?;
-        let h = self.held.get_mut(k)?.take()?;
-        let src = self.data.get(k)?.get(..h.len)?;
-        out.get_mut(..h.len)?.copy_from_slice(src);
-        self.counts.replayed += 1;
+            .max_by_key(|(_, order)| *order)?;
+        let h = self.held.get(k).copied().flatten()?;
+        out.get_mut(..h.len)?.copy_from_slice(self.data.get(k)?.get(..h.len)?);
         Some((h.local, h.len))
     }
 
     /// Whether a fresh datagram from `remote` with a part of the message of `total` bytes for `dcid` is held.
     pub(crate) fn holds(&self, now: u64, dcid: &ConnId, total: u64, remote: &SocketAddr) -> bool {
         self.held.iter().flatten().any(|x| {
-            x.dcid == *dcid && x.total == total && x.remote == *remote && now.saturating_sub(x.at) <= ORPHAN_LIFE
+            !x.start
+                && x.dcid == *dcid
+                && x.total == total
+                && x.remote == *remote
+                && now.saturating_sub(x.at) <= ORPHAN_LIFE
         })
     }
 
@@ -258,7 +385,9 @@ pub(crate) mod trace {
             remote: &SocketAddr,
             out: &mut [u8; ORPHAN_MAX],
         ) -> Option<(SocketAddr, usize)> {
-            self.o.take(now, dcid, total, remote, out)
+            let (order, local, n) = self.o.next(now, dcid, total, remote, 0, out)?;
+            self.o.done(order);
+            Some((local, n))
         }
 
         /// Entry `k` of the table.
@@ -299,6 +428,22 @@ pub(crate) mod trace {
 #[allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "test assertions")]
 mod tests {
     use super::*;
+
+    impl Orphans {
+        /// The oldest fresh part, given out once.
+        fn take(
+            &mut self,
+            now: u64,
+            dcid: &ConnId,
+            total: u64,
+            remote: &SocketAddr,
+            out: &mut [u8; ORPHAN_MAX],
+        ) -> Option<(SocketAddr, usize)> {
+            let (order, local, n) = self.next(now, dcid, total, remote, 0, out)?;
+            self.done(order);
+            Some((local, n))
+        }
+    }
 
     fn addr(i: u8) -> SocketAddr {
         SocketAddr::from(([10, 0, 0, i], 9))
@@ -414,5 +559,54 @@ mod tests {
         assert!(!o.hold(0, cid(1), 4000, addr(1), addr(5), &[0; ORPHAN_MAX + 1]));
         assert!(o.hold(0, cid(1), 4000, addr(1), addr(5), &[0; ORPHAN_MAX]));
         assert_eq!((o.counts.held, o.waiting()), (1, 1));
+    }
+
+    /// A long Handshake datagram for `cid(1)` carrying `data` at `off` of a message of `total` bytes.
+    fn fragment_of(total: u64, off: u64, data: &[u8]) -> std::vec::Vec<u8> {
+        use pinc_transport::packet::{LongHeader, LongType};
+        let mut body = [0u8; 64];
+        let mut w = pinc_wire::Writer::new(&mut body);
+        w.put_varint(total).unwrap();
+        w.put_varint(off).unwrap();
+        w.put_slice(data).unwrap();
+        let n = w.written().len();
+        let h = LongHeader {
+            ty: LongType::Handshake,
+            dcid: cid(1),
+            scid: cid(2),
+            body_len: n,
+        };
+        let mut d = std::vec![0u8; h.header_len() + n];
+        let mut w = pinc_wire::Writer::new(&mut d);
+        h.write(&mut w, 0).unwrap();
+        w.put_slice(&body[..n]).unwrap();
+        d
+    }
+
+    #[test]
+    fn the_start_a_part_continues_is_the_newest_that_agrees_with_it() {
+        let mut o = Orphans::new();
+        let (real, forged) = (
+            fragment_of(8, 0, &[1, 2, 3, 4]),
+            fragment_of(8, 0, &[1, 2, 3, 9, 9, 9, 9, 9]),
+        );
+        assert!(o.hold_start(0, cid(1), 8, addr(1), addr(5), &real));
+        assert!(o.hold_start(1, cid(1), 8, addr(1), addr(5), &forged));
+        let mut out = [0u8; ORPHAN_MAX];
+        // A part that contradicts the newer start (byte 4 of the real message) continues the older one.
+        let part = fragment_of(8, 4, &[5, 6, 7, 8]);
+        assert_eq!(
+            o.start_of(2, &cid(1), 8, &addr(5), &part, &mut out),
+            Some((addr(1), real.len()))
+        );
+        // A part both starts agree with continues the newest.
+        let part = fragment_of(8, 4, &[9, 9, 9, 9]);
+        assert_eq!(
+            o.start_of(2, &cid(1), 8, &addr(5), &part, &mut out),
+            Some((addr(1), forged.len()))
+        );
+        // A part no start agrees with continues none.
+        let part = fragment_of(8, 2, &[0, 0]);
+        assert_eq!(o.start_of(2, &cid(1), 8, &addr(5), &part, &mut out), None);
     }
 }

@@ -99,12 +99,15 @@ fn an_address_change_arms_the_punch_again_a_tenth_of_a_second_later() {
     });
 }
 
-/// A hub session that carries no application data lapses onto its relay path once its direct path has been silent
-/// for 15 s at the hub, and does not punch again while it stays idle, as in the reference model: the relay path is
-/// valid beside the direct one, only the dialer pings a silent direct path (14 s after the later of its own last send
-/// and receive on it), the hub hears nothing on the direct path once the dialer's standby pings stop (20 s after the
-/// last data) and the dialer's answers to the hub's pings stop, so the hub's direct path idles out first; a PING
-/// does not move a session back to a path, and the punch round is skipped while no data moved for 20 s.
+/// A hub session that carries no application data does not punch again while it stays idle, and lapses onto its relay
+/// path once nothing holds its direct path, as in the reference model: the relay path is valid beside the direct one,
+/// the standby pings of both ends stop 20 s after the last data, only the dialer pings a silent direct path (14 s
+/// after the later of its own last send and receive on it, for the 120 s after the path last carried data), a direct
+/// path silent for 15 s at an end idles out there, a PING does not move a session back to a path, and the punch round
+/// is skipped while no data moved for 20 s. When the direct path goes depends on the phase of the two ends' pings:
+/// the hub owes its flight to the relay path too, its standby pings and the dialer's then end within 60 ms of each
+/// other, and each direct-silence ping of the dialer reaches the hub inside its 15 s, so the path is held until those
+/// pings end (the hub's direct path idles out at 139 s) and the session is on its relay path from 140 s.
 #[test]
 fn a_session_with_no_application_data_for_twenty_seconds_skips_its_punch_round() {
     big(|| {
@@ -142,7 +145,7 @@ fn a_session_with_no_application_data_for_twenty_seconds_skips_its_punch_round()
             w.client(a).session_stats(sa)
         );
         assert!(reach_outs(&w, r, secs(5), secs(6)) > 0, "the first punch");
-        w.run(secs(100));
+        w.run(secs(200));
         assert!(
             w.client(a)
                 .session_stats(sa)
@@ -151,7 +154,7 @@ fn a_session_with_no_application_data_for_twenty_seconds_skips_its_punch_round()
             w.client(a).session_stats(sa)
         );
         assert_eq!(
-            reach_outs(&w, r, secs(10), secs(100)),
+            reach_outs(&w, r, secs(10), secs(200)),
             0,
             "a session idle for 20 s does not punch again"
         );

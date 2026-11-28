@@ -217,6 +217,9 @@ pub struct Connection<
     /// length of the datagram that completed it. Acted on only once the session is established. The source id of the
     /// packet header is never kept: the peer's id comes from the authenticated message.
     reply_from: Option<(PathId, u64, usize)>,
+    /// The paths of held handshake fragments that are neither a slot's path nor `reply_from`: the endpoint's pair table
+    /// keeps them until the fragments are applied or dropped (see `path_ids`).
+    hold_ids: [Option<PathId>; NP],
     resumed: bool,
     /// A resumed responder's path that its one Reply went to: the dialer's first 1-RTT packet proves the dialer
     /// received that Reply, so it validates this path (a 0-RTT packet proves nothing). Cleared when the Reply leaves
@@ -330,6 +333,7 @@ where
             started: now,
             odcid,
             reply_from: None,
+            hold_ids: [None; NP],
             resumed: false,
             proof: None,
             confirmed: false,

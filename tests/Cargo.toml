@@ -245,6 +245,14 @@ name = "transport_rules"
 path = "transport_rules.rs"
 
 [[test]]
+name = "transport_fan"
+path = "transport_fan.rs"
+
+[[test]]
+name = "transport_reply_frag"
+path = "transport_reply_frag.rs"
+
+[[test]]
 name = "transport_dgram_size"
 path = "transport_dgram_size.rs"
 
@@ -1300,6 +1308,10 @@ path = "mbt_ranges.rs"
 [[test]]
 name = "mbt_reasm"
 path = "mbt_reasm.rs"
+
+[[test]]
+name = "reasm_agrees"
+path = "reasm_agrees.rs"
 
 [[test]]
 name = "trace_standby"

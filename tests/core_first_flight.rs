@@ -466,3 +466,280 @@ fn the_half_open_cap_counts_every_holder() {
         assert_eq!(holders!(ep, flight, now, addr, addr_a), 3);
     });
 }
+
+/// The length, offset and bytes of the fragment in the long Handshake datagram `d`.
+fn parts(d: &[u8]) -> (usize, usize, Vec<u8>) {
+    let (h, at) = LongHeader::parse(d).unwrap();
+    let mut r = pinc_wire::Reader::new(&d[at..at + h.body_len]);
+    let (total, off) = (r.read_varint().unwrap() as usize, r.read_varint().unwrap() as usize);
+    (total, off, r.read_bytes(r.remaining()).unwrap().to_vec())
+}
+
+/// A datagram for `dcid` that carries `data` at `off` of a message of `total` bytes.
+fn piece(dcid: ConnId, total: usize, off: usize, data: &[u8]) -> Vec<u8> {
+    let mut body = vec![0u8; data.len() + 16];
+    let mut w = Writer::new(&mut body);
+    w.put_varint(total as u64).unwrap();
+    w.put_varint(off as u64).unwrap();
+    w.put_slice(data).unwrap();
+    let n = w.written().len();
+    forge_packet(dcid, &body[..n])
+}
+
+/// The first flight in two datagrams, and the dialer's own copies kept off the wire: the test hands the responder
+/// every datagram itself, spaced as it chooses.
+struct Held {
+    p: Pair,
+    /// The datagram with the start of the message and the one with the rest.
+    d0: Vec<u8>,
+    d1: Vec<u8>,
+    /// Where the rest begins.
+    cut: usize,
+    total: usize,
+}
+
+impl Held {
+    fn new() -> Self {
+        let mut p = Pair::new();
+        let (addr_a, _) = p.addrs();
+        let odcid = p.flight.dcid();
+        p.net.loss = Some(Box::new(move |from, _, d| {
+            from == addr_a && d[0] & 0x80 != 0 && LongHeader::parse(d).is_ok_and(|(h, _)| h.dcid == odcid)
+        }));
+        let both: Vec<Vec<u8>> = p
+            .flight
+            .datagrams
+            .iter()
+            .filter(|d| LongHeader::parse(d).is_ok_and(|(h, _)| h.ty == LongType::Handshake))
+            .cloned()
+            .collect();
+        assert_eq!(both.len(), 2, "the first flight is not two datagrams");
+        let (total, cut, _) = parts(&both[1]);
+        assert_eq!(parts(&both[0]).1, 0);
+        Self {
+            p,
+            d0: both[0].clone(),
+            d1: both[1].clone(),
+            cut,
+            total,
+        }
+    }
+
+    fn dcid(&self) -> ConnId {
+        self.p.flight.dcid()
+    }
+
+    /// Hand the responder `d` now.
+    fn feed(&mut self, d: &[u8]) {
+        let (addr_a, addr_b) = self.p.addrs();
+        let now = self.p.net.now;
+        self.p.net.nodes[self.p.b]
+            .ep
+            .handle_datagram(now, addr_b, addr_a, &mut d.to_vec());
+    }
+
+    fn feed_all(&mut self, ds: &[&[u8]]) {
+        for d in ds {
+            self.feed(d);
+        }
+    }
+
+    /// Let `ms` pass.
+    fn wait(&mut self, ms: u64) {
+        let end = self.p.net.now + ms * MS_NS;
+        self.p.net.run(end, |_| false);
+    }
+
+    /// `d0` with one byte of its message flipped.
+    fn damaged_start(&self) -> Vec<u8> {
+        let mut d = self.d0.clone();
+        let (_, at) = LongHeader::parse(&d).unwrap();
+        d[at + 320] ^= 1;
+        d
+    }
+
+    /// The whole message with the byte `at` flipped, in one datagram.
+    fn damaged_whole(&self, at: usize) -> Vec<u8> {
+        let mut m = self.p.flight.message.clone();
+        m[at] ^= 1;
+        forge_message(self.dcid(), &m)
+    }
+
+    /// One byte at the cut, flipped: a later part that disagrees with the real one.
+    fn damaged_part(&self) -> Vec<u8> {
+        let mut m = self.p.flight.message.clone();
+        m[self.cut] ^= 1;
+        piece(self.dcid(), self.total, self.cut, &m[self.cut..=self.cut])
+    }
+
+    fn served(&mut self) -> bool {
+        self.p.open()
+    }
+}
+
+/// A repeat that adds nothing to a first message still being assembled is not a take: the flight that follows a forged
+/// part is served (the replays 3:3 and 1:86 of the model-based test, witness `FirstFlight_cmp`: `[d0, bad, d1]`, then
+/// `[d0, d1]`).
+#[test]
+fn a_repeat_start_that_adds_nothing_does_not_hide_a_later_part_that_was_refused() {
+    big_stack(|| {
+        let mut h = Held::new();
+        let (d0, d1, bad) = (h.d0.clone(), h.d1.clone(), h.damaged_part());
+        h.feed_all(&[&d0, &bad, &d1]);
+        h.wait(10);
+        h.feed_all(&[&d0, &d1]);
+        assert!(h.served(), "the repeated flight was not served");
+        assert_eq!(
+            h.p.stats().starts_held,
+            0,
+            "the repeat start made a holder at once, nothing was held"
+        );
+    });
+}
+
+/// A repeat of the start after a part a holder refused makes a holder at once and is not held, so the part before the
+/// start of the next flight finds it (witness `FirstFlight_b4`: flight `[d0, bad, d1]`, then `[d1, d0]`).
+#[test]
+fn a_repeat_start_after_a_held_part_makes_a_holder_at_once() {
+    big_stack(|| {
+        let mut h = Held::new();
+        let (d0, d1, bad) = (h.d0.clone(), h.d1.clone(), h.damaged_part());
+        h.feed_all(&[&d0, &bad, &d1]);
+        h.wait(10);
+        h.feed_all(&[&d1, &d0]);
+        assert_eq!(
+            h.p.stats().starts_held,
+            0,
+            "the repeated start was only held, it made no holder at once"
+        );
+        assert!(h.served(), "the part before the repeated start was not served");
+    });
+}
+
+/// A damaged start between the genuine parts does not win: the next flight's genuine start and rest are served
+/// (witness `FirstFlight_old`: flight `[d0, damaged start, d1]`, then `[d0, d1]`).
+#[test]
+fn a_damaged_start_between_the_genuine_parts_does_not_win() {
+    big_stack(|| {
+        let mut h = Held::new();
+        let (d0, d1, bad_start) = (h.d0.clone(), h.d1.clone(), h.damaged_start());
+        h.feed_all(&[&d0, &bad_start, &d1]);
+        // The damaged start is refused as different by the holder of the genuine start and gets a holder of its own:
+        // its bytes are not mixed into the genuine message, and it is not held as a repeat.
+        let st = h.p.stats();
+        assert_eq!(
+            (st.half_open, st.starts_held),
+            (2, 0),
+            "the damaged start did not get its own holder"
+        );
+        h.wait(10);
+        h.feed_all(&[&d0, &d1]);
+        assert!(h.served(), "the genuine flight was not served after a damaged start");
+    });
+}
+
+/// A datagram that coalesces a repeat of the first message's start with a new part is weak (any weak packet makes it
+/// so): its start is held, as for any start no holder took as new.
+#[test]
+fn a_datagram_with_a_repeat_part_and_a_new_part_is_weak() {
+    big_stack(|| {
+        let mut h = Held::new();
+        let (d0, d1) = (h.d0.clone(), h.d1.clone());
+        h.feed(&d0);
+        h.feed(&[d0.as_slice(), d1.as_slice()].concat());
+        assert_eq!(h.p.stats().starts_held, 1, "the coalesced datagram was not weak");
+        assert!(
+            h.served(),
+            "the message the coalesced datagram completed was not served"
+        );
+    });
+}
+
+/// A later part that one holder refused and another took only as a repeat forks a holder from the held start (the
+/// replay 5:114).
+#[test]
+fn a_later_part_that_only_repeats_took_forks_from_the_held_start() {
+    big_stack(|| {
+        let mut h = Held::new();
+        let (d0, d1) = (h.d0.clone(), h.d1.clone());
+        let (bad_start, bad_whole) = (h.damaged_start(), h.damaged_whole(h.cut + 5));
+        h.feed_all(&[&d0, &bad_start, &bad_whole, &d1]);
+        h.wait(10);
+        h.feed_all(&[&d0, &d1]);
+        assert!(h.served(), "the repeated flight was not served");
+    });
+}
+
+/// The start a later part forks from is the newest held start that agrees with it, not the newest: the newest is a
+/// copy of a forged whole message that the part contradicts.
+#[test]
+fn a_later_part_forks_from_the_held_start_that_agrees_with_it() {
+    big_stack(|| {
+        let mut h = Held::new();
+        let (d0, d1) = (h.d0.clone(), h.d1.clone());
+        let (bad_part, bad_whole) = (h.damaged_part(), h.damaged_whole(h.cut + 5));
+        // The first holder takes the forged byte at the cut, so it refuses the real rest; the forged whole message
+        // makes a holder of its own.
+        h.feed_all(&[&d0, &bad_part, &bad_whole]);
+        h.wait(10);
+        // Both repeat: the real start and then the forged one are held, and the real rest finds no holder.
+        h.feed_all(&[&d0, &bad_whole, &d1]);
+        assert!(h.served(), "the second flight was not served");
+    });
+}
+
+/// A part held for a start that is not its own stays held: a holder that refuses the replay does not take the part
+/// from the genuine start that comes after.
+#[test]
+fn a_held_part_a_holder_refused_in_the_replay_stays_held_for_the_genuine_start() {
+    big_stack(|| {
+        let mut h = Held::new();
+        let (d0, d1, bad_start) = (h.d0.clone(), h.d1.clone(), h.damaged_start());
+        h.feed_all(&[&d1, &bad_start, &d0]);
+        assert!(h.served(), "the genuine start did not find the held part");
+    });
+}
+
+/// At the cap a differing later part that would fork a holder from a held start is refused by the same checks as a new
+/// flight: the half-open count stays at the cap and the refusal is counted.
+#[test]
+fn a_fork_at_the_half_open_cap_is_refused_and_counted() {
+    big_stack(|| {
+        let mut net = CoreNet::new(MS_NS);
+        net.capture = true;
+        let a = net.add(1);
+        let kp = Keypair::from_seed(IdentityAlg::Ed25519, &[7u8; 32]).unwrap();
+        let peer = LocalIdentity::from_keypair(&kp, KeyHandle(1)).unwrap().node_id();
+        let (addr_a, now) = (net.nodes[a].addr, net.now);
+        let (mut ep, addr) = server(now);
+        net.nodes[a].connect(now, peer, ALPN_A, addr, Role::Other).unwrap();
+        net.pump_all();
+        let flight = Flight::of(&net, addr_a);
+        let both: Vec<Vec<u8>> = flight
+            .datagrams
+            .iter()
+            .filter(|d| LongHeader::parse(d).is_ok_and(|(h, _)| h.ty == LongType::Handshake))
+            .cloned()
+            .collect();
+        assert_eq!(both.len(), 2);
+        // Strangers fill all but one place, the real flight takes the last.
+        for i in 0..(MAX_HALF_OPEN - 1) as u64 {
+            ep.handle_datagram(now, addr, source(i), &mut craft(0x1000 + i));
+        }
+        for d in &both {
+            ep.handle_datagram(now, addr, addr_a, &mut d.clone());
+        }
+        assert_eq!(ep.node_stats().half_open, MAX_HALF_OPEN);
+        // A copy of the holder's start is held, then a part that contradicts the genuine message.
+        ep.handle_datagram(now, addr, addr_a, &mut both[0].clone());
+        let (total, cut, _) = parts(&both[1]);
+        let mut m = flight.message.clone();
+        m[cut] ^= 1;
+        let before = ep.node_stats();
+        ep.handle_datagram(now, addr, addr_a, &mut piece(flight.dcid(), total, cut, &m[cut..=cut]));
+        let after = ep.node_stats();
+        assert_eq!(after.half_open, MAX_HALF_OPEN, "a fork went past the cap");
+        assert_eq!(after.sessions, before.sessions);
+        assert_eq!(after.dropped_in - before.dropped_in, 1, "the refusal is not counted");
+    });
+}

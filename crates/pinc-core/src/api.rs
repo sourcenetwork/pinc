@@ -782,6 +782,8 @@ pub struct NodeStats {
     /// First flights dropped because the id they name already has four half-open sessions (also counted in
     /// `dropped_in`).
     pub holders_refused: u64,
+    /// First-message starts held because a session already had the same first message (counted in `fragments_held`).
+    pub starts_held: u64,
     /// First handshake messages dropped before admission because their datagram was shorter than the least a first
     /// packet of their type is (also counted in `dropped_in`).
     pub first_too_short: u64,

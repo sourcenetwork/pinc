@@ -4,7 +4,8 @@
 //!
 //! A run cuts messages of random lengths (up to the largest message and past it) into fragments and hands them in
 //! order, reversed, shuffled, repeated, overlapping, cut off at the end of the message and with a message of another
-//! length in between; the sparse mode sends every other fragment first so the table of runs fills. After every call
+//! length in between (an empty reassembly takes it and then refuses the fragments of the message it was cut from;
+//! one that holds the message refuses it); the sparse mode sends every other fragment first so the table of runs fills. After every call
 //! the reassembly shows its runs and the message length being assembled.
 //!
 //! The test checks the bytes itself: a message reported complete is, byte for byte, the message that was cut, and no
@@ -57,8 +58,21 @@ fn run(rng: &mut SplitMix64, out: &mut String, id: u32, sparse: bool) {
                 view_json(&p.view())
             );
         }
+        // A message that did not complete leaves its runs: the next message of that length agrees with them where it
+        // overlaps and adds its own bytes elsewhere, so the bytes are the cut message's only from an empty start.
+        let dirty = !p.view().runs.is_empty();
         let mut msg = vec![0u8; total];
         rng.fill(&mut msg);
+        // The bytes held for this length are this message's at every covered run, so it agrees with them where it
+        // overlaps (the reassembly refuses a byte that differs and keeps the first).
+        let held = p.view();
+        if dirty && held.total == total {
+            for &(a, b) in &held.runs {
+                if let (Some(dst), Some(src)) = (msg.get_mut(a..b), p.buffer().get(a..b)) {
+                    dst.copy_from_slice(src);
+                }
+            }
+        }
         let width = 1 + (rng.next_u64() % 200) as usize;
         let mut frags: Vec<(usize, usize)> = (0..total).step_by(width).map(|o| (o, (o + width).min(total))).collect();
         match rng.next_u64() % 4 {
@@ -110,8 +124,7 @@ fn run(rng: &mut SplitMix64, out: &mut String, id: u32, sparse: bool) {
                         r.map_or(-1, |t| i64::try_from(t).unwrap()),
                         view_json(&p.view())
                     );
-                    // the other message's fragment is not a fragment of this one
-                    sent_cover.fill(false);
+                    // an empty reassembly takes it and then holds that message; one holding this message refuses it
                 }
                 _ => {}
             }
@@ -127,6 +140,12 @@ fn run(rng: &mut SplitMix64, out: &mut String, id: u32, sparse: bool) {
                 r.map_or(-1, |t| i64::try_from(t).unwrap()),
                 view_json(&after)
             );
+            if !before.runs.is_empty() && before.total != total {
+                // another message holds the reassembly: the fragment is refused and the runs keep that message
+                assert_eq!(after, before, "a fragment of another length changed the reassembly");
+                assert!(r.is_none());
+                continue;
+            }
             if total == 0 || total > max {
                 assert_eq!(after, before, "a refused length changed the reassembly");
                 continue;
@@ -136,9 +155,8 @@ fn run(rng: &mut SplitMix64, out: &mut String, id: u32, sparse: bool) {
             }
             if let Some(t) = r {
                 assert_eq!(t, total);
-                assert_eq!(
-                    &p.buffer()[..total],
-                    &msg[..],
+                assert!(
+                    dirty || p.buffer()[..total] == msg[..],
                     "the message reported complete differs from the message cut"
                 );
                 assert!(after.runs.is_empty() && after.total == 0);
@@ -151,9 +169,8 @@ fn run(rng: &mut SplitMix64, out: &mut String, id: u32, sparse: bool) {
                 }
                 for (a, b) in &after.runs {
                     assert!(a < b && *b <= total);
-                    assert_eq!(
-                        &p.buffer()[*a..*b],
-                        &msg[*a..*b],
+                    assert!(
+                        dirty || p.buffer()[*a..*b] == msg[*a..*b],
                         "a run holds bytes that were not sent"
                     );
                     for c in sent_cover.iter_mut().take(*b).skip(*a) {

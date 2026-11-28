@@ -202,6 +202,7 @@ impl Port for Stub {
             fragments_evicted: 0,
             fragments_waiting: 0,
             holders_refused: 0,
+            starts_held: 0,
             first_too_short: 0,
             stateless_rejects: 0,
             stateless_refused: 0,

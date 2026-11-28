@@ -66,6 +66,10 @@ pub struct PathsView {
     pub decl: bool,
     /// The connection's clock.
     pub clock: u64,
+    /// The bytes of a packet number in a short header now.
+    pub pn_len: usize,
+    /// The bytes of a connection id this connection's packets carry.
+    pub cid_len: usize,
 }
 
 conn_impl! {
@@ -105,6 +109,8 @@ conn_impl! {
             thin: self.thin_session(),
             decl: self.cfg.thin,
             clock: self.life.clock,
+            pn_len: self.pn_len,
+            cid_len: self.cfg.cid_len,
         }
     }
 }

@@ -56,6 +56,9 @@ pub(crate) struct Life {
     pub(crate) rejoined: Option<(super::PathId, u64)>,
     /// The last datagram only added a part to a handshake message and finished none.
     pub(crate) hs_part: bool,
+    /// The last datagram was a part of the first message a responder already holds, again, or added no byte to the
+    /// one it is still assembling.
+    pub(crate) hs_repeat: bool,
     pub(crate) ping_owed: bool,
     /// An acknowledgement must leave in the next packet.
     pub(crate) ack_now: bool,
@@ -99,6 +102,7 @@ impl Life {
             probes: 0,
             rejoined: None,
             hs_part: false,
+            hs_repeat: false,
             ping_owed: false,
             ack_now: false,
             small_ping: None,

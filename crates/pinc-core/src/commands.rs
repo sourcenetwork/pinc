@@ -2,10 +2,12 @@
 //!
 //! [`Endpoint::command`] applies a [`Command`] and returns the [`Reply`]: the command's value and the events it caused
 //! at once (up to eight; any more wait in the queue for [`Endpoint::poll_event`]). A command that fails changes no
-//! session and queues no event, and its error says why, with two exceptions: a dial of the node's own id queues
-//! [`Event::ConnectFailed`], and a sub-session whose open cannot be queued has taken a session slot, which it undoes
-//! and redials, so the redial may queue events. It may leave two traces: an address the endpoint learned a path id
-//! for, and, for a dial whose connection could not be built, the resumption ticket it took.
+//! session and queues no event, and its error says why, with three exceptions: a dial of the node's own id queues
+//! [`Event::ConnectFailed`], a sub-session whose open cannot be queued has taken a session slot, which it undoes
+//! and redials, so the redial may queue events, and a key answer whose message did not authenticate goes on with the
+//! handshake fragments the session held while it waited, which may queue that session's events (a new key request, or
+//! its end). It may leave two traces: an address the endpoint learned a path id for, and, for a dial whose connection
+//! could not be built, the resumption ticket it took.
 //! [`Endpoint::query`] reads state and changes nothing.
 //!
 //! A dial first looks for an established session with the peer: if there is one, the new protocol opens as a

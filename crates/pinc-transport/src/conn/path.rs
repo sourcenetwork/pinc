@@ -501,6 +501,7 @@ conn_impl! {
             *s = None;
         }
         self.paths.recount();
+        self.unowe(1 << i);
         Ok(())
     }
 
@@ -528,12 +529,23 @@ conn_impl! {
     /// Stop tracking the paths whose local address is gone, except the active one.
     pub(super) fn forget_gone(&mut self) {
         let active = self.paths.active;
+        let mut forgotten = 0u16;
         for (i, s) in self.paths.slots.iter_mut().enumerate() {
             if i != active && s.as_ref().is_some_and(|p| p.gone) {
                 *s = None;
+                forgotten |= 1 << i;
             }
         }
         self.paths.recount();
+        self.unowe(forgotten);
+    }
+
+    /// The slots in `mask` were emptied or given to another path: the handshake flight is owed to no path in them. A
+    /// bit left behind would hand its flight, and the validation the Finish gives a lone owed path, to the next path
+    /// learnt into the slot.
+    fn unowe(&mut self, mask: u16) {
+        self.fan_set &= !mask;
+        self.fan_mask &= !mask;
     }
 
     /// Whether the connection tracks path `id`.
@@ -634,12 +646,21 @@ conn_impl! {
             return Some(i);
         }
         let active = self.paths.active;
-        let free = self
-            .paths
-            .slots
-            .iter()
-            .position(Option::is_none)
-            .or_else(|| self.paths.iter().find(|(i, p)| *i != active && !p.validated).map(|(i, _)| i))?;
+        // A path the handshake flight is still owed is never given up: dropping it would leave the dialer's flight
+        // unanswered on the path it was sent for.
+        let owed = self.fan_set;
+        let free = self.paths.slots.iter().position(Option::is_none).or_else(|| {
+            self.paths
+                .iter()
+                .find(|(i, p)| *i != active && !p.validated && owed & (1 << i) == 0)
+                .map(|(i, _)| i)
+        });
+        let Some(free) = free else {
+            if self.paths.iter().any(|(i, p)| i != active && !p.validated && owed & (1 << i) != 0) {
+                self.stats.paths_owed_full += 1;
+            }
+            return None;
+        };
         self.put_path(free, id, info, now);
         Some(free)
     }

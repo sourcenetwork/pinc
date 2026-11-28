@@ -1056,3 +1056,137 @@ fn a_challenge_owed_on_a_held_path_is_not_pushed_out_by_an_acknowledgement() {
         assert!(sent_first > 0, "no scenario wrote on the held path");
     });
 }
+
+/// A path with no challenge outstanding keeps nothing back: a validated path's datagrams may be as large as the path
+/// carries, so the whole room goes to the frames.
+#[test]
+fn no_reserve_without_an_outstanding_challenge() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let mut net = connected(&mut w, &mut sa, &mut sb, Link::new(43, Params::new(10 * MS)));
+        let stream = net.a.conn.open_bi().unwrap();
+        net.a.conn.write(stream, &[1; 100]).unwrap();
+        net.run(net.now + 100 * MS, |_| false);
+        net.b.conn.trace_dgram_enable();
+        net.b.conn.write(stream, &pattern(6000, 7)).unwrap();
+        net.run(net.now + 500 * MS, |_| false);
+        let recs = net.b.conn.trace_dgram_take();
+        let largest = recs
+            .iter()
+            .filter(|r| r.len > 0)
+            .max_by_key(|r| r.len)
+            .expect("the responder sent nothing");
+        assert!(
+            largest.len + 16 > usize::from(largest.path_mtu),
+            "a datagram never used the whole room: {largest:?}"
+        );
+    });
+}
+
+/// The reserve a path with a challenge outstanding keeps back is the smallest datagram that carries the challenge: with
+/// the stream data of the responder waiting, whatever room the first datagram of the path has, it carries the
+/// challenge, stays within the room, and a room of no more than the reserve and a few bytes holds nothing else.
+#[test]
+fn the_reserve_is_the_smallest_challenge_datagram() {
+    big_stack(|| {
+        let (mut firsts, mut all) = (Vec::new(), Vec::new());
+        let (mut cid_len, mut pn_len) = (0, 0);
+        for pad in 2..121usize {
+            let mut w = World::new(IdentityAlg::Ed25519);
+            let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+            let mut net = held_route(&mut w, &mut sa, &mut sb, 42);
+            net.b.conn.trace_dgram_enable();
+            let stream = net.a.conn.open_bi().unwrap();
+            net.a.conn.write(stream, &[1; 100]).unwrap();
+            move_to_held(&mut net, stream, &pattern(pad, 5));
+            let _ = net.b.conn.write(stream, &pattern(3000, 9));
+            net.run(net.now + 200 * MS, |_| false);
+            let recs = net.b.conn.trace_dgram_take();
+            all.extend(
+                recs.iter()
+                    .filter(|r| r.len > 0 && r.amp < 1_000_000)
+                    .map(|r| (r.amp, r.len)),
+            );
+            let Some(first) = recs.iter().find(|r| r.len > 0 && r.amp < 1_000_000).copied() else {
+                continue;
+            };
+            let view = net.b.conn.trace_paths();
+            (cid_len, pn_len) = (view.cid_len, view.pn_len);
+            let s = b_slot(&net, PathId(4));
+            assert!(
+                s.sent.iter().any(Option::is_some),
+                "pad {pad}: the first datagram left without the challenge {first:?}"
+            );
+            assert!(
+                first.len <= first.amp,
+                "pad {pad}: a datagram of {} left on a room of {}",
+                first.len,
+                first.amp
+            );
+            firsts.push((first.amp, first.len));
+        }
+        assert!(!firsts.is_empty(), "no scenario wrote on the held path");
+        // The smallest datagram that carries a challenge, as the config gives it: a short header of the connection id
+        // and the packet number, the frame (the sample skip or the longest challenge), and the tag. A datagram written
+        // with less room than the reserve (that, and the overhead the budget keeps) holds nothing but the challenge.
+        let challenge = 1 + cid_len + (pn_len + 9).max(pinc_transport::packet::SAMPLE_SKIP) + 16;
+        let reserve = challenge + pinc_security::amp::OVERHEAD;
+        let smallest = all
+            .iter()
+            .map(|f| f.1)
+            .min()
+            .expect("no datagram was written on the held path");
+        assert_eq!(
+            smallest, challenge,
+            "the smallest datagram on the held path is not the challenge: {all:?}"
+        );
+        for (room, len) in all.iter().filter(|(room, _)| *room < reserve) {
+            assert_eq!(
+                *len, challenge,
+                "a room of {room} below the reserve held more than the challenge: {len}"
+            );
+        }
+        for (room, len) in &all {
+            assert!(len <= room, "a datagram of {len} left on a room of {room}");
+        }
+    });
+}
+
+/// The reserve is exactly the smallest challenge datagram and its overhead, computed from the configuration: on a held
+/// path that received `n` bytes and has a challenge outstanding, with more stream data waiting than the room holds, the
+/// first datagram the responder writes there is the room less the reserve less the 9 bytes of the challenge frame it
+/// carries inside that cap (a reserve of one byte more or less, or none, moves its size).
+#[test]
+fn a_challenged_path_keeps_back_exactly_the_smallest_challenge_datagram() {
+    big_stack(|| {
+        let mut checked = 0;
+        for pad in (20..=120usize).step_by(20) {
+            let mut w = World::new(IdentityAlg::Ed25519);
+            let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+            let mut net = held_route(&mut w, &mut sa, &mut sb, 42);
+            let stream = net.a.conn.open_bi().unwrap();
+            net.a.conn.write(stream, &[1; 100]).unwrap();
+            move_to_held(&mut net, stream, &pattern(pad, 5));
+            let view = net.b.conn.trace_paths();
+            let s = b_slot(&net, PathId(4));
+            assert!(
+                !s.validated && s.challenge.is_some(),
+                "pad {pad}: no challenge is outstanding"
+            );
+            let reserve = 1
+                + view.cid_len
+                + (view.pn_len + 9).max(pinc_transport::packet::SAMPLE_SKIP)
+                + 16
+                + pinc_security::amp::OVERHEAD;
+            let t0 = net.now;
+            let _ = net.b.conn.write(stream, &pattern(3000, 9));
+            net.run(net.now + 5 * MS, |_| false);
+            let first = net.b.tx_log.iter().find(|t| t.2 == PathId(4) && t.0 >= t0).map(|t| t.1);
+            let first = first.expect("nothing left on the held path");
+            assert_eq!(first, s.amp_room - reserve - 9, "pad {pad}: room {}", s.amp_room);
+            checked += 1;
+        }
+        assert_eq!(checked, 6);
+    });
+}

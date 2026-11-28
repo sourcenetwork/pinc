@@ -38,7 +38,7 @@ use pinc_transport::packet::{LongHeader, LongType, short_dcid};
 use pinc_wire::Reader;
 
 use crate::endpoint::{CID_LEN, MAX_DATAGRAM, env, ep_impl, lent};
-use crate::orphan::ORPHAN_MAX;
+use crate::orphan::{ORPHAN_MAX, ORPHANS};
 use crate::relay_net::is_relay_addr;
 use crate::slot::State;
 use crate::trace::trace;
@@ -77,8 +77,9 @@ fn peek(buf: &[u8]) -> Option<(ConnId, bool)> {
     }
 }
 
-/// The destination id and first message type of a long Handshake packet that starts a message.
-fn classify(buf: &[u8]) -> Option<First<'_>> {
+/// The long Handshake packet in `buf`: its header, the length of the message it is a part of, the offset of the
+/// fragment and its bytes.
+pub(crate) fn fragment(buf: &[u8]) -> Option<(LongHeader, u64, u64, &[u8])> {
     let (h, hlen) = LongHeader::parse(buf).ok()?;
     if h.ty != LongType::Handshake {
         return None;
@@ -87,10 +88,16 @@ fn classify(buf: &[u8]) -> Option<First<'_>> {
     let mut r = Reader::new(body);
     let total = r.read_varint().ok()?;
     let off = r.read_varint().ok()?;
+    let data = r.read_bytes(r.remaining()).ok()?;
+    Some((h, total, off, data))
+}
+
+/// The destination id and first message type of a long Handshake packet that starts a message.
+fn classify(buf: &[u8]) -> Option<First<'_>> {
+    let (h, total, off, data) = fragment(buf)?;
     if off != 0 || total == 0 {
         return None;
     }
-    let data = r.read_bytes(r.remaining()).ok()?;
     let kind = MessageType::of(&[*data.first()?]).ok()?;
     let message = usize::try_from(total).ok().and_then(|t| data.get(..t));
     Some(First {
@@ -105,14 +112,7 @@ fn classify(buf: &[u8]) -> Option<First<'_>> {
 /// The destination id and message length of a long Handshake packet that carries a part of a message other than its
 /// start.
 fn later_part(buf: &[u8]) -> Option<(ConnId, u64)> {
-    let (h, hlen) = LongHeader::parse(buf).ok()?;
-    if h.ty != LongType::Handshake {
-        return None;
-    }
-    let body = buf.get(hlen..hlen.checked_add(h.body_len)?)?;
-    let mut r = Reader::new(body);
-    let total = r.read_varint().ok()?;
-    let off = r.read_varint().ok()?;
+    let (h, total, off, _) = fragment(buf)?;
     let plausible = off != 0 && off < total && usize::try_from(total).is_ok_and(|t| t <= MAX_MESSAGE_LEN);
     plausible.then_some((h.dcid, total))
 }
@@ -157,9 +157,6 @@ ep_impl! {
         match n {
             0 => self.unrouted(now, local, remote, buf),
             // A long packet is not sealed: each holder is offered it in turn and the one it belongs to takes it.
-            _ if long && n < MAX_CANDIDATES && self.starts_held_message(now, remote, buf) => {
-                self.unrouted(now, local, remote, buf);
-            }
             _ if long => self.offer(&found, n, now, local, remote, buf),
             1 => {
                 if let Some(i) = found.first().copied().flatten() {
@@ -200,12 +197,22 @@ ep_impl! {
     /// not complete yet, since the parts of a Finish reach every holder and only the one whose key opens the whole
     /// message takes it. When every live holder says the packet is a first flight different from its own, the packet
     /// is the start of another dial under the same id and gets a session of its own, unless the id already has
-    /// [`MAX_CANDIDATES`] holders. An id with one holder gets that one delivery and nothing else.
+    /// [`MAX_CANDIDATES`] holders (counted in `holders_refused`).
+    ///
+    /// A packet counts as taken into a first message only when a holder took it into the first message it is
+    /// assembling or holds and it added a byte there; a part of a repeat, or one that added no byte, does not. A
+    /// start that no holder took so is held (once), and when parts of a message of its length are held and the id has
+    /// room, it makes a session of its own at once. A later part that no holder took so, while some holder refused it
+    /// as a different first message, makes a session of its own from the newest held start that agrees with it, or is
+    /// held: a damaged copy that took the id first cannot keep the genuine message out. An id with one holder gets
+    /// that one delivery and nothing else.
     fn offer(&mut self, found: &[Option<u32>], n: usize, now: u64, local: SocketAddr, remote: SocketAddr, buf: &mut [u8]) {
         let len = buf.len();
         let Some(copy) = self.scratch.get_mut(..len) else { return };
         copy.copy_from_slice(buf);
-        let (mut different, mut other, mut parted) = (false, false, false);
+        let start = classify(buf).map(|f| (f.odcid, f.total));
+        let later = later_part(buf);
+        let (mut different, mut other, mut took, mut strong) = (false, false, false, false);
         // The table lists the newest holder first; the first holder of an id is never displaced, so it is asked first.
         for (k, i) in found.iter().flatten().rev().enumerate() {
             if k > 0 {
@@ -215,57 +222,87 @@ ep_impl! {
                 }
             }
             let r = self.deliver(*i as usize, now, local, remote, buf);
+            let (was_part, repeat) = self.took(*i as usize);
             let refused = matches!(r, Err(Drop::Handshake(_) | Drop::Closed | Drop::Undecryptable));
-            let part = n > 1 && r.is_ok() && self.took_part(*i as usize);
+            let part = n > 1 && r.is_ok() && was_part;
             if n > 1 {
                 trace!(self, now, Trial { slot: u64::from(*i), ok: u64::from(!refused && !part) });
             }
-            if part {
-                parted = true;
-                continue;
-            }
             if !refused {
-                return;
+                took = true;
+                strong |= r.is_ok() && !repeat;
+                if part {
+                    continue;
+                }
+                break;
             }
             match r {
                 Err(Drop::Handshake(Failure::DifferentFirst)) => different = true,
+                // A later part that completes a holder's message wrongly (the holder took another start, or a damaged
+                // part) fails its authentication: for the part that is the same answer as a different message.
+                Err(Drop::Handshake(_)) if later.is_some() && self.unauthenticated(*i as usize) => different = true,
                 Err(Drop::Closed) => {}
                 _ => other = true,
             }
-        }
-        if !different || other || parted {
-            return;
         }
         match self.scratch.get(..len) {
             Some(s) => buf.copy_from_slice(s),
             None => return,
         }
-        if classify(buf).is_none() {
-            // A later part that completed a message other than every holder's: it waits for the start of that message,
-            // which then gets a session of its own (see `starts_held_message`).
-            let held = later_part(buf)
-                .is_some_and(|(dcid, total)| self.orphans.hold(now, dcid, total, local, remote, buf));
-            self.counters.dropped_in += u64::from(!held);
-        } else if n >= MAX_CANDIDATES {
+        if let Some((odcid, total)) = start {
+            if took {
+                // A start no holder took into its first message: with parts of a message of its length held it is the
+                // start of another dial and gets a session of its own at once; else it waits, held once.
+                if !strong {
+                    if n < MAX_CANDIDATES && self.orphans.holds(now, &odcid, total, &remote) {
+                        self.unrouted(now, local, remote, buf);
+                    } else {
+                        self.orphans.hold_start(now, odcid, total, local, remote, buf);
+                    }
+                }
+            } else if different && !other {
+                if n >= MAX_CANDIDATES {
+                    self.counters.dropped_in += 1;
+                    self.counters.holders_refused += 1;
+                } else {
+                    self.unrouted(now, local, remote, buf);
+                }
+            }
+            return;
+        }
+        if strong || !different || other {
+            return;
+        }
+        let Some((dcid, total)) = later else {
             self.counters.dropped_in += 1;
-            self.counters.holders_refused += 1;
+            return;
+        };
+        let mut first = [0u8; ORPHAN_MAX];
+        if n < MAX_CANDIDATES
+            && let Some((l, m)) = self.orphans.start_of(now, &dcid, total, &remote, buf, &mut first)
+            && let Some(d) = first.get_mut(..m)
+            && let Some(f) = classify(d)
+            && self.admit(now, l, remote, d.len(), &f)
+            && let Some(i) = self.start_session(now, l, remote, d)
+        {
+            let _ = self.deliver(i, now, local, remote, buf);
+            self.replay_held(i, now, dcid, total, remote);
         } else {
-            self.unrouted(now, local, remote, buf);
+            let held = self.orphans.hold(now, dcid, total, local, remote, buf);
+            self.counters.dropped_in += u64::from(!held);
         }
     }
 
-    /// Whether session `i` only added a part to a handshake message from the datagram it was just given.
-    fn took_part(&mut self, i: usize) -> bool {
-        self.slots
-            .get_mut(i)
-            .and_then(|s| s.conn.as_mut())
-            .is_some_and(Connection::take_handshake_part)
+    /// What session `i` made of the datagram it was just given: whether it only added a part to a message it did not
+    /// finish, and whether it was a part of its first message again or added no byte to the one being assembled.
+    fn took(&mut self, i: usize) -> (bool, bool) {
+        let Some(c) = self.slots.get_mut(i).and_then(|s| s.conn.as_mut()) else { return (false, false) };
+        (c.take_handshake_part(), c.take_handshake_repeat())
     }
 
-    /// Whether `buf` starts a first message whose later part the endpoint holds: every session that holds the id has
-    /// refused that part as a different message, so the start gets a session of its own, which the part then joins.
-    fn starts_held_message(&self, now: u64, remote: SocketAddr, buf: &[u8]) -> bool {
-        classify(buf).is_some_and(|f| self.orphans.holds(now, &f.odcid, f.total, &remote))
+    /// Whether session `i` has not authenticated its peer yet.
+    fn unauthenticated(&self, i: usize) -> bool {
+        self.slots.get(i).is_some_and(|s| s.m.unauth)
     }
 
     /// Hand a datagram to session `i`, then bring the endpoint's view of it up to date.
@@ -356,34 +393,56 @@ ep_impl! {
 
     /// A datagram for an id no session holds: it may start a server session.
     fn unrouted(&mut self, now: u64, local: SocketAddr, remote: SocketAddr, buf: &mut [u8]) {
-        // Back-pressure: a new session raises events; with the host's queue near full of events it cannot recover,
-        // none starts.
-        if self.events.stalled() {
-            self.counters.stalled_in += 1;
-            return;
-        }
         let Some(first) = classify(buf) else {
+            // Back-pressure: the datagram would be held for a session that cannot start.
+            if self.stalled_in() {
+                return;
+            }
             // A later part of a first message that overtook the part that starts it waits a moment for its session.
             let held = later_part(buf)
                 .is_some_and(|(dcid, total)| self.orphans.hold(now, dcid, total, local, remote, buf));
             self.counters.dropped_in += u64::from(!held);
             return;
         };
+        let (odcid, total) = (first.odcid, first.total);
+        if !self.admit(now, local, remote, buf.len(), &first) {
+            return;
+        }
+        if let Some(i) = self.start_session(now, local, remote, buf) {
+            self.replay_held(i, now, odcid, total, remote);
+        }
+    }
+
+    /// Back-pressure: a new session raises events; with the host's queue near full of events it cannot recover, none
+    /// starts. Counts the datagram.
+    fn stalled_in(&mut self) -> bool {
+        let stalled = self.events.stalled();
+        self.counters.stalled_in += u64::from(stalled);
+        stalled
+    }
+
+    /// Whether the first message `first`, in a datagram of `len` bytes from `remote`, may start a server session now:
+    /// the one place every start passes, whether it came in a datagram or from a held start. A refusal is counted and
+    /// answered here (a reject, or nothing); the caller does nothing more with the datagram.
+    fn admit(&mut self, now: u64, local: SocketAddr, remote: SocketAddr, len: usize, first: &First<'_>) -> bool {
+        if self.stalled_in() {
+            return false;
+        }
         let floor = match first.kind {
             MessageType::Initial => FULL_INITIAL_MIN,
             MessageType::ShortInitial => SHORT_INITIAL_MIN,
             MessageType::ResumeHello => RESUME_HELLO_MIN,
             _ => {
                 self.counters.dropped_in += 1;
-                return;
+                return false;
             }
         };
         // A first packet under the least its type has is never admitted: it costs the sender less than the session.
-        if buf.len() < floor {
+        if len < floor {
             self.counters.first_too_short += 1;
             self.counters.dropped_in += 1;
             self.note_first(now, 0, false);
-            return;
+            return false;
         }
         // Back-pressure: every session this node owes its host would have to wait to be accepted, so while they fill
         // the room the host has left none starts, before a ticket is opened and with nothing kept (the holders of the
@@ -391,20 +450,20 @@ ep_impl! {
         if self.owed >= self.backlog_room {
             self.counters.backlog_refused += 1;
             self.note_first(now, 0, false);
-            return;
+            return false;
         }
         let resume = match first.kind {
-            MessageType::ShortInitial | MessageType::ResumeHello => match self.screen(now, &first) {
+            MessageType::ShortInitial | MessageType::ResumeHello => match self.screen(now, first) {
                 Screen::Admit { resume } => resume,
                 Screen::Reject(message) => {
                     self.note_first(now, 2, false);
                     self.reject_stateless(now, local, remote, (first.odcid, first.scid), &message);
-                    return;
+                    return false;
                 }
                 Screen::Drop => {
                     self.counters.dropped_in += 1;
                     self.note_first(now, 3, false);
-                    return;
+                    return false;
                 }
             },
             _ => false,
@@ -416,16 +475,22 @@ ep_impl! {
         self.note_first(now, u64::from(admitted), resume);
         if !admitted {
             self.counters.dropped_in += 1;
-            return;
         }
-        let (odcid, total) = (first.odcid, first.total);
-        let Some(i) = self.accept(now, odcid, resume) else {
+        admitted
+    }
+
+    /// Create the server session for the first message `buf` starts and give it that datagram; no part held for it is
+    /// replayed. Counts the datagram dropped when no session can be made.
+    fn start_session(&mut self, now: u64, local: SocketAddr, remote: SocketAddr, buf: &mut [u8]) -> Option<usize> {
+        let first = classify(buf)?;
+        let resume = first.kind == MessageType::ResumeHello;
+        let Some(i) = self.accept(now, first.odcid, resume) else {
             self.counters.dropped_in += 1;
-            return;
+            return None;
         };
         // A drop reason is counted by the connection itself.
         let _ = self.deliver(i, now, local, remote, buf);
-        self.replay_held(i, now, odcid, total, remote);
+        Some(i)
     }
 
     /// Give session `i`, just created by the first part of a message of `total` bytes for `odcid` from `remote`, the
@@ -433,11 +498,20 @@ ep_impl! {
     fn replay_held(&mut self, i: usize, now: u64, odcid: ConnId, total: u64, remote: SocketAddr) {
         let id = self.session_id(i);
         let mut held = [0u8; ORPHAN_MAX];
-        while self.slot_of(id).is_some() {
-            let Some((local, n)) = self.orphans.take(now, &odcid, total, &remote, &mut held) else { return };
+        // A part the session refuses stays held for another session of the id; the walk never passes the table.
+        let mut min = 0;
+        for _ in 0..ORPHANS {
+            if self.slot_of(id).is_none() {
+                return;
+            }
+            let Some((order, local, n)) = self.orphans.next(now, &odcid, total, &remote, min, &mut held) else { return };
+            min = order + 1;
             if let Some(d) = held.get_mut(..n) {
                 // A drop reason is counted by the connection itself.
-                let _ = self.deliver(i, now, local, remote, d);
+                let r = self.deliver(i, now, local, remote, d);
+                if !matches!(r, Err(Drop::Handshake(Failure::DifferentFirst))) {
+                    self.orphans.done(order);
+                }
             }
         }
     }

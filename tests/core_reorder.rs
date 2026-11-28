@@ -152,7 +152,11 @@ fn a_flood_of_parts_from_many_addresses_stays_bounded_and_a_real_dial_still_conn
             "the dial did not connect under the flood"
         );
         let s = net.nodes[b].ep.node_stats();
-        assert_eq!((s.fragments_held, s.fragments_replayed), (1011, 0));
+        assert_eq!((s.fragments_held, s.fragments_replayed), (1012, 0));
+        assert_eq!(
+            s.starts_held, 1,
+            "the dialer's resend start is a repeat of the session's start, held"
+        );
         assert!(s.fragments_waiting <= 4 && balanced(&s));
     });
 }
@@ -221,8 +225,12 @@ fn a_forged_part_given_to_a_new_session_does_not_stop_the_real_dial() {
         let s = net.nodes[b].ep.node_stats();
         assert_eq!(
             (s.sessions, s.half_open, s.fragments_waiting),
-            (2, 1, 0),
+            (2, 1, 1),
             "the forged session was freed"
+        );
+        assert_eq!(
+            s.starts_held, 1,
+            "the dialer's resend start is a repeat of the session's start, held"
         );
         net.run_for(pinc_core::HALF_OPEN_HOLD + SEC_NS);
         let s = net.nodes[b].ep.node_stats();

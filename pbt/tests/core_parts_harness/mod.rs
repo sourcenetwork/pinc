@@ -322,54 +322,11 @@ pub fn run(c: &Case) {
 
 /// The causes `repro_core2.rs` reproduces, told by what they leave or by the rule that makes them, so a search that
 /// lets them pass finds the others:
-/// - A: the server never sent the client anything while it answered another address (a copied first flight made the
-///   session), or a rule sends an exact copy of a client datagram from another address that may arrive first;
-/// - B: the server let two held fragments expire with a half-open session left (the repeat's later part waited for a
-///   start that only the next resend brings), or a rule sends one damaged copy from the client's address that may
-///   stand in for the genuine datagram;
-/// - C: the client sent to an address other than the server's (it followed a copied Reply);
-/// - D: a rule that sends a forged fragment to the server with more than one flight, from any address (the reassembly
-///   takes fragments from anyone).
-///
-/// vertexia: the exclusions are coarse (B and D let through any case that shows the symptom or uses the rule); narrow
-/// them once the causes are fixed.
-fn known_cause(net: &Net, c: &Case, a: usize, b: usize, ca: SocketAddr, sa: SocketAddr) -> Option<&'static str> {
-    let to_client = net.sent_to.get(&(b, ca)).copied().unwrap_or(0);
-    let to_spoof = net.sent_to.iter().any(|((h, to), n)| *h == b && *to != ca && *n > 0);
-    let s = net.hosts[b].ep.node_stats();
-    if to_client == 0 && to_spoof {
-        return Some("A: the server answers only the address of a copied first flight");
-    }
-    if s.fragments_expired >= 2 && s.half_open >= 1 {
-        return Some("B: the repeat of a damaged first message never meets its held part");
-    }
-    if net.sent_to.iter().any(|((h, to), n)| *h == a && *to != sa && *n > 0) {
-        return Some("C: the client follows a copied Reply to another address");
-    }
-    // A by its rule: an exact copy of a client datagram from another address that may arrive first.
-    let stand_in = c.drop_first || (c.loss > 0 && c.lossy_ms > 0);
-    let copied_first = |act: &Act| {
-        act.dir == 0
-            && matches!(act.src, Src::Other(_))
-            && matches!(&act.forge, Forge::Copy(e) if e.is_empty())
-            && (act.offset <= 0 || stand_in)
-    };
-    if c.acts.iter().any(copied_first) {
-        return Some("A: a copy of the first flight from another address may make the session");
-    }
-    // B by its rule: one damaged copy of the first message from the client's address that may stand in for the
-    // genuine one.
-    let damaged_first = |act: &Act| {
-        act.dir == 0
-            && act.src == Src::Victim
-            && !act.every
-            && !matches!(&act.forge, Forge::Copy(e) if e.is_empty())
-            && (act.offset < 0 || stand_in)
-    };
-    if c.acts.iter().any(damaged_first) {
-        return Some("B: a damaged first message may stand in for the genuine one");
-    }
-    let spoofed_parts = |act: &Act| act.dir == 0 && act.every && !matches!(&act.forge, Forge::Copy(e) if e.is_empty());
+/// - D: a rule that sends a persistent (`every`) damaged forgery to the server from the client direction: damaged
+///   copies racing every datagram of a fragmented first message, in an order the third party picks, are a stated
+///   ceiling of the handshake (`FirstFlight_race`).
+fn known_cause(_net: &Net, c: &Case, _a: usize, _b: usize, _ca: SocketAddr, _sa: SocketAddr) -> Option<&'static str> {
+    let spoofed_parts = |act: &Act| act.dir == 0 && act.every && matches!(&act.forge, Forge::Copy(e) if !e.is_empty());
     c.acts
         .iter()
         .any(spoofed_parts)
