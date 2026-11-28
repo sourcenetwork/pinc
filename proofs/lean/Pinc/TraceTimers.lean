@@ -46,7 +46,8 @@ def evOf : String → Except String Ev
   | e => throw s!"unknown event {e}"
 
 def sOf (v : J) : Except String S := do
-  pure { ph := ← phOf (← strF v "ph"), close := ← optF v "close", keys := ← boolF v "keys", act := ← natF v "act",
+  pure { ph := ← phOf (← strF v "ph"), close := ← optF v "close", co := ← boolF v "co", keys := ← boolF v "keys",
+         act := ← natF v "act",
          sent := ← natF v "sent", ka := ← optF v "ka", pa := ← optF v "pa", la := ← boolF v "la",
          stx := ← natF v "stx", wd := ← optF v "wd", ld := ← optF v "ld" }
 

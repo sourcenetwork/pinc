@@ -23,6 +23,9 @@ of the model in `Pinc.TransportTimers`:
   within `cf`, 4 probe timeouts in a row, 4 round trips of silence) it begins a close with a CLOSE unless the path is
   dead or the call ended the connection first (`timeout_carrier_close`), and it begins a close at no other time
   (`timeout_close_only_carrier`);
+* a timer call leaves a closing connection whose CLOSE was not offered to the host yet as it is, and ends one whose
+  CLOSE was offered, written or not (`timeout_closing_waits`, `timeout_closing_ends`); every `poll_transmit` call
+  on a closing connection with a CLOSE to send offers it (`tx_offers`);
 * at most one CLOSE leaves in any run (`run_closes_le_one`); after a local close of a connected connection the first
   datagram written is the CLOSE and the connection is then closed (`close_then_tx`); a closed connection stays closed,
   has no timer, writes nothing and takes nothing (`closed_inert`, `run_closed`), so a peer's CLOSE, the idle timeout,
@@ -309,8 +312,32 @@ theorem timeout_body {k : K} {s : S} {now : Nat} (cc : CC) (pr : P) (ho : isOpen
 /-! ## `handle_timeout` -/
 
 theorem timeout_closing (k : K) (s : S) (now : Nat) (cc : CC) (pr : P) (h : s.ph = .closing) :
-    timeout k s now cc pr = ⟨{ s with ph := .closed }, []⟩ := by
+    timeout k s now cc pr = graceStep s := by
   unfold timeout; rw [h]
+
+theorem graceStep_ev (s : S) : (graceStep s).ev = [] := by
+  unfold graceStep; split <;> rfl
+
+/-- The grace waits for the CLOSE: a timer call leaves a closing connection whose CLOSE was not offered to the host
+yet as it is, reporting nothing. -/
+theorem timeout_closing_waits {k : K} {s : S} {now : Nat} (cc : CC) (pr : P) (h : s.ph = .closing)
+    (hc : s.close.isSome = true) (ho : s.co = false) : timeout k s now cc pr = ⟨s, []⟩ := by
+  rw [timeout_closing k s now cc pr h]
+  have hn : s.close.isNone = false := by cases hcl : s.close <;> simp_all
+  simp [graceStep, hn, ho]
+
+/-- Once the CLOSE was offered, written or not, the next timer call ends a closing connection. -/
+theorem timeout_closing_ends {k : K} {s : S} {now : Nat} (cc : CC) (pr : P) (h : s.ph = .closing)
+    (ho : s.co = true) : timeout k s now cc pr = ⟨{ s with ph := .closed }, []⟩ := by
+  rw [timeout_closing k s now cc pr h]
+  simp [graceStep, ho]
+
+/-- Every `poll_transmit` call on a closing connection with a CLOSE to send offers it. -/
+theorem tx_offers {s : S} {now st : Nat} (sent : Bool) (h : s.ph = .closing) (hc : s.close.isSome = true) :
+    (tx s now sent st).co = true := by
+  cases hcl : s.close with
+  | none => simp [hcl] at hc
+  | some e => cases sent <;> simp [tx, h, hcl]
 
 theorem timeout_closed (k : K) (s : S) (now : Nat) (cc : CC) (pr : P) (h : s.ph = .closed) :
     timeout k s now cc pr = ⟨s, []⟩ := by
@@ -469,7 +496,7 @@ theorem timeout_ev_open {k : K} {s : S} {now : Nat} {cc : CC} {pr : P} {x : Ev}
   cases hp : s.ph with
   | hs => simp [isOpen, hp]
   | conn => simp [isOpen, hp]
-  | closing => rw [timeout_closing k s now cc pr hp] at h; simp at h
+  | closing => rw [timeout_closing k s now cc pr hp, graceStep_ev] at h; simp at h
   | closed => rw [timeout_closed k s now cc pr hp] at h; simp at h
 
 /-- The handshake's ends keep to their phases: a call reports a handshake timeout only for a handshaking connection
@@ -743,6 +770,9 @@ theorem wake_starts_wait {k : K} {s : S} {now : Nat} (hp : s.ph = .conn) (hl : s
 #audit_axioms carrier_iff
 #audit_axioms timeout_carrier_close
 #audit_axioms timeout_close_only_carrier
+#audit_axioms timeout_closing_waits
+#audit_axioms timeout_closing_ends
+#audit_axioms tx_offers
 #audit_axioms close_then_tx
 #audit_axioms recv_peer_close
 #audit_axioms closed_inert

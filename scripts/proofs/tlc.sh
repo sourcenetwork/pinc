@@ -708,6 +708,7 @@ par witness_tlc timers_carrier Timers Timers_carrier NoCarrierClose
 par witness_tlc timers_norelay Timers Timers_norelay CarrierClose
 par witness_tlc timers_nofresh Timers Timers_nofresh CarrierClose
 par witness_tlc timers_nounconf Timers Timers_nounconf HsEnds
+par witness_tlc timers_grace Timers Timers_grace CloseWaits
 par run_tlc finish FinishResend FinishResend
 par witness_tlc finish_pto FinishResend FinishResend_pto FirstBounded
 par witness_tlc finish_fixed FinishResend FinishResend_fixed FirstAtPto

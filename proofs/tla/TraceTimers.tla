@@ -5,7 +5,9 @@
 (*                                                                         *)
 (* The Rust test tests/trace_timers.rs drives scripted pairs of real       *)
 (* connections (built with the cargo feature `trace`) call by call: the    *)
-(* idle timeout, local closes with their CLOSE or with a timer first,      *)
+(* idle timeout, local closes with their CLOSE, with a timer past the      *)
+(* grace first (the CLOSE still leaves) and with a first ask that had no   *)
+(* room for it (the next timer ends the connection),                       *)
 (* violations, a sleeping peer held 120 s, an unanswered WAKE, a link      *)
 (* outage past 30 s, a dead path, a dial nobody answers, a dialing side    *)
 (* whose Finish never reached the responder (it ends the session           *)
@@ -54,7 +56,7 @@ E == Trace[i]
 N == E.n
 St == s[N]
 
-SOf(v) == [ph |-> v.ph, close |-> v.close, keys |-> v.keys, act |-> v.act, sent |-> v.sent, ka |-> v.ka, pa |-> v.pa,
+SOf(v) == [ph |-> v.ph, close |-> v.close, co |-> v.co, keys |-> v.keys, act |-> v.act, sent |-> v.sent, ka |-> v.ka, pa |-> v.pa,
            la |-> v.la, stx |-> v.stx, wd |-> v.wd, ld |-> v.ld]
 COf(v) == [conf |-> v.conf, hs |-> v.hs, rekey |-> v.rekey, rec |-> v.rec, ack |-> v.ack, amp |-> v.amp, rr |-> v.rr,
            kr |-> v.kr, paced |-> v.paced, path |-> v.path, mtu |-> v.mtu]
@@ -93,7 +95,7 @@ KeepEv == E.op = "keepalive" /\ Keep(Keepalive(St, E.ka))
 PulseEv == E.op = "pulse" /\ Keep(Pulse(St, E.now, E.sent))
 AppEv == E.op = "app" /\ (E.ok => AppOpen(St)) /\ Keep(St)
 
-S0 == [ph |-> "closed", close |-> None, keys |-> FALSE, act |-> 0, sent |-> 0, ka |-> None, pa |-> None,
+S0 == [ph |-> "closed", close |-> None, co |-> FALSE, keys |-> FALSE, act |-> 0, sent |-> 0, ka |-> None, pa |-> None,
        la |-> FALSE, stx |-> 0, wd |-> None, ld |-> None]
 Init == i = 1 /\ s = [x \in {"a", "b"} |-> S0] /\ closes = [x \in {"a", "b"} |-> 0]
 Step == /\ i <= Len(Trace) /\ E.t = "tmr"
