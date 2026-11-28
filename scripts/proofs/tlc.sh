@@ -406,6 +406,7 @@ par witness_tlc homesnap_w_recompute MembershipHomeSnap MembershipHomeSnap_w_rec
 par witness_tlc homesnap_w_open MembershipHomeSnap MembershipHomeSnap_w_open NoGhost
 par witness_tlc homesnap_w_reage MembershipHomeSnap MembershipHomeSnap_w_reage DeferKept
 par witness_tlc homesnap_w_skipall MembershipHomeSnap MembershipHomeSnap_w_skipall KeptIfListed
+par witness_tlc homesnap_w_stale MembershipHomeSnap MembershipHomeSnap_w_stale StaleAged
 par run_tlc_deep nanos NanosCheck NanosCheck
 par run_tlc incarnation Incarnation Incarnation
 par run_tlc incarnation_pers Incarnation Incarnation_pers

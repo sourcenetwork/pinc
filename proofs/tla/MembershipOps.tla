@@ -165,7 +165,13 @@ OnFrame(S, env, now, peer, f) ==
               [] f.k = "other" -> Bc(sG, [k |-> "frame", from |-> peer, ty |-> f.ty, topic |-> f.topic, rest |-> f.rest])
 
 (* ---- timers.rs ---- *)
-\* a stale hub's copy is dropped while another hub is fresh, and its session is closed so a fresh one is made
+\* a stale hub's copy is dropped while another hub is fresh, and its session is closed so a fresh one is made; while
+\* removals are held (a member with no confirmed home) the copies are kept, so the confirmed home's snapshot finds the
+\* members only a stale copy lists and ages them (MarkViewAbsent) instead of removing them at once, unreported
+\* (KeepStale; OldKeepStale, the rule before, dropped the copies while removals were held)
+KeepStale(S, now) == Source(S, now).hold
+OldKeepStale(S, now) == FALSE
+
 RECURSIVE StaleLoop(_, _, _, _, _)
 StaleLoop(S, env, now, cur, ch) ==
     LET hub == NextKey(DOMAIN S.hv, cur)
@@ -185,7 +191,7 @@ StaleLoop(S, env, now, cur, ch) ==
 
 DropStaleHubs(S, env, now) ==
     LET stale == Cardinality({k \in DOMAIN S.hv : ~HubUp(S, now, k)})
-    IN IF stale = 0 \/ stale >= Cardinality(DOMAIN S.hv) THEN S
+    IN IF stale = 0 \/ stale >= Cardinality(DOMAIN S.hv) \/ KeepStale(S, now) THEN S
        ELSE LET r == StaleLoop(S, env, now, NONE, FALSE) IN IF r.ch THEN Bump(r.S) ELSE r.S
 
 RECURSIVE SampleLoop(_, _, _, _)

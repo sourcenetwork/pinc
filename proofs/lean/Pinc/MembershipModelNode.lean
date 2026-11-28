@@ -72,10 +72,11 @@ def N.sampleSessionRtts (e : Env) (n : N) (now : Nat) : N :=
        | none => false))
   if better then N.reselect e n now else n
 
-/-- `drop_stale_hubs`: a stale hub's copy is dropped while another hub is fresh, and its session is closed. -/
+/-- `drop_stale_hubs`: a stale hub's copy is dropped while another hub is fresh, and its session is closed; while
+removals are held (`N.source`, a member with no confirmed home) the copies are kept. -/
 def N.dropStaleHubs (e : Env) (n : N) (now : Nat) : N :=
   let stale := (n.hv.keys.filter (fun k => !n.hubUp now k)).length
-  if stale == 0 || n.hv.len ≤ stale then n
+  if stale == 0 || n.hv.len ≤ stale || (n.source now).hold then n
   else
     let (n, changed) := n.hv.keys.foldl
       (fun (a : N × Bool) hub =>

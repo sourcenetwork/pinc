@@ -100,7 +100,7 @@ theorem sweepAbsent_eq_c (e : Env) (n : N) (now : Nat) :
 theorem dropStaleHubs_eq (e : Env) (n : N) (now : Nat) :
     N.dropStaleHubs e n now =
       (let stale := (n.hv.keys.filter (fun k => !n.hubUp now k)).length
-       if stale == 0 || n.hv.len ≤ stale then n
+       if stale == 0 || n.hv.len ≤ stale || (n.source now).hold then n
        else
          let (n, changed) := n.hv.keys.foldl (dshStep e now) (n, false)
          if changed then n.bump else n) := rfl

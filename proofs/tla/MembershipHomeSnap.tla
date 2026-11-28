@@ -8,8 +8,10 @@
 (* (by an open window). Hub 1's snapshot lists each at epoch 1 or 2 or      *)
 (* omits it, in one frame or one frame per entry, and is optionally         *)
 (* preceded by a snapshot cut short after its first frame (listing 3 at     *)
-(* epoch 2) and the end of that session. ApplySnap and DropPeer are the     *)
-(* operators of Membership.tla and MembershipOps.tla.                       *)
+(* epoch 2) and the end of that session, or by the end of hub 2's session *)
+(* and the slow tick's drop of stale copies (DropStaleHubs). ApplySnap,     *)
+(* DropPeer and DropStaleHubs are the operators of Membership.tla and       *)
+(* MembershipOps.tla.                                                       *)
 (*                                                                         *)
 (* HomeRec: the view holds the home's record of every member the home      *)
 (* lists (a higher record only another copy holds does not stay:            *)
@@ -21,9 +23,12 @@
 (* end, not a lease later). HeldDecided: a held member no copy holds is     *)
 (* removed when the home is confirmed, with no window open. KeptIfListed:   *)
 (* a held member only hub 2's copy lists stays (it is aged, not removed).   *)
-(* Witnesses: MembershipHomeSnap_w_recompute (OldViewRecompute) breaks     *)
-(* HomeRec, _w_open (OldCloseOpen) NoGhost, _w_reage (NoViewSkip) DeferKept *)
-(* and _w_skipall (AnyViewSkip) KeptIfListed.                               *)
+(* StaleAged: a view member only hub 2's copy lists, hub 2 gone stale, is   *)
+(* aged by the home's omission, not removed (no stale copy is dropped while *)
+(* removals are held). Witnesses: MembershipHomeSnap_w_recompute            *)
+(* (OldViewRecompute) breaks HomeRec, _w_open (OldCloseOpen) NoGhost,       *)
+(* _w_reage (NoViewSkip) DeferKept, _w_skipall (AnyViewSkip) KeptIfListed   *)
+(* and _w_stale (OldKeepStale) StaleAged.                                   *)
 (***************************************************************************)
 EXTENDS MembershipOps
 
@@ -66,26 +71,45 @@ Frames(s, chunk) ==
 Cut(S) == LET s1 == DropPeer(ApplySnap(S, Env0, Now, 1, Frame(<<[m |-> 3, rec |-> Rec(2)]>>, TRUE)), Env0, Now, 1)
           IN [s1 EXCEPT !.up = Put(@, 1, Now), !.primary = <<1>>]
 
-Run(v, ca, cb, r, s, chunk, cut) ==
+\* hub 2's session ends and the slow tick drops the stale copies, before the snapshot (the host does not redial it)
+Gone(S) == DropStaleHubs(DropPeer(S, Env0, Now, 2), Env0, Now)
+
+Run(v, ca, cb, r, s, chunk, cut, gone) ==
     LET fs == Frames(s, chunk)
         RECURSIVE F(_, _)
         F(st, i) == IF i > Len(fs) THEN st ELSE F(ApplySnap(st, Env0, Now, 1, fs[i]), i + 1)
         s0 == Mk(v, ca, cb, r)
-    IN F(IF cut THEN Cut(s0) ELSE s0, 1)
+        s1 == IF cut THEN Cut(s0) ELSE s0
+    IN F(IF gone THEN Gone(s1) ELSE s1, 1)
 
-VARIABLES c1, c2, v, r, s, chunk, cut, fin
-vars == <<c1, c2, v, r, s, chunk, cut, fin>>
+\* the part of the final state the invariants read, computed whole (TLCEval): every state is an initial one, and states
+\* that hold the node, or functions TLC would compute later from it, outgrow the heap of the quick profile
+Fin(S) == TLCEval([members |-> TLCEval(S.members), home |-> TLCEval(S.hv[1].entries), recheck |-> TLCEval(S.recheck)])
 
-Init == /\ c1 \in Cells2 /\ c2 \in Cells2 /\ v \in Cells2 /\ s \in Cells2
-        /\ r \in [{3, 4} -> Waits] /\ \A m \in {3, 4} : r[m] # "none" => v[m] # 0
-        /\ chunk \in BOOLEAN /\ cut \in BOOLEAN
-        /\ fin = Run(v, c1, c2, r, s, chunk, cut)
+VARIABLES c1, c2, v, r, s, chunk, cut, gone, fin
+vars == <<c1, c2, v, r, s, chunk, cut, gone, fin>>
+
+\* the starting states with member 4's cells in c4 (member 3 takes every cell)
+CellsOf(c4) == {f \in Cells2 : f[4] \in c4}
+InitOn(c4) ==
+    /\ c1 \in CellsOf(c4) /\ c2 \in CellsOf(c4) /\ v \in CellsOf(c4) /\ s \in CellsOf(c4)
+    /\ r \in [{3, 4} -> Waits] /\ \A m \in {3, 4} : r[m] # "none" => v[m] # 0
+    /\ chunk \in BOOLEAN /\ cut \in BOOLEAN
+    \* a gone hub 2 is taken with one frame and no cut snapshot, which bounds the states it adds
+    /\ gone \in BOOLEAN /\ (gone => ~chunk /\ ~cut)
+    \* the run is bound once: TLC does not keep an operator's argument while it computes an initial state, and Fin
+    \* reads it thrice
+    /\ \E S \in {Run(v, c1, c2, r, s, chunk, cut, gone)} : fin = Fin(S)
+Init == InitOn(Cells)
+\* the quick profile (proofs/tla/quick): member 4 is listed at epoch 2 or not at all; member 3 still meets every
+\* epoch, wait and snapshot, and member 4 still splits a snapshot in two frames and waits beside it
+InitQuick == InitOn({0, 2})
 Next == UNCHANGED vars
 Spec == Init /\ [][Next]_vars
 
 \* whether hub 1's copy held an entry of m before the final snapshot (its earlier copy, or the cut snapshot)
 Held1(m) == c1[m] # 0 \/ (cut /\ m = 3)
-Home == fin.hv[1].entries
+Home == fin.home
 
 HomeRec == \A m \in {3, 4} : s[m] # 0 => m \in DOMAIN fin.members /\ fin.members[m].rec = Rec(s[m])
 NoGhost == \A m \in DOMAIN Home : s[m] = 0 => Home[m].absentSince # <<>>
@@ -95,4 +119,6 @@ DeferKept == \A m \in {3, 4} : r[m] = "deferred" /\ s[m] = 0 /\ ~Held1(m) =>
 HeldDecided == \A m \in {3, 4} : r[m] = "held" /\ s[m] = 0 /\ ~Held1(m) /\ c2[m] = 0 /\ QuietEnd(r) = Z =>
                  m \notin DOMAIN fin.members
 KeptIfListed == \A m \in {3, 4} : r[m] = "held" /\ s[m] = 0 /\ ~Held1(m) /\ c2[m] # 0 => m \in DOMAIN fin.members
+StaleAged == \A m \in {3, 4} : gone /\ v[m] # 0 /\ r[m] = "none" /\ s[m] = 0 /\ ~Held1(m) /\ c2[m] # 0 =>
+                 m \in DOMAIN fin.members /\ m \in DOMAIN Home /\ Home[m].absentSince # <<>>
 =============================================================================
