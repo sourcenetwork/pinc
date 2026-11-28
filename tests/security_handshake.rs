@@ -676,6 +676,37 @@ fn the_sub_session_secret_binds_its_inputs() {
 }
 
 #[test]
+fn a_repeat_of_the_initial_during_the_signature_is_answered_by_the_one_reply() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519, IdentityAlg::Hybrid, false, false);
+        let mut i = w.initiator();
+        let mut r = w.responder();
+        let mut env_r = Env {
+            provider: &w.r_prov,
+            now: w.now,
+            drbg: &mut w.r_drbg,
+        };
+        let Some(Output::Send { data, .. }) = i.poll_output() else {
+            panic!()
+        };
+        let initial = data.to_vec();
+        r.handle(&mut env_r, &mut w.stores, &initial).unwrap();
+        let Some(Output::Key(KeyRequest::Sign { message, .. })) = r.poll_output() else {
+            panic!("no sign request")
+        };
+        let message = message.to_vec();
+        assert_eq!(r.handle(&mut env_r, &mut w.stores, &initial), Ok(()));
+        assert!(r.poll_output().is_none());
+        let mut sig = vec![0u8; 4000];
+        let n = w.rp.kp.sign(&message, &mut sig).unwrap();
+        r.on_key_response(&mut env_r, KeyResponse::Signature(&sig[..n]))
+            .unwrap();
+        assert!(matches!(r.poll_output(), Some(Output::Send { .. })));
+        assert!(r.poll_output().is_none());
+    });
+}
+
+#[test]
 fn key_requests_can_be_answered_many_polls_later() {
     big_stack(|| {
         let mut w = World::new(IdentityAlg::Ed25519, IdentityAlg::Hybrid, false, false);

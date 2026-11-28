@@ -144,6 +144,8 @@ pub struct Responder {
     th: Transcript,
     out: Outbox,
     state: State,
+    /// The id the dialer named for itself in the first message this machine accepted.
+    client_scid: Option<ConnId>,
     #[cfg(feature = "trace")]
     resend_cap: Option<usize>,
 }
@@ -162,9 +164,17 @@ impl Responder {
             th: Transcript::new(),
             out: Outbox::new(),
             state: State::Idle,
+            client_scid: None,
             #[cfg(feature = "trace")]
             resend_cap: None,
         }
+    }
+
+    /// The id the dialer named for itself in the first message this machine accepted (an Initial that parsed and was
+    /// answered or rejected, or a Hello whose binder verified or that was rejected), `None` before. A responder host
+    /// addresses the session to this id, never to one read from an unauthenticated packet header.
+    pub const fn client_cid(&self) -> Option<ConnId> {
+        self.client_scid
     }
 
     /// The most bytes of Reply the last message let a resumed responder send again, when the last message was a
@@ -283,7 +293,10 @@ impl Responder {
         result
     }
 
-    fn reject(&mut self, th: &[u8; 32], ty: MessageType) -> Result<(), Failure> {
+    /// Answer a first message that parsed with a reject. The reject is addressed to the id that message named, as
+    /// the answer to a message that was accepted is.
+    fn reject(&mut self, th: &[u8; 32], ty: MessageType, scid: ConnId) -> Result<(), Failure> {
+        self.client_scid = Some(scid);
         let reject = Reject { echo: echo(th) };
         self.out.build(0, |w| reject.write(w, ty))
     }
@@ -323,6 +336,8 @@ impl Responder {
             }
             // The held Initial was not the dialer's (a bit flipped on the way, or a forgery): the dialer's own repeat
             // differs from it, and the host starts the session again from the repeat.
+            // The same first message while its Reply waits for the signature: the Reply, once signed, answers it.
+            State::Sign(b) if b.th0 == th0 => return Ok(()),
             State::Sign(b) if b.th0 != th0 => return Err(Failure::DifferentFirst),
             State::Finish(_) => return Err(Failure::DifferentFirst),
             _ => return Err(Failure::UnexpectedMessage),
@@ -333,7 +348,7 @@ impl Responder {
             PrekeyField::Full(k) => (*k, true),
             PrekeyField::Hash(h) => match stores.prekeys.get(h) {
                 Some(k) => (*k, false),
-                None => return self.reject(&th0, MessageType::PrekeyReject),
+                None => return self.reject(&th0, MessageType::PrekeyReject, initial.scid),
             },
         };
         let ek = p.kem_encaps_key(&ek_bytes).map_err(|_| Failure::InvalidPeerKey)?;
@@ -372,6 +387,7 @@ impl Responder {
             prekey: fresh.then_some((hash, ek_bytes)),
             peer_credit: initial.credit,
         });
+        self.client_scid = Some(initial.scid);
         Ok(())
     }
 
@@ -533,7 +549,7 @@ impl Responder {
         };
         let Some(slot) = found else {
             // Unknown, expired or not matching: tell the initiator to start a full handshake.
-            return self.reject(&th_hello, MessageType::ResumeReject);
+            return self.reject(&th_hello, MessageType::ResumeReject, hello.scid);
         };
         let p = env.provider;
         let ck_psk = psk_chain(&slot.psk);
@@ -590,6 +606,7 @@ impl Responder {
             scid: hello.scid,
             spent: 0,
         });
+        self.client_scid = Some(hello.scid);
         Ok(())
     }
 }
