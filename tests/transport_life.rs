@@ -98,6 +98,49 @@ fn one_close_then_the_state_is_freed() {
     });
 }
 
+/// A host that serves the close's grace before it asks for a datagram still sends the CLOSE: the state is freed once
+/// the CLOSE was offered, not when the grace passes.
+#[test]
+fn a_close_reaches_the_peer_after_a_timer_call_past_the_grace() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let mut net = connected(&mut w, &mut sa, &mut sb, Link::new(3, Params::new(10 * MS)));
+        net.run(net.now + SEC, |_| false);
+        let at = net.now;
+        net.a.with_lent(at, |c, env, l| c.close(env, l, 42));
+        net.a.with_lent(at + 2 * SEC, Conn::handle_timeout);
+        assert!(net.run(at + 5 * SEC, |n| n.b.closed().is_some()));
+        assert_eq!(net.b.closed(), Some(CloseReason::Peer { error: 42 }));
+    });
+}
+
+/// A CLOSE the host was offered but that had no room to be written does not hold the state: the next timer call frees
+/// it and nothing leaves afterwards.
+#[test]
+fn a_close_that_could_not_be_written_is_freed_by_the_next_timer_call() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let mut net = connected(&mut w, &mut sa, &mut sb, Link::new(3, Params::new(10 * MS)));
+        net.run(net.now + SEC, |_| false);
+        let at = net.now;
+        net.a.with_lent(at, |c, env, l| c.close(env, l, 42));
+        let mut small = [0u8; 8];
+        assert!(
+            net.a
+                .with_lent(at, |c, env, l| c.poll_transmit(env, l, &mut small))
+                .is_none()
+        );
+        assert!(net.a.conn.poll_timeout().is_some(), "the close ended before its timer");
+        net.a.with_lent(at + 2 * SEC, Conn::handle_timeout);
+        assert!(net.a.conn.poll_timeout().is_none(), "the state outlived the grace");
+        let sent = net.a.tx_log.len();
+        net.run(at + 5 * SEC, |_| false);
+        assert_eq!(net.a.tx_log.len(), sent, "a datagram left a freed connection");
+    });
+}
+
 /// A frame held back for want of room must not discard the frames behind it in its packet. The room the held stream
 /// waits for only comes back as the stream ahead of it receives its bytes, and those ride behind it in every
 /// retransmission.

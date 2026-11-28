@@ -1338,6 +1338,47 @@ fn two_sessions_to_one_address_share_a_pair_until_both_let_go() {
     });
 }
 
+/// A session the host closes and then holds past the close's grace, its timer served again and again before it asks
+/// for a datagram, keeps its CLOSE: each timer call leaves the next deadline later than the call (no spin), the
+/// session stays, and the first datagram asked for is the CLOSE, which frees it and ends the peer's session.
+#[test]
+fn a_closing_session_held_past_the_grace_keeps_its_close_and_does_not_spin() {
+    big_stack(|| {
+        let mut buf = vec![0u8; 65_536];
+        let mut net = CoreNet::new(5 * MS_NS);
+        let (s, c) = (net.add(1), net.add(2));
+        let (_, ss) = net.connect_pair(c, s, ALPN_A, Role::Other);
+        net.run_for(SEC_NS);
+        let (saddr, caddr) = (net.nodes[s].addr, net.nodes[c].addr);
+        let mut now = net.now;
+        net.nodes[s].cmd(now, Command::Close { session: ss, error: 7 }).unwrap();
+        for _ in 0..5 {
+            now += 2 * SEC_NS;
+            net.nodes[s].ep.handle_timeout(now);
+            let next = net.nodes[s].ep.poll_timeout();
+            assert!(
+                next.is_some_and(|t| t > now),
+                "the closing session's timer is due again at once: {next:?}"
+            );
+            assert_eq!(
+                net.nodes[s].ep.trace_path_count(),
+                1,
+                "the session was freed before its CLOSE was offered"
+            );
+        }
+        let t = net.nodes[s].ep.poll_transmit(now, &mut buf).expect("the CLOSE");
+        assert_eq!(t.remote, caddr);
+        assert_eq!(net.nodes[s].ep.trace_path_count(), 0, "the session outlived its CLOSE");
+        net.now = now;
+        net.inject(saddr, caddr, buf[..t.len].to_vec(), 0);
+        let want = pinc_core::EndReason::Transport(pinc_transport::conn::CloseReason::Peer { error: 7 });
+        let ended = net.run(now + SEC_NS, |n| {
+            n.nodes[c].saw(|e| matches!(e, Event::Closed { reason, .. } if *reason == want))
+        });
+        assert!(ended, "the peer did not take the CLOSE");
+    });
+}
+
 /// The CLOSE of a session freed in the same call leaves for the peer's address: alone, batched with another datagram
 /// to the same address, and as the datagram kept for another destination.
 #[test]

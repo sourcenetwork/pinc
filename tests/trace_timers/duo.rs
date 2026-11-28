@@ -201,6 +201,16 @@ impl Duo<'_, '_> {
         made
     }
 
+    /// One `poll_transmit` with only `room` bytes to write into, too few for any datagram: an event that writes
+    /// nothing.
+    pub fn tx_cramped(&mut self, log: &mut Log, n: usize, room: usize) {
+        let now = self.now;
+        let buf = &mut self.buf[..room];
+        let r = self.nodes[n].with_lent(now, |c, env, l| c.poll_transmit(env, l, buf));
+        assert!(r.is_none(), "a datagram fit in {room} bytes");
+        log.line(n, &mut self.nodes[n], now, "tx", r#","len":0"#);
+    }
+
     /// Hand pool datagram `i` to the other node.
     pub fn deliver(&mut self, log: &mut Log, i: usize, how: How) {
         let (from, mut bytes, _) = self.pool[i].clone();

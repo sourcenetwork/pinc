@@ -59,8 +59,11 @@ pub fn idle_run(log: &mut Log, seed: u64) {
     });
 }
 
-/// A local close: one CLOSE, then nothing; the peer ends silently on it.
-pub fn close_run(log: &mut Log, seed: u64, timer_first: bool, keep_talking: bool) {
+/// A local close: one CLOSE, then nothing; the peer ends silently on it. With `timer_first` a timer call past the
+/// grace comes before the host asks for a datagram: the connection waits for that ask and the CLOSE still leaves.
+/// With `cramped` the first ask has no room for the CLOSE: it was offered, so the next timer call ends the connection
+/// and nothing leaves.
+pub fn close_run(log: &mut Log, seed: u64, timer_first: bool, cramped: bool, keep_talking: bool) {
     with_pair(seed, false, |d| {
         d.init(log);
         d.exchange(log);
@@ -74,8 +77,19 @@ pub fn close_run(log: &mut Log, seed: u64, timer_first: bool, keep_talking: bool
         assert!(d.nodes[0].conn.is_closed());
         assert_eq!(d.poll(log, 0), Some(0));
         if timer_first {
-            // the timer comes before the CLOSE is written: the connection is over and nothing leaves
+            // the timer comes before the host asked for a datagram: the CLOSE was not offered, so the connection waits
+            d.now += 2 * SEC;
             d.timeout(log, 0);
+            assert_eq!(d.poll(log, 0), Some(0), "the close ended before its CLOSE was offered");
+        }
+        if cramped {
+            // offered with no room: the next timer call ends the connection and nothing leaves
+            d.tx_cramped(log, 0, 8);
+            d.timeout(log, 0);
+            assert!(
+                d.poll(log, 0).is_none(),
+                "an offered CLOSE held the connection past its timer"
+            );
             assert_eq!(d.tx(log, 0), 0);
             assert_eq!(log.closes[0], 0);
         } else {
@@ -83,7 +97,7 @@ pub fn close_run(log: &mut Log, seed: u64, timer_first: bool, keep_talking: bool
             assert_eq!(log.closes[0], 1);
         }
         d.deliver_all(log);
-        if !timer_first {
+        if !cramped {
             assert!(d.nodes[1].conn.is_closed(), "the peer took the CLOSE");
             assert_eq!(d.tx(log, 1), 0, "the peer's end is silent");
         }

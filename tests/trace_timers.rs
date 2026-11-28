@@ -11,7 +11,8 @@
 //! injected that do not decode or break a rule, `sleep`, `wake`, `set_link_down`, `set_keepalive`, `pulse` and the
 //! application's opens and writes. The scenarios: random runs with traffic, loss, duplicates, sleep and wake, link
 //! outages, keepalives and closes; the idle timeout on both sides; a local close and its one CLOSE; a close whose
-//! connection reaches a timer first; violations; a sleeping peer held 120 s; an unanswered WAKE; a link outage past
+//! connection reaches a timer past the grace before the host asks for a datagram (the CLOSE still leaves); a close
+//! whose first ask had no room for the CLOSE (the next timer ends it, nothing leaves); violations; a sleeping peer held 120 s; an unanswered WAKE; a link outage past
 //! 30 s; a dial nobody answers, until its handshake gives up; a close while handshaking; a dialing side whose Finish
 //! never reached the responder (the test takes over once the dialing side is connected), which ends the session
 //! unconfirmed at its connect limit counted from when it established (30 s, 60 s on a thin node, the limit following
@@ -85,12 +86,19 @@ fn timers_match_the_models() {
             next(&mut log);
             idle_run(&mut log, 100 + seed);
         }
-        for (i, (timer_first, talk)) in [(false, false), (true, false), (false, true), (true, true)]
-            .into_iter()
-            .enumerate()
+        for (i, (timer_first, cramped, talk)) in [
+            (false, false, false),
+            (true, false, false),
+            (false, false, true),
+            (true, false, true),
+            (false, true, false),
+            (true, true, true),
+        ]
+        .into_iter()
+        .enumerate()
         {
             next(&mut log);
-            close_run(&mut log, 200 + i as u64, timer_first, talk);
+            close_run(&mut log, 200 + i as u64, timer_first, cramped, talk);
         }
         for (i, bad) in [true, false].into_iter().enumerate() {
             next(&mut log);

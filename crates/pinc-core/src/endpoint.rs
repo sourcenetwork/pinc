@@ -91,7 +91,7 @@ pub const MAX_ALPNS: usize = pinc_security::ids::MAX_ALPNS;
 pub const PREKEY_PEERS: usize = 256;
 /// The addresses whose last re-join challenge is remembered.
 pub(crate) const REJOIN_ADDRS: usize = 200;
-/// How long a closing session may wait for its CLOSE to leave before it is dropped.
+/// How long a closing session waits for its next timer: the timer drops it once its CLOSE was offered to the host.
 pub(crate) const CLOSE_GRACE: u64 = 1_000_000_000;
 
 /// How the endpoint behaves; [`EndpointConfig::new`] holds the defaults.

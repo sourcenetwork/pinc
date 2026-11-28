@@ -19,6 +19,7 @@ conn_impl! {
             self.phase = Phase::Closed;
             return None;
         };
+        self.life.close_offered = true;
         let ti = self.paths.active;
         let now = env.now;
         let p = env.provider;

@@ -18,14 +18,16 @@
 #[macro_use]
 mod pinc_common;
 
+use std::cell::Cell;
 use std::net::{SocketAddr, UdpSocket};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use nuclei::Handle;
 use nuclei::sync::oneshot;
-use pinc::{Discovery, Endpoint, Error, Hosted};
+use pinc::{Discovery, Endpoint, Error, ErrorKind, Hosted, Pinc, Platform};
 use pinc_common::{ECHO, SINK, bind, bind_idle, client, join_all, node, pattern, pattern_hash, poll_drop, within};
 
 pinc_tests::install_counting_allocator!();
@@ -476,6 +478,79 @@ fn closed_on_accept<H: Hosted + 'static, D: Discovery + 'static>(
     })
     .detach();
     (why_rx, up_rx)
+}
+
+/// A platform on the system's clock that, once armed, reads normally once and then jumps 2 s ahead: a host held up
+/// between the close (the first read) and its next drive.
+#[derive(Clone)]
+struct Stalled {
+    origin: Instant,
+    reads_left: Rc<Cell<u8>>,
+    skew: Rc<Cell<u64>>,
+}
+
+impl Platform for Stalled {
+    type Instant = u64;
+    type Error = Error;
+
+    fn now(&self) -> u64 {
+        match self.reads_left.get() {
+            2 => self.reads_left.set(1),
+            1 => {
+                self.reads_left.set(0);
+                self.skew.set(2_000_000_000);
+            }
+            _ => {}
+        }
+        u64::try_from(self.origin.elapsed().as_nanos()).unwrap_or(u64::MAX) + self.skew.get()
+    }
+
+    fn wall_ns(&self) -> u64 {
+        0
+    }
+
+    fn random(&self, out: &mut [u8]) -> Result<(), Error> {
+        pinc_keystore::os_random(out).map_err(|_| Error::new(ErrorKind::Config, "no randomness"))
+    }
+}
+
+/// The close of an endpoint whose host was held up for longer than the close's grace between the close and the next
+/// drive still reaches the peer: the grace does not free a session whose CLOSE the host has not been offered.
+#[nuclei::test]
+async fn a_close_reaches_the_peer_though_the_host_was_held_past_the_grace() {
+    within(30, async {
+        let server = bind(pinc_common::builder().alpn(ECHO)).await;
+        let clock = Stalled {
+            origin: Instant::now(),
+            reads_left: Rc::default(),
+            skew: Rc::default(),
+        };
+        let sock = Arc::new(Handle::<UdpSocket>::bind(pinc_common::lo()).await.unwrap());
+        let (r, s, origin) = (Arc::clone(&sock), Arc::clone(&sock), clock.origin);
+        let failed = |_: std::io::Error| Error::new(ErrorKind::Unreachable, "the socket failed");
+        let client = Pinc::builder_on(clock.clone())
+            .alpn(ECHO)
+            .local_addr(sock.local_addr().unwrap())
+            .build(
+                async move |buf: &mut [u8]| r.recv_from(buf).await.map_err(failed),
+                async move |pkt: &[u8], to: SocketAddr| s.send_to(pkt, to).await.map_err(failed),
+                async move |at: u64| nuclei::time::sleep_until_precise(origin + Duration::from_nanos(at)).await,
+            )
+            .unwrap();
+        let conn = client.connect(server.addr(), ECHO).await.unwrap();
+        let (why_rx, accepted) = closed_on_accept(&server);
+        within(20, accepted).await.unwrap();
+        clock.reads_left.set(2);
+        conn.close(0).await;
+        drop(conn);
+        drop(client);
+        let why = within(20, why_rx).await.unwrap();
+        assert!(
+            matches!(why.kind(), pinc::ErrorKind::Closed { code: 0, by_peer: true }),
+            "the peer did not see the close: {why:?}"
+        );
+    })
+    .await;
 }
 
 #[allow(dead_code)]

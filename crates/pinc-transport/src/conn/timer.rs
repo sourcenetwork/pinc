@@ -2,10 +2,11 @@
 //!
 //! Invariants: a timer is reported only while it can still act (a stale deadline would make a driver spin); the
 //! recovery timer keeps running while the peer sleeps or the link is down (it declares the oldest packet lost and
-//! pings, without growing the count); a connection that is closing ends at its next timer. A session on a relay path
-//! is closed, with a CLOSE, at a probe timeout once 4 have fired in a row, it heard nothing for 4 round trips and the
-//! relay's carrier was heard within 6 s: the carrier works, so the peer no longer holds the session, and the layers
-//! above dial again instead of waiting for the probes to give up.
+//! pings, without growing the count); a connection that is closing ends at its next timer once its CLOSE was offered
+//! (`poll_transmit` was called since the close), and until then its timer, due at once, waits for that call. A session
+//! on a relay path is closed, with a CLOSE, at a probe timeout once 4 have fired in a row, it heard nothing for 4
+//! round trips and the relay's carrier was heard within 6 s: the carrier works, so the peer no longer holds the
+//! session, and the layers above dial again instead of waiting for the probes to give up.
 
 use pinc_crypto::Provider;
 use pinc_security::Env;
@@ -87,7 +88,11 @@ conn_impl! {
         match self.phase {
             Phase::Closed => return,
             Phase::Closing => {
-                self.phase = Phase::Closed;
+                // The grace runs from the close, but a host that has not asked for a datagram yet still owes the peer
+                // its CLOSE; a CLOSE that cannot leave is freed by the grace after the first attempt.
+                if self.life.close.is_none() || self.life.close_offered {
+                    self.phase = Phase::Closed;
+                }
                 return;
             }
             Phase::Handshaking | Phase::Connected => {}
@@ -195,6 +200,8 @@ pub(super) mod trace {
         pub phase: u8,
         /// The code of the CLOSE to send, until it left.
         pub close: Option<u64>,
+        /// Whether the host has asked for a datagram since the close began, so the CLOSE was offered to it.
+        pub close_offered: bool,
         /// Whether the 1-RTT sending keys are installed.
         pub send_keys: bool,
         /// When the peer was last heard (or the connection last resumed).
@@ -320,6 +327,7 @@ pub(super) mod trace {
                     Phase::Closed => 3,
                 },
                 close: self.life.close,
+                close_offered: self.life.close_offered,
                 send_keys: self.keys.send.is_some(),
                 last_activity: self.life.last_activity,
                 last_sent: self.life.last_sent,

@@ -82,8 +82,9 @@ pub fn carrier_decision(p: &CarrierView, now: u64) -> bool {
 pub fn view_json(v: &TimerView) -> String {
     let ph = ["hs", "conn", "closing", "closed"][usize::from(v.phase)];
     format!(
-        r#"{{"ph":"{ph}","close":{},"keys":{},"act":{},"sent":{},"ka":{},"pa":{},"la":{},"stx":{},"wd":{},"ld":{},"idle":{},"conf":{},"hs":{},"rekey":{},"rec":{},"ack":{},"amp":{},"rr":{},"kr":{},"paced":{},"path":{},"mtu":{}}}"#,
+        r#"{{"ph":"{ph}","close":{},"co":{},"keys":{},"act":{},"sent":{},"ka":{},"pa":{},"la":{},"stx":{},"wd":{},"ld":{},"idle":{},"conf":{},"hs":{},"rekey":{},"rec":{},"ack":{},"amp":{},"rr":{},"kr":{},"paced":{},"path":{},"mtu":{}}}"#,
         v.close.map_or(-1, |c| i64::try_from(c).unwrap()),
+        v.close_offered,
         v.send_keys,
         us(v.last_activity),
         us(v.last_sent),
